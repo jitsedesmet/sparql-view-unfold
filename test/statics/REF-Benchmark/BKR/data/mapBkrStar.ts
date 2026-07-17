@@ -1,5 +1,10 @@
 /**
- * Maps BKR-star.ttl to four target representations by executing SPARQL CONSTRUCT queries.
+ * Maps the Skolemized BKR-star dataset to several target reification representations
+ * by executing single-pattern SPARQL CONSTRUCT queries.
+ *
+ * Input: `BKR-star-skolem.ttl` — the blank-node-free RDF 1.2 dataset produced by
+ * `skolemize.ts` from `BKR-star.ttl`.  Because the reifiers are already IRIs, the
+ * outputs of every mapping are themselves free of blank nodes.
  *
  * Outputs written to the same directory as this script:
  *   BKR-Graph.trig        — named-graph representation        (mapToGraph-Q1/Q2)
@@ -7,22 +12,20 @@
  *   BKR-Singleton.ttl     — singleton-property pattern         (mapToSingleton-Q1/Q2)
  *   BKR-WikiData.ttl      — Wikidata-style n-ary pattern       (mapToWikiData-Q1/Q2)
  *
- * Performance: instead of re-reading the source file from disk for every SPARQL
- * pattern-match call, the entire source is loaded into memory once using
- * `PosIndexedTurtleSource`.  A single predicate-indexed in-memory store is then
- * shared across all queries and all mappings, running in one process.
+ * Streaming: the source is a `StreamingTurtleSource` that re-parses the input file
+ * for every `match()` call rather than building an in-memory store.  Every mapping
+ * query is a single triple pattern, so Comunica streams matches straight through
+ * without any join buffering.  Combined with the streaming N3 `Writer`, heap usage
+ * stays bounded regardless of the (multi-GiB) input size — no `--max-old-space-size`
+ * bump is required.
  *
- * Output is written in a streaming fashion: each quad is serialised and flushed to
- * disk as it arrives from the SPARQL engine — no output is buffered in memory.
- *
- * Memory: the script requires ~20 GiB of heap.  It will automatically re-exec
- * itself with `--max-old-space-size=20480` if that flag is not already present.
+ * Prerequisite:
+ *   npx tsx skolemize.ts BKR-star.ttl BKR-star-skolem.ttl
  *
  * Usage:
  *   npx tsx mapBkrStar.ts
  */
 
-import { spawnSync } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -32,15 +35,14 @@ import type * as RDF from '@rdfjs/types';
 import { Writer } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 import { termToString } from 'rdf-string';
-import { PosIndexedTurtleSource } from './PosIndexedTurtleSource.js';
-import { skolemizeTerm } from './StreamingTurtleSource.js';
+import { StreamingTurtleSource, skolemizeTerm } from './StreamingTurtleSource.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const DF = new DataFactory();
 const skolemDF = new DataFactory({ blankNodePrefix: '' });
 const SKOLEM_PREFIX = 'urn:bkr:blank:';
-const sourcePath = resolve(__dirname, 'BKR-star.ttl');
+const sourcePath = resolve(__dirname, 'BKR-star-skolem.ttl');
 
 /**
  * Extension function `<internal://bnode>`.
@@ -99,8 +101,9 @@ const mappings: MappingSpec[] = [
     name: 'mapToSingleton',
     queries: [ 'mapToSingleton-Q1.rq', 'mapToSingleton-Q2.rq' ],
     output: 'BKR-Singleton.ttl',
-    // Singleton properties are blank nodes used as predicates, which requires N3 format.
-    format: 'text/n3',
+    // The input is Skolemized, so singleton properties are IRIs (not blank nodes)
+    // and the output is valid plain Turtle.
+    format: 'text/turtle',
   },
   {
     name: 'mapToWikiData',
@@ -114,7 +117,7 @@ const mappings: MappingSpec[] = [
 
 // ---------------------------------------------------------------------------
 
-async function executeMapping(spec: MappingSpec, rdfjsSource: PosIndexedTurtleSource): Promise<void> {
+async function executeMapping(spec: MappingSpec, rdfjsSource: StreamingTurtleSource): Promise<void> {
   const { name, queries, output, format, context = {}} = spec;
   const outputPath = resolve(__dirname, output);
   const outStream = createWriteStream(outputPath);
@@ -209,28 +212,17 @@ async function executeMapping(spec: MappingSpec, rdfjsSource: PosIndexedTurtleSo
 }
 
 // ---------------------------------------------------------------------------
-// Entry point: re-exec with 20 GiB heap when the flag is absent, then load the
-// source once and run all mappings sequentially in this process.
+// Entry point: stream the Skolemized source through each mapping.  The source is
+// re-parsed per match() call, so heap usage stays bounded and no heap bump is
+// needed.
 // ---------------------------------------------------------------------------
 
-const HEAP_MB = 20_480;
-const heapFlag = `--max-old-space-size=${HEAP_MB}`;
-
-if (!process.execArgv.some(a => a.startsWith('--max-old-space-size='))) {
-  process.stdout.write(`Re-execing with ${heapFlag}...\n`);
-  const result = spawnSync(
-    process.execPath,
-    [ heapFlag, ...process.execArgv, process.argv[1], ...process.argv.slice(2) ],
-    { stdio: 'inherit' },
-  );
-  // eslint-disable-next-line unicorn/no-process-exit
-  process.exit(result.status ?? 1);
-}
-
-// Load the source into memory once; it is shared across all mappings.
-process.stdout.write(`Loading source: ${sourcePath}\n`);
-const rdfjsSource = new PosIndexedTurtleSource(sourcePath, 'text/turtle', true, SKOLEM_PREFIX);
-await rdfjsSource.load();
+// Skolemized input contains explicit `<iri> rdf:reifies <<( s p o )>>` triples, so
+// no on-the-fly Skolemization is needed here (skolemize = false).  The write loop
+// still Skolemizes any blank nodes introduced by mapping queries (e.g. the WikiData
+// `<internal://bnode>` extension function).
+process.stdout.write(`Streaming source: ${sourcePath}\n`);
+const rdfjsSource = new StreamingTurtleSource(sourcePath, 'bkr_', 'text/turtle', false, SKOLEM_PREFIX);
 
 // Run all mappings sequentially; print the full error and exit on failure.
 try {
