@@ -1,10 +1,11 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
 import * as arrayifyStreamNS from 'arrayify-stream';
-import { Store } from 'n3';
+import { DataFactory, Store } from 'n3';
 import { describe, it } from 'vitest';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
+import { removeProjections } from '../lib/transformations/removeProjections.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import { transformContextFromConstructs } from '../lib/transformContext.js';
 import {
@@ -28,12 +29,15 @@ const arrayifyStream =
  */
 describe('integration tests', () => {
   const engine = new QueryEngine();
+  const DF = DataFactory;
 
   const standardTransformations = <const>[
     operationTransform,
     transformFilterFalse,
     nullifyJoinOverIncompatibleBounds,
     transformFilterFalse,
+    // TODO: remove once https://github.com/comunica/comunica/pull/1734 is merged
+    removeProjections,
   ];
 
   async function sourceToStore(
@@ -300,6 +304,20 @@ describe('integration tests', () => {
       expect(resOnMappedData).toEqual(resUsingRewriter);
     });
 
+    // A triple term pattern whose predicate is a variable also reaches the pass through mapping,
+    // where the object is any term. Reading SUBJECT/PREDICATE/OBJECT out of a non triple term
+    // raises an evaluation error, which leaves the BIND target unbound instead of rejecting the
+    // solution, so the rewriting has to assert the triple term-ness itself.
+    it('a triple term pattern with a variable predicate does not match plain triples', async({ expect }) => {
+      const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        mappers,
+        'SELECT ?t ?p ?s ?p2 ?o WHERE { ?t ?p <<( ?s ?p2 ?o )>> }',
+      );
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+    });
+
     it('selecting with OPTIONAL annotation (StarBench S-category) returns the same results', async({ expect }) => {
       const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
       const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
@@ -315,12 +333,9 @@ describe('integration tests', () => {
       expect(resOnMappedData).toEqual(resUsingRewriter);
     });
 
-    it.skip(
+    it(
       'selecting by joining two reified triples (StarBench P22-style) returns the same results',
       async({ expect }) => {
-        // Known rewriter limitation: when two rdf:reifies triple term patterns appear in the same
-        // JOIN, the rewriter maps both to the same mapper (m0_) and the shared internal variable
-        // names (?m0_o, ?m0_t) collide at the outer JOIN level, causing incorrect results.
         const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
         const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
           store11,
@@ -359,6 +374,22 @@ describe('integration tests', () => {
         `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
          PREFIX : <ex://>
          SELECT ?p ?o WHERE { ?t rdf:reifies <<( :alice ?p ?o )>> }`,
+      );
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+    });
+
+    it('selecting with a variable reused across positions (?x ?x ?o) returns the same results', async({ expect }) => {
+      // Reusing the same variable in subject and predicate position unifies two mapping-head
+      // variables, which previously produced an invalid double BIND to the same variable.
+      // The store deliberately contains a triple whose subject equals its predicate.
+      const store11 = new Store([
+        DF.quad(DF.namedNode('ex://loop'), DF.namedNode('ex://loop'), DF.namedNode('ex://x')),
+        DF.quad(DF.namedNode('ex://a'), DF.namedNode('ex://b'), DF.namedNode('ex://c')),
+      ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        mappers,
+        'SELECT ?x ?o WHERE { ?x ?x ?o }',
       );
       expect(resOnMappedData).toEqual(resUsingRewriter);
     });

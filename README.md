@@ -1,79 +1,40 @@
-# Query Rewriting: SPARQL 1.2 over RDF 1.1
+# GAV unfolding and optimization
 
-A library for rewriting SPARQL 1.2 queries into equivalent SPARQL 1.1 queries that can be executed against RDF 1.1 data sources.
+A library for defining a single GAV mapping as a construct query with one triple template in the head and a body.
+A user query targeting the global schema is rewritten to instead target the local schemata by unfolding each triple pattern.
 
+The idea is explained in our [under review, in works paper targeting AMW](https://2026-amw-rewriting.jitsedesmet.be/),
+and a [under review demo paper targeting SEMANTiCS](https://2026-semantics-rewriting.jitsedesmet.be/), based on a previous version of this repo.
+
+A conceptual overview of rewriting, specifically targeting the RDF 1.1/1.2 interoperability case is given:
 ![Schematic overview of query rewriting](assets/schematic-plan.png)
 
 ## Overview
 
-This library enables querying RDF 1.2 data (including triple terms/quoted triples) when your data is stored in an RDF 1.1 representation.
-It uses SPARQL CONSTRUCT queries to define mappings between the two representations, following GAV (Global-As-View) / LAV (Local-As-View) / GLAV approaches from data integration literature.
+Given a query Q without recursive paths and mapping with head H and body B:
+1. Rewrite the paths to triple patterns without any paths: `./lib/transformations/pathTransformation.ts`
+2. For each triple pattern in the user query, unfold the mapping body within it
+  2.1 Unify the mapping head and the body so you get groups of equality between expressions, mapping head variables and triple term variables.
+  2.2 B' = FILTER(B) with the equality of mapping head vars that are equal (using rewriteToSingleVar we replace them later)
+  2.3 B' = FILTER(B') with the other constraints on the vars we found (equality with a static term)
+  2.4 B' = EXTEND(B') with how the triple term vars are constructed from the mapping head vars
+  2.5 B' = FILTER(B') assert the triple term vars are assigned.
+  2.6 B' = PROJECT(B') what remains accessible are only the triple terms vars
+3. rewrite B' to replace equality (sameTerm) between many variables with a single variable that represents this equality.
+In case one of the variables is normally constructed using an EXTEND, a FILTER is used instead of a second EXTEND
+(`collapseDuplicateExtends`), so the same variable is never bound twice.
+4. Replace variables that are assigned to static terms with those terms, again special care is needed when they are used in certain operations such as expressions.
+5. group constraints together using pushDownRestrictions, which pushes restrictions down and distributes JOIN over UNION
+6. Prune invalid constraint groups, replacing them with filter false.
+  This involves statically evaluating the expression equalities, using both the ClusterSolver (I think), as range and domain of known operations,
+  but also using comunica's expression evaluator to evaluate static expressions and optimize the query.
+  Certain operations might be fruitful to implement specific prune algorithms for,
+  like word equations testing literal concatenations are possible given a variable.
+7. optimize filter False expressions by letting them walk up.
 
-> **Reference**: Principles of Data Integration - AnHai Doan, Alon Halevy, Zachary Ives
-
-There is also a [working draft for RDF 1.2 interoperability](https://w3c.github.io/rdf-interop/spec/) describing standard mappings between RDF 1.1 and RDF 1.2.
-
-## Installation
-
-```bash
-npm install query-rewriting-1-2
-```
-
-## Quick Start
-
-```typescript
-import {
-  transformContextFromConstructs,
-  queryTransform,
-  operationTransform,
-  substituteVarsThatArePreBoundToTerms,
-  transformFilterFalse
-} from 'query-rewriting-1-2';
-
-// Define mappings from RDF 1.2 to RDF 1.1 representation
-const mappings = [
-  // Map triple terms from RDF 1.1 reification vocabulary
-  `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-   CONSTRUCT { ?t rdf:reifies <<( ?s ?p ?o )>> }
-   WHERE {
-     ?t rdf:reifies [
-       a rdf:tripleTerm ;
-       rdf:ttSubject ?s ;
-       rdf:ttPredicate ?p ;
-       rdf:ttObject ?o
-     ]
-   }`,
-  // Map regular triples (excluding reification)
-  `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-   CONSTRUCT { ?s ?p ?o }
-   WHERE {
-     ?s ?p ?o .
-     FILTER(!isTriple(?o))
-     FILTER(?p != rdf:reifies)
-   }`
-];
-
-// Create transformation context
-const context = transformContextFromConstructs(mappings);
-
-// Rewrite a SPARQL 1.2 query
-const userQuery = `
-  PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-  SELECT * WHERE {
-    ?t rdf:reifies <<( :me :name ?name )>> .
-    ?t :statedBy :govBE .
-  }
-`;
-
-// Apply transformations
-const rewrittenQuery = queryTransform(
-  context,
-  userQuery,
-  [operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse]
-);
-
-console.log(rewrittenQuery);
-```
+To check:
+1. projections may cause some engines to behave weird. In that case we should remove projections.
+2. Merge service calls. Services can handle a variable amound of computation, given that, we can compose them in various ways.
 
 ## How It Works
 
@@ -102,161 +63,6 @@ The rewriter transforms each triple pattern in your BGP (Basic Graph Pattern) in
 - **No blank nodes in head**: Use variables instead; blank node templates are supported for skolemization
 - **No BNODE() function in body**: Blank node creation in the mapping body is not allowed
 
-## RDF 1.2 Representation Examples
-
-### Standard RDF Reification Vocabulary
-
-RDF 1.2 (with triple term):
-```turtle
-:me :name "jitse" ~ :t {| :statedBy :govBE |}
-```
--- RDF 1.2 spec ->
-```turtle
-:me :name "jitse" .
-< :me :name "jitse" ~ :t > :satatedBy :govBE
-```
--- RDF 1.2 spec ->
-```turtle
-:me :name "jitse" .
-:t rdf:reifies <<( :me :name "jitse" )>> .
-:t :statedBy :govBE .
-```
-
-RDF 1.1 representation:
-```turtle
-:me :name "jitse" .
-:t rdf:reifies _:triple1 .
-:t :statedBy :govBE .
-
-_:triple1 a rdf:tripleTerm .
-_:triple1 rdf:ttSubject :me .
-_:triple1 rdf:ttPredicate :name .
-_:triple1 rdf:ttObject "jitse" .
-```
-
-Mapping to go back to RDF 1.2:
-```sparql
-PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-CONSTRUCT {
-    ?t rdf:reifies <<( ?s ?p ?o )>>
-} WHERE {
-    ?t rdf:reifies [
-        a rdf:tripleTerm ;
-        rdf:ttSubject ?s ;
-        rdf:ttPredicate ?p ;
-        rdf:ttObject ?o ;
-    ]
-}
-CONSTRUCT {
-    ?s ?p ?o .
-} WHERE {
-    ?s ?p ?o .
-    # Next filter is not needed since in 1.1 the function does not exist
-    FILTER ( !isTripleTerm(?o)) .
-    FILTER ( ?p != "rdf:reifies" && NOT EXISTS {
-        ?sRoot rdf:reifies ?s .
-    })
-}
-```
-Construct to go to: (Because 2 ways, can do GLAV)
-```
-PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-
-CONSTRUCT {
-    ?t rdf:type rdf:Statement ;
-       rdf:subject ?s ;
-       rdf:predicate ?p ;
-       rdf:object ?o ;
-} WHERE {
-    ?t rdf:reifies <<( ?s ?p ?o )>>
-}
-```
-
-### Singleton Property Pattern
-
-```turtle
-:me :name "jitse" .
-:me :name#1 "jitse" .
-:name#1 rdf:singletonPropertyOf :name ;
-        :statedBy :govBE .
-```
-
-Mapping:
-```sparql
-CONSTRUCT {
-    ?p rdf:reifies <<( ?s ?trueProp ?o )>>
-} WHERE {
-    ?s ?p ?o .
-    ?p rdf:singletonPropertyOf ?trueProp .
-}
-```
-
-### Named Graphs Pattern
-Either:
-1. trust the graph has only one triple,
-2. use one subject multiple times to reify many triples,
-3. Annotate the graph has only one triple (could also use a count subquery?)
-
-```turtle
-:me :name "jitse" .
-_:g { :me :name "jitse" }
-_:g :statedBy :govBE .
-```
-
-Mapping:
-```sparql
-CONSTRUCT {
-    ?t rdf:reifies <<( ?s ?p ?o )>> ; ?p1 ?o1 .
-} WHERE {
-    GRAPH ?t { ?s ?p ?o } .
-    ?t ?p1 ?o1 .
-    OPTIONAL { ?t a some:reificationGraph }
-}
-```
-
-Mapping with check for only one triple:
-```sparql
-CONSTRUCT {
-    ?t rdf:reifies <<( ?s ?p ?o )>> ; ?p1 ?o1 .
-} WHERE {
-    {
-        SELECT ?t WHERE {
-            GRAPH ?t { ?s ?p ?o }
-        } GROUP BY (?t) having (count(*) = 1)
-    }
-    GRAPH ?t { ?s ?p ?o } .
-    ?t ?p1 ?o1 .
-}
-```
-
-### N-ary Pattern (e.g., Wikidata style)
-(used by Wikidata under the [prefixes](https://www.wikidata.org/wiki/EntitySchema:E49), p(property), ps(property statement) and wdt(property direct))
-
-```turtle
-:me :name "jitse" .
-:me :nameP _:temp .
-_:temp :statedBy :govBE .
-_:temp :namePs "jitse" .
-
-# Made up properties...
-:nameP :hasDirectProp :name .
-:nameP :hasPropertyStatement ?ps .
-```
-
-Mapping:
-```sparql
-CONSTRUCT {
-    ?rel rdf:reifies <<( ?s ?trueProp ?o )>> ; ?p1 ?o1 .
-} WHERE {
-    ?s ?p ?rel .
-    ?rel ?p1 ?o1 ;
-         ?ps ?o .
-
-     ?p :hasDirectProp :name ;
-        :hasPropertyStatement ?ps ;
-}
-```
-
 ## Blank Node Handling (Skolem Functions)
 
 Since underlying RDF 1.1 datasets cannot consistently reference blank nodes across queries, this library supports four skolem types in mapping heads:
@@ -275,6 +81,8 @@ For TemplateBlank, since actual blank nodes cannot be consistently referenced, t
 Both approaches ensure "same inputs = same identity" semantics.
 
 ## SPARQL Quirks
+
+There is also a [working draft for RDF 1.2 interoperability](https://w3c.github.io/rdf-interop/spec/) describing standard mappings between RDF 1.1 and RDF 1.2.
 
 **Empty groups produce one binding**: An empty group `{}` emits a single binding with no variables bound ([spec reference](https://www.w3.org/TR/sparql11-query/#emptyGroupPattern)).
 

@@ -1,7 +1,9 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
-import { createFilterFalse, isRdfVar } from '../utils.js';
+import { createFilterFalse } from '../utils/operationhelpers.js';
+
+import { isRdfVar } from '../utils/typeGuards.js';
 
 /**
  * Counter for generating unique variable names during path rewriting.

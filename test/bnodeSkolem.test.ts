@@ -1,13 +1,10 @@
 import { describe, it } from 'vitest';
 import { DT_INTERNAL_BNODE } from '../lib/consts.js';
 import { internalBnodeAsSpecialLiteral } from '../lib/transformations/bnodeMapAsLiteral.js';
-import { createPartialContext } from '../lib/transformContext.js';
+import { type TransformContext, transformContextFromConstructs } from '../lib/transformContext.js';
 
 describe('bnode skolem', () => {
-  const c = {
-    ...createPartialContext(),
-    mappers: [],
-  };
+  const c: TransformContext = transformContextFromConstructs([ 'CONSTRUCT WHERE {?s ?p ?o}' ]);
   const AF = c.AF;
   const DF = c.DF;
 

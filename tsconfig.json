@@ -6,6 +6,7 @@
       "es2022",
       "dom"
     ],
+    "rootDir": ".",
     "module": "NodeNext",
     "moduleResolution": "nodenext",
     "types": ["vitest/globals"],
@@ -24,12 +25,15 @@
     "esModuleInterop": true,
     "skipLibCheck": true
   },
+  // Only `lib` is built: the tests import `@comunica/*`, which the local `comunica` checkout resolves to
+  // TypeScript sources instead of the published declarations. Those sources need TypeScript 6, so type
+  // checking them here fails. Tests are run by vitest, which transpiles without type checking.
   "include": [
-    "lib/**/*.ts",
-    "test/**/*.ts"
+    "lib/**/*.ts"
   ],
   "exclude": [
     "node_modules",
+    "comunica",
     "dist/**",
     "test/statics/REF-Benchmark/BKR/data/**"
   ]

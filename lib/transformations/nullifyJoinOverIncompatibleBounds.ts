@@ -1,7 +1,9 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
-import { createFilterFalse, directExtensions, termIsStaticTerm } from '../utils.js';
+import { createFilterFalse } from '../utils/operationhelpers.js';
+import { termIsStaticTerm } from '../utils/typeGuards.js';
+import { directExtensions } from '../utils.js';
 import { VariableSet } from './variableSet.js';
 
 // TODO: implement this check to not only check static bind equality but also static term/iri equality in a filter.

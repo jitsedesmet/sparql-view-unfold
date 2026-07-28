@@ -1,9 +1,10 @@
+import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { rewriteSinglePattern } from './transformations/index.js';
 import type { TransformContext } from './transformContext.js';
 import { prefixVarsInOperation, parseQuery } from './transformContext.js';
-import { createFilterFalse } from './utils.js';
+import { collectVariableNames, renameVariables } from './utils.js';
 
 /**
  * Returns true when a GROUP node exists at the top of the operation's
@@ -112,74 +113,48 @@ export function queryTransform(
 }
 
 /**
- * Core transformation that rewrites BGPs (Basic Graph Patterns) into unions of subselects.
+ * Rewrites a single BGP pattern and namespaces every internal (non user-query)
+ * variable it introduces so that sibling patterns in the same BGP cannot collide.
  *
- * For each triple pattern in a BGP, this creates a UNION of alternatives where
- * each alternative corresponds to one of the configured mappings. This is the
- * key operation that enables query rewriting from SPARQL 1.2 to SPARQL 1.1.
+ * `rewriteSinglePattern` always produces the same internal variable names for a
+ * given mapping (`m_s`, `m_o`, `mi_*`, unification vars, ...). When two patterns
+ * of a BGP are joined, these internal variables — some of which are projected out
+ * of the pattern's subselect and are therefore visible at the JOIN level — would
+ * be unified across patterns, yielding incorrect (usually empty) results.
  *
- * A BGP of `n` triple patterns with `m` mappers results in:
- * - A JOIN of `n` unions
- * - Each union has `m` alternatives (one per mapper)
- *
- * @param c - The transformation context
- * @param input - The algebra operation to transform
- * @returns The transformed operation with BGPs rewritten to unions
- *
- * @example
- * // Input: BGP { ?s ?p ?o . ?a ?b ?c }
- * // Output: JOIN [
- * //   UNION [ mapper1(?s ?p ?o), mapper2(?s ?p ?o) ],
- * //   UNION [ mapper1(?a ?b ?c), mapper2(?a ?b ?c) ]
- * // ]
+ * User-query variables carry the `uq_` prefix and are the *only* variables that
+ * are meant to be shared between patterns (they are the natural join keys). We
+ * therefore rename every other variable with a per-pattern prefix, keeping the
+ * rename consistent within the pattern's subtree so scoping is preserved.
  */
+function rewritePatternWithUniqueScope(
+  c: TransformContext,
+  pattern: Algebra.Pattern,
+  patternIndex: number,
+): Algebra.Operation {
+  const rewritten = rewriteSinglePattern(c, pattern, c.mapping);
+  const renames: Record<string, RDF.Variable> = {};
+  for (const name of collectVariableNames(c.astTransformer, rewritten)) {
+    if (!name.startsWith('uq_')) {
+      renames[name] = c.DF.variable(`p${patternIndex}_${name}`);
+    }
+  }
+  return renameVariables(c, rewritten, renames);
+}
+
 export function operationTransform(c: TransformContext, input: Algebra.Operation): Algebra.Operation {
+  // Counter shared across every BGP of the query so that the internal variables of
+  // distinct pattern rewrites never collide — not even across sibling BGPs that are
+  // later combined by a JOIN/LEFT JOIN (e.g. a pattern and an OPTIONAL block).
+  let patternCounter = 0;
   const transformed = algebraUtils.mapOperation<'unsafe', typeof input>(
     input,
-    { [Algebra.Types.BGP]: {
-      transform: input => bgpTransform(c, input),
+    { [Algebra.Types.BGP]: { transform: input =>
+      c.AF.createJoin(
+        input.patterns.map(pattern => rewritePatternWithUniqueScope(c, pattern, patternCounter++)),
+        true,
+      ),
     }},
   );
   return transformed;
-}
-
-/**
- * Transforms a BGP (Basic Graph Pattern) into a join of unions.
- * Each triple pattern becomes a union of subselects (one per mapper).
- *
- * @param c - The transformation context
- * @param input - The BGP to transform
- * @returns A Join containing one Union per triple pattern
- */
-export function bgpTransform(c: TransformContext, input: Algebra.Bgp): Algebra.Join {
-  return c.AF.createJoin(input.patterns.map(pattern => mapPattern(c, pattern)), true);
-}
-
-/**
- * Transforms a single triple pattern into a union of alternatives.
- *
- * For each configured mapper, attempts to rewrite the pattern using that mapper.
- * If rewriting fails (e.g., incompatible patterns), a FILTER(FALSE) placeholder
- * is used to maintain the union structure.
- *
- * @param c - The transformation context
- * @param pattern - The triple pattern to transform
- * @returns A Union of rewritten patterns (or FILTER(FALSE) for non-matching mappers)
- */
-export function mapPattern(
-  c: TransformContext,
-  pattern: Algebra.Pattern,
-): Algebra.Union | Algebra.Filter | Algebra.Project | Algebra.Extend {
-  const mappedPatterns = c.mappers.map((mapper) => {
-    try {
-      return rewriteSinglePattern(c, pattern, mapper);
-    } catch {
-      // Console.error(e);
-      return createFilterFalse(c);
-    }
-  });
-  if (mappedPatterns.length === 1) {
-    return mappedPatterns[0];
-  }
-  return c.AF.createUnion(mappedPatterns, true);
 }

@@ -1,7 +1,7 @@
 import { GeneratorBuilder } from '@traqula/core';
 import { Generator, sparql12GeneratorBuilder } from '@traqula/generator-sparql-1-2';
 import type { Query, SparqlGeneratorContext, Update } from '@traqula/rules-sparql-1-2';
-import { datatypeBoolean, datatypeString } from '../utils.js';
+import { datatypeBoolean, datatypeString } from '../utils/rdfDatatypes.js';
 
 /**
  * @fileoverview Custom SPARQL generator with optimized literal output.

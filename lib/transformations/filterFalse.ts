@@ -1,6 +1,6 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
-import { createFilterFalse, isFilterFalse, termFalse } from '../utils.js';
+import { createFilterFalse, isFilterFalse, termFalse } from '../utils/operationhelpers.js';
 
 /**
  * @fileoverview FILTER(FALSE) simplification transformation.
