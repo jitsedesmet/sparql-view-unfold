@@ -30,13 +30,48 @@ export class ClusterSet<T> {
    * @param value - The value to get/create a group for
    * @returns The group ID
    */
-  protected getGroup(value: T): number {
+  public getGroup(value: T): number {
     const group = this.valueToGroup[this.toId(value)];
     // Return the group
     if (group !== undefined) {
       return group;
     }
     return this.createGroup(value);
+  }
+
+  /**
+   * The group a value is in, without creating one for it - the read-only counterpart of {@link getGroup}.
+   * @param value - The value to look up
+   * @returns The group ID, or `undefined` when the value is in no group
+   */
+  public groupOf(value: T): number | undefined {
+    return this.valueToGroup[this.toId(value)];
+  }
+
+  /** The values of a group, empty when the group does not exist. */
+  public valuesOf(group: number): readonly T[] {
+    return this.groupToValues[group] ?? [];
+  }
+
+  /** Every group and its values, in the order the groups were created. */
+  public groupEntries(): [ number, readonly T[] ][] {
+    return Object.entries(this.groupToValues).map(([ group, values ]) => [ Number(group), values ]);
+  }
+
+  /** A copy that shares no state with this one, so that either may be mutated on its own. */
+  public clone(): ClusterSet<T> {
+    const copy = new ClusterSet<T>(this.toId);
+    this.copyInto(copy);
+    return copy;
+  }
+
+  /** Copies the state of this set into `target`, which subclasses extend with the state they add. */
+  protected copyInto(target: ClusterSet<T>): void {
+    target.groupToValues = Object.fromEntries(
+      Object.entries(this.groupToValues).map(([ group, values ]) => [ group, [ ...values ]]),
+    );
+    target.valueToGroup = { ...this.valueToGroup };
+    target.cleanNumber = this.cleanNumber;
   }
 
   protected createGroup(value: T): number {
@@ -48,7 +83,42 @@ export class ClusterSet<T> {
   }
 
   /**
+   * Takes a value out of the group it is in.
+   *
+   * A group the removal leaves without members, or with a single member and nothing for that member to be
+   * equal *to* ({@link carriesInformation}), no longer says anything, so it is dropped rather than kept
+   * around as a group of one.
+   */
+  public remove(value: T): void {
+    const id = this.toId(value);
+    const group = this.valueToGroup[id];
+    if (group === undefined) {
+      return;
+    }
+    delete this.valueToGroup[id];
+    const remaining = this.groupToValues[group].filter(other => this.toId(other) !== id);
+    this.groupToValues[group] = remaining;
+    if (remaining.length === 0 || (remaining.length < 2 && !this.carriesInformation(group))) {
+      this.dropGroup(group);
+    }
+  }
+
+  /** Whether the group holds something its single remaining member would still be constrained by. */
+  protected carriesInformation(_group: number): boolean {
+    return false;
+  }
+
+  /** Deletes a group and every value in it, which subclasses extend with the state they add. */
+  protected dropGroup(group: number): void {
+    for (const value of this.groupToValues[group] ?? []) {
+      delete this.valueToGroup[this.toId(value)];
+    }
+    delete this.groupToValues[group];
+  }
+
+  /**
    * Merges two groups into one.
+   * @returns `undefined` when both values were already in the same group, so nothing was merged.
    */
   public mergeGroups(from: T, to: T): { oldGroup: number; newGroup: number } | undefined {
     const fromGroup = this.getGroup(from);

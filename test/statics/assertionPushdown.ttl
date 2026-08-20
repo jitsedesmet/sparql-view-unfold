@@ -1,0 +1,43 @@
+PREFIX : <ex://>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+# `:p` and `:q` share the object `:shared`, so `{ ?x :p ?y } MINUS { ?z :q ?y }` is empty on this graph.
+# That is what tells a strong prune of the MINUS right hand side apart from the (correct) weak one.
+:a :p :shared .
+:b :q :shared .
+
+# Reached only through `:r`, which is what the operand a demoted (weak) assertion travels into joins
+# with: the solutions that leave `?x` unbound have to survive that demotion.
+:a :r :rd .
+
+# Two intermediate witnesses for the same pair, so `:a :step/:onwards :end` has multiplicity two.
+:a :step :m1 , :m2 .
+:m1 :onwards :end .
+:m2 :onwards :end .
+
+# A literal in a non-canonical lexical form: `sameTerm(?o, "01"^^xsd:integer)` does not match it,
+# although `?o = "01"^^xsd:integer` does.
+:a :value "1"^^xsd:integer .
+
+# `?s = ?o` holds of some of these and not others, which is what a unification pushed into a pattern has
+# to tell apart - and it holds *twice* over `:loop`, so a rewrite that changed multiplicities would show.
+:loop :self :loop .
+:loop :twice :loop .
+:loop :self :other .
+:other :self :other .
+
+# The same pair reached by two intermediate witnesses, but this time a *cycle*, so `?x :step/:onwards ?x`
+# has multiplicity two. Nothing here is reachable from `:a`, and `:cyc` has no `:r`, so the rows the
+# assertions above are counted over do not move.
+:cyc :step :h1 , :h2 .
+:h1 :onwards :cyc .
+:h2 :onwards :cyc .
+
+# Triple terms, the subject of the structural assertions. `:says` relates a subject to a triple term
+# whose own subject is that same subject for `:a` and `:c` but not for `:b`, which is what
+# `FILTER(sameTerm(subject(?o), ?s))` tells apart. `:d` is bound to something that is not a triple term
+# at all, so an accessor on it errors and the row drops.
+:a :says <<( :a :p :shared )>> .
+:b :says <<( :a :q :other )>> .
+:c :says <<( :c :p :other )>> .
+:d :says :notATripleTerm .

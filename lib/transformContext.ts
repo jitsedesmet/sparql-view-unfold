@@ -11,7 +11,7 @@ import { AlgebraTemplateFactory } from './AlgebraTemplateFactory.js';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
 import type { Mapping, MappingHead } from './types.js';
-import { certainlyBoundVariables } from './utils/certainlyBoundVars.js';
+import { withCpVars } from './utils/certainlyBoundVars.js';
 import { isRdfTerm } from './utils/typeGuards.js';
 import { collectVariableNames } from './utils.js';
 
@@ -148,7 +148,7 @@ ${JSON.stringify(construct.template, null, 2)}`);
   // A CONSTRUCT only instantiates its template when every variable in that template is bound,
   // so solutions leaving a head variable unbound do not belong to the mapping.
   // Variables that are certainly bound already need no filter.
-  const certainlyBound = certainlyBoundVariables(construct.input, { extendBinds: true });
+  const certainlyBound = withCpVars(construct.input).metadata.cVars;
   const mustBeBound = [ ...usedVars.keys() ].filter(name => !certainlyBound.has(name));
   const filteredInput = mustBeBound.length === 0 ?
     construct.input :

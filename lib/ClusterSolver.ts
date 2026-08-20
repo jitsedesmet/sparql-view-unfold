@@ -1,6 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { ClusterSet } from './datastructures/ClusterSet.js';
+import { TermClusterSet } from './datastructures/TermClusterSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
 import type { RangedVar } from './utils/RangedVar.js';
 import { isRdfTerm, isRdfVar } from './utils/typeGuards.js';
@@ -38,13 +38,11 @@ export type RawBasicTerm = Exclude<RawTerm, RDF.Quad>;
  * // And triple pattern: ?x rdf:reifies <<( ?x ?y ?z )>>
  * // The solver determines: ?t = ?x = ?s, ?y = ?p, ?z = ?o
  */
-export class ClusterSolver extends ClusterSet<RangedVar> {
+export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   /** Maps group ID to the valid term type range for that group */
   protected groupToRange: Record<number, RangeSet>;
   /** Maps group ID to the expression that they need to satisfy */
   public groupToExpressions: Record<number, Algebra.Expression[]>;
-  /** Maps group ID to the concrete term the group is bound to (if any) */
-  public groupToTerm: Record<number, RawBasicTerm | undefined>;
   /**
    * Static expression validations where no variable group is involved.
    * These occur when an expression must equal a concrete term.
@@ -53,7 +51,7 @@ export class ClusterSolver extends ClusterSet<RangedVar> {
   /** Counter for generating unique group IDs */
 
   public constructor() {
-    super(variable => variable.value);
+    super(variable => variable.value, (a, b) => a.equals(b));
     this.clear();
   }
 
@@ -65,7 +63,6 @@ export class ClusterSolver extends ClusterSet<RangedVar> {
     super.clear();
     this.groupToExpressions = {};
     this.groupToRange = {};
-    this.groupToTerm = {};
     this.staticExpressionValidation = [];
   }
 
@@ -145,7 +142,6 @@ export class ClusterSolver extends ClusterSet<RangedVar> {
   protected override createGroup(variable: RangedVar): number {
     const group = super.createGroup(variable);
     this.groupToExpressions[group] = [];
-    this.groupToTerm[group] = undefined;
     this.groupToRange[group] = new RangeSet(variable.range ?? objectRange);
     return group;
   }
@@ -183,13 +179,15 @@ export class ClusterSolver extends ClusterSet<RangedVar> {
   }
 
   /**
-   * Registers a concrete term binding to a group.
+   * Registers a concrete term binding to a group: the throwing wrapper around {@link setTerm} that the
+   * unfolding needs, since a mapping head asking one group to be two terms at once is a broken mapping
+   * rather than an ordinary contradiction.
    * @param group - The group ID
    * @param term - The term to bind
    * @throws Error if term conflicts with existing binding or range
    */
   protected registerTermToGroup(group: number, term: RawBasicTerm): void {
-    const curTerm = this.groupToTerm[group];
+    const curTerm = this.termOf(group);
     // TODO: validate in the case of triple term by also registering that some variables present might be the same.
     if (curTerm && !curTerm.equals(term)) {
       throw new Error(`Cannot match Term ${JSON.stringify(curTerm)} with term ${JSON.stringify(term)}`);
@@ -198,25 +196,18 @@ export class ClusterSolver extends ClusterSet<RangedVar> {
     if (!groupRange.has(term.termType)) {
       throw new Error(`Cannot assign Term ${JSON.stringify(term)} to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
     }
-    this.groupToTerm[group] = curTerm ?? term;
+    this.setTerm(group, term);
   }
 
   /**
-   * Merges two variable groups into one.
-   * Combines ranges, terms, and expressions from both groups.
-   * @param from - First variable
-   * @param to - Second variable
+   * Combines the ranges, terms and expressions of two groups being merged.
+   * The range is narrowed first, so that a term the narrowed range no longer admits is still caught.
    */
-  public override mergeGroups(from: RangedVar, to: RangedVar): { oldGroup: number; newGroup: number } | undefined {
-    const res = super.mergeGroups(from, to);
-    if (res === undefined) {
-      return res;
-    }
-    const { oldGroup, newGroup } = res;
+  protected override migrateGroupData(oldGroup: number, newGroup: number): boolean {
     // Merge range
     this.groupToRange[newGroup] = this.groupToRange[newGroup].disjunct(this.groupToRange[oldGroup]);
     // Merge term
-    const oldTerm = this.groupToTerm[oldGroup];
+    const oldTerm = this.termOf(oldGroup);
     if (oldTerm) {
       this.registerTermToGroup(newGroup, oldTerm);
     }
@@ -224,8 +215,7 @@ export class ClusterSolver extends ClusterSet<RangedVar> {
     this.groupToExpressions[newGroup].push(...this.groupToExpressions[oldGroup]);
     delete this.groupToExpressions[oldGroup];
     delete this.groupToRange[oldGroup];
-    delete this.groupToTerm[oldGroup];
-    return res;
+    return true;
   }
 
   /**

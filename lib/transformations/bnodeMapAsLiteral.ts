@@ -222,7 +222,7 @@ export function internalBnodeAsSpecialIri<T extends Algebra.Operation>(c: Transf
         return AF.createOperatorExpression('&&', [
           AF.createOperatorExpression('isiri', expression.args),
 
-          AF.createOperatorExpression('STRSTARTS', [
+          AF.createOperatorExpression('strstarts', [
             AF.createOperatorExpression('str', expression.args),
             AF.createTermExpression(DF.literal(IRI_PREFIX_BNODE)),
           ]),

@@ -25,6 +25,17 @@ In case one of the variables is normally constructed using an EXTEND, a FILTER i
 (`collapseDuplicateExtends`), so the same variable is never bound twice.
 4. Replace variables that are assigned to static terms with those terms, again special care is needed when they are used in certain operations such as expressions.
 5. group constraints together using pushDownRestrictions, which pushes restrictions down and distributes JOIN over UNION
+  5.1 push the assertions down with `pushDownAssertions`: both the `FILTER(sameTerm(?x, term))` constraints of 2.3,
+  which substitute their term into the patterns they reach and empty the branches that cannot bind the variable,
+  and the `FILTER(sameTerm(?x, ?y))` unifications of 2.2 that 3 left behind, which substitute one variable for the other.
+  A chain of unifications is a *clique* of variables that all have to be equal, and it is substituted to the
+  lexicographically first member of the clique, with a `BIND` per member replacing the ones it substituted away
+  (`?s ?p ?o FILTER(sameTerm(?s, ?o))` becomes `?o ?p ?o . BIND(?o AS ?s)`, keeping `pVars` and `cVars` unchanged).
+  The two interact: a term meeting a clique fixes every variable in it at once.
+  Two invariants that are not guessable from the code, and are argued for in the `@fileoverview` of the pass:
+  a clique is split by *edges* rather than by variables, so that what is pushed down plus what is kept on top spans it
+  again; and the weak form (`!bound(?x) || sameTerm(?x, term)`) only exists for a clique pinned to a term,
+  a clique without one travelling as the `bound(?x)` it entails of each of its members instead.
 6. Prune invalid constraint groups, replacing them with filter false.
   This involves statically evaluating the expression equalities, using both the ClusterSolver (I think), as range and domain of known operations,
   but also using comunica's expression evaluator to evaluate static expressions and optimize the query.
@@ -104,13 +115,13 @@ This means a mapping that doesn't match uses `FILTER(FALSE)` (zero results), not
 
 ### Optimization Transformations
 
-| Transformation                         | Description                                           |
-|----------------------------------------|-------------------------------------------------------|
-| `substituteVarsThatArePreBoundToTerms` | Inline known variable values into patterns            |
-| `transformFilterFalse`                 | Remove FILTER(FALSE) branches and simplify            |
-| `nullifyJoinOverIncompatibleBounds`    | Replace incompatible join branches with FILTER(FALSE) |
-| `pushUpBoundedFromUnion`               | Hoist common bindings out of UNION branches           |
-| `rewriteNonRecursivePaths`             | Expand property paths into BGPs                       |
+| Transformation                         | Description                                                                                                                                                                                                                        |
+|-----------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `nullifyJoinOverIncompatibleBounds`    | Replace incompatible join branches with FILTER(FALSE)                                                                                                                                                                             |
+| `pushUpBoundedFromUnion`               | Hoist common bindings out of UNION branches                                                                                                                                                                                       |
+| `pushDownAssertions`                   | Push assertion filters (`FILTER(sameTerm(?x, c))`) as deep as possible: substitute the term into BGPs and paths, prune VALUES rows, empty UNION branches that cannot bind the variable, and turn an OPTIONAL over an asserted variable into a plain join |
+| `rewriteNonRecursivePaths`             | Expand property paths into BGPs                                                                                                                                                                                                   |
+| `transformFilterFalse`                 | Remove FILTER(FALSE) branches and simplify                                                                                                                                                                                        |
 
 ### Blank Node Transformations
 

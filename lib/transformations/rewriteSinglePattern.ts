@@ -141,7 +141,7 @@ function collectTriplePatternBinds({
         // Triple pattern matching is term equality, so assert sameTerm and not `=`:
         // "1"^^xsd:integer and "1.0"^^xsd:decimal are `=` but never match the same pattern.
         expressionFilters.push(
-          AF.createOperatorExpression('sameTerm', [ triplePatternBinds[tpVariable.value], expression ]),
+          AF.createOperatorExpression('sameterm', [ triplePatternBinds[tpVariable.value], expression ]),
         );
       } else {
         triplePatternBinds[tpVariable.value] = expression;
@@ -180,7 +180,7 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF 
       }
       // Each mapping head var in the cluter should be equal to the term.
       for (const clusterVar of groupMappingVars) {
-        termEqualityFilter.push(AF.createOperatorExpression('sameTerm', [
+        termEqualityFilter.push(AF.createOperatorExpression('sameterm', [
           AF.createTermExpression(clusterVar),
           AF.createTermExpression(groupTerm),
         ]));
@@ -190,7 +190,7 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF 
       for (let headIdx = 0; headIdx < groupMappingVars.length - 1; headIdx++) {
         const headVar = groupMappingVars[headIdx];
         const tailVar = groupMappingVars[headIdx + 1];
-        headUnificationFilter.push(AF.createOperatorExpression('sameTerm', [
+        headUnificationFilter.push(AF.createOperatorExpression('sameterm', [
           AF.createTermExpression(headVar),
           AF.createTermExpression(tailVar),
         ]));
@@ -202,7 +202,7 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF 
       // If group has term, check if templates equal term, otherwise check if template equals var.
       // By checking templates to terms we can perform prefix validation checks.
       const term: RDF.Term = groupTerm ?? groupMappingVars[0];
-      remainderFilter.push(AF.createOperatorExpression('sameTerm', [ AF.createTermExpression(term), expression ]));
+      remainderFilter.push(AF.createOperatorExpression('sameterm', [ AF.createTermExpression(term), expression ]));
     }
   }
 
@@ -349,7 +349,7 @@ export function rewriteSinglePattern(
   for (const expression of [
     ...expressionFilters,
     ...clusterSolver.getStaticExpressionValidation()
-      .map(x => AF.createOperatorExpression('sameTerm', [ AF.createTermExpression(x.term), x.expression ])),
+      .map(x => AF.createOperatorExpression('sameterm', [ AF.createTermExpression(x.term), x.expression ])),
     ...guards.values(),
   ]) {
     inProject = AF.createFilter(inProject, expression);
