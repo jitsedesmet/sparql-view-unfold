@@ -82,24 +82,6 @@ export function prefixVarsInOperation<T extends object>(
 }
 
 /**
- * Prefixes all variables in a mapping (both head and body) with the given prefix.
- * @param c - Partial context with astTransformer and DF
- * @param mapping - The mapping to transform
- * @param prefix - The prefix to add (e.g., "m0_" for first mapper)
- * @returns A new mapping with all variables prefixed
- */
-export function prefixMappingVars(
-  c: Pick<TransformContext, 'astTransformer' | 'DF'>,
-  mapping: Mapping,
-  prefix: string,
-): Mapping {
-  return {
-    head: prefixVarsInOperation(c, mapping.head, prefix),
-    body: prefixVarsInOperation(c, mapping.body, prefix),
-  };
-}
-
-/**
  * Converts a SPARQL CONSTRUCT query string into a Mapping object.
  *
  * The CONSTRUCT query must have exactly one triple in the template (head).

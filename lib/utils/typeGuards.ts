@@ -1,5 +1,5 @@
 import type * as RDF from '@rdfjs/types';
-import type { Patch, Typed } from '@traqula/core';
+import type { Patch } from '@traqula/core';
 import type { RangedVar } from './RangedVar.js';
 
 /** Whether an object is an RDF term, i.e. has a `termType`. */
@@ -15,18 +15,6 @@ export function isRdfQuad(obj: object): obj is RDF.Quad {
 /** Whether an object is an RDF Variable (potentially with range). */
 export function isRdfVar(obj: object): obj is RangedVar {
   return isRdfTerm(obj) && obj.termType === 'Variable';
-}
-
-/** Whether an object is the default graph. */
-export function isRdfDefaultGraph(obj: object): obj is RDF.DefaultGraph {
-  return isRdfTerm(obj) && obj.termType === 'DefaultGraph';
-}
-
-/** Whether an object is a Typed structure: a string `type`, and a string `subType` if present at all. */
-export function isTyped(obj: object): obj is Typed {
-  return 'type' in obj && typeof obj.type === 'string' && (
-    !('subType' in obj) || typeof obj.subType === 'string'
-  );
 }
 
 export type StaticTermPrimitive =

@@ -1177,12 +1177,17 @@ GROUP BY ?x?y`,
     });
 
     it('empties the plan where the term it pins the clique to cannot occupy its position', ({ expect }) => {
-      // `?y ≡ "a"` reaches the pattern, where no triple has a literal subject.
+      // `?y ≡ "a"` cannot hold: `?y` is a subject, and no triple has a literal one. The *group* carries
+      // that range, so the contradiction is decided where the BIND hands the clique its term - before the
+      // term ever reaches the pattern that `canOccupy` would have refused it at.
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND("a" AS ?t) FILTER(sameTerm(?t, ?y)) }',
-        `SELECT ( "a" AS ?t ) ?w ?y WHERE {
-  ?y <ex://p> ?w .
+        `SELECT ?t ?w ?y WHERE {
+  {
+    ?y <ex://p> ?w .
+    BIND( "a" AS ?t )
+  }
   FILTER ( FALSE )
 }`,
       );
@@ -1325,6 +1330,28 @@ GROUP BY ?x?y`,
         `SELECT * WHERE {
           { ?s ?p ?o FILTER(sameTerm(?s, :x)) } UNION { ?s :p ?o }
           FILTER(sameTerm(?s, ?o))
+        }`,
+        // The accessor folds are what make these idempotent: the condition the assertion was read from
+        // is written back over the operation it was pushed into, and has to collapse there.
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), ?s)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, <<( :a :b :c )>>)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, TRIPLE(?s, ?p, ?s))) }',
+        'SELECT * WHERE { ?s ?p ?o OPTIONAL { ?o :q ?z } FILTER(isTRIPLE(?z)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(isLITERAL(?o)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(object(?o))) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(subject(object(?o)) = :subj) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), subject(?o))) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o) && sameTerm(subject(?o), :a)) }',
+        // And the materialisation on top of them: the plan a shape leaves behind holds no condition for
+        // the pass to read a second time, and what it does leave - a kind of term, a position no
+        // pattern reached - has to survive the second run unchanged rather than coin a second name.
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), :a) && isIRI(object(?o))) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(object(?o)), ?s)) }',
+        `SELECT * WHERE {
+          { { ?t :p ?o } UNION { ?t :q ?o } }
+          ?s :r ?o
+          FILTER(sameTerm(subject(?o), :a))
         }`,
       ]) {
         const once = pushDownAssertions(c, parseQuery(c, prefixes + query));
@@ -1758,16 +1785,23 @@ GROUP BY ?x?y`,
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND(<<( :a :b :c )>> AS ?t) FILTER(sameTerm(?t, ?y)) }',
-        `SELECT ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t ) ?w ?y WHERE {
-  ?y <ex://p> ?w .
+        `SELECT ?t ?w ?y WHERE {
+  {
+    ?y <ex://p> ?w .
+    BIND( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t )
+  }
   FILTER ( FALSE )
 }`,
       );
     });
 
     it('does not let a fallible triple term BIND pin the clique of its target', ({ expect }) => {
-      // `?w` may be a literal, in which case the construction errors and leaves `?t` unbound. Pinning
-      // `?y` to it below would keep exactly those rows, where `sameTerm(?t, ?y)` errored on top.
+      // `?w` may be a literal, in which case the construction errors and leaves `?t` unbound - so nothing
+      // *transfers* onto the expression, and the edge stays an edge.
+      //
+      // The plan is still empty, and for a reason that has nothing to do with the transfer: the edge
+      // implies both of its endpoints are bound, `?t` bound is a triple term ({Quad}), and `?y` is a
+      // subject. Those two ranges meet in nothing, so the group holds no value at all.
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND(<<( ?w :b :c )>> AS ?t) FILTER(sameTerm(?t, ?y)) }',
@@ -1776,7 +1810,7 @@ GROUP BY ?x?y`,
     ?y <ex://p> ?w .
     BIND( <<( ?w <ex://b> <ex://c> )>> AS ?t )
   }
-  FILTER ( SAMETERM( ?y , ?t ) )
+  FILTER ( FALSE )
 }`,
       );
     });
@@ -1858,6 +1892,437 @@ GROUP BY ?x?y`,
       const once = pushDownAssertions(c, parseQuery(c, query));
       const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, query)));
       expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
+    });
+  });
+
+  describe('structural assertions', () => {
+    it('materialises a shape into a triple term pattern, re-binding the variable', ({ expect }) => {
+      // The pattern is what states the shape: `?s` written into the subject position is the equality the
+      // condition carried, and the two coined variables are what the pattern binds the other positions
+      // to. The `BIND` hands `?o` back the value the substitution took out of the pattern.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), ?s)) }',
+        `SELECT ( <<( ?s ?o_p ?o_o )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( ?s ?o_p ?o_o )>> .
+}`,
+      );
+    });
+
+    it('materialises the same shape into every operand a join gives it to', ({ expect }) => {
+      // Both operands write the *same* names for the positions, which is what keeps them joining on the
+      // triple term after both have been rewritten: the positions are functionally determined by the
+      // value the two already joined on, so agreeing on `?o` is agreeing on `?o_p` and `?o_o`.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { { ?t :holds ?o } UNION { ?t :mirrors ?o } }
+          ?s :holds ?o
+          FILTER(sameTerm(subject(?o), :a))
+        }`,
+        `SELECT ?o ?s ?t WHERE {
+  {
+    ?t <ex://holds> <<( <ex://a> ?o_p ?o_o )>> .
+    BIND( <<( <ex://a> ?o_p ?o_o )>> AS ?o )
+  }
+  UNION {
+    ?t <ex://mirrors> <<( <ex://a> ?o_p ?o_o )>> .
+    BIND( <<( <ex://a> ?o_p ?o_o )>> AS ?o )
+  }
+  {
+    ?s <ex://holds> <<( <ex://a> ?o_p ?o_o )>> .
+    BIND( <<( <ex://a> ?o_p ?o_o )>> AS ?o )
+  }
+}`,
+      );
+    });
+
+    it('coins a name the query does not already use', ({ expect }) => {
+      // The candidate `?o_p` is taken by a variable of the query, so the position takes the first free
+      // suffix instead - and the one nothing collides with keeps its plain name.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o . ?a :q ?o_p FILTER(sameTerm(subject(?o), ?s)) }',
+        `SELECT ?a ( <<( ?s ?o_p0 ?o_o )>> AS ?o ) ?o_p ?p ?s WHERE {
+  ?s ?p <<( ?s ?o_p0 ?o_o )>> .
+  ?a <ex://q> ?o_p .
+}`,
+      );
+    });
+
+    it('materialises a shape into a property path', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(subject(?x), :a)) }',
+        `SELECT ( <<( <ex://a> ?x_p ?x_o )>> AS ?x ) ?y WHERE {
+  <<( <ex://a> ?x_p ?x_o )>> (<ex://step>*) ?y .
+}`,
+      );
+    });
+
+    it('keeps the kind of a position over the pattern that materialised it', ({ expect }) => {
+      // A pattern states which term a position holds and which positions the value has; which *kind* of
+      // term a variable takes is not something it states, so that conjunct stays a condition - written
+      // about `?o`, which the re-binding above the pattern has bound, rather than about the variable
+      // coined for the position.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), :a) && isIRI(object(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  {
+    ?s ?p <<( <ex://a> ?o_p ?o_o )>> .
+    BIND( <<( <ex://a> ?o_p ?o_o )>> AS ?o )
+  }
+  FILTER ( ISIRI( OBJECT( ?o ) ) )
+}`,
+      );
+    });
+
+    it('drops the kind of a position the term written there already decides', ({ expect }) => {
+      // The other side of the test above: `isIRI` says which kind of term the subject is, and the
+      // pattern writes *which* term it is - a NamedNode, which is the kind. A term decides its own kind,
+      // so the conjunct states nothing the pattern does not and is not written back, exactly as it is
+      // not written back into a condition (`termTypeToState`).
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), :a) && isIRI(subject(?o))) }',
+          `SELECT ( <<( <ex://a> ?o_p ?o_o )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( <ex://a> ?o_p ?o_o )>> .
+}`,
+      );
+    });
+
+    it('leaves a shape no position of which says anything as the condition it is', ({ expect }) => {
+      // Writing it would coin three variables to state that the value is a triple term, which is what
+      // `isTRIPLE(?o)` states without coining any - and the two have to be the one plan, being the one
+      // fact reached two ways.
+      const expected = `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ISTRIPLE( ?o ) )
+}`;
+      expectTransform(expect, 'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o)) }', expected);
+      expectTransform(expect, 'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), subject(?o))) }', expected);
+    });
+
+    it('substitutes a shape every position of which is decided, being a term after all', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, TRIPLE(:a, :b, :c))) }',
+        `SELECT ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( <ex://a> <ex://b> <ex://c> )>> .
+}`,
+      );
+    });
+
+    it('reads a triple term construction as one conjunct per position', ({ expect }) => {
+      // Not written back as itself: as *conjuncts of a FILTER* the two agree, differing only where one is
+      // `false` and the other an error, which a FILTER discards either way.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, TRIPLE(?s, ?p, :c))) }',
+        `SELECT ( <<( ?s ?p <ex://c> )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( ?s ?p <ex://c> )>> .
+}`,
+      );
+    });
+
+    it('empties the plan where the position a shape lands in holds no triple term', ({ expect }) => {
+      // No triple has a triple term as its subject, which the *group* range decides before anything
+      // downstream has to type-check a term.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?s)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('collapses an OPTIONAL over a structurally asserted variable into a join (FLBndII)', ({ expect }) => {
+      // A shape implies `bnd(?z)`, and `?z ∉ pVars` of the left hand side, so the anti-join half of the
+      // left join produces nothing the assertion keeps.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o OPTIONAL { ?o :q ?z } FILTER(isTRIPLE(?z)) }',
+        `SELECT ?o ?p ?s ?z WHERE {
+  ?s ?p ?o .
+  ?o <ex://q> ?z .
+  FILTER ( ISTRIPLE( ?z ) )
+}`,
+      );
+    });
+
+    it('deletes the UNION branch that can never bind what the shape is about', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s ?p ?o } UNION { ?s ?p ?q } FILTER(sameTerm(subject(?o), :a)) }',
+        `SELECT ?o ?p ?q ?s WHERE {
+  {
+    ?s ?p <<( <ex://a> ?o_p ?o_o )>> .
+    BIND( <<( <ex://a> ?o_p ?o_o )>> AS ?o )
+  }
+  UNION {
+    ?s ?p ?q .
+    FILTER ( FALSE )
+  }
+}`,
+      );
+    });
+
+    it('keeps an edge reading through an accessor above a join no operand licenses it for', ({ expect }) => {
+      // `?s` is bound by the union and `?o` by the pattern, so no single operand is licensed for the edge
+      // - and dropping it rather than keeping it would be a wrong answer, not a missed optimisation.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { { ?s :q ?x } UNION { ?s :q2 ?x } }
+          ?y :r ?o
+          FILTER(sameTerm(subject(?o), ?s))
+        }`,
+        `SELECT ?o ?s ?x ?y WHERE {
+  {
+    ?s <ex://q> ?x .
+  }
+  UNION {
+    ?s <ex://q2> ?x .
+  }
+  ?y <ex://r> ?o .
+  FILTER ( SAMETERM( SUBJECT( ?o ) , ?s ) )
+}`,
+      );
+    });
+
+    it('sends nothing into the right hand side of a MINUS that Θ holds only weakly', ({ expect }) => {
+      // The argument for the RHS needs the surviving `μ₁` to *bind* `?o`: a compatible `μ₂` then either
+      // misses `?o` or agrees with it on the value. Under the weak form `μ₁` may leave `?o` unbound, and
+      // an RHS `μ₂` binding it to anything is still compatible - so filtering that `μ₂` out would keep a
+      // `μ₁` the MINUS removes. The RHS is left alone.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?s :p ?y
+          OPTIONAL { ?s :nosuch ?o }
+          MINUS { ?s :value ?o }
+          FILTER(!bound(?o) || isIRI(?o))
+        }`,
+        `SELECT ?o ?s ?y WHERE {
+  {
+    ?s <ex://p> ?y .
+    OPTIONAL {
+      ?s <ex://nosuch> ?o .
+    }
+    FILTER ( ( ! BOUND( ?o ) || ISIRI( ?o ) ) )
+  }
+  MINUS {
+    ?s <ex://value> ?o .
+  }
+}`,
+      );
+    });
+
+    it('sends the weak form of a shape into the right hand side of a MINUS', ({ expect }) => {
+      // A unary predicate on the value is admissible there: the argument turns on the two sides agreeing
+      // on that value. Here the RHS binds `?o` to a subject, which no triple term is, so it empties.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :r ?o MINUS { ?o :q ?z } FILTER(isTRIPLE(?o)) }',
+        `SELECT ?o ?y WHERE {
+  {
+    ?y <ex://r> ?o .
+    FILTER ( ISTRIPLE( ?o ) )
+  }
+  MINUS {
+    {
+      ?o <ex://q> ?z .
+      FILTER ( FALSE )
+    }
+  }
+}`,
+      );
+    });
+
+    it('leaves the weak form of a shape weak where the variable may be unbound', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :r ?o OPTIONAL { ?o :q ?z } FILTER(!bound(?z) || isTRIPLE(?z)) }',
+        `SELECT ?o ?y ?z WHERE {
+  ?y <ex://r> ?o .
+  OPTIONAL {
+    ?o <ex://q> ?z .
+  }
+  FILTER ( ( ! BOUND( ?z ) || ISTRIPLE( ?z ) ) )
+}`,
+      );
+    });
+
+    it('empties the plan where a position cannot be the kind of term asserted', ({ expect }) => {
+      // The predicate of a triple term is an IRI, so no solution has a literal there - the same rule for
+      // a position of a shape that `isLITERAL(?s)` is for a subject of a pattern.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isLITERAL(predicate(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('states the kind of term without restating that it is a triple term', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(subject(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ISIRI( SUBJECT( ?o ) ) )
+}`,
+      );
+    });
+
+    it('empties the plan on a kind of term the position of a pattern cannot hold', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isLITERAL(?s)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('reads `isURI` as the synonym of `isIRI` that it is', ({ expect }) => {
+      // Written back as `isIRI`, which is the same non-verbatim round trip the other forms make.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isURI(?o)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ISIRI( ?o ) )
+}`,
+      );
+    });
+
+    it('prunes the VALUES rows holding another kind of term', ({ expect }) => {
+      // A row decides which kind of term its column holds, so the assertion is discharged here rather
+      // than left on top - what it cannot decide is a *position* of one.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { VALUES (?o) { (:a) ("l") (:b) } FILTER(isIRI(?o)) }',
+        `SELECT ?o WHERE {
+  VALUES ?o {
+    <ex://a>
+    <ex://b>
+  }
+}`,
+      );
+    });
+
+    it('drops an `isTRIPLE` the position read beside it already entails', ({ expect }) => {
+      // `SUBJECT(?o)` cannot be read of anything but a triple term, so `isTRIPLE(?o)` beside it states a
+      // second time what the row already has to satisfy. Writing both back would grow the condition on
+      // every run of the pass, which is why the shape states it only where no position of it says
+      // anything at all.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o) && sameTerm(subject(?o), :a)) }',
+        `SELECT ( <<( <ex://a> ?o_p ?o_o )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( <ex://a> ?o_p ?o_o )>> .
+}`,
+      );
+    });
+
+    it('drops it whichever way round the two are met', ({ expect }) => {
+      // The order they arrive in is not the order Θ decomposes into, so neither spelling can keep it -
+      // including the one where they arrive as two filters and the second is absorbed into the first.
+      const expected = `SELECT ( <<( <ex://a> ?o_p ?o_o )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( <ex://a> ?o_p ?o_o )>> .
+}`;
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), :a) && isTRIPLE(?o)) }',
+        expected,
+      );
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o)) FILTER(sameTerm(subject(?o), :a)) }',
+        expected,
+      );
+    });
+
+    it('reads and writes back a chain of accessors', ({ expect }) => {
+      // Two levels down, which is where a chain can go at all: only the object of a triple term holds
+      // another one. Written back as the chain it was read from, and it re-parses as one.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s ?p ?o } UNION { ?x ?y ?z } FILTER(sameTerm(subject(object(?o)), :subj)) }',
+        `SELECT ?o ?p ?s ?x ?y ?z WHERE {
+  {
+    ?s ?p <<( ?o_s ?o_p <<( <ex://subj> ?o_o_p ?o_o_o )>> )>> .
+    BIND( <<( ?o_s ?o_p <<( <ex://subj> ?o_o_p ?o_o_o )>> )>> AS ?o )
+  }
+  UNION {
+    ?x ?y ?z .
+    FILTER ( FALSE )
+  }
+}`,
+      );
+    });
+
+    it('reads an `=` against an IRI over a chain as the `sameTerm` it is', ({ expect }) => {
+      // `=` and `sameTerm` coincide against an IRI - `=` only raises a type error where both sides are
+      // literals - so the fold rewrites it before the recognisers ever see it.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s ?p ?o } UNION { ?x ?y ?z } FILTER(subject(object(?o)) = :subj) }',
+        `SELECT ?o ?p ?s ?x ?y ?z WHERE {
+  {
+    ?s ?p <<( ?o_s ?o_p <<( <ex://subj> ?o_o_p ?o_o_o )>> )>> .
+    BIND( <<( ?o_s ?o_p <<( <ex://subj> ?o_o_p ?o_o_o )>> )>> AS ?o )
+  }
+  UNION {
+    ?x ?y ?z .
+    FILTER ( FALSE )
+  }
+}`,
+      );
+    });
+
+    it('reads `sameTerm(a, a)` over an accessor as what it reads *through* being a triple term', ({ expect }) => {
+      // Not that `SUBJECT(?o)` is a triple term - that would be unsatisfiable, no subject being one.
+      // Asserting the access shapes the groups on the way to it and leaves the one it names alone.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), subject(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ISTRIPLE( ?o ) )
+}`,
+      );
+    });
+
+    it('empties the plan where a chain would make a value its own position', ({ expect }) => {
+      // `OBJECT(?o) ≡ OBJECT(OBJECT(?o))` asks a triple term to be its own object, which the occurs
+      // check refuses: a triple term is strictly larger than each of its positions.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(object(object(?o)), object(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('leaves the input tree untouched', ({ expect }) => {
+      const algebra = parseQuery(c, `${prefixes}SELECT * WHERE {
+        ?s ?p ?o
+        OPTIONAL { ?o :q ?z }
+        FILTER(sameTerm(subject(?o), ?s) && isTRIPLE(?z) && isIRI(?p))
+      }`);
+      const before = JSON.stringify(algebra);
+      pushDownAssertions(c, algebra);
+      expect(JSON.stringify(algebra)).toEqual(before);
     });
   });
 
@@ -2139,6 +2604,194 @@ GROUP BY ?x?y`,
         OPTIONAL { ?m :onwards ?y }
         FILTER(bound(?y) && (!bound(?y) || sameTerm(?y, :end)))
       }`, 2);
+    });
+
+    it('keeps the rows the subject of a triple term agrees with its own subject on', async({ expect }) => {
+      // The target of this whole feature: `:a` and `:c` say a triple term whose subject is themselves,
+      // `:b` says one whose subject is someone else, and `:d` says something that is not a triple term
+      // at all - where the accessor errors, and the FILTER discards the row rather than the query
+      // failing.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(sameTerm(subject(?o), ?s))
+      }`, 2);
+    });
+
+    it('returns nothing rather than erroring where the variable is no triple term', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(sameTerm(subject(?o), :notATripleTerm))
+      }`, 0);
+    });
+
+    it('keeps the rows a shape selects, the parts of it decided one at a time', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(sameTerm(predicate(?o), :p) && sameTerm(object(?o), :shared))
+      }`, 1);
+    });
+
+    it('keeps the rows a triple term construction selects', async({ expect }) => {
+      // Read as one conjunct per position, which is not how it was written - and equivalent to it as a
+      // conjunct of a FILTER, where `false` and an error both discard the row.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(sameTerm(?o, TRIPLE(?s, :p, :shared)))
+      }`, 1);
+    });
+
+    it('keeps the rows a bare shape selects', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(isTRIPLE(?o))
+      }`, 3);
+    });
+
+    it('keeps the rows a shape pushed weakly into a join operand selects', async({ expect }) => {
+      // `?o` is bound by one operand only, so the other takes the *weak* form - and the rows it leaves
+      // `?o` unbound in have to survive that.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { ?s :says ?o } UNION { ?s :p ?y }
+        ?s :says ?any
+        FILTER(!bound(?o) || isTRIPLE(?o))
+      }`, 4);
+    });
+
+    it('keeps the rows a shape over a VALUES with an UNDEF column selects', async({ expect }) => {
+      // The UNDEF row leaves `?s` to the pattern, so it contributes every triple term whose subject is
+      // the subject that says it; `:d` says something that is no triple term, and drops.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        VALUES (?s ?x) { (:a :one) (UNDEF :two) (:d :three) }
+        ?s :says ?o
+        FILTER(sameTerm(subject(?o), ?s))
+      }`, 3);
+    });
+
+    it('keeps the rows a shape on the right hand side of a MINUS removes', async({ expect }) => {
+      // The RHS takes the weak form, which is what keeps it from removing the rows the LHS binds `?o`
+      // in and the RHS does not.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        MINUS { ?z :says ?o FILTER(sameTerm(?z, :a)) }
+        FILTER(isTRIPLE(?o))
+      }`, 2);
+    });
+
+    it('keeps the rows a kind of term selects', async({ expect }) => {
+      // `:a :value "1"^^xsd:integer` is the only literal object in the fixture.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s ?p ?o
+        FILTER(isLITERAL(?o))
+      }`, 1);
+    });
+
+    it('keeps the rows a kind of term over a position of a triple term selects', async({ expect }) => {
+      // Every triple term in the fixture has an IRI subject, and `:d` says something that is no triple
+      // term at all - where the accessor errors and the row drops.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(isIRI(subject(?o)))
+      }`, 3);
+    });
+
+    it('returns nothing for a kind of term no position can hold', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(isLITERAL(subject(?o)))
+      }`, 0);
+    });
+
+    it('keeps the rows a weak kind of term leaves under an OPTIONAL', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?any
+        OPTIONAL { ?s :value ?o }
+        FILTER(!bound(?o) || isLITERAL(?o))
+      }`, 4);
+    });
+
+    it('keeps the rows a MINUS removes through a variable Θ holds only weakly', async({ expect }) => {
+      // `:a :value "1"` is an RHS solution binding `?o` to a literal, and the LHS leaves `?o` unbound -
+      // compatible, sharing `?s`, so it removes the row. An RHS pruned by the weak `isIRI(?o)` would not
+      // have, and the row would come back.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :p ?y
+        OPTIONAL { ?s :nosuch ?o }
+        MINUS { ?s :value ?o }
+        FILTER(!bound(?o) || isIRI(?o))
+      }`, 0);
+      // The same over a subject that has more to say, so the answer is not empty for want of anything to
+      // remove: `:a` goes, the other three stay.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?y
+        OPTIONAL { ?s :nosuch ?o }
+        MINUS { ?s :value ?o }
+        FILTER(!bound(?o) || isIRI(?o))
+      }`, 3);
+    });
+
+    it('keeps the rows an `isTRIPLE` selected once the pass has dropped it', async({ expect }) => {
+      // The half that matters: dropping a conjunct is only sound where something else enforces it. `:d`
+      // says a term that is not a triple one, and it has to be gone from the answer even though the
+      // rewritten plan no longer mentions `isTRIPLE` - the accessor errors on it, and the FILTER drops
+      // the row.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(isTRIPLE(?o) && sameTerm(subject(?o), :a))
+      }`, 2);
+    });
+
+    it('keeps the rows a chain of accessors selects', async({ expect }) => {
+      // `:e` nests a triple term inside one, `:f` holds an IRI there - so reading two levels down errors
+      // on `:f` and the row drops, which is the answer the rewritten plan has to reproduce.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :nests ?o
+        FILTER(sameTerm(subject(object(?o)), :b))
+      }`, 1);
+    });
+
+    it('keeps the rows an `=` over a chain selects', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :nests ?o
+        FILTER(subject(object(?o)) = :b)
+      }`, 1);
+    });
+
+    it('keeps the rows `sameTerm(a, a)` over an accessor selects', async({ expect }) => {
+      // Both rows hold a triple term, so both survive - the assertion is about `?o`, not about the
+      // subject it reads.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :nests ?o
+        FILTER(sameTerm(subject(?o), subject(?o)))
+      }`, 2);
+    });
+
+    it('keeps the rows two operands materialising the same shape join on', async({ expect }) => {
+      // Both operands of the join are licensed for the shape, so both write it out - and after that they
+      // join on the variables coined for its positions as well as on `?o`. That is only sound because
+      // both sites coined the same names for the same positions, which is what the shared namer is for;
+      // two independently named sites would join on nothing and multiply the rows out.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { { ?t :holds ?o } UNION { ?t :mirrors ?o } }
+        ?s :holds ?o
+        FILTER(sameTerm(subject(?o), :a))
+      }`, 2);
+    });
+
+    it('keeps the rows a kind of term selects over a materialised position', async({ expect }) => {
+      // The shape reaches the pattern and the kind of term stays a condition over it, read through the
+      // variable the re-binding gave back rather than through the one coined for the position.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(sameTerm(subject(?o), :a) && isIRI(object(?o)))
+      }`, 2);
+    });
+
+    it('keeps the rows an OPTIONAL collapsed by a shape selects', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :p ?y
+        OPTIONAL { ?s :says ?o }
+        FILTER(isTRIPLE(?o))
+      }`, 1);
     });
   });
 });

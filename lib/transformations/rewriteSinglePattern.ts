@@ -170,7 +170,7 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF 
     }
     handledGroups.add(group);
 
-    const groupTerm = clusterSolver.groupToTerm[group];
+    const groupTerm = clusterSolver.termOf(group);
     const groupMappingVars = clusterSolver.groupToValues[group].filter(val => !val.value.startsWith('uq'));
 
     // Handle term restrictions first!

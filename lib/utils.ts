@@ -1,5 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
+import type { TriplePosition } from './datastructures/TermClusterSet.js';
 import type { TransformContext } from './transformContext.js';
 import { DF } from './utils/rdfDatatypes.js';
 import { isRdfTerm, isRdfVar } from './utils/typeGuards.js';
@@ -61,6 +62,57 @@ export function freshVarGenerator(existing: Iterable<string>, prefix = 'v_'): ()
     taken.add(name);
     index += 1;
     return DF.variable(name);
+  };
+}
+
+/** Names a variable a rewrite coins for one position of a triple term it writes into a pattern. */
+export type DerivedVarNamer = (anchor: string, position: TriplePosition) => RDF.Variable;
+
+/** How a position is spelled in the name of the variable holding it. */
+const positionSuffixes: Readonly<Record<TriplePosition, string>> = {
+  subject: 's',
+  predicate: 'p',
+  object: 'o',
+};
+
+/**
+ * Creates the namer a pass writing triple terms into patterns coins its variables with: the position
+ * `p` of the value `?x` names becomes `?x_p`, and a name already taken in the query takes the first
+ * free numeric suffix (`?x_p0`, `?x_p1`, ...).
+ *
+ * **The name has to be a function of what it names**, which is the whole reason this exists beside
+ * {@link freshVarGenerator}. Two places writing out the same position must write the same variable, or
+ * the two operands of a join stop joining on it once both have been rewritten - and a sequentially
+ * numbered generator names by call order instead, so the *same* position picks up a different name
+ * depending on which branch is rewritten first. Sound because the position is functionally determined
+ * by the value the two already agree on: equal triple terms have equal subjects.
+ *
+ * So `anchor` must be the canonical name of the value the position is read from, and the memo below is
+ * what makes a second reading of the same position hand back the variable the first one coined -
+ * including where the first candidate was taken and the suffix moved the name.
+ *
+ * @param existing - Every variable name occurring in the query, collected once *before* the pass runs
+ *   ({@link collectVariableNames}), since a name coined half way through would otherwise collide with
+ *   one further down the tree that has not been visited yet.
+ * @returns The namer, which is stateful: it remembers what it has already coined.
+ */
+export function derivedVarNamer(existing: Iterable<string>): DerivedVarNamer {
+  const taken = new Set(existing);
+  const coined = new Map<string, RDF.Variable>();
+  return (anchor: string, position: TriplePosition): RDF.Variable => {
+    const key = `${anchor}_${positionSuffixes[position]}`;
+    const known = coined.get(key);
+    if (known !== undefined) {
+      return known;
+    }
+    let name = key;
+    for (let index = 0; taken.has(name); index += 1) {
+      name = `${key}${index}`;
+    }
+    taken.add(name);
+    const variable = DF.variable(name);
+    coined.set(key, variable);
+    return variable;
   };
 }
 

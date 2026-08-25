@@ -53,6 +53,11 @@ export class ClusterSet<T> {
     return this.groupToValues[group] ?? [];
   }
 
+  /** Whether the group exists at all - a group nothing points at any more does not. */
+  public hasGroup(group: number): boolean {
+    return this.groupToValues[group] !== undefined;
+  }
+
   /** Every group and its values, in the order the groups were created. */
   public groupEntries(): [ number, readonly T[] ][] {
     return Object.entries(this.groupToValues).map(([ group, values ]) => [ Number(group), values ]);
@@ -74,10 +79,23 @@ export class ClusterSet<T> {
     target.cleanNumber = this.cleanNumber;
   }
 
-  protected createGroup(value: T): number {
+  /**
+   * Creates a group holding no values at all.
+   *
+   * Such a group is only reachable through whatever a subclass makes point at it - the positions of a
+   * triple pin, for {@link TermClusterSet} - which is what an *anonymous* group is: a value the
+   * conjunction can reason about and unify without any variable ever having named it.
+   */
+  protected createEmptyGroup(): number {
     const group = this.cleanNumber;
     this.cleanNumber++;
-    this.groupToValues[group] = [ value ];
+    this.groupToValues[group] = [];
+    return group;
+  }
+
+  protected createGroup(value: T): number {
+    const group = this.createEmptyGroup();
+    this.groupToValues[group].push(value);
     this.valueToGroup[this.toId(value)] = group;
     return group;
   }
@@ -87,7 +105,8 @@ export class ClusterSet<T> {
    *
    * A group the removal leaves without members, or with a single member and nothing for that member to be
    * equal *to* ({@link carriesInformation}), no longer says anything, so it is dropped rather than kept
-   * around as a group of one.
+   * around as a group of one. What "says anything" means is {@link isLive}, which a subclass widens with
+   * the references it holds onto a group from elsewhere.
    */
   public remove(value: T): void {
     const id = this.toId(value);
@@ -96,11 +115,22 @@ export class ClusterSet<T> {
       return;
     }
     delete this.valueToGroup[id];
-    const remaining = this.groupToValues[group].filter(other => this.toId(other) !== id);
-    this.groupToValues[group] = remaining;
-    if (remaining.length === 0 || (remaining.length < 2 && !this.carriesInformation(group))) {
+    this.groupToValues[group] = this.groupToValues[group].filter(other => this.toId(other) !== id);
+    if (!this.isLive(group)) {
       this.dropGroup(group);
     }
+  }
+
+  /**
+   * Whether the group is still worth keeping: two members constrain each other, and a single one is
+   * constrained by whatever the group {@link carriesInformation} about.
+   *
+   * A subclass that lets something *outside* the group's values point at it overrides this: dropping a
+   * group that is still pointed at would leave that reference dangling.
+   */
+  protected isLive(group: number): boolean {
+    const values = this.groupToValues[group]?.length ?? 0;
+    return values > 1 || (values === 1 && this.carriesInformation(group));
   }
 
   /** Whether the group holds something its single remaining member would still be constrained by. */
@@ -121,8 +151,17 @@ export class ClusterSet<T> {
    * @returns `undefined` when both values were already in the same group, so nothing was merged.
    */
   public mergeGroups(from: T, to: T): { oldGroup: number; newGroup: number } | undefined {
-    const fromGroup = this.getGroup(from);
-    const toGroup = this.getGroup(to);
+    return this.mergeGroupIds(this.getGroup(from), this.getGroup(to));
+  }
+
+  /**
+   * Merges two groups by *id*, which is what a group nothing names can be merged by.
+   *
+   * The values-only half of a merge: whatever else a subclass hangs off a group is migrated by
+   * {@link migrateGroupData}, which the caller of this runs.
+   * @returns `undefined` when the two ids are the same group, so nothing was merged.
+   */
+  protected mergeGroupIds(fromGroup: number, toGroup: number): { oldGroup: number; newGroup: number } | undefined {
     if (fromGroup === toGroup) {
       return undefined;
     }
@@ -141,5 +180,13 @@ export class ClusterSet<T> {
       this.valueToGroup[this.toId(value)] = newGroup;
     }
     return { oldGroup, newGroup };
+  }
+
+  /**
+   * Moves everything the disappearing group carried besides its values onto the surviving one.
+   * Subclasses that give a group more state migrate it here.
+   */
+  protected migrateGroupData(_oldGroup: number, _newGroup: number): void {
+    // Nothing but the values, at this level.
   }
 }

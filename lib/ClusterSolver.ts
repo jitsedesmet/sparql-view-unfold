@@ -39,8 +39,6 @@ export type RawBasicTerm = Exclude<RawTerm, RDF.Quad>;
  * // The solver determines: ?t = ?x = ?s, ?y = ?p, ?z = ?o
  */
 export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
-  /** Maps group ID to the valid term type range for that group */
-  protected groupToRange: Record<number, RangeSet>;
   /** Maps group ID to the expression that they need to satisfy */
   public groupToExpressions: Record<number, Algebra.Expression[]>;
   /**
@@ -51,7 +49,11 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   /** Counter for generating unique group IDs */
 
   public constructor() {
-    super(variable => variable.value, (a, b) => a.equals(b));
+    // The unfolding never builds a shape: a mapping head equates terms and variables, and the one place a
+    // triple term could be decomposed is the TODO of {@link getStaticExpressionValidation}. So the meet is
+    // the term equality it always was, and any other pair is a broken mapping.
+    super(variable => variable.value, (a, b) =>
+      a.kind === 'term' && b.kind === 'term' && a.term.equals(b.term) ? { pin: a, entailed: []} : false);
     this.clear();
   }
 
@@ -62,7 +64,6 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   public override clear(): void {
     super.clear();
     this.groupToExpressions = {};
-    this.groupToRange = {};
     this.staticExpressionValidation = [];
   }
 
@@ -75,13 +76,9 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   protected handleVarRange(variable: RangedVar): void {
     const range = variable.range;
     const group = this.getGroup(variable);
-    if (range !== undefined && group !== undefined) {
-      const groupRange = this.groupToRange[group].disjunct(range);
-      this.groupToRange[group] = groupRange;
-      const groupTerm = this.groupToTerm[group];
-      if (groupTerm && !groupRange.has(groupTerm.termType)) {
-        throw new Error(`The range of the current group no longer matches the term type ${groupTerm.termType} of term: ${JSON.stringify(groupTerm.termType)}`);
-      }
+    if (range !== undefined && group !== undefined && !this.narrowRange(group, range)) {
+      const groupTerm = this.termOf(group);
+      throw new Error(`The range of the current group no longer matches the term type ${groupTerm?.termType} of term: ${JSON.stringify(groupTerm?.termType)}`);
     }
   }
 
@@ -139,9 +136,14 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     }
   }
 
+  protected override createEmptyGroup(): number {
+    const group = super.createEmptyGroup();
+    this.groupToExpressions[group] = [];
+    return group;
+  }
+
   protected override createGroup(variable: RangedVar): number {
     const group = super.createGroup(variable);
-    this.groupToExpressions[group] = [];
     this.groupToRange[group] = new RangeSet(variable.range ?? objectRange);
     return group;
   }
@@ -192,7 +194,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     if (curTerm && !curTerm.equals(term)) {
       throw new Error(`Cannot match Term ${JSON.stringify(curTerm)} with term ${JSON.stringify(term)}`);
     }
-    const groupRange = this.groupToRange[group];
+    const groupRange = this.rangeOf(group);
     if (!groupRange.has(term.termType)) {
       throw new Error(`Cannot assign Term ${JSON.stringify(term)} to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
     }
@@ -200,22 +202,26 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   }
 
   /**
-   * Combines the ranges, terms and expressions of two groups being merged.
-   * The range is narrowed first, so that a term the narrowed range no longer admits is still caught.
+   * Carries the expressions of the disappearing group over - it is no longer reachable, so the constraints
+   * it holds would otherwise be lost. Ranges and terms are merged by {@link TermClusterSet} itself.
    */
-  protected override migrateGroupData(oldGroup: number, newGroup: number): boolean {
-    // Merge range
-    this.groupToRange[newGroup] = this.groupToRange[newGroup].disjunct(this.groupToRange[oldGroup]);
-    // Merge term
-    const oldTerm = this.termOf(oldGroup);
-    if (oldTerm) {
-      this.registerTermToGroup(newGroup, oldTerm);
-    }
-    // Merge expressions - the old group is no longer reachable, so its constraints would be lost.
+  protected override migrateGroupData(oldGroup: number, newGroup: number): void {
     this.groupToExpressions[newGroup].push(...this.groupToExpressions[oldGroup]);
     delete this.groupToExpressions[oldGroup];
-    delete this.groupToRange[oldGroup];
-    return true;
+  }
+
+  /**
+   * A mapping head asking one group to be two terms at once is broken, rather than the ordinary
+   * contradiction it is for an assertion conjunction, so the conflict {@link TermClusterSet} reports is
+   * raised here.
+   */
+  public override mergeGroups(from: RangedVar, to: RangedVar):
+    { oldGroup: number; newGroup: number; conflict: boolean } | undefined {
+    const merged = super.mergeGroups(from, to);
+    if (merged?.conflict === true) {
+      throw new Error(`Cannot unify ${JSON.stringify(from.value)} with ${JSON.stringify(to.value)}: they are fixed to different terms`);
+    }
+    return merged;
   }
 
   /**
@@ -241,7 +247,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   public getCluster(from: RDF.Variable): { term: RawBasicTerm | undefined ; vars: RDF.Variable[]; group: number } {
     const varGroup = this.getGroup(from);
     return {
-      term: this.groupToTerm[varGroup],
+      term: this.termOf(varGroup),
       vars: this.groupToValues[varGroup]
         .filter(x => !x.equals(from)),
       group: varGroup,
