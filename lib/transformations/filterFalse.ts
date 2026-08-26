@@ -77,7 +77,7 @@ export function transformFilterFalse(c: TransformContext, op: Algebra.Operation)
  * @param single - A single-input operation
  * @returns FILTER(FALSE) if input is empty, otherwise the original operation
  */
-export function absorbingSingle(
+function absorbingSingle(
   c: TransformContext,
   single: Algebra.Single,
 ): Algebra.Single {
@@ -94,7 +94,7 @@ export function absorbingSingle(
  * @param join - The JOIN operation
  * @returns FILTER(FALSE) if any input is empty, otherwise the original JOIN
  */
-export function absorbJoinOnEmptyBindings(c: TransformContext, join: Algebra.Join): Algebra.Join | Algebra.Filter {
+function absorbJoinOnEmptyBindings(c: TransformContext, join: Algebra.Join): Algebra.Join | Algebra.Filter {
   for (const op of join.input) {
     if (isFilterFalse(c, op)) {
       return createFilterFalse(c);
@@ -123,7 +123,7 @@ val is Extract<Algebra.Operation, { type: T }> extends object ?
  *   - If one branch remains: returns that branch
  *   - Otherwise: returns UNION with empty branches removed
  */
-export function pruneUnionOfEmptyBindings(c: TransformContext, union: Algebra.Union): Algebra.Operation {
+function pruneUnionOfEmptyBindings(c: TransformContext, union: Algebra.Union): Algebra.Operation {
   // Filter out filterFalse
   union.input = union.input.filter((maybeFilter: Algebra.Operation | { type: string }) => {
     if (isAlgebraTyped(maybeFilter, Algebra.Types.FILTER) &&

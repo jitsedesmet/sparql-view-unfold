@@ -16,6 +16,7 @@ import {
   assertTermType,
   assertUnbound,
   assertWeak,
+  asWeakenedConjunct,
 } from '../lib/utils/assertions.js';
 import type { CPMeta } from '../lib/utils/certainlyBoundVars.js';
 import { VRanges } from '../lib/utils/certainlyBoundVars.js';
@@ -117,6 +118,21 @@ function termString(term: RDF.Term): string {
   return term.value;
 }
 
+/**
+ * Θ in the strongest form that survives a move where its variables may be unbound: what the rules that
+ * demote a conjunction do to it, one conjunct at a time ({@link asWeakenedConjunct}).
+ */
+function weakenedForm(assertions: AssertionConjunction): AssertionConjunction {
+  return AssertionConjunction.of(assertions.conjuncts()
+    .map(conjunct => asWeakenedConjunct(conjunct))
+    .filter(conjunct => conjunct !== undefined));
+}
+
+/** The groups Θ can read more than one way, each as the ids of its readings, representative first. */
+function equatedReadingsOf(assertions: AssertionConjunction | undefined): string[][] {
+  return (assertions?.equatedReadings() ?? []).map(readings => readings.map(reading => accessId(reading)));
+}
+
 /** A substitution as `name=term`, in the order it hands the replacements over. */
 function substitutionOf(substitution: Assertions): string[] {
   return [ ...substitution ].map(([ name, term ]) => `${name}=${termString(term)}`);
@@ -167,7 +183,7 @@ describe('assertionConjunction', () => {
       expect(stateOf(assertions, 'x')).toBe('unbound');
       expect(stateOf(assertions, 'y')).toBe('strong(ex://c)');
       // Disjointness: `?x` is in no group any more, so nothing about it can be substituted.
-      expect([ ...(<AssertionConjunction> assertions).strongSubstitution().keys() ]).toEqual([ 'y' ]);
+      expect([ ...(<AssertionConjunction> assertions).rebuildingSubstitution().keys() ]).toEqual([ 'y' ]);
     });
 
     it('contradicts a member of a clique, which is always strong', ({ expect }) => {
@@ -212,11 +228,11 @@ describe('assertionConjunction', () => {
   describe('unification', () => {
     it('makes a clique whose representative is its lexicographically first member', ({ expect }) => {
       const assertions = <AssertionConjunction> conjunctionOf([ 's', assertStrong(DF.variable('o')) ]);
-      expect(assertions.cliques()).toEqual([[ 'o', 's' ]]);
+      expect(equatedReadingsOf(assertions)).toEqual([[ 'o', 's' ]]);
       expect(stateOf(assertions, 's')).toBe('strong(o)');
       // The representative has nothing left to be equal to, and reads as what the clique entails of it.
       expect(stateOf(assertions, 'o')).toBe('bound');
-      expect([ ...assertions.strongSubstitution() ]).toEqual([[ 's', DF.variable('o') ]]);
+      expect([ ...assertions.rebuildingSubstitution() ]).toEqual([[ 's', DF.variable('o') ]]);
       expect(conditionOf(assertions)).toBe('FILTER ( SAMETERM( ?s , ?o ) )');
     });
 
@@ -225,15 +241,15 @@ describe('assertionConjunction', () => {
         [ 's', assertStrong(DF.variable('o')) ],
         [ 'o', assertStrong(DF.variable('a')) ],
       );
-      expect(assertions.cliques()).toEqual([[ 'a', 'o', 's' ]]);
-      expect([ ...assertions.strongSubstitution() ])
+      expect(equatedReadingsOf(assertions)).toEqual([[ 'a', 'o', 's' ]]);
+      expect([ ...assertions.rebuildingSubstitution() ])
         .toEqual([[ 's', DF.variable('a') ], [ 'o', DF.variable('a') ]]);
     });
 
     it('is only `bound` between a variable and itself', ({ expect }) => {
       const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertStrong(DF.variable('x')) ]);
       expect(stateOf(assertions, 'x')).toBe('bound');
-      expect(assertions.cliques()).toEqual([]);
+      expect(equatedReadingsOf(assertions)).toEqual([]);
     });
 
     it('drags a term met later onto every member of the clique', ({ expect }) => {
@@ -243,7 +259,7 @@ describe('assertionConjunction', () => {
       );
       expect(stateOf(assertions, 's')).toBe('strong(ex://c)');
       expect(stateOf(assertions, 'o')).toBe('strong(ex://c)');
-      expect((<AssertionConjunction> assertions).cliques()).toEqual([]);
+      expect(equatedReadingsOf(assertions)).toEqual([]);
     });
 
     it('promotes a weak member it meets, membership implying bound', ({ expect }) => {
@@ -299,9 +315,8 @@ describe('assertionConjunction', () => {
         [ 'c', assertStrong(DF.variable('b')) ],
       );
       const { inside, outside } = assertions.split(name => name !== 'c');
-      const rejoined = inside.clone();
-      expect(rejoined.absorb(outside)).toBe(true);
-      expect(rejoined.cliques()).toEqual([[ 'a', 'b', 'c' ]]);
+      const rejoined = AssertionConjunction.of([ ...inside.conjuncts(), ...outside.conjuncts() ]);
+      expect(equatedReadingsOf(rejoined)).toEqual([[ 'a', 'b', 'c' ]]);
     });
   });
 
@@ -313,7 +328,7 @@ describe('assertionConjunction', () => {
         [ 'w', assertBound() ],
         [ 'v', assertUnbound() ],
       );
-      const weakened = assertions.weakened();
+      const weakened = weakenedForm(assertions);
       expect(stateOf(weakened, 'x')).toBe('none');
       expect(stateOf(weakened, 'y')).toBe('none');
       // B⟨?x⟩ weakened is `¬b ∨ b`, which is `true`, so it is dropped too.
@@ -420,7 +435,7 @@ describe('assertionConjunction', () => {
       // `BIND(?z AS ?t)` under A⟨?t ≡ ?y⟩: below the EXTEND `?z` is what `?t` was.
       const assertions = <AssertionConjunction> conjunctionOf([ 'y', assertStrong(DF.variable('t')) ]);
       const transferred = <AssertionConjunction> assertions.transferred('t', DF.variable('z'));
-      expect(transferred.cliques()).toEqual([[ 'y', 'z' ]]);
+      expect(equatedReadingsOf(transferred)).toEqual([[ 'y', 'z' ]]);
       expect(stateOf(transferred, 't')).toBe('none');
     });
 
@@ -444,7 +459,49 @@ describe('assertionConjunction', () => {
       expect(stateOf(transferred, 'y')).toBe('strong(ex://c)');
       expect(stateOf(transferred, 'w')).toBe('strong(ex://c)');
       expect(stateOf(transferred, 't')).toBe('none');
-      expect(transferred.cliques()).toEqual([]);
+      expect(equatedReadingsOf(transferred)).toEqual([]);
+    });
+
+    it('takes a shape apart onto the components of the construction that carries it', ({ expect }) => {
+      // `BIND(<<( ?a ?b ?c )>> AS ?t)` under a shape on `?t`: what the shape said about a position is
+      // what it says about the variable written there, so it can travel on to the pattern binding it.
+      const assertions = <AssertionConjunction> structuralConjunctionOf(
+        [ access('t', 'subject'), assertStrong(termC) ],
+        [ access('t', 'object'), assertStrong(access('y')) ],
+      );
+      const transferred = <AssertionConjunction> assertions.transferred('t', {
+        subject: access('a'),
+        predicate: access('b'),
+        object: access('c'),
+      });
+      expect(stateOf(transferred, 'a')).toBe('strong(ex://c)');
+      expect(equatedReadingsOf(transferred)).toEqual([[ 'c', 'y' ]]);
+      expect(stateOf(transferred, 't')).toBe('none');
+    });
+
+    it('moves what it holds onto the access a BIND reads', ({ expect }) => {
+      // `BIND(SUBJECT(?o) AS ?x)` under A⟨?x ≡ ?y⟩: below the EXTEND it is the subject of `?o` that has
+      // to equal `?y`, which is a shape on `?o` where nothing was known about it before.
+      const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertStrong(DF.variable('y')) ]);
+      const transferred = <AssertionConjunction> assertions.transferred('x', access('o', 'subject'));
+      expect(conjunctsOf(transferred)).toEqual([ 'o.subject=strong(y)' ]);
+      expect(stateOf(transferred, 'x')).toBe('none');
+    });
+
+    it('restates `bound` as reading the source yielding a value', ({ expect }) => {
+      // B⟨?x⟩ says the expression produced a value rather than erroring, which for a variable it copies
+      // is that the variable is bound, and for a position that what it is read through is a triple term.
+      expect(stateOf(conjunctionOf([ 'x', assertBound() ])?.transferred('x', DF.variable('z')), 'z'))
+        .toBe('bound');
+      expect(stateOf(conjunctionOf([ 'x', assertBound() ])?.transferred('x', access('o', 'subject')), 'o'))
+        .toBe('type(Quad)');
+      // And on a construction it is every position of it, since one that raises leaves the target unbound.
+      const built = conjunctionOf([ 'x', assertBound() ])?.transferred('x', {
+        subject: access('a'),
+        predicate: access('b'),
+        object: access('c'),
+      });
+      expect(conjunctsOf(built)).toEqual([ 'a=bound', 'b=bound', 'c=bound' ]);
     });
 
     it('decides a term against the term the group was already pinned to', ({ expect }) => {
@@ -488,12 +545,12 @@ describe('assertionConjunction', () => {
     });
 
     it('decomposes a shape asserted twice', ({ expect }) => {
-      // `?o ≡ <<( ?a … )>>` and `?o ≡ <<( ?b … )>>` say `?a ≡ ?b`.
+      // `?o ≡ <<( ?a … )>>` and `?o ≡ <<( ?b … )>>` say `?a ≡ ?b` - one group, read three ways.
       const assertions = structuralConjunctionOf(
         [ access('a'), assertStrong(subjectOfO) ],
         [ access('b'), assertStrong(subjectOfO) ],
       );
-      expect(assertions?.cliques()).toEqual([[ 'a', 'b' ]]);
+      expect(equatedReadingsOf(assertions)).toEqual([[ 'a', 'b', 'o.subject' ]]);
     });
 
     it('carries what it knows about a position onto everything unified with it', ({ expect }) => {
@@ -597,7 +654,7 @@ describe('assertionConjunction', () => {
         [ subjectOfO, assertStrong(termC) ],
         [ access('x'), assertStrong(access('y', 'object')) ],
       );
-      expect(conjunctsOf(assertions.weakened())).toEqual([ 'o.subject=weak(ex://c)' ]);
+      expect(conjunctsOf(weakenedForm(assertions))).toEqual([ 'o.subject=weak(ex://c)' ]);
     });
 
     it('reads the four term-type predicates as one form', ({ expect }) => {
@@ -634,7 +691,7 @@ describe('assertionConjunction', () => {
         [ 'y', assertStrong(DF.variable('x')) ],
       );
       expect(stateOf(assertions, 'y')).toBe('strong(x)');
-      // The edge comes first: the group writes itself out from its anchor, and `?x` is that anchor.
+      // The edge comes first: the group writes itself out from its representative, and `?x` is that representative.
       expect(conjunctsOf(assertions)).toEqual([ 'y=strong(x)', 'x=type(Literal)' ]);
     });
 
@@ -731,15 +788,15 @@ describe('assertionConjunction', () => {
       expect(conjunctsOf(assertions)).toEqual([ 'o.subject=strong(ex://c)' ]);
     });
 
-    it('hands an edge reading through an accessor over one at a time', ({ expect }) => {
+    it('reads an edge through an accessor as a group of two ways of reading one value', ({ expect }) => {
+      // A clique of variables and an edge into a position are one thing: each is a group Θ can read
+      // more than one way, and it is that which a rule splits rather than places conjunct by conjunct.
       const assertions = <AssertionConjunction> structuralConjunctionOf(
         [ access('s'), assertStrong(subjectOfO) ],
         [ access('y'), assertStrong(access('z')) ],
       );
-      expect(assertions.singleVariableConjuncts().map(conjunct => accessId(conjunct.access))).toEqual([]);
-      expect(assertions.cliques()).toEqual([[ 'y', 'z' ]]);
-      expect(conjunctsOf(AssertionConjunction.of(assertions.accessConjuncts())))
-        .toEqual([ 'o.subject=strong(s)' ]);
+      expect(assertions.unaryConjuncts().map(conjunct => accessId(conjunct.access))).toEqual([]);
+      expect(equatedReadingsOf(assertions)).toEqual([[ 's', 'o.subject' ], [ 'y', 'z' ]]);
     });
   });
 
@@ -809,6 +866,24 @@ describe('assertionConjunction', () => {
       expect(conjunctsOf(assertions.intoPattern(derivedVarNamer([])).residual)).toEqual([ 'o.subject=weak(ex://c)' ]);
     });
 
+    it('rebuilds a shape out of what reads its positions, and coins nothing', ({ expect }) => {
+      // What a re-binding may write, as against what a pattern may: every position is read by a variable
+      // of its own, so the value can be put together again without naming anything new.
+      const assertions = <AssertionConjunction> structuralConjunctionOf(
+        [ access('s'), assertStrong(subjectOfO) ],
+        [ access('p'), assertStrong(access('o', 'predicate')) ],
+        [ access('v'), assertStrong(objectOfO) ],
+      );
+      expect(substitutionOf(assertions.rebuildingSubstitution())).toEqual([ 'o=<<( ?s ?p ?v )>>' ]);
+    });
+
+    it('leaves a shape a position of which nothing reads alone', ({ expect }) => {
+      // The line between the two substitutions: coining `?o_p` and `?o_o` is what a *pattern* may do,
+      // since it binds them where it writes them, and a re-binding reading them would find them unbound.
+      const assertions = <AssertionConjunction> structuralConjunctionOf([ access('s'), assertStrong(subjectOfO) ]);
+      expect(substitutionOf(assertions.rebuildingSubstitution())).toEqual([]);
+    });
+
     it('names a position once, and around the names the query already uses', ({ expect }) => {
       // The memo is what makes two materialisation sites agree, and the suffix is what keeps a coined
       // name off a variable of the query - including on the second reading, which has to hand back the
@@ -824,7 +899,7 @@ describe('assertionConjunction', () => {
     const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertStrong(DF.variable('y')) ]);
     const copy = assertions.clone();
     expect(copy.assert(access('z'), assertStrong(DF.variable('y')))).toBe(true);
-    expect(copy.cliques()).toEqual([[ 'x', 'y', 'z' ]]);
-    expect(assertions.cliques()).toEqual([[ 'x', 'y' ]]);
+    expect(equatedReadingsOf(copy)).toEqual([[ 'x', 'y', 'z' ]]);
+    expect(equatedReadingsOf(assertions)).toEqual([[ 'x', 'y' ]]);
   });
 });

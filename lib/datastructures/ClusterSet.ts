@@ -5,8 +5,8 @@
  */
 export class ClusterSet<T> {
   public groupToValues: Record<number, T[]>;
-  /** Maps group ID to the expression that they need to satisfy */
-  public valueToGroup: Record<string, number | undefined>;
+  /** Maps a value to the group it is in - read through {@link groupOf}. */
+  protected valueToGroup: Record<string, number | undefined>;
 
   /** Counter for generating unique group IDs */
   protected cleanNumber: number;

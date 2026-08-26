@@ -66,7 +66,7 @@ export function freshVarGenerator(existing: Iterable<string>, prefix = 'v_'): ()
 }
 
 /** Names a variable a rewrite coins for one position of a triple term it writes into a pattern. */
-export type DerivedVarNamer = (anchor: string, position: TriplePosition) => RDF.Variable;
+export type DerivedVarNamer = (representative: string, position: TriplePosition) => RDF.Variable;
 
 /** How a position is spelled in the name of the variable holding it. */
 const positionSuffixes: Readonly<Record<TriplePosition, string>> = {
@@ -87,9 +87,9 @@ const positionSuffixes: Readonly<Record<TriplePosition, string>> = {
  * depending on which branch is rewritten first. Sound because the position is functionally determined
  * by the value the two already agree on: equal triple terms have equal subjects.
  *
- * So `anchor` must be the canonical name of the value the position is read from, and the memo below is
- * what makes a second reading of the same position hand back the variable the first one coined -
- * including where the first candidate was taken and the suffix moved the name.
+ * So `representative` must be the canonical name of the value the position is read from, and the memo
+ * below is what makes a second reading of the same position hand back the variable the first one coined
+ * - including where the first candidate was taken and the suffix moved the name.
  *
  * @param existing - Every variable name occurring in the query, collected once *before* the pass runs
  *   ({@link collectVariableNames}), since a name coined half way through would otherwise collide with
@@ -99,8 +99,8 @@ const positionSuffixes: Readonly<Record<TriplePosition, string>> = {
 export function derivedVarNamer(existing: Iterable<string>): DerivedVarNamer {
   const taken = new Set(existing);
   const coined = new Map<string, RDF.Variable>();
-  return (anchor: string, position: TriplePosition): RDF.Variable => {
-    const key = `${anchor}_${positionSuffixes[position]}`;
+  return (representative: string, position: TriplePosition): RDF.Variable => {
+    const key = `${representative}_${positionSuffixes[position]}`;
     const known = coined.get(key);
     if (known !== undefined) {
       return known;
@@ -190,26 +190,4 @@ export function deleteVarExtensionsInPlace(
     return op;
   };
   return pruneExtensions(op);
-}
-
-/**
- * Optimizes a template array by concatenating adjacent string values.
- * This reduces the number of CONCAT operations needed when generating SPARQL.
- * @param arr - Array of template components (strings and variables)
- * @returns Optimized array with adjacent strings merged
- * @example
- * optimizeTemplateArray(['http://', 'example.org/', varX])
- * // Returns: ['http://example.org/', varX]
- */
-export function optimizeTemplateArray<T>(arr: T[]): (T | string)[] {
-  const optimizedTemplate: (T | string)[] = [];
-  for (const val of arr) {
-    if (typeof val === 'string' && typeof optimizedTemplate.at(-1) === 'string') {
-      const prev = <string> optimizedTemplate.pop();
-      optimizedTemplate.push(prev + val);
-    } else {
-      optimizedTemplate.push(val);
-    }
-  }
-  return optimizedTemplate;
 }

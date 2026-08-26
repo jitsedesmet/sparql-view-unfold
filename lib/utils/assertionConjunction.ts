@@ -12,32 +12,30 @@ import type {
   Assertion,
   AssertionConjunct,
   Assertions,
+  TransferSource,
 } from './assertions.js';
 import {
   access,
   accessId,
+  compareAccesses,
   componentOf,
   assertableTermTypes,
   assertBound,
-  strongAssertionAsExpression,
   asAssertionConjuncts,
   assertStrong,
   assertTermType,
   assertUnbound,
   assertWeak,
-  boundAssertionAsExpression,
+  conjunctAsExpression,
   variablesReadByConjunct,
   hasTarget,
   impliesBound,
-  isAccessTarget,
+  targetIsAccess,
   isBareAccess,
+  isTripleConstruction,
+  normalisedTarget,
   rangeOfTermType,
   sameAccessAs,
-  termTypeAssertionAsExpression,
-  unboundAssertionAsExpression,
-  weakAssertionAsExpression,
-  asWeakenedConjunct,
-  weakenedExpression,
 } from './assertions.js';
 import type { CPMeta } from './certainlyBoundVars.js';
 import { withCpVars } from './certainlyBoundVars.js';
@@ -72,7 +70,7 @@ import { DF } from './rdfDatatypes.js';
  * |----------------------------------------|---------------------------------------------------|
  * | strong member of a pinned group        | `sameTerm(?x, c)`                                 |
  * | weak member of a pinned group          | `!bound(?x) \|\| sameTerm(?x, c)`                 |
- * | member of an anchorless group (clique) | `sameTerm(?x, ?rep)`                              |
+ * | member of an unpinned group (clique)   | `sameTerm(?x, ?rep)`                              |
  * | group with an asserted term type       | `isIRI(?x)`, `isBLANK(?x)`, `isLITERAL(?x)`, `isTRIPLE(?x)` |
  * | the same, asserted weakly              | `!bound(?x) \|\| is<τ>(?x)`                       |
  * | member of a shaped group               | one conjunct per position of the shape that says something |
@@ -98,9 +96,9 @@ import { DF } from './rdfDatatypes.js';
  * **Weak ⇔ sole member of a pinned group.** There is no usable weak form of a clique: cluster-level weak
  * ("all bound members pairwise `sameTerm`") does not distribute over a join - `μ₁={?x↦a}` and `μ₂={?y↦b}`
  * each satisfy it and their merge does not - and merging two independent weak edges is unsound
- * (`W⟨{x,y}⟩ ∧ W⟨{y,z}⟩ ⊭ W⟨{x,y,z}⟩`, take `?y` unbound). A pin is what makes the weak form work: an
- * anchor both sides of a join already agree on. So {@link weakened} drops anchorless groups rather than
- * inventing a weak form for them, exactly as it drops B⟨?x⟩, and every operation that would put a second
+ * (`W⟨{x,y}⟩ ∧ W⟨{y,z}⟩ ⊭ W⟨{x,y,z}⟩`, take `?y` unbound). A pin is what makes the weak form work: a
+ * value both sides of a join already agree on. So {@link asWeakenedConjunct} hands back nothing for an
+ * edge, exactly as it does for B⟨?x⟩, and every operation that would put a second
  * named member into a group promotes the weak one first - which is why a group holding a weak member
  * holds nothing else, and why a shape reached through a weak root is read only through that root.
  *
@@ -204,7 +202,7 @@ export class AssertionConjunction {
     if (pin?.kind === 'term') {
       return isStrong ? assertStrong(pin.term) : assertWeak(pin.term);
     }
-    const representative = this.representativeOf(group);
+    const representative = this.representativeMemberOf(group);
     if (representative === undefined || representative === name) {
       const termType = this.assertedTermTypeOf(group);
       return termType === undefined ? assertBound() : assertTermType(termType, isStrong);
@@ -237,27 +235,28 @@ export class AssertionConjunction {
   }
 
   /**
-   * The independent conjuncts Θ decomposes into: one per alias of every group it can reach from a named
+   * The independent conjuncts Θ decomposes into: one per reading of every group it can reach from a named
    * variable, plus the two term-less forms.
    *
-   * An *alias* of a group is a way of reading it: a variable that is a member of it, or the position of a
-   * shape that holds it, read from the alias of the group holding that shape. A group with several
-   * aliases states that they are equal - which for a clique is the star from its representative, and for
-   * `sameTerm(SUBJECT(?o), ?s)` is that one edge. All of them point at the *anchor*, the alias that reads
-   * the group most directly (a member before a position, lexicographic within that), so that the same Θ
-   * always decomposes the same way and a re-run of the pass absorbs what it finds instead of stacking it.
+   * The *readings* of a group are the ways of naming its value: a variable that is a member of it, or a
+   * position of a shape that holds it, read from the representative of the group holding that shape. A
+   * group with several readings states that they are equal - which for a clique is the star from its
+   * representative, and for `sameTerm(SUBJECT(?o), ?s)` is that one edge. All of them point at the
+   * *representative*, the reading that names the value most directly (a member before a position,
+   * lexicographic within that), so that the same Θ always decomposes the same way and a re-run of the
+   * pass absorbs what it finds instead of stacking it.
    *
    * Splitting a clique means splitting its *edges*, never its variables: a clique is transitively closed,
    * so any spanning tree of it is equivalent to the whole, and what a caller pushes plus what it keeps has
-   * to span it. Dropping the anchor's own (empty) conjunct is what makes that work out: the edges of the
+   * to span it. Dropping the representative's own (empty) conjunct is what makes that work out: the edges of the
    * star already entail B⟨?rep⟩.
    *
-   * A shape adds T⟨anchor⟩ only where no position of it says anything - reading a position already
+   * A shape adds T⟨representative⟩ only where no position of it says anything - reading a position already
    * entails that what it is read from is a triple term, so `isTRIPLE(?o) && sameTerm(SUBJECT(?o), :a)`
    * would state the same thing twice and stop the pass being idempotent.
    */
   public conjuncts(): AssertionConjunct[] {
-    const accessesPerGroup = this.anchoredAccessesPerGroup();
+    const accessesPerGroup = this.readingsPerGroup();
     const result: AssertionConjunct[] = [];
     const emitted = new Set<number>();
 
@@ -287,50 +286,40 @@ export class AssertionConjunction {
     return result;
   }
 
-  /** The conjuncts of Θ that mention a single variable, which is everything but an edge between two. */
-  public singleVariableConjuncts(): AssertionConjunct[] {
-    return this.conjuncts().filter(conjunct => variablesReadByConjunct(conjunct).length === 1);
+  /**
+   * The conjuncts of Θ about one access alone: what it is fixed to, which kind of term it is, whether it
+   * is bound. Everything but an *edge*, which is what a rule cannot decide by looking at one access.
+   *
+   * Exactly the conjuncts reading a single variable, and for the one reason: two of them only ever come
+   * of one access being fixed to another, an access having a single root.
+   */
+  public unaryConjuncts(): AssertionConjunct[] {
+    return this.conjuncts().filter(conjunct => !isEdgeConjunct(conjunct));
   }
 
   /**
-   * The conjuncts of Θ that mention two variables and are *not* an edge of one of its {@link cliques} -
-   * an edge that reads at least one of its two sides through an accessor.
+   * Every group Θ names more than one way, each as its {@link Access | readings}, representative first -
+   * the conjuncts of {@link conjuncts} a rule cannot take one at a time.
    *
-   * A rule places these one at a time, on the same licence it reads for a clique but with nothing to
-   * split: an edge is either licensed whole or kept where it is.
+   * A *reading* names the value of a group: a variable in it, or a position of a shape, read from the
+   * representative of the group holding that shape. Several of them is the statement that they are equal, which
+   * for a group of variables is a clique and for `sameTerm(SUBJECT(?o), ?s)` is that one edge - and the
+   * two are one thing here, since a group reached both as `?s` and as `SUBJECT(?o)` says that equality
+   * exactly as two variables in one group do.
+   *
+   * A rule that decided per reading would split such a group into pieces that no longer say it, so it
+   * decides per group and splits the *edges* instead ({@link splitClique}): a group is transitively
+   * closed, so any spanning tree of it is equivalent to the whole, and what a rule pushes plus what it
+   * keeps has to span it again.
+   *
+   * A group pinned to a *term* is not one of them: every reading of it is that term, which already states
+   * that they are equal, so each writes a conjunct of its own and no edge is left to split.
    */
-  public accessConjuncts(): AssertionConjunct[] {
-    return this.conjuncts().filter(conjunct =>
-      variablesReadByConjunct(conjunct).length > 1 && !isCliqueEdge(conjunct));
-  }
-
-  /**
-   * The cliques of Θ - the groups no term pins, with more than one variable in them - each as its members
-   * in lexicographic order, so that the first of them is the representative.
-   *
-   * These are the conjuncts of {@link conjuncts} that a rule cannot take one at a time: a rule that
-   * decides per variable would split a clique into pieces that no longer say it, so it decides per clique
-   * and splits the *edges* instead. A group carrying a shape is one of them: its members equal each other
-   * whatever the shape says about them, and it is that equality these edges are.
-   *
-   * **Variables rather than accesses, which is a simplification and not the shape of the thing.** A
-   * group's aliases are accesses, and one reached both as `?s` and as `SUBJECT(?o)` states that equality
-   * exactly as two variables in one group do - so reading the aliases here would fold
-   * {@link accessConjuncts} into this, and let a clique of both kinds be *split* over the targets rather
-   * than placed an edge at a time.
-   *
-   * Two things have to be settled before it can, which is why it is scheduled work rather than a rename.
-   * The licence a target gives an alias is over the variables it reads *through* rather than over a name.
-   * And where a target is licensed for a single member, {@link splitClique} falls back to B⟨?x⟩, which no
-   * accessor has - `BOUND` takes a variable, and {@link assert} raises on one that is not. T⟨?x : Quad⟩
-   * of the root is what it would have to send instead (S6), which is a rule rather than a refactor.
-   */
-  public cliques(): string[][] {
-    const result: string[][] = [];
-    for (const [ group ] of this.clusters.groupEntries()) {
-      const members = this.namedMembers(group);
-      if (this.clusters.pinOf(group)?.kind !== 'term' && members.length > 1) {
-        result.push(members);
+  public equatedReadings(): Access[][] {
+    const result: Access[][] = [];
+    for (const [ group, readings ] of this.readingsPerGroup()) {
+      if (this.clusters.pinOf(group)?.kind !== 'term' && readings.length > 1) {
+        result.push(readings);
       }
     }
     return result;
@@ -348,17 +337,6 @@ export class AssertionConjunction {
       (variablesReadByConjunct(conjunct).every(predicate) ? inside : outside).push(conjunct);
     }
     return { inside: AssertionConjunction.of(inside), outside: AssertionConjunction.of(outside) };
-  }
-
-  /**
-   * Θ with every conjunct in the strongest form that survives a move somewhere its variables may be
-   * unbound: a pinned member becomes weak, and the forms that have no weak form at all - B⟨?x⟩ and the
-   * edges - are dropped.
-   */
-  public weakened(): AssertionConjunction {
-    return AssertionConjunction.of(this.conjuncts()
-      .map(conjunct => asWeakenedConjunct(conjunct))
-      .filter(conjunct => conjunct !== undefined));
   }
 
   /**
@@ -382,30 +360,32 @@ export class AssertionConjunction {
 
   /**
    * The substitution the strong assertions stand for, in the form the `substituteIn…` helpers take: a
-   * pinned member maps to its term, a member of a shape every position of which is decided maps to the
-   * ground triple term that shape *is*, and a clique member maps to the representative of its clique.
+   * pinned member maps to its term, a clique member to the representative of its clique, and a member of
+   * a shaped group to the triple term that shape is - written out of the variables that already read its
+   * positions, and undecided where a position is read by nothing at all.
    *
    * Dropping the other forms is the point: substituting `c` for `?x` under W⟨?x ≡ c⟩ would claim `?x` is
-   * bound, and B⟨?x⟩ and U⟨?x⟩ have no term to substitute. An *open* shape has no term either - it is a
-   * pattern rather than a value, so it may only go where a pattern may ({@link intoPattern}) and
-   * never into an expression (S3).
+   * bound, and B⟨?x⟩ and U⟨?x⟩ have no term to substitute.
+   *
+   * Everything it writes is something already written elsewhere, which is what makes it usable outside a
+   * pattern where S3 rules the *materialised* shape out ({@link intoPattern}): every variable it names
+   * already reads the group it stands for, so it is bound wherever the value it rebuilds is. That is
+   * also what takes a variable out of a VALUES no single column holds the value of - under
+   * A⟨?o ≡ <<( ?s ?p ?x )>>⟩ the column `?o` goes and `BIND(<<( ?s ?p ?x )>> AS ?o)` rebuilds it from
+   * the three that stay.
    */
-  public strongSubstitution(): Assertions {
-    return this.strongMembersReplacedBy((group) => {
-      const term = this.termDecidedByPin(group);
-      if (term !== undefined) {
-        return term;
-      }
-      const representative = this.representativeOf(group);
+  public rebuildingSubstitution(): Assertions {
+    return this.strongMembersReplacedBy(group => this.termDecidedByPin(group, (undecided) => {
+      const representative = this.representativeMemberOf(undecided);
       return representative === undefined ? undefined : DF.variable(representative);
-    });
+    }));
   }
 
   /**
    * What a *pattern* takes of Θ, and what it leaves behind: the two halves of one decision, which is why
    * they are decided together off the one set of values written for the groups.
    *
-   * The substitution is {@link strongSubstitution} with the shapes written out:
+   * The substitution is {@link rebuildingSubstitution} with the shapes written out further:
    * a member of a shaped group maps to the triple term that shape is, its positions filled in with the
    * terms they are pinned to, the variables that name them, and a variable coined for each position
    * nothing names (D4).
@@ -432,23 +412,59 @@ export class AssertionConjunction {
    * - T⟨a : Quad⟩ holds where `a` is written as a triple term - the three positions of a materialised
    *   shape *are* the assertion that it is one;
    * - T⟨a : τ⟩ for any other kind does not, a position holding a variable saying nothing about which
-   *   kind of term that variable takes. `isIRI(SUBJECT(?o))` is written back over the pattern, about
-   *   `?o` rather than about the variable materialised for the position (D6): the condition sits above
-   *   the re-binding of `?o`, where it is bound, and a derived name never enters a condition.
+   *   kind of term that variable takes. It is written back over the pattern - and *against the values
+   *   the pattern holds* rather than against the accesses Θ reads them by, which is what `asWritten` is
+   *   for: `isIRI(SUBJECT(?o))` becomes `isIRI(?o_s)`, a condition over a variable the pattern binds
+   *   rather than an accessor over one only the re-binding above it does, and one an engine can push
+   *   into the scan.
    *
    * The forms that say a variable is *not* bound to something (W and U), and B⟨?x⟩ which names no value
    * at all, are never written into a pattern and so always stay. None of them ever reaches one -
    * {@link normalisedFor} promotes or prunes all three against the `cVars` of a leaf that binds every
    * variable it has - but the rule is about what the pattern enforces, not about what happens to arrive.
    *
+   * `asWritten` is that last part: what the residual has to be *read against* once the pattern holds the
+   * values, as a substitution over the condition it writes rather than over Θ itself. Θ keeps saying
+   * `OBJECT(?o)` where the plan will say `?o_o`, and the two meet only when the condition is written.
+   *
+   * Not because a coined name may never reach Θ - it does, later in this same traversal and by the
+   * ordinary route: the condition written here is read back as the pass carries on past it, and `?o_o`
+   * enters Θ from it like any other variable of the plan, checked against the very pattern that binds
+   * it. That is the rule D6 is really about, and writing the name down rather than injecting it is what
+   * keeps to it: **a name enters Θ only from a condition read against the operation it is about**, never
+   * from a rewrite that knows what it is *going* to write.
+   *
+   * The substitution has to be over the condition for two reasons of its own, either of which would sink
+   * a Θ built over the coined names:
+   *
+   * - **Some of the residual stops being a conjunct at all.** `bound(?o_p)` over the pattern that writes
+   *   `?o_p` is `true`, and Θ has no state for that - it would write `BOUND(?o_p)` back out, and the next
+   *   run would delete it, which is the pass failing to be a fixpoint over its own output. An access can
+   *   equally resolve to a *term* (`SUBJECT(?o)` to `:a`), and a conjunct of Θ is never about a term.
+   * - **A coined name in a group would state what the pattern states.** `?o_o` put into the group
+   *   `OBJECT(?o)` names makes {@link conjuncts} write the edge `sameTerm(OBJECT(?o), ?o_o)` - the thing
+   *   the pattern already says, said a second time. Avoiding that means rebuilding Θ over fresh accesses,
+   *   which is this substitution again, only without the folds that come free on an expression (S7).
+   *
    * @param namer - Coins the variable for a position, once per position and query ({@link derivedVarNamer}).
    */
-  public intoPattern(namer: DerivedVarNamer): { substitution: Assertions; residual: AssertionConjunction } {
+  public intoPattern(namer: DerivedVarNamer): {
+    substitution: Assertions;
+    residual: AssertionConjunction;
+    asWritten: AssertionView;
+  } {
     const values = this.patternValues(namer);
     return {
       substitution: this.strongMembersReplacedBy(group => values.get(group)),
       residual: AssertionConjunction.of(this.conjuncts()
         .filter(conjunct => !this.enforcedByPattern(conjunct, values))),
+      // TODO: why do we need this? I thought we concluded that coining the variables indeed break cVars/ pVars
+      //  and thus we need not wory about what we coined exactly?
+      //  D6 can happen while passing an expression because we already know at the time of passing the expression
+      //  what variable can and will be coined to represent e.g. subject(?o)
+      // No `typeRange`: the kinds of term are what the residual is *about* here, and what the pattern
+      // decided about one has already taken the conjunct out of the residual.
+      asWritten: { resolve: access => this.patternValueOf(access, values), bound: this.boundImpliedBy() },
     };
   }
 
@@ -512,7 +528,7 @@ export class AssertionConjunction {
    *   U⟨?x⟩. Which is why the rewrites downstream need no term-type checks of their own.
    *
    * A strong member narrows its *group*, rather than only being checked against it: its value is the
-   * group's value, so what the plan leaves for the variable is what it leaves for every alias of the
+   * group's value, so what the plan leaves for the variable is what it leaves for every reading of the
    * group - which is what confines the nesting of shapes to the `object` chain, a shape in a subject
    * position being the same contradiction a Literal there is.
    *
@@ -587,47 +603,84 @@ export class AssertionConjunction {
   }
 
   /**
-   * Θ with `name` taken out of it and whatever it was equal *to* restated against `replacement` -
-   * the term that carries its value where the result is going, which the caller is responsible for establishing.
+   * Θ with `name` taken out of it and whatever it said about it restated against `replacement` - what
+   * carries its value where the result is going, which the caller is responsible for establishing.
    *
-   * For a BIND, that is its expression: below `BIND(?z AS ?t)` it is `?z` that holds what `?t` holds above,
-   * and below `BIND(:c AS ?t)` it is `:c`. Two cases, which are the same rule read against the two kinds
-   * of thing the replacement can be:
+   * For a BIND, that is its expression: below `BIND(?z AS ?t)` it is `?z` that holds what `?t` holds
+   * above, and below `BIND(:c AS ?t)` it is `:c`. Three cases, which are the same rule read against the
+   * three kinds of thing a {@link TransferSource} can be:
    *
-   * - a variable *joins the group* `name` was in, taking over everything the group holds - the term it is
-   *   pinned to, the shape it has, and the edges to its other members;
-   * - a term is what the group has to be, which either agrees with what it already was - decomposing
-   *   against a shape, position by position - or makes the whole thing empty.
+   * - an *access* takes over everything the group holds - the term it is pinned to, the shape it has, and
+   *   the edges to its other members - which for a bare variable is joining that group, and for
+   *   `SUBJECT(?o)` is the same after opening the shape of `?o` on the way to it;
+   * - a *term* is what the group has to be, which either agrees with what it already was - decomposing
+   *   against a shape, position by position - or makes the whole thing empty;
+   * - a *construction* is the shape itself: `BIND(<<( ?a ?b ?c )>> AS ?o)` says that the value has
+   *   `?a`, `?b` and `?c` in its positions, so everything the group said about a position is restated
+   *   about the variable holding it, and `sameTerm(SUBJECT(?o), :a)` reaches the pattern binding `?a` as
+   *   `sameTerm(?a, :a)`.
    *
    * Taking the variable out one member at a time, rather than dropping every conjunct that mentions it,
    * is what keeps the rest of its group intact when it happens to be the representative all of the edges
-   * point at, or the only variable a shape is reached through. Only what it was equal to travels: B⟨?x⟩
-   * and U⟨?x⟩ on `name` are simply removed, and stay where the caller put them.
+   * point at, or the only variable a shape is reached through.
+   *
+   * U⟨?x⟩ is simply removed and stays where the caller put it - it is about the EXTEND's own binding
+   * rather than about what the expression yields. B⟨?x⟩ is *not*: it says the expression produced a
+   * value, which for the source is that reading it yields one - `bnd(?z)` for a variable it copies, and
+   * for `SUBJECT(?o)` that `?o` is a triple term at all. Dropping it instead loses the one thing the
+   * assertion said, and with it the solutions where the expression errored.
    */
-  public transferred(name: string, replacement: RDF.Term): AssertionConjunction | undefined {
+  public transferred(name: string, replacement: TransferSource): AssertionConjunction | undefined {
     const result = this.clone();
-    result.bound.delete(name);
+    const wasBound = result.bound.delete(name);
     result.unbound.delete(name);
-    const group = result.clusters.groupOf(name);
-    if (group === undefined) {
+    if (wasBound && !result.assertReadingYieldValue(replacement)) {
+      return undefined;
+    }
+    if (result.clusters.groupOf(name) === undefined) {
       return result;
     }
-    // The replacement joins before `name` leaves, so that a group nothing else names does not go away
-    // between the two - with it, the shape it carries and the anonymous groups that shape holds.
-    if (replacement.termType === 'Variable') {
-      if (!result.joinGroup(replacement.value, group)) {
-        return undefined;
-      }
-    } else if (!result.clusters.setTerm(group, replacement)) {
+    // The replacement takes over before `name` leaves, so that a group nothing else names does not go
+    // away between the two - with it, the shape it carries and the anonymous groups that shape holds.
+    if (!result.assertRestatedOn(access(name), replacement)) {
       return undefined;
     }
     result.removeMember(name);
     return result;
   }
 
-  /** Conjoins everything `other` says with what this conjunction already says. */
-  public absorb(other: AssertionConjunction): boolean {
-    return other.conjuncts().every(({ access, assertion }) => this.assert(access, assertion));
+  /**
+   * Restates on the source what Θ holds about the access being transferred away.
+   *
+   * A construction is taken apart rather than met as a whole, which is the one thing that makes it
+   * different from the two kinds of value: what it hands down is a statement per position, and a
+   * position that is a construction of its own hands down three more.
+   */
+  private assertRestatedOn(access: Access, source: TransferSource): boolean {
+    if (isTripleConstruction(source)) {
+      return triplePositions.every(position =>
+        this.assertRestatedOn(wrapAccess(access, position), source[position]));
+    }
+    // A⟨read ≡ source⟩ is what a value carrying another's is, so it is asserted as one - which also
+    // spells a variable the single way Θ holds one, as the access reading it.
+    return this.assert(access, assertStrong(source));
+  }
+
+  /**
+   * Conjoins what the source has to satisfy for reading it to yield a value at all, which is what
+   * B⟨?x⟩ on a transferred target comes to.
+   *
+   * A ground term is one by being one. An access says that what it reads *through* is a triple term,
+   * which for a bare variable is `bnd(?x)` - both of which asserting `a ≡ a` already is. A construction
+   * that yields a value is one every position of which does, since it raises where a component is
+   * unbound.
+   */
+  private assertReadingYieldValue(source: TransferSource): boolean {
+    if (isTripleConstruction(source)) {
+      return triplePositions.every(position => this.assertReadingYieldValue(source[position]));
+    }
+    const access = normalisedTarget(source);
+    return !targetIsAccess(access) || this.assertUnify(access, access);
   }
 
   /**
@@ -649,14 +702,14 @@ export class AssertionConjunction {
         return this.assertTermType(access, assertion.termType, assertion.strong);
       }
       case 'strong': {
-        return isAccessTarget(assertion.term) ?
+        return targetIsAccess(assertion.term) ?
           this.assertUnify(access, assertion.term) :
           this.assertPin(access, assertion.term, true);
       }
       case 'weak': {
         // A weak *edge* is not a state this can be in (weak ⇔ pinned group), and neither the recognisers
         // nor {@link asWeakenedConjunct} ever produce one, so the target of a weak assertion is a term.
-        if (isAccessTarget(assertion.term)) {
+        if (targetIsAccess(assertion.term)) {
           return true;
         }
         return this.assertPin(access, assertion.term, false);
@@ -683,14 +736,7 @@ export class AssertionConjunction {
    * only where `?o` is bound at all.
    */
   public assertPin(access: Access, term: RDF.Term, strong: boolean): boolean {
-    function apply(target: AssertionConjunction): boolean {
-      const group = target.assertAccessAndResolve(access);
-      if (group === false) {
-        return false;
-      }
-      return target.clusters.setTerm(group, term);
-    }
-    return strong ? this.assertStrongly(access.name, apply) : this.assertWeakly(access.name, apply);
+    return this.narrowing(access, strong, (clusters, group) => clusters.setTerm(group, term));
   }
 
   /**
@@ -703,12 +749,33 @@ export class AssertionConjunction {
    * to the same `{Quad}` - so the two never disagree.
    */
   public assertTermType(access: Access, termType: AssertableTermType, strong: boolean): boolean {
+    return this.narrowing(access, strong, (clusters, group) =>
+      clusters.assertTermTypeRange(group, rangeOfTermType(termType)));
+  }
+
+  /**
+   * Conjoins something that narrows the *group* an access names, which is what both of the forms above
+   * are: opening the shapes on the way to the access, and then narrowing what the group it names may be.
+   *
+   * The strength decides which of the two ways that is conjoined, and nothing else does: strongly, the
+   * root is known bound and the narrowing simply holds; weakly, it is `¬bnd(?x) ∨ φ`, and a `φ` the
+   * group cannot hold comes to U⟨?x⟩ rather than to a contradiction ({@link assertWeakly}).
+   *
+   * `narrow` is what to do to the group the access names, once every shape on the way to it is asserted.
+   * It takes the clusters of the conjunction it is applied to, which is a *copy* of this one wherever the
+   * weak form has to try the narrowing before committing to it.
+   */
+  private narrowing(
+    access: Access,
+    strong: boolean,
+    narrow: (clusters: AssertionClusterSet, group: number) => boolean,
+  ): boolean {
     function apply(target: AssertionConjunction): boolean {
       const group = target.assertAccessAndResolve(access);
       if (group === false) {
         return false;
       }
-      return target.clusters.assertTermTypeRange(group, rangeOfTermType(termType));
+      return narrow(target.clusters, group);
     }
     return strong ? this.assertStrongly(access.name, apply) : this.assertWeakly(access.name, apply);
   }
@@ -785,27 +852,7 @@ export class AssertionConjunction {
 
   /** The single condition the (non-empty) conjunction stands for, each conjunct in the form it carries. */
   public toExpression(c: TransformContext): Algebra.Expression {
-    // eslint-disable-next-line array-callback-return
-    return conjunctionOf(c, this.conjuncts().map(({ access, assertion }) => {
-      switch (assertion.subType) {
-        case 'unbound': {
-          return unboundAssertionAsExpression(c, access.name);
-        }
-        case 'bound': {
-          return boundAssertionAsExpression(c, access.name);
-        }
-        case 'strong': {
-          return strongAssertionAsExpression(c, access, assertion.term);
-        }
-        case 'weak': {
-          return weakAssertionAsExpression(c, access, assertion.term);
-        }
-        case 'termType': {
-          const typed = termTypeAssertionAsExpression(c, access, assertion.termType);
-          return assertion.strong ? typed : weakenedExpression(c, access.name, typed);
-        }
-      }
-    }));
+    return conjunctionOf(c, this.conjuncts().map(conjunct => conjunctAsExpression(c, conjunct)));
   }
 
   /**
@@ -890,25 +937,13 @@ export class AssertionConjunction {
     return group;
   }
 
-  /** Puts a variable into an existing group, taking over everything that group holds. */
-  private joinGroup(name: string, group: number): boolean {
-    this.remember(name);
-    if (this.unbound.has(name)) {
-      // Whatever the group holds, its members are equal to each other, which implies they are bound.
-      return false;
-    }
-    this.bound.delete(name);
-    this.strength.set(name, 'strong');
-    return this.clusters.unifyGroups(this.clusters.getGroup(name), group);
-  }
-
   /** The conjuncts one group of Θ contributes, given how the whole of it can be read. */
   private groupConjuncts(group: number, accessesPerGroup: Map<number, Access[]>): AssertionConjunct[] {
     const accesses = accessesPerGroup.get(group)!;
     const pin = this.clusters.pinOf(group);
     const result: AssertionConjunct[] = [];
     if (pin?.kind === 'term') {
-      // Every alias is that term, which already says they are equal to each other.
+      // Every reading is that term, which already says they are equal to each other.
       return accesses.map(access => ({
         access,
         assertion: this.isStrong(access) ? assertStrong(pin.term) : assertWeak(pin.term),
@@ -954,12 +989,12 @@ export class AssertionConjunction {
   }
 
   /**
-   * Whether a position of the shape says something of its own, in which case T⟨anchor : Quad⟩ need not be
+   * Whether a position of the shape says something of its own, in which case T⟨representative : Quad⟩ need not be
    * stated: reading a position already entails that what it is read through is a triple term.
    *
    * "Says something" is asked of the position by writing it out, rather than by listing the ways it might
-   * - which is what keeps the two from drifting apart as more of them appear. A position with an alias of
-   * its own writes an edge back to this one; one without writes whatever it writes from here.
+   * - which is what keeps the two from drifting apart as more of them appear. A position with a reading
+   * of its own writes an edge back to this one; one without writes whatever it writes from here.
    */
   private shapeIsWitnessed(group: number, accessesPerGroup: Map<number, Access[]>): boolean {
     const childGroups = childGroupsOf(this.clusters.childrenOf(group));
@@ -989,21 +1024,23 @@ export class AssertionConjunction {
   }
 
   /**
-   * Every group Θ can reach from a variable it names, with the accesses reading it, anchor first.
-   * - FILTER(sameTerm(?x, ?y)) — one group, two members. Entry: [?x, ?y], anchor ?x. The conjunct is the edge ?y ≡ ?x.
+   * Every group Θ can reach from a variable it names, with the readings of it, representative first.
+   * - FILTER(sameTerm(?x, ?y)) — one group, two members. Entry: [?x, ?y], representative ?x.
+   *      The conjunct is the edge ?y ≡ ?x.
    * - FILTER(sameTerm(SUBJECT(?o), ?s)) — two groups. ?o's group: [?o]. The subject position:
-   *      [?s, SUBJECT(?o)], anchor ?s, giving the edge SUBJECT(?o) ≡ ?s.
-   *      The other two positions are anonymous: [PREDICATE(?o)] and [OBJECT(?o)], one reading each, nothing to say.
+   *      [?s, SUBJECT(?o)], representative ?s, giving the edge SUBJECT(?o) ≡ ?s.
+   *      The other two positions are anonymous: [PREDICATE(?o)] and [OBJECT(?o)], one reading each,
+   *      nothing to say.
    * - FILTER(sameTerm(SUBJECT(?o), :a)) — the subject position has only [SUBJECT(?o)], so no edge;
    *      it writes SUBJECT(?o) ≡ :a from that single reading.
    *
-   * Two passes, because an access reading a group through a shape is written from the *anchor* of the
-   * group holding that shape: the anchors are settled first, shortest path and lexicographic first within
-   * that, and the aliases are collected against them afterwards. A group nothing reaches is not in the
+   * Two passes, because a reading through a shape is written from the *representative* of the group
+   * holding that shape: the representatives are settled first, shortest path and lexicographic first within
+   * that, and the readings are collected against them afterwards. A group nothing reaches is not in the
    * result at all - it is what is left of a shape a variable was taken out of, and nothing may be written
    * about it, since there is no way left to name it.
    */
-  private anchoredAccessesPerGroup(): Map<number, Access[]> {
+  private readingsPerGroup(): Map<number, Access[]> {
     // The shortest access pattern into a group
     const representatives = new Map<number, Access>();
     // Seed with every group that has a named member, including groups created for
@@ -1049,8 +1086,7 @@ export class AssertionConjunction {
       }
     }
     for (const reads of result.values()) {
-      reads.sort((left, right) =>
-        left.positions.length - right.positions.length || accessId(left).localeCompare(accessId(right)));
+      reads.sort(compareAccesses);
     }
     return result;
   }
@@ -1061,7 +1097,7 @@ export class AssertionConjunction {
   }
 
   /** The representative of a group: its lexicographically first member, so that the pass stays idempotent. */
-  private representativeOf(group: number): string | undefined {
+  private representativeMemberOf(group: number): string | undefined {
     return this.namedMembers(group)[0];
   }
 
@@ -1080,16 +1116,18 @@ export class AssertionConjunction {
    * The term a group is fixed to, which for a shape is the triple term its decided positions make, and
    * `undefined` where a position is decided by nothing at all.
    *
-   * Unless the caller has something to put there, which is the one thing its two callers differ in:
+   * Unless the caller has something to put there, which is the one thing its callers differ in:
    * `valueForUndecidedGroup` is asked for every group the pins leave undecided. A substitution into an
    * expression has nothing to offer (S3) and takes the `undefined`; a substitution into a *pattern* has
-   * the variable that reads the group, and so gets the shape written out whole rather than not at all.
+   * the variable that reads the group, and so gets the shape written out whole rather than not at all;
+   * a re-binding has one for the groups something reads and none for the rest, which is the third
+   * signature - a position nobody reads leaves the shape as undecided as a position nothing pins.
    * Everything else - that a pin is a term or three groups, and that three terms make one - is this
    * walk, here once so that the two cannot come to disagree about what a shape is.
    *
    * **A caller that always has one always gets a term back**, which the second signature states: every
-   * way out of the walk is a pin's term, a quad built from three of those, or the reading of an
-   * undecided group, so nothing else can come back. That is the one step the compiler takes on trust -
+   * way out of the walk is a pin's term, a quad built from three of those, or the value the caller has
+   * for an undecided group, so nothing else can come back. That is the one step the compiler takes on trust -
    * a conditional return type would not defer over a parameter that is not generic, and would hand the
    * *first* caller a term it can be missing - so it is stated here once, where the argument for it is.
    *
@@ -1100,7 +1138,14 @@ export class AssertionConjunction {
    */
   private termDecidedByPin(group: number): RDF.Term | undefined;
   private termDecidedByPin(group: number, valueForUndecidedGroup: (group: number) => RDF.Term): RDF.Term;
-  private termDecidedByPin(group: number, valueForUndecidedGroup?: (group: number) => RDF.Term): RDF.Term | undefined {
+  private termDecidedByPin(
+    group: number,
+    valueForUndecidedGroup: (group: number) => RDF.Term | undefined,
+  ): RDF.Term | undefined;
+  private termDecidedByPin(
+    group: number,
+    valueForUndecidedGroup?: (group: number) => RDF.Term | undefined,
+  ): RDF.Term | undefined {
     // The walk is a function of its own so that it recurses on what it *is* rather than on what the
     // signatures above promise: the two modes are one traversal, and only the promise is per caller.
     const recurse = (reached: number): RDF.Term | undefined => {
@@ -1133,12 +1178,12 @@ export class AssertionConjunction {
    * - a position nobody named is reached through the triple term written for the group holding it, and
    * has no way of being asked for on its own.
    *
-   * The value is what every alias of the group is written as, wherever it occurs, which is where the
-   * enforcement comes from: two aliases of one group become the same term or the same variable in the
+   * The value is what every reading of the group is written as, wherever it occurs, which is where the
+   * enforcement comes from: two readings of one group become the same term or the same variable in the
    * same pattern, and matching that pattern is what states the equality Θ carried as a condition.
    */
   private patternValues(namer: DerivedVarNamer): Map<number, RDF.Term> {
-    const accessesPerGroup = this.anchoredAccessesPerGroup();
+    const accessesPerGroup = this.readingsPerGroup();
 
     const nameOfGroup = (group: number): string => {
       const [ representative ] = accessesPerGroup.get(group)!;
@@ -1153,10 +1198,10 @@ export class AssertionConjunction {
 
     const result = new Map<number, RDF.Term>();
     for (const [ group, [ representative ]] of accessesPerGroup) {
-      // A group no variable names is only ever read through the shape holding it, and the anchor of one
+      // A group no variable names is only ever read through the shape holding it, and the representative of one
       // that has them is the variable it is read by: its representative.
       if (isBareAccess(representative)) {
-        // Without its shape, a group is what {@link strongSubstitution} makes of it: the term it is
+        // Without its shape, a group is what {@link rebuildingSubstitution} makes of it: the term it is
         // pinned to, or the representative every member of a clique substitutes to.
         result.set(group, this.shapeIsWorthWriting(group) ?
           materialisedTerm(group) :
@@ -1222,7 +1267,7 @@ export class AssertionConjunction {
     if (assertion.subType !== 'strong') {
       return false;
     }
-    const target = isAccessTarget(assertion.term) ?
+    const target = targetIsAccess(assertion.term) ?
       this.patternValueOf(assertion.term, values) :
       assertion.term;
     // The same term written twice, or the same variable - which in a pattern is the equality itself.
@@ -1251,7 +1296,7 @@ export class AssertionConjunction {
     if (term !== undefined) {
       return term;
     }
-    const representative = this.representativeOf(group);
+    const representative = this.representativeMemberOf(group);
     if (representative === undefined || (isBareAccess(read) && representative === read.name)) {
       return undefined;
     }
@@ -1289,10 +1334,14 @@ function wrapAccess(access: Access, position: TriplePosition): Access {
   return { name: access.name, positions: [ ...access.positions, position ]};
 }
 
-/** Whether the conjunct is one edge of a clique - both of its sides a variable read directly. */
-function isCliqueEdge(conjunct: AssertionConjunct): boolean {
-  return isBareAccess(conjunct.access) && hasTarget(conjunct.assertion) &&
-    isAccessTarget(conjunct.assertion.term) && isBareAccess(conjunct.assertion.term);
+/**
+ * Whether the conjunct is an *edge*: one access fixed to another, rather than to a term or to nothing.
+ *
+ * Which is the one thing that makes a conjunct mention two accesses, and so the one thing a rule cannot
+ * place by reading a single one - see {@link AssertionConjunction.equatedReadings}.
+ */
+function isEdgeConjunct(conjunct: AssertionConjunct): boolean {
+  return hasTarget(conjunct.assertion) && targetIsAccess(conjunct.assertion.term);
 }
 
 /**
@@ -1339,7 +1388,7 @@ export type AssertionFilter = Algebra.Filter & {
  * Like {@link withCpVars}, this is dynamic programming: a filter this pass created already knows its own
  * assertions, and one met in the input tree is analysed once and carries the result from then on.
  */
-export function withAssertionConjunction(c: TransformContext, filter: Algebra.Filter): AssertionFilter {
+function withAssertionConjunction(c: TransformContext, filter: Algebra.Filter): AssertionFilter {
   const casted = <Algebra.Filter & { metadata?: Partial<AssertionFilter['metadata']> }> filter;
   const known = casted.metadata?.assertions;
   if (known === undefined) {
@@ -1397,7 +1446,7 @@ export function collectAssertions(
 ): AssertionConjunctionMeta | undefined {
   // Make copy and perform substitution
   const assertions = known.clone();
-  let substitution = assertions.strongSubstitution();
+  let substitution = assertions.rebuildingSubstitution();
   let conjuncts = splitConjunction(
     substituteInExpression(c, expression, assertions.expressionSubstitution(), cVars),
   );
@@ -1433,7 +1482,7 @@ export function collectAssertions(
       }
     }
 
-    const grown = assertions.strongSubstitution();
+    const grown = assertions.rebuildingSubstitution();
     // Only a change to what can be substituted below can collapse a leftover into an assertion.
     if (!sameSubstitution(substitution, grown)) {
       learned = true;

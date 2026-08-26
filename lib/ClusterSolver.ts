@@ -8,7 +8,7 @@ import { isRdfTerm, isRdfVar } from './utils/typeGuards.js';
 /**
  * A raw term that is either a concrete term (not a variable) or a ranged variable.
  */
-export type RawTerm = Exclude<RDF.Term, RDF.Variable> | RangedVar;
+type RawTerm = Exclude<RDF.Term, RDF.Variable> | RangedVar;
 
 /**
  * A basic raw term (not a quad/triple term).

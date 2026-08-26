@@ -58,6 +58,21 @@ Review pushed step 3 past its brief in one respect: T⟨?x⟩ became T⟨?x : τ
 predicates (`isIRI`/`isURI`, `isBLANK`, `isLITERAL`, `isTRIPLE`), since they are one fact — a narrowing
 of a group's range — and everything written for `isTRIPLE` held of them word for word.
 
-Left to do: what is left of the per-operation rules (phase 5) — MINUS, GRAPH and now BGP/PATH are done,
-VALUES and JOIN/LEFT JOIN are partly done, and EXTEND is open. See the status table and the
-per-operation table in `task-for-agent.md`.
+Phase **5** (the per-operation rules) is on `feat/phase-5-operation-rules`, in three commits:
+
+* **VALUES** — a row is a solution mapping, so it is asserted into a clone of Θ rather than read per
+  variable: that decides the positions of a triple term a row holds as readily as the term itself, and
+  leaves nothing to restate above the VALUES. A column is dropped wherever what stays rebuilds its
+  value, which for a shape is the triple term written out of the columns holding its positions.
+* **JOIN / LEFT JOIN / GRAPH** — a clique of variables and an edge into a position are one thing: a
+  group Θ can read more than one way. `splitClique` splits those *readings* over the targets, and a
+  target licensed for one reading gets what reading it entails — B⟨?x⟩ for a variable, `isTRIPLE(?o)` for
+  a position of one, which is the S6 case an edge placed whole could not reach.
+* **EXTEND** — Θ transfers onto anything it can name: a term, an access (`BIND(SUBJECT(?o) AS ?x)`), or
+  the construction `BIND(<<( ?a ?b ?c )>> AS ?t)`, which is taken apart position by position. Two things
+  came with it: B⟨?x⟩ on the target was being dropped rather than restated, which was a wrong answer;
+  and the construction rule forced follow-up 6, since the pass writes such a BIND itself at every
+  materialisation and so meets the rule on its own output.
+
+Left to do: only the optional follow-up 7 (`ClusterSolver` dropping its `Quad` exclusion). See the
+status table and the per-operation table in `task-for-agent.md`.

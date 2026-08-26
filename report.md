@@ -9,11 +9,12 @@ SELECT * { ?s ?p <<( ?s ?o_p ?o_o )>> . BIND(<<( ?s ?o_p ?o_o )>> AS ?o) }
 Verified against the installed traqula: both the pattern and the `BIND` generate and re-parse exactly,
 so no parser/generator work is needed.
 
-> **State of play (2026-08-24).** Phases **0** (`ac6d447`, #31), **1** (`e18a8dd`, #32), **2** (the pin
-> lattice) and **3** (accesses and term types) are on `main`; phase **4** (materialisation) is in the
-> working tree, and the example at the top of this file is what the pass now produces. The sections
-> below say so where they describe something that now exists. Phase 5 (what is left of the operation
-> rules) is open — see the per-operation table in `task-for-agent.md` for which of its rows are done.
+> **State of play (2026-08-25).** Phases **0** (`ac6d447`, #31), **1** (`e18a8dd`, #32), **2** and **3**
+> (`c15adc9`, #34) and **4** (`6a3f2fa`, #35) are on `main`, and the example at the top of this file is
+> what the pass produces. Phase **5** (the operation rules) is on `feat/phase-5-operation-rules`, and it
+> brought **6** with it: transferring an assertion through `BIND(<<( ?a ?b ?c )>> AS ?o)` is a rule the
+> pass meets on its *own* output, so without 6 it stopped being a fixpoint. The sections below say so
+> where they describe something that now exists.
 
 The algebraic ground under all of this is Schmidt, Meier, Lausen, ["Foundations of SPARQL Query
 Optimization"](https://dl.acm.org/doi/pdf/10.1145/1804669.1804675) (ICDT 2010): the pass is (FElimI)/(FElimII) — discharge an equality by substituting
@@ -52,13 +53,21 @@ idempotent. Writing `sameTerm(?o, <<( ?s ?o_p ?o_o )>>)` instead would be a wron
 derived variables are unbound wherever the filter sits, so the condition would error and drop
 everything.
 
-**Variables are coined only when writing into a pattern**, named `${anchor}_${s|p|o}` against the
-whole query's pre-transformation variable list, suffixed only on collision. The anchor is the
+**Variables are coined only when writing into a pattern**, named `${representative}_${s|p|o}` against the
+whole query's pre-transformation variable list, suffixed only on collision. The representative is the
 *group's* canonical name (term pin → first named member → shortest access path), memoised per group in
 one pass-scoped map — so two materialisation sites of the same group agree and both operands of a join
 still join on the position. **Done** (`derivedVarNamer`), with one thing this study did not settle: a
 shape *no* position of which says anything is left as the condition `isTRIPLE(?o)` rather than written
 out, since writing it would coin three variables to state what that condition states with none.
+
+**What the pattern could not state is written against the values it holds** — `isIRI(?o_o)` rather than
+`isIRI(OBJECT(?o))` — and sits on the pattern, below the re-binding, wherever it no longer reads a
+re-bound variable. **Done** with phase 5, which forced it: the pass writes the re-binding itself, so a
+condition reading through it is one the pass would push through it on the next run. A substitution over
+the condition after `toExpression`. The coined name still reaches Θ - the pass reads its own condition
+back on the way past - but it gets there the way every name does, from a condition read against the
+operation it is about, rather than by a rewrite injecting what it is about to write.
 
 **The weak/strong line is unchanged**, restated: *a conjunct mentioning one variable has a weak form,
 one mentioning two does not*. `!bound(?o) || sameTerm(subject(?o), :a)` is fine;
@@ -126,9 +135,15 @@ error when every component is bound and `range(c₁) ⊆ {IRI, bnode}`, `range(c
    **done (working tree)**, as `intoPattern`. `bindAssertedTerms` needed no change; what did grow a rule
    of its own is the *residual*, which asks what the materialised pattern enforces rather than which form
    a conjunct has, and which comes back from the same call for that reason.
-5. Operation rules — `pruneValues`, EXTEND transfer (`BIND(<<( ?a ?b ?c )>> AS ?o)` and
-   `BIND(subject(?o) AS ?x)`, the `TODO(next time)` at `pushDownAssertions.ts:455`), shape-weakening in
-   `splitClique`, the GRAPH and MINUS cases.
+5. ~~Operation rules — `pruneValues`, EXTEND transfer (`BIND(<<( ?a ?b ?c )>> AS ?o)` and
+   `BIND(subject(?o) AS ?x)`), shape-weakening in `splitClique`, the GRAPH and MINUS cases.~~ **Done.**
+   A VALUES row is asserted into a clone of Θ, which decides every form at once and leaves nothing over;
+   `splitClique` splits a group of *readings* rather than a clique of variables, with T⟨?o : Quad⟩ where a
+   target is licensed for one reading only (S6); and the EXTEND transfer takes a construction apart onto
+   the variables it writes. That last one also found a wrong answer of its own — B⟨?x⟩ on a transferred
+   BIND target was dropped rather than restated — and forced 6.
+6. ~~Follow-up: read a materialised position through the variable the pattern wrote for it.~~ **Done**,
+   with 5 rather than after it, see the state of play above.
 
 **Evaluation harness — checked and in use** (the triple-term fixtures are in
 `test/statics/assertionPushdown.ttl` as of phase 1) on `n3@2` and `@comunica/query-sparql-file@5.3` (upgraded from 5.1.3
@@ -152,8 +167,10 @@ so this is the same kind of non-verbatim round-trip the pass already does for th
 
 **VALUES pruning** — prune *rows* by asserting the row into a clone of Θ (uniform over terms, cliques
 and shapes: a ground triple-term value decomposes against a shape by itself); drop a *column* iff Θ can
-rebuild its value from the columns that survive. That last condition is the general form of what the
-code does today, and it is where the shape case differs from the strong-term case:
+rebuild its value from the columns that survive. **Done**, and it turned out to say more than pruning:
+a row *is* a solution mapping, so a row Θ survives is a row that satisfies it, and the conjunction is
+discharged whole rather than restated above the VALUES. The column half is where the shape case differs
+from the strong-term case:
 
 ```sparql
 VALUES (?o ?s) { (<<( :a :b :c )>> :a) (<<( :d :e :f )>> :d) }   FILTER(sameTerm(subject(?o), ?s))
@@ -165,6 +182,6 @@ keeps both rows, with *different* `?o` — there is no single term to re-bind, s
 VALUES (?o ?s ?p ?x) { … }   FILTER(sameTerm(?o, <<( ?s ?p ?x )>>))
 ```
 
-does drop `?o` and re-bind it from the three surviving columns. Whether that is reached by rewriting
-the per-variable `switch` or by extending it is the implementor's call — the rewrite is more uniform,
-the existing evaluation tests are the thing to keep green either way.
+does drop `?o` and re-bind it from the three surviving columns (`rebuildingSubstitution`, which writes a
+shape out of the variables that already read its positions and coins nothing). The per-variable `switch`
+went away rather than growing a case.

@@ -97,7 +97,7 @@ export function prefixVarsInOperation<T extends object>(
  * @throws Error if the head contains blank nodes
  * @throws Error if the body uses the BNODE() function
  */
-export function constructToMapper(
+function constructToMapper(
   { parser, AF, astTransformer, DF }: Pick<TransformContext, 'parser' | 'AF' | 'astTransformer' | 'DF'>,
   constructQuery: string,
 ): Mapping {

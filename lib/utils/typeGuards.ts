@@ -17,7 +17,7 @@ export function isRdfVar(obj: object): obj is RangedVar {
   return isRdfTerm(obj) && obj.termType === 'Variable';
 }
 
-export type StaticTermPrimitive =
+type StaticTermPrimitive =
     | Exclude<RDF.Term, RDF.Quad | RDF.Variable>
     | Patch<RDF.Quad, {
       subject: Exclude<RDF.Quad['subject'], RDF.Variable>;
