@@ -9,6 +9,7 @@ import { AstFactory, AstTransformer } from '@traqula/rules-sparql-1-2';
 import { DataFactory } from 'rdf-data-factory';
 import { AlgebraTemplateFactory } from './AlgebraTemplateFactory.js';
 import { ClusterSolver } from './ClusterSolver.js';
+import { VAR_PREFIX_MAPPING, VAR_PREFIX_MERGED_HEAD } from './consts.js';
 import { MyGenerator } from './generator/generator.js';
 import type { Mapping, MappingHead } from './types.js';
 import { withCpVars } from './utils/certainlyBoundVars.js';
@@ -39,11 +40,11 @@ export interface TransformContext {
 }
 
 /**
- * Parses a SPARQL query string into algebra representation.
- * Enables quad mode and converts blank nodes to variables.
+ * Parses a SPARQL query string into its algebra representation, in quad mode and with blank nodes converted
+ * to variables.
  * @param context - Object containing the parser
  * @param query - SPARQL query string to parse
- * @returns The parsed algebra operation
+ * @returns the parsed algebra operation
  */
 export function parseQuery(
   { parser }: Pick<TransformContext, 'parser'>,
@@ -54,12 +55,11 @@ export function parseQuery(
 }
 
 /**
- * Prefixes all variable names in an operation with the given prefix.
- * Used to avoid variable name collisions when combining multiple patterns.
+ * Prefixes all variable names in an operation, so that patterns combined later cannot collide.
  * @param context - Object containing astTransformer and DF
  * @param obj - The object to transform
  * @param prefix - The prefix to add to all variable names
- * @returns The object with all variables prefixed
+ * @returns the object with all variables prefixed
  */
 export function prefixVarsInOperation<T extends object>(
   { astTransformer, DF }: Pick<TransformContext, 'astTransformer' | 'DF'>,
@@ -82,20 +82,16 @@ export function prefixVarsInOperation<T extends object>(
 }
 
 /**
- * Converts a SPARQL CONSTRUCT query string into a Mapping object.
+ * Converts a SPARQL CONSTRUCT query string into a {@link Mapping}.
  *
- * The CONSTRUCT query must have exactly one triple in the template (head).
- * The WHERE clause becomes the mapping body, wrapped in a projection of
- * the variables used in the head. Since a CONSTRUCT only instantiates its
- * template when all of the template's variables are bound, a FILTER(BOUND(?x))
- * is added for every head variable that is not already certainly bound.
- *
- * @param context - Partial context with parser, AF, and astTransformer
+ * The template becomes the head and the WHERE clause the body, wrapped in a projection of the variables
+ * used in the head. Since a CONSTRUCT only instantiates its template when all of the template's variables
+ * are bound, a `FILTER(BOUND(?x))` is added for every head variable that is not already certainly bound.
+ * @param context - Partial context with parser, AF, astTransformer and DF
  * @param constructQuery - SPARQL CONSTRUCT query string
- * @returns A Mapping with the template as head and WHERE clause as body
- * @throws Error if the construct has != 1 template triple
- * @throws Error if the head contains blank nodes
- * @throws Error if the body uses the BNODE() function
+ * @returns the mapping
+ * @throws Error if the construct has more or fewer than one template triple, if the head holds a blank node
+ * or a term no mapping head position admits, or if the body uses the BNODE() function
  */
 function constructToMapper(
   { parser, AF, astTransformer, DF }: Pick<TransformContext, 'parser' | 'AF' | 'astTransformer' | 'DF'>,
@@ -154,9 +150,8 @@ ${JSON.stringify(construct.template, null, 2)}`);
 }
 
 /**
- * Creates a partial TransformContext without mappers.
- * Used as a base for creating full contexts with different mapper configurations.
- * @returns A context object with all components except mappers
+ * Creates a {@link TransformContext} without its mapping, the base a full context is built on.
+ * @returns the context, with all components except the mapping
  */
 export function createPartialContext(): Omit<TransformContext, 'mapping'> {
   return {
@@ -171,11 +166,10 @@ export function createPartialContext(): Omit<TransformContext, 'mapping'> {
 }
 
 /**
- * Creates a complete TransformContext from an array of CONSTRUCT query strings.
- * Each CONSTRUCT query becomes a mapper with its variables prefixed (m0_, m1_, etc.).
- *
- * @param mappers - Array of SPARQL CONSTRUCT query strings defining the mappings
- * @returns A complete TransformContext ready for query transformation
+ * Creates a complete {@link TransformContext} from CONSTRUCT query strings, merging several of them into a
+ * single mapping over one generic `?m_s ?m_p ?m_o` head.
+ * @param mappers - SPARQL CONSTRUCT query strings defining the mappings
+ * @returns a context ready for query transformation
  * @example
  * const context = transformContextFromConstructs([
  *   'CONSTRUCT { ?t rdf:reifies <<( ?s ?p ?o )>> } WHERE { ... }',
@@ -185,7 +179,8 @@ export function createPartialContext(): Omit<TransformContext, 'mapping'> {
 export function transformContextFromConstructs(mappers: readonly string[]): TransformContext {
   const c = createPartialContext();
 
-  const manyMappings: Mapping[] = mappers.map(contr => prefixVarsInOperation(c, constructToMapper(c, contr), 'mi_'));
+  const manyMappings: Mapping[] = mappers
+    .map(contr => prefixVarsInOperation(c, constructToMapper(c, contr), VAR_PREFIX_MAPPING));
   if (manyMappings.length === 1) {
     // Console.log(manyMappings[0].head);
     // console.log(c.generator.generate(toAst(manyMappings[0].body), c));
@@ -194,7 +189,7 @@ export function transformContextFromConstructs(mappers: readonly string[]): Tran
       mapping: manyMappings[0],
     };
   }
-  const vars = [ c.DF.variable('m_s'), c.DF.variable('m_p'), c.DF.variable('m_o') ];
+  const vars = [ 's', 'p', 'o' ].map(position => c.DF.variable(`${VAR_PREFIX_MERGED_HEAD}${position}`));
   const [ varS, varP, varO ] = vars;
 
   const mappedBodies = manyMappings.map((mapping) => {

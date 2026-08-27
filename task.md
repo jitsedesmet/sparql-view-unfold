@@ -58,7 +58,7 @@ Review pushed step 3 past its brief in one respect: T⟨?x⟩ became T⟨?x : τ
 predicates (`isIRI`/`isURI`, `isBLANK`, `isLITERAL`, `isTRIPLE`), since they are one fact — a narrowing
 of a group's range — and everything written for `isTRIPLE` held of them word for word.
 
-Phase **5** (the per-operation rules) is on `feat/phase-5-operation-rules`, in three commits:
+Phase **5** (the per-operation rules) landed as **#36 `9a95be5`**, in three commits:
 
 * **VALUES** — a row is a solution mapping, so it is asserted into a clone of Θ rather than read per
   variable: that decides the positions of a triple term a row holds as readily as the term itself, and
@@ -74,5 +74,13 @@ Phase **5** (the per-operation rules) is on `feat/phase-5-operation-rules`, in t
   and the construction rule forced follow-up 6, since the pass writes such a BIND itself at every
   materialisation and so meets the rule on its own output.
 
-Left to do: only the optional follow-up 7 (`ClusterSolver` dropping its `Quad` exclusion). See the
-status table and the per-operation table in `task-for-agent.md`.
+Phase **7**, the last one, is the unfolding side of the same unification. A triple term a *mapping
+head* writes is no longer a value the solver pins a group to but a shape whose three positions are
+groups of their own, the way the assertion conjunction has held one since phase 2, and the term is read
+back off that shape for the `BIND` the rewriting emits. Two triple terms reaching one group therefore
+unify position by position rather than being reported unequal for being spelt with different variables -
+the TODO it was about - and the positional ranges and the occurs check come with it. The one visible
+change: a position of the head triple term that the pattern decides is written into the construction.
+
+Everything in `report.md` is now built. See the status table and the per-operation table in
+`task-for-agent.md`.

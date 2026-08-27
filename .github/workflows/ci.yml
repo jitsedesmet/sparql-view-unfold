@@ -49,3 +49,43 @@ jobs:
       - run: yarn install --immutable
       - run: yarn build
       - run: yarn test
+
+  documentation:
+    name: Prepare documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Use Node.js ${{ env.DEFAULT_NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.DEFAULT_NODE_VERSION }}
+          cache: yarn
+      - run: yarn install --immutable
+      # Builds and validates in one go: typedoc.json turns a validation warning - a {@link} that resolves
+      # to nothing, above all - into an error, so this is also the check `yarn doc:check` runs locally.
+      - run: yarn doc
+      - name: Prepare artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: documentation
+          name: documentation
+
+  documentation-publish:
+    name: Publish documentation
+    needs:
+      - documentation
+    runs-on: ubuntu-latest
+    # The documentation is only published for the main branch
+    if: startsWith(github.ref, 'refs/heads/main')
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
+        with:
+          artifact_name: documentation

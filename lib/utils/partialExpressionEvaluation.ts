@@ -11,19 +11,19 @@ import { DF } from './rdfDatatypes.js';
 import { unionSets } from './setUtils.js';
 
 /**
- * What an {@link AssertionConjunction} decides about the expressions it is substituted into.
+ * What an {@link utils/assertionConjunction!AssertionConjunction} decides about the expressions it is substituted into.
  *
- * A *view* rather than the map of terms it used to be, because a conjunction now knows things no map can
- * hold: `SUBJECT(?o)` may be decided where `?o` is not, and `?o` may be known to be a triple term without
- * any term for it being known at all. It stays a view of *terms*, though - an open shape may never be
- * substituted into an expression (S3), since the positions nobody named have no variable to write.
+ * A *view* rather than a map of terms, because a conjunction knows things no map can hold: `SUBJECT(?o)`
+ * may be decided where `?o` is not, and `?o` may be known to be a triple term without any term for it being
+ * known at all. It stays a view of *terms* though - an open shape may never be substituted into an
+ * expression (S3), the positions nobody named having no variable to write.
  */
 export interface AssertionView {
   /** The term the access is fixed to, or the variable that reads its value most directly. */
   resolve: (access: Access) => RDF.Term | undefined;
   /**
-   * The term types left to the access, when the access is proven bound - `undefined` otherwise, and
-   * absent altogether for a view that decides no kinds of term at all.
+   * The term types left to the access, when the access is proven bound - `undefined` otherwise, and absent
+   * altogether for a view that decides no kinds of term at all.
    *
    * Boundedness is what makes both directions of `isIRI(a)` foldable: it is `false` of a bound term of
    * another kind, but an *error* of an unbound one, and an error is not `false` in every context.
@@ -34,17 +34,17 @@ export interface AssertionView {
 }
 
 /**
- * Substitutes assertions (θ) into an expression and folds what becomes constant: `simplify(R[θ])`.
+ * Substitutes assertions (theta) into an expression and folds what becomes constant: `simplify(R[theta])`.
  *
- * Substitution is *not* uniform textual replacement. `BOUND` is the only SPARQL built-in whose grammar
- * takes a bare `Var` instead of an `Expression`, so replacing the variable by a term would produce the
- * ungrammatical `BOUND(<ex://p>)` once the plan is serialised back to SPARQL. Since an assertion implies
- * the variable is bound, `bound(?x)` becomes `true` instead.
- *
- * `cVars` are the variables certainly bound where the expression is evaluated - the ones of the operation
- * it sits on. They are the only thing that decides `sameTerm(?x, ?x)`, and the conjunction proves a few
- * more of them by itself - both ends of every replacement it makes, which is what lets the residual
- * `sameTerm(?o, ?o)` a unification leaves behind fold away.
+ * Substitution is *not* uniform textual replacement: `BOUND` is the only SPARQL built-in whose grammar
+ * takes a bare `Var` instead of an `Expression`, so `bound(?x)` becomes `true` rather than the
+ * ungrammatical `BOUND(<ex://p>)`.
+ * @param c - The transformation context
+ * @param expression - The expression to substitute into
+ * @param assertions - What the conjunction decides about it
+ * @param cVars - The variables certainly bound where the expression is evaluated, which is the only thing
+ * that decides `sameTerm(?x, ?x)`; the conjunction proves a few more of them by itself
+ * @returns the substituted, folded expression
  */
 export function substituteInExpression(
   c: TransformContext,
@@ -55,6 +55,14 @@ export function substituteInExpression(
   return substitute(c, expression, assertions, unionSets([ cVars, assertions.bound ]));
 }
 
+/**
+ * The recursive half of {@link substituteInExpression}, over an expression tree.
+ * @param c - The transformation context
+ * @param expression - The expression to substitute into
+ * @param assertions - What the conjunction decides about it
+ * @param boundVariables - The variables known to be bound here
+ * @returns the substituted, folded expression
+ */
 function substitute(
   c: TransformContext,
   expression: Algebra.Expression,
@@ -107,22 +115,15 @@ function substitute(
 }
 
 /**
- * Substitutes Θ into the term of a term expression, `undefined` where it decides nothing about it.
- *
- * A variable is the term it is fixed to, or the variable that reads its group most directly - the
- * substitution this pass is. A **triple term written out** is that one level down, over each of its
- * components: `<<( ?s ?p ?o )>>` under A⟨?s ≡ :a⟩ is `<<( :a ?p ?o )>>`, which is the same value by the
- * same argument that lets `?s` be replaced anywhere else, Θ proving the two equal wherever it holds.
- *
- * That is not cosmetic where the construction is a `BIND`: the pattern below it has had `:a` substituted
- * into it and hands `?s` back through a re-binding of its own, so a construction still reading `?s` makes
- * one projected expression read what another projected expression binds - legal, and not every parser is
- * happy about it. Nothing is lost by writing what the pass already knows.
+ * Substitutes theta into the term of a term expression, writing a triple term out one component at a time.
  *
  * No position is checked, deliberately: a component the position cannot hold makes the *construction*
- * raise, leaving its target unbound, which is exactly what the variable it replaces would have done.
- * Only a pattern refuses such a term outright ({@link substituteInTerm}), because a pattern that cannot
- * match is an emptiness rather than an error.
+ * raise, leaving its target unbound, which is exactly what the variable it replaces would have done. Only a
+ * pattern refuses such a term outright ({@link substituteInTerm}), a pattern that cannot match being an
+ * emptiness rather than an error.
+ * @param term - The term to substitute into
+ * @param assertions - What the conjunction decides about it
+ * @returns the substituted term, or `undefined` where the conjunction decides nothing about it
  */
 function substitutedTerm(term: RDF.Term, assertions: AssertionView): RDF.Term | undefined {
   if (term.termType === 'Variable') {
@@ -147,12 +148,16 @@ function substitutedTerm(term: RDF.Term, assertions: AssertionView): RDF.Term | 
 }
 
 /**
- * Reads an accessor chain - `SUBJECT(?o)`, `OBJECT(SUBJECT(?o))` - or an `isTRIPLE` of one against what Θ
- * decides, before its argument is substituted into.
+ * Reads an accessor chain - `SUBJECT(?o)`, `OBJECT(SUBJECT(?o))` - or an `isTRIPLE` of one against what
+ * theta decides, before its argument is substituted into.
  *
- * These folds are what make the pass **idempotent** (S7): the very condition an assertion was read from
- * is written back over the operation it was pushed into, and unless it collapses to `true` there, running
- * the pass again reads it as a second assertion and stacks a second copy of the rewrite it caused.
+ * These folds are what make the pass **idempotent** (S7): the condition an assertion was read from is
+ * written back over the operation it was pushed into, and unless it collapses to `true` there, a second run
+ * reads it as a second assertion and stacks a second copy of the rewrite it caused.
+ * @param c - The transformation context
+ * @param expression - The expression to read
+ * @param assertions - What the conjunction decides about it
+ * @returns what it folds to, or `undefined` when the conjunction decides it not at all
  */
 function decidedByAccess(
   c: TransformContext,
@@ -167,7 +172,7 @@ function decidedByAccess(
       return undefined;
     }
     // `⊆` answers it `true`, an empty meet answers it `false`, and anything between leaves it standing.
-    if (rangeOfAccess.size === rangeOfAccess.disjunct(rangeOfTermType(termTypeAssertion)).size) {
+    if (rangeOfAccess.size === rangeOfAccess.meet(rangeOfTermType(termTypeAssertion)).size) {
       return createBooleanExpression(c, true);
     }
     return rangeOfAccess.has(termTypeAssertion) ? undefined : createBooleanExpression(c, false);
@@ -177,7 +182,11 @@ function decidedByAccess(
   return decided === undefined ? undefined : c.AF.createTermExpression(decided);
 }
 
-/** The term an argument spells out, when it is a ground one. */
+/**
+ * The term an argument spells out, when it is a ground one.
+ * @param expression - The expression to read
+ * @returns the term, or `undefined` for anything else
+ */
 function exprAsGroundedTerm(expression: Algebra.Expression): RDF.Term | undefined {
   return expression.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(expression.term) ?
     expression.term :
@@ -188,18 +197,16 @@ function exprAsGroundedTerm(expression: Algebra.Expression): RDF.Term | undefine
  * Constant-folds an operator expression whose arguments are (partly) constant.
  *
  * Only deterministic, side-effect free operators may be folded: `rand`, `uuid`, `struuid`, `bnode` and
- * `now` must survive to evaluation, and anything not listed below is rebuilt unchanged.
- *
- * Only the folds sound under SPARQL's error handling are applied. Notably `=` folds to `true` for two
- * identical terms - RDF term equality is the fallback for unsupported datatypes - but never to `false`,
- * since comparing unsupported datatypes raises an error, and an error is not `false` in every context:
- * `COALESCE(Error, false, true) ≡ false`.
- *
- * `boundVariables` are the variables known to be bound here, which is the only thing that makes
- * `sameTerm(?x, ?x)` decidable: it is `true` of a bound `?x` and an *error* of an unbound one. Where `?x`
- * is not known to be bound there is nothing to rewrite it into either, since no expression has that
- * true-or-error semantics: `bound(?x)` answers `false` where `sameTerm(?x, ?x)` errors, and the two are
- * told apart by `COALESCE`.
+ * `now` must survive to evaluation, and anything not listed is rebuilt unchanged. Only the folds sound
+ * under SPARQL's error handling are applied - notably `=` folds to `true` for two identical terms but never
+ * to `false`, comparing unsupported datatypes raising an error, and an error is not `false` in every
+ * context (`COALESCE(Error, false, true) == false`).
+ * @param c - The transformation context
+ * @param operator - The operator to fold
+ * @param args - Its arguments, already substituted into
+ * @param boundVariables - The variables known to be bound here, which is the only thing that makes
+ * `sameTerm(?x, ?x)` decidable: it is `true` of a bound `?x` and an *error* of an unbound one
+ * @returns the folded expression, or the operator rebuilt over its arguments
  */
 export function constantFoldOperator(
   c: TransformContext,
@@ -314,8 +321,12 @@ export function constantFoldOperator(
 }
 
 /**
- * Drops the arguments of an `&&` / `||` that are its neutral element,
- * keeping the operator only when more than one argument is left.
+ * Drops the arguments of an `&&` / `||` that are its neutral element.
+ * @param c - The transformation context
+ * @param args - The arguments of the operator
+ * @param constants - The boolean each argument folds to, `undefined` where it folds to none
+ * @param neutral - The neutral element: `true` for `&&`, `false` for `||`
+ * @returns the operator over what is left, or that single argument, or the neutral element itself
  */
 function neutralFold(
   c: TransformContext,

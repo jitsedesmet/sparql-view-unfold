@@ -2,9 +2,26 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { termToString } from 'rdf-string';
 import type { TransformContext } from '../transformContext.js';
 
+/**
+ * Merges and hoists SERVICE calls, so that as much of the plan as possible is evaluated by the endpoint
+ * rather than around it.
+ *
+ * Three rewrites: sibling SERVICE calls to one endpoint become a single call over the operation that
+ * joined or united them; a SERVICE that is the sole input of a congruent operation swaps places with it;
+ * and the VALUES clauses of a join over nothing but VALUES and SERVICE are pushed into each service,
+ * where the endpoint can apply them as an early filter.
+ * @param c - The transformation context
+ * @param op - The operation to transform
+ * @returns the transformed operation
+ */
 export function transformServiceCallPushUp(c: TransformContext, op: Algebra.Operation): Algebra.Operation {
   const { AF } = c;
-  // A join branches of the multi
+
+  /**
+   * Merges the SERVICE operands of a JOIN or UNION that name the same endpoint into a single call.
+   * @param op - The multi-input operation to merge
+   * @returns the merged operation, or `op` when no endpoint is named twice
+   */
   function pushUpServiceFromMulti(op: Algebra.Operation & Algebra.Multi): Algebra.Operation {
     let canOptimize = false;
     const distinctServices: Record<string, Algebra.Service[]> = {};
@@ -54,6 +71,11 @@ export function transformServiceCallPushUp(c: TransformContext, op: Algebra.Oper
     };
   }
 
+  /**
+   * Swaps a congruent single-input operation with the SERVICE below it, so that the endpoint evaluates it.
+   * @param op - The single-input operation to swap
+   * @returns the swapped operation, or `op` when its input is no SERVICE
+   */
   function pushOpServiceFromSingle(op: Algebra.Operation & Algebra.Single): Algebra.Operation {
     const subOp = op.input;
     if (subOp.type === Algebra.Types.SERVICE) {
@@ -64,12 +86,14 @@ export function transformServiceCallPushUp(c: TransformContext, op: Algebra.Oper
     return op;
   }
 
+  /**
+   * Pushes the VALUES clauses of a join into every SERVICE call beside them, which makes the outer join
+   * simpler and lets each endpoint apply the bindings as an early filter.
+   * @param op - The join to distribute over
+   * @returns the rewritten join, or `op` when it holds anything but VALUES and SERVICE - removing the
+   * VALUES from the outer join would change what the other operands join with
+   */
   function valuesDistributionOfJoin(op: Algebra.Join): Algebra.Operation {
-    // Partition the join inputs into VALUES clauses and SERVICE calls.
-    // If every non-VALUES input is a SERVICE call, we can push all VALUES
-    // clauses inside each service.  This creates a less complex outer join
-    // (the VALUES are removed from the join level) while letting each service
-    // endpoint apply the bindings as an early filter.
     const valueClauses: Algebra.Values[] = [];
     const serviceClauses: Algebra.Service[] = [];
 

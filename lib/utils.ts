@@ -34,17 +34,11 @@ export function renameVariables<T extends object>(
 }
 
 /**
- * Creates a generator of fresh (non-colliding) RDF variables.
- *
- * The generator coins variable names using an internal, monotonically increasing
- * index (e.g. `?v_0`, `?v_1`, ...). If a candidate name already exists in the set
- * of known variables, the index is advanced until an unused name is found.
- * Every coined name is remembered internally, so repeated calls never collide with
- * each other nor with any variable that was present in the original operation tree.
- *
+ * Creates a generator of fresh (non-colliding) RDF variables, coining names from a monotonically increasing
+ * index and remembering every name it hands out.
  * @param existing - Variable names that already exist within the operation tree
- * @param prefix - Prefix used for the coined variable names (defaults to `v`)
- * @returns A function that returns a new, unused variable on each call
+ * @param prefix - Prefix used for the coined variable names
+ * @returns a function that returns a new, unused variable on each call
  * @example
  * const fresh = freshVarGenerator([ 'x', 'v_0' ]);
  * fresh(); // ?v_1  (v_0 was taken)
@@ -76,25 +70,20 @@ const positionSuffixes: Readonly<Record<TriplePosition, string>> = {
 };
 
 /**
- * Creates the namer a pass writing triple terms into patterns coins its variables with: the position
- * `p` of the value `?x` names becomes `?x_p`, and a name already taken in the query takes the first
- * free numeric suffix (`?x_p0`, `?x_p1`, ...).
+ * Creates the namer a pass writing triple terms into patterns coins its variables with: the position `p` of
+ * the value `?x` names becomes `?x_p`, and a name already taken in the query takes the first free numeric
+ * suffix (`?x_p0`, `?x_p1`, ...).
  *
  * **The name has to be a function of what it names**, which is the whole reason this exists beside
- * {@link freshVarGenerator}. Two places writing out the same position must write the same variable, or
- * the two operands of a join stop joining on it once both have been rewritten - and a sequentially
- * numbered generator names by call order instead, so the *same* position picks up a different name
- * depending on which branch is rewritten first. Sound because the position is functionally determined
- * by the value the two already agree on: equal triple terms have equal subjects.
- *
- * So `representative` must be the canonical name of the value the position is read from, and the memo
- * below is what makes a second reading of the same position hand back the variable the first one coined
- * - including where the first candidate was taken and the suffix moved the name.
- *
+ * {@link freshVarGenerator}. Two places writing out the same position must write the same variable, or the
+ * two operands of a join stop joining on it once both have been rewritten - where a sequentially numbered
+ * generator names by call order instead. Sound because the position is functionally determined by the value
+ * the two already agree on: equal triple terms have equal subjects.
  * @param existing - Every variable name occurring in the query, collected once *before* the pass runs
- *   ({@link collectVariableNames}), since a name coined half way through would otherwise collide with
- *   one further down the tree that has not been visited yet.
- * @returns The namer, which is stateful: it remembers what it has already coined.
+ * ({@link collectVariableNames}), a name coined half way through otherwise colliding with one further down
+ * the tree that has not been visited yet
+ * @returns the namer, which is stateful: it remembers what it has already coined, so that a second reading
+ * of one position hands back the variable the first one coined
  */
 export function derivedVarNamer(existing: Iterable<string>): DerivedVarNamer {
   const taken = new Set(existing);
@@ -117,9 +106,11 @@ export function derivedVarNamer(existing: Iterable<string>): DerivedVarNamer {
 }
 
 /**
- * Collects the names of every variable that occurs anywhere in an operation subtree.
- * This includes variable terms (subjects, predicates, objects, expression operands,
- * projected/extended variables, ...) as well as the string keys used in VALUES bindings.
+ * Collects the names of every variable that occurs anywhere in an operation subtree, the string keys used
+ * in VALUES bindings included.
+ * @param astTransformer - The transformer to traverse with
+ * @param obj - The subtree to read
+ * @returns the variable names
  */
 export function collectVariableNames(astTransformer: TransformContext['astTransformer'], obj: object): Set<string> {
   const names = new Set<string>();
@@ -140,13 +131,12 @@ export function collectVariableNames(astTransformer: TransformContext['astTransf
 }
 
 /**
- * Extracts direct variable assignments from EXTEND operations.
- * Only collects assignments where the expression is a simple term (Literal or NamedNode).
- * @param c - Transform context
+ * Extracts direct variable assignments from the EXTEND chain at the top of an operation, keeping only the
+ * ones whose expression is a Literal or a NamedNode.
  * @param op - The operation to search
- * @returns A record mapping variable names to their assigned terms
+ * @returns a record mapping variable names to their assigned terms
  */
-export function directExtensions(c: TransformContext, op: Algebra.Operation): Record<string, RDF.Term> {
+export function directExtensions(op: Algebra.Operation): Record<string, RDF.Term> {
   const assignments: Record<string, RDF.Term> = {};
 
   const findAssignments = (op: Algebra.Operation): void => {
@@ -164,15 +154,13 @@ export function directExtensions(c: TransformContext, op: Algebra.Operation): Re
 }
 
 /**
- * Removes EXTEND operations for specified variables from an operation tree.
- * Modifies the tree in place.
- * @param c - Transform context
+ * Removes the EXTEND operations binding the given variables from the top of an operation tree. Modifies the
+ * tree in place.
  * @param op - The operation to modify
  * @param vars - Variable names whose extensions should be removed
- * @returns The modified operation
+ * @returns the modified operation
  */
 export function deleteVarExtensionsInPlace(
-  c: TransformContext,
   op: Algebra.Operation,
   vars: string[],
 ): Algebra.Operation {

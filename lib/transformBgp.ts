@@ -1,25 +1,21 @@
 import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { VAR_PREFIX_USER_QUERY } from './consts.js';
 import { rewriteSinglePattern } from './transformations/index.js';
 import type { TransformContext } from './transformContext.js';
 import { prefixVarsInOperation, parseQuery } from './transformContext.js';
 import { collectVariableNames, renameVariables } from './utils.js';
 
 /**
- * Returns true when a GROUP node exists at the top of the operation's
- * Extend / Filter / OrderBy chain.
+ * Whether a GROUP node sits at the top of the operation's Extend / Filter / OrderBy chain.
  *
- * This matters for `queryTransform`: when the user query contains a GROUP BY,
- * extra outer EXTEND nodes added for variable renaming must not be visible to
- * `toAst`'s `translateAlgProject`. That function flattens all Extend nodes and
- * replaces intermediate aggregate variables (e.g. `var0`) with their aggregate
- * expressions. Any unused flattened Extend gets pushed into the WHERE clause via
- * `putExtensionsInGroup`, producing invalid SPARQL such as
- * `BIND(COUNT(?o) AS ?count)`.
- *
- * Wrapping the grouped sub-tree in a subSELECT (Project) before adding the outer
- * EXTEND renames isolates the aggregate from the outer scope and avoids the issue.
+ * This matters for {@link queryTransform}: the extra outer EXTEND nodes it adds for variable renaming must
+ * not be visible to `toAst`'s `translateAlgProject`, which flattens all Extend nodes, replaces intermediate
+ * aggregate variables by their aggregate expressions, and pushes any unused one into the WHERE clause -
+ * producing invalid SPARQL such as `BIND(COUNT(?o) AS ?count)`.
+ * @param op - The operation to inspect
+ * @returns whether the query groups, in which case the grouped sub-tree is wrapped in a subSELECT first
  */
 function hasGroupInTopLevelChain(op: Algebra.Operation): boolean {
   if (op.type === Algebra.Types.GROUP) {
@@ -36,30 +32,18 @@ function hasGroupInTopLevelChain(op: Algebra.Operation): boolean {
 }
 
 /**
- * Transforms a SPARQL query by applying the configured mappings and transformations.
+ * Transforms a SPARQL query by applying the configured mappings and transformations - the main entry point
+ * for query rewriting.
  *
- * This is the main entry point for query rewriting. It:
- * 1. Parses the input query
- * 2. Strips any outer DISTINCT/REDUCED modifier, then the Project
- * 3. Prefixes user query variables with "uq_"
- * 4. Applies each transformation in order
- * 5. Wraps the result with EXTEND operations to map back to original variable names
- * 6. Re-applies the Project and any stripped DISTINCT/REDUCED modifier
- * 7. Generates the output SPARQL string
- *
- * **GROUP BY queries**: when the user query contains a GROUP BY (detected by
- * `hasGroupInTopLevelChain`), the transformed algebra is first wrapped in a
- * subSELECT projecting the `uq_`-prefixed result variables. This prevents
- * `toAst` from incorrectly serialising aggregate alias Extend nodes as
- * `BIND(aggregate AS var)` in the WHERE clause.
- *
- * @param c - The transformation context containing mappings and factories
+ * It parses the query, strips any outer DISTINCT/REDUCED and the Project, prefixes the user query variables
+ * with `uq_`, applies each transformation in order, and then wraps the result back up: an EXTEND per
+ * original variable name, the Project, and the stripped modifier.
+ * @param c - The transformation context containing the mapping and the factories
  * @param input - The SPARQL query string to transform
- * @param transformations - Array of transformation functions to apply in order
- * @returns The transformed SPARQL query string
- *
+ * @param transformations - Transformation functions to apply in order
+ * @returns the transformed SPARQL query string
  * @example
- * const result = queryTransform(context, 'SELECT * WHERE { ?s ?p ?o }', [operationTransform]);
+ * const result = queryTransform(context, 'SELECT * WHERE { ?s ?p ?o }', [ operationTransform ]);
  */
 export function queryTransform(
   c: TransformContext,
@@ -78,7 +62,7 @@ export function queryTransform(
   if (innerAlgebra.type === 'project') {
     transformedAlgebra = innerAlgebra.input;
   }
-  transformedAlgebra = prefixVarsInOperation(c, transformedAlgebra, 'uq_');
+  transformedAlgebra = prefixVarsInOperation(c, transformedAlgebra, VAR_PREFIX_USER_QUERY);
   for (const transformation of transformations) {
     transformedAlgebra = transformation(c, transformedAlgebra);
   }
@@ -87,7 +71,8 @@ export function queryTransform(
     // Because of the variable renaming, when we group,
     // we need to group as part of a subquery and then rename afterwards.
     if (hasGroupInTopLevelChain(transformedAlgebra)) {
-      const uqVariables = innerAlgebra.variables.map(v => c.DF.variable(`uq_${v.value}`));
+      const uqVariables = innerAlgebra.variables
+        .map(v => c.DF.variable(`${VAR_PREFIX_USER_QUERY}${v.value}`));
       transformedAlgebra = c.AF.createProject(transformedAlgebra, uqVariables);
     }
 
@@ -96,7 +81,7 @@ export function queryTransform(
       transformedAlgebra = c.AF.createExtend(
         transformedAlgebra,
         variable,
-        c.AF.createTermExpression(c.DF.variable(`uq_${variable.value}`)),
+        c.AF.createTermExpression(c.DF.variable(`${VAR_PREFIX_USER_QUERY}${variable.value}`)),
       );
     }
     transformedAlgebra = c.AF.createProject(transformedAlgebra, innerAlgebra.variables);
@@ -113,19 +98,17 @@ export function queryTransform(
 }
 
 /**
- * Rewrites a single BGP pattern and namespaces every internal (non user-query)
- * variable it introduces so that sibling patterns in the same BGP cannot collide.
+ * Rewrites a single BGP pattern and namespaces every internal (non user-query) variable it introduces, so
+ * that sibling patterns in the same BGP cannot collide.
  *
- * `rewriteSinglePattern` always produces the same internal variable names for a
- * given mapping (`m_s`, `m_o`, `mi_*`, unification vars, ...). When two patterns
- * of a BGP are joined, these internal variables — some of which are projected out
- * of the pattern's subselect and are therefore visible at the JOIN level — would
- * be unified across patterns, yielding incorrect (usually empty) results.
- *
- * User-query variables carry the `uq_` prefix and are the *only* variables that
- * are meant to be shared between patterns (they are the natural join keys). We
- * therefore rename every other variable with a per-pattern prefix, keeping the
- * rename consistent within the pattern's subtree so scoping is preserved.
+ * {@link rewriteSinglePattern} always produces the same internal variable names for a given mapping, and
+ * some of them are projected out of the pattern's subselect and so visible at the JOIN level - where they
+ * would be unified across patterns, yielding incorrect (usually empty) results. Only the `uq_` variables
+ * are meant to be shared between patterns, being the natural join keys.
+ * @param c - The transformation context
+ * @param pattern - The pattern to rewrite
+ * @param patternIndex - The index that namespaces this pattern's internal variables
+ * @returns the rewritten pattern
  */
 function rewritePatternWithUniqueScope(
   c: TransformContext,
@@ -135,13 +118,19 @@ function rewritePatternWithUniqueScope(
   const rewritten = rewriteSinglePattern(c, pattern, c.mapping);
   const renames: Record<string, RDF.Variable> = {};
   for (const name of collectVariableNames(c.astTransformer, rewritten)) {
-    if (!name.startsWith('uq_')) {
+    if (!name.startsWith(VAR_PREFIX_USER_QUERY)) {
       renames[name] = c.DF.variable(`p${patternIndex}_${name}`);
     }
   }
   return renameVariables(c, rewritten, renames);
 }
 
+/**
+ * Rewrites every BGP of an operation into a join of its unfolded patterns.
+ * @param c - The transformation context
+ * @param input - The operation to rewrite
+ * @returns the rewritten operation
+ */
 export function operationTransform(c: TransformContext, input: Algebra.Operation): Algebra.Operation {
   // Counter shared across every BGP of the query so that the internal variables of
   // distinct pattern rewrites never collide — not even across sibling BGPs that are

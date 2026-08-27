@@ -23,7 +23,7 @@ member of a clique must assert it on all of them.
 implementation contract: everything below is decided, not up for re-litigation, except where it says
 "your call".
 
-## Where this stands (branch `feat/phase-5-operation-rules`, 2026-08-25)
+## Where this stands (`main`, 2026-08-26)
 
 **Every step is in the codebase.** D1 to D6 below describe what is *there*, not what to build; read
 them as the foundation the rest stands on, and **the code as the authority** — review renamed a good deal
@@ -37,10 +37,11 @@ of it, and where this file and a symbol disagree, the symbol wins.
 | 3 | `c15adc9` (#34), main | accesses and T⟨?x : τ⟩ (D1, D2), the recognisers, `toExpression`, the folds of S7. Θ round-trips through a condition; nothing is written into patterns yet. |
 | 3+ | `c15adc9` (#34), main | **beyond the plan**: all four term-type predicates rather than `isTRIPLE` alone (D2), and `AssertionClusterSet`, which is where the asserted half of a group's range lives. |
 | 4 | `6a3f2fa` (#35), main | materialisation (D4): `derivedVarNamer`, `intoPattern` (the substitution and what it leaves behind), and the namer threaded through the pass. The target example works. |
-| 5 | branch `feat/phase-5-operation-rules` | the operation rules: the VALUES row rule, `equatedReadings` + S6 in `splitClique`, and the EXTEND transfer - which forced 6 (see below). |
+| 5 | `9a95be5` (#36), main | the operation rules: the VALUES row rule, `equatedReadings` + S6 in `splitClique`, and the EXTEND transfer - which forced 6 (see below). |
+| 7 | working tree | the unfolding side: `ClusterSolver` decomposes a triple term of a mapping head into a shape (`assertTerm`) and reads one back as a term (`resolvedTermOf`). |
 
-**Everything in the plan is built.** What is left is the optional 7
-(`ClusterSolver`). The per-operation table below says what each row came to.
+**Everything in the plan is built**, 7 included. The per-operation table below says what each row came
+to.
 
 Step 2 is not separable from step 3 in the build: `AssertionConjunction` is the only caller of
 `TermClusterSet`'s comparator, so the lattice and the conjunction that meets pins on it land together.
@@ -117,6 +118,31 @@ generalise cleanly: `variablesReadByConjunct` over an edge is the two roots, and
 one, so the per-target licence is unchanged in form. `placeAccessConjunct` and the split between
 `cliques` / `accessConjuncts` / `singleVariableConjuncts` all collapsed into `equatedReadings` +
 `unaryConjuncts`.
+
+### What phase 7 found, so that the next reader does not re-derive it
+
+**The exclusion did not disappear, it moved.** A pin of the solver still holds a term that is not a
+triple term, because a triple term is now one level up: `assertTerm` decomposes it into a *shape* whose
+three positions are groups of their own, exactly as the assertion side does, and `resolvedTermOf` reads
+the term back off that shape for the `BIND(<<( ?mi_s ?mi_p ?mi_o )>> AS ?uq_o)` the rewriting emits.
+Pinning the term whole and teaching `meetPins` to take it apart would have needed the meet to *create*
+groups, which it cannot: it is a pure function of two pins, and the work list it reports into speaks of
+group ids.
+
+**The TODO it resolves is unreachable from the current pipeline**, and that is a fact about
+`iterateMappingHead` rather than about the solver: a pair of triple terms is recursed into rather than
+registered, and one triple pattern has one object position, so no group is ever handed two triple terms.
+What the decomposition buys where the pipeline *does* reach it is smaller and real: a position of the
+head triple term that the pattern decides is now written into the construction
+(`<<( ?mi_s <ex://knows> ?mi_o )>>` for a mapping whose reifier is the predicate it reifies), each
+position is held to the range it admits, and the occurs check refuses `?y ≡ <<( … ?y )>>`.
+
+**The path had no test at all.** Registering a triple term onto a pattern variable - every mapping head
+in `queryConsts.ts` writes one - is never reached by the suite as it stood, since every test that uses
+such a head passes *two* mappings, and two are merged behind a head of three plain variables
+(`transformContextFromConstructs`). A `throw` put in that branch left all 386 tests green. So the tests
+7 adds are the first cover it has, at all three layers, and the two evaluation ones pass on the old code
+too: they guard the path rather than the change.
 
 ## Grounding
 
@@ -441,14 +467,18 @@ written back in accessor form, so it does not round-trip verbatim — that is ac
    condition after `toExpression`, against the values `intoPattern` wrote (`asWritten`), never a coined
    name in Θ. It also decides *where* the condition goes — on the pattern, below the re-binding, wherever
    it no longer reads a re-bound variable — which is what makes a second run write the same plan.
-7. Follow-up, optional: `ClusterSolver` drops the `Quad` exclusion from `RawBasicTerm` and resolves its
+7. ~~Follow-up, optional: `ClusterSolver` drops the `Quad` exclusion from `RawBasicTerm` and resolves its
    TODO at line 191 — the mapping head `?t rdf:reifies <<( ?s ?p ?o )>>` against a pattern binding a
-   triple term is the same unification problem.
+   triple term is the same unification problem.~~ **Done**, and it is the same unification problem: a
+   triple term the head writes is decomposed into a shape (`assertTerm`) rather than pinned as a value,
+   and read back off one (`resolvedTermOf`). One decision of this file came out the other way round, see
+   "What phase 7 found".
 
 ## Tests
 
-Extend the four layers that now exist; keep every current test green (**378 passing, 1 skipped** after
-step 5, from the 359 step 4 left, the 344 steps 0 to 3 left and the 261 the first two left).
+Extend the layers that now exist; keep every current test green (**401 passing, 1 skipped** after step
+7, from the 386 step 5 left, the 359 step 4 left, the 344 steps 0 to 3 left and the 261 the first two
+left).
 
 * `test/termClusterSet.test.ts` (new in step 2) — the pin lattice on its own: pins, shapes, the
   decomposition of a ground triple term against one, the positional ranges, the occurs check both ways,
@@ -467,6 +497,12 @@ step 5, from the 359 step 4 left, the 344 steps 0 to 3 left and the 261 the firs
   suppression or a serialisation shows; and the two meta-tests that must keep passing: *"applying the
   transformation twice yields the same result as once"* — add every new form to its list, a chain above
   all — and *"leaves the input tree untouched"*.
+* `test/clusterSolver.test.ts` (new in step 7) — the unfolding side of the lattice: a triple term of a
+  mapping head decomposed and read back, a position of it decided, two of them unified, and what a shape
+  refuses (a Literal subject, a term that is not a triple term, itself). Alongside it, the two layers the
+  rewriting has of its own: the generated SPARQL in `test/rewriting.test.ts` and the evaluation
+  comparison in `test/integration.test.ts`, both under a *single* mapping, which is the only way to keep
+  a triple term in the head that reaches the solver.
 * the `semantic equivalence (evaluation)` block — the real safety net, and the only layer that caught
   the MINUS bug. The data is in `test/statics/assertionPushdown.ttl`: `:a`/`:b`/`:c` `:says` a triple
   term, `:d` says a non-triple term, and `:e`/`:f` `:nests` one triple term inside another. Extend it

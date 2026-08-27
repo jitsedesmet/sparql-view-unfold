@@ -9,12 +9,13 @@ SELECT * { ?s ?p <<( ?s ?o_p ?o_o )>> . BIND(<<( ?s ?o_p ?o_o )>> AS ?o) }
 Verified against the installed traqula: both the pattern and the `BIND` generate and re-parse exactly,
 so no parser/generator work is needed.
 
-> **State of play (2026-08-25).** Phases **0** (`ac6d447`, #31), **1** (`e18a8dd`, #32), **2** and **3**
-> (`c15adc9`, #34) and **4** (`6a3f2fa`, #35) are on `main`, and the example at the top of this file is
-> what the pass produces. Phase **5** (the operation rules) is on `feat/phase-5-operation-rules`, and it
-> brought **6** with it: transferring an assertion through `BIND(<<( ?a ?b ?c )>> AS ?o)` is a rule the
-> pass meets on its *own* output, so without 6 it stopped being a fixpoint. The sections below say so
-> where they describe something that now exists.
+> **State of play (2026-08-26).** Every phase is on `main`: **0** (`ac6d447`, #31), **1** (`e18a8dd`,
+> #32), **2** and **3** (`c15adc9`, #34), **4** (`6a3f2fa`, #35) and **5** with **6** (`9a95be5`, #36),
+> and the example at the top of this file is what the pass produces. 5 brought **6** with it:
+> transferring an assertion through `BIND(<<( ?a ?b ?c )>> AS ?o)` is a rule the pass meets on its *own*
+> output, so without 6 it stopped being a fixpoint. **7**, the last of them, takes the lattice back to
+> the side it was lifted from: the unfolding decomposes a triple term of a mapping head into a shape
+> rather than pinning it whole. The sections below say so where they describe something that now exists.
 
 The algebraic ground under all of this is Schmidt, Meier, Lausen, ["Foundations of SPARQL Query
 Optimization"](https://dl.acm.org/doi/pdf/10.1145/1804669.1804675) (ICDT 2010): the pass is (FElimI)/(FElimII) — discharge an equality by substituting
@@ -117,7 +118,7 @@ error when every component is bound and `range(c₁) ⊆ {IRI, bnode}`, `range(c
 | `utils/partialExpressionEvaluation.ts` | substitution argument becomes a view (`resolve`, `isTriple`); fold accessors and `istriple` — without this the filter's own residual never folds and the pass is not idempotent |
 | `utils/certainlyBoundVars.ts` | ~~`vRanges` + the EXTEND rule~~ **done** (as the `pVars` merge) |
 | `transformations/pushDownAssertions.ts` | pattern substitution + namer, `pruneValues`, `transferred` through triple-term/accessor BINDs, ~~metadata strip~~ (strip done) |
-| `ClusterSolver.ts` | follow-up: drop the `Quad` exclusion, resolve its TODO at line 191 |
+| `ClusterSolver.ts` | ~~follow-up: drop the `Quad` exclusion, resolve its TODO at line 191~~ **done**: a triple term of a mapping head is decomposed into a shape (`assertTerm`), read back off one (`resolvedTermOf`) |
 
 ## 3. Phasing
 
@@ -144,6 +145,16 @@ error when every component is bound and `range(c₁) ⊆ {IRI, bnode}`, `range(c
    BIND target was dropped rather than restated — and forced 6.
 6. ~~Follow-up: read a materialised position through the variable the pattern wrote for it.~~ **Done**,
    with 5 rather than after it, see the state of play above.
+7. ~~Follow-up: the `ClusterSolver` side of the same unification.~~ **Done.** A triple term the mapping
+   head writes is not a value a group is pinned to but a shape whose three positions are groups of their
+   own, and the term is *read back off* that shape (`resolvedTermOf`). Which resolves the TODO it was
+   about - two triple terms on one group unify position by position, rather than being reported unequal
+   because they are spelt with different variables - and brings the positional ranges and the occurs
+   check with it. It also decided one thing this study left open: the exclusion did not disappear, it
+   moved. A pin still holds a *basic* term, since the triple term is now one level up, on the lattice
+   rather than in the leaves of it. Nothing the rewriting generates changed but one thing that got
+   sharper: a position of the head triple term that the pattern decides is written into the construction
+   (`<<( ?mi_s <ex://knows> ?mi_o )>>`), where the whole term was written from its own variables before.
 
 **Evaluation harness — checked and in use** (the triple-term fixtures are in
 `test/statics/assertionPushdown.ttl` as of phase 1) on `n3@2` and `@comunica/query-sparql-file@5.3` (upgraded from 5.1.3

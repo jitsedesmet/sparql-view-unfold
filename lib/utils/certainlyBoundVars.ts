@@ -16,36 +16,34 @@ import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils
 
 /**
  * What an operation binds, as one structure: its **key set is exactly the variables in scope** - what
- * `SELECT *` expands to, the `pVars` - and the range stored for one
- * is the term types it can hold *when it is bound*.
+ * `SELECT *` expands to, the `pVars` - and the range stored for one is the term types it can hold *when it
+ * is bound*.
  *
  * Key presence and range are independent on purpose, which is what makes the merge sound. A key at
- * {@link emptyRange} is a variable *in scope that provably never binds*, and it has to stay a key:
- * `pVars(Empty_S) := S`, never `∅`, or `SELECT *` scoping changes silently. So nothing here ever drops a
- * key to say something about the terms a variable takes - {@link narrow} only ever tightens the value.
+ * {@link emptyRange} is a variable in scope that provably never binds, and it has to stay a key:
+ * `pVars(Empty_S) := S`, never the empty set, or `SELECT *` scoping changes silently.
  *
- * A range is about the value the variable takes *when it is bound*: a branch that cannot bind it at all
- * contributes nothing, which is why {@link unionRanges} reads the branches of a union against their key
- * sets before combining their ranges.
- *
- * One case deliberately drops a key rather than bottoming its range: a `FILTER(!bound(?x))` takes `?x`
- * out of scope, which is what the `pVars` this replaced did too. The bottom range would say it more
- * precisely - in scope, never bound - but (FBndII) reads *absence* as its emptiness proof, so moving it
- * would change what the assertion pushdown concludes. Worth revisiting once the bottom has consumers.
+ * One case deliberately drops a key rather than bottoming its range: a `FILTER(!bound(?x))` takes `?x` out
+ * of scope, which is what the `pVars` this replaced did too. The bottom range would say it more precisely,
+ * but (FBndII) reads *absence* as its emptiness proof, so moving it would change what the assertion
+ * pushdown concludes. Worth revisiting once the bottom has consumers.
  */
 export class VRanges extends Map<string, RangeSet> {
   /**
-   * The term types `name` can be bound to here - {@link emptyRange} when it is not in scope at all,
-   * since a variable this operation cannot bind takes no value in any of its solutions.
+   * The term types `name` can be bound to here.
+   * @param name - The variable to look up
+   * @returns its range, {@link emptyRange} when it is not in scope at all, since a variable this operation
+   * cannot bind takes no value in any of its solutions
    */
   public rangeOf(name: string): RangeSet {
     return this.get(name) ?? emptyRange;
   }
 
   /**
-   * Whether no solution here binds `name`: it is out of scope, or in scope with a range no term
-   * satisfies. Anything reading Θ against an operation wants these two as one fact - `bound(?x)` is
-   * false either way - which is what {@link rangeOf} reporting the bottom for both is for.
+   * Whether no solution here binds `name`: it is out of scope, or in scope with a range no term satisfies.
+   * @param name - The variable to check
+   * @returns whether it never binds; anything reading assertions against an operation wants those two as one
+   * fact, `bound(?x)` being false either way
    */
   public neverBinds(name: string): boolean {
     return this.rangeOf(name).size === 0;
@@ -54,6 +52,8 @@ export class VRanges extends Map<string, RangeSet> {
   /**
    * Whether some solution here can bind `name`: it is in scope and has a term left to take. The dual of
    * {@link neverBinds}, for the licences and guards that read the fact positively.
+   * @param name - The variable to check
+   * @returns whether it can bind
    */
   public canBind(name: string): boolean {
     return !this.neverBinds(name);
@@ -61,16 +61,17 @@ export class VRanges extends Map<string, RangeSet> {
 
   /**
    * Brings `name` into scope and narrows what is known about it: the variable has to satisfy both.
-   *
-   * A variable not recorded yet starts at the *top* rather than at the bottom {@link rangeOf} reports,
-   * because this only ever runs while building an operation's ranges up out of the positions its
-   * variables occupy - the key is being added, not read.
+   * @param name - The variable to narrow
+   * @param range - The term types it also has to satisfy
    */
   public narrow(name: string, range: RangeSet): void {
-    this.set(name, (this.get(name) ?? objectRange).disjunct(range));
+    this.set(name, (this.get(name) ?? objectRange).meet(range));
   }
 
-  /** Brings `names` into scope without saying anything about the terms they take. */
+  /**
+   * Brings `names` into scope without saying anything about the terms they take.
+   * @param names - The variables to bring into scope
+   */
   public addAtTop(names: Iterable<string>): void {
     for (const name of names) {
       if (!this.has(name)) {
@@ -80,6 +81,10 @@ export class VRanges extends Map<string, RangeSet> {
   }
 }
 
+/**
+ * What an operation binds: the variables every solution of it binds, and the scope with a range per
+ * variable ({@link VRanges}).
+ */
 export interface CPMeta {
   cVars: SSet;
   vRanges: VRanges;
@@ -88,17 +93,14 @@ export interface CPMeta {
 export type CPOp<T extends Algebra.Operation = Algebra.Operation> = T & { metadata: CPMeta };
 
 /**
- * The ranges of the operands an operation *merges*, which the scopes unite over. Useful for BGPs and JOINs.
- * A union of the vars apearing in vRanges, but an intersection of their ranges where possible.
+ * The ranges of the operands an operation *merges* - a BGP, a JOIN: a union of the variables in scope, but
+ * an intersection of their ranges where possible.
  *
  * Only an operand that binds the variable *certainly* narrows it: its binding is in every solution, so
- * whatever else merges has to agree with it. An operand that merely has it in scope may be the one that
- * leaves it unbound - and then another operand's binding is what survives the merge untouched - so where
- * no operand is certain the ranges **unite** rather than intersect.
- *
- * `{ VALUES (?x) { (UNDEF) } } . { VALUES (?x) { ("l") } }` is what forces the distinction: intersecting
- * reports `?x` as unbindable where the join in fact binds it to `"l"`, and anything reading the range as
- * a proof - {@link VRanges.neverBinds}, and the pruning built on it - would act on that.
+ * whatever else merges has to agree with it. Where no operand is certain the ranges **unite** instead, one
+ * of them possibly being what leaves the variable unbound.
+ * @param inputs - The metadata of the operands
+ * @returns the merged ranges
  */
 function intersectRanges(inputs: readonly CPMeta[]): VRanges {
   const result = new VRanges();
@@ -118,9 +120,11 @@ function intersectRanges(inputs: readonly CPMeta[]): VRanges {
 }
 
 /**
- * The ranges of the branches an operation *chooses between*: a variable takes the type of whichever
- * branch produced the solution, so the ranges are unioned - and a branch that does not have it in scope
- * contributes nothing rather than the top.
+ * The ranges of the branches an operation *chooses between*: a variable takes the type of whichever branch
+ * produced the solution, so the ranges are unioned.
+ * @param inputs - The metadata of the branches
+ * @returns the united ranges, a branch that does not have the variable in scope contributing nothing rather
+ * than the top
  */
 function unionRanges(inputs: readonly CPMeta[]): VRanges {
   const result = new VRanges();
@@ -133,8 +137,11 @@ function unionRanges(inputs: readonly CPMeta[]): VRanges {
 }
 
 /**
- * Narrows the range of every variable of `term` by the position it occupies, recursing into a triple
- * term with the positions of its components.
+ * Narrows the range of every variable of `term` by the position it occupies, recursing into a triple term
+ * with the positions of its components.
+ * @param target - The ranges to narrow
+ * @param term - The term to read
+ * @param range - The range the term itself occupies
  */
 function narrowTermRanges(target: VRanges, term: RDF.Term, range: RangeSet): void {
   if (term.termType === 'Variable') {
@@ -146,7 +153,10 @@ function narrowTermRanges(target: VRanges, term: RDF.Term, range: RangeSet): voi
   }
 }
 
-/** The ranges a single quad pattern imposes on the variables it holds, which are exactly its scope. */
+/**
+ * The ranges a single quad pattern imposes on the variables it holds, which are exactly its scope.
+ * @returns its ranges
+ */
 function patternRanges(pattern: { subject: RDF.Term; predicate: RDF.Term; object: RDF.Term; graph: RDF.Term }):
 VRanges {
   const result = new VRanges();
@@ -159,10 +169,10 @@ VRanges {
 
 /**
  * The range of the target of a `BIND(e AS ?t)`: what the expression can possibly evaluate to.
- *
- * Only the shapes that decide a term type are read - a term expression is its own type, and a triple
- * term construction is a `Quad` however its components evaluate - since everything else is the top
- * anyway and this is only ever asked to *narrow*.
+ * @param expression - The expression of the EXTEND
+ * @param input - The metadata of its input
+ * @returns the range; only the shapes that decide a term type are read, everything else being the top
+ * anyway and this only ever being asked to narrow
  */
 function expressionRange(expression: Algebra.Expression, input: CPMeta): RangeSet {
   if (expression.subType === ExpressionTypes.TERM) {
@@ -188,12 +198,10 @@ const dropMetadata = { transform: (copy: { metadata?: unknown }): unknown => {
 const dropAllMetadata = Object.fromEntries(Object.values(Types).map(type => [ type, dropMetadata ]));
 
 /**
- * Returns a copy of `op` without any cached metadata, the state {@link withCpVars} recomputes from.
- * Since every operation is copied, the tree it is given is left untouched.
- *
- * Two reasons to start a pass with this. Metadata another pass left behind may describe an operation that
- * has since been rewritten. And the sets it holds do not survive a generic traversal: a `Set` shallow
- * copied by {@link algebraUtils.mapOperation} keeps its prototype but loses its contents.
+ * Returns a copy of `op` without any cached metadata, the state {@link withCpVars} recomputes from. Since
+ * every operation is copied, the tree it is given is left untouched.
+ * @param op - The operation to strip
+ * @returns the stripped copy
  */
 export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
   return algebraUtils.mapOperation<'unsafe', T>(op, dropAllMetadata);
@@ -201,6 +209,9 @@ export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
 
 /**
  * Whether constructing this triple term is guaranteed to yield a term rather than an evaluation error.
+ * @param term - The triple term being constructed
+ * @param vRanges - What the input binds
+ * @returns whether every component is certainly a term its position admits
  */
 function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
   function admits(component: RDF.Term, position: RangeSet): boolean {
@@ -226,10 +237,10 @@ function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
 }
 
 /**
- * The operation with its certain and possible vars assigned, computed by dynamic programming: callers
- * are responsible for keeping the metadata up to date when they manipulate the operation.
- *
- * Filter false is not handled explicitly, since {@link transformFilterFalse} already rewrites it cheaply.
+ * The operation with its certainly and possibly bound variables assigned, computed by dynamic programming:
+ * callers are responsible for keeping the metadata up to date when they manipulate the operation.
+ * @param op - The operation to annotate
+ * @returns the same operation, with its metadata attached
  */
 export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
   function asCPVars<T extends Algebra.Operation>(op: T): CPOp<T> {
@@ -482,8 +493,10 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
 }
 
 /**
- * Collects the variables a filter condition can only hold for when they are bound. See
- * {@link BoundVariablesOptions.filterImpliesBound} for why only these positions are safe to conclude that from.
+ * Collects the variables a filter condition can only hold for when they are bound.
+ * @param expression - The condition to read
+ * @param agg - The variables collected so far, filled in by the recursion
+ * @returns those variables
  */
 function variablesImpliedBoundBy(expression: A.Expression, agg = new Set<string>()): Set<string> {
   if (expression.subType !== ExpressionTypes.OPERATOR) {
@@ -506,7 +519,12 @@ function variablesImpliedBoundBy(expression: A.Expression, agg = new Set<string>
   return agg;
 }
 
-/** Collects the variables a filter condition can only hold for when they are *unbound*. */
+/**
+ * Collects the variables a filter condition can only hold for when they are *unbound*.
+ * @param expression - The condition to read
+ * @param agg - The variables collected so far, filled in by the recursion
+ * @returns those variables
+ */
 function variablesImpliedUnboundBy(expression: A.Expression, agg = new Set<string>()): SSet {
   if (expression.subType !== ExpressionTypes.OPERATOR) {
     return agg;
@@ -531,7 +549,11 @@ function variablesImpliedUnboundBy(expression: A.Expression, agg = new Set<strin
   return agg;
 }
 
-/** Collects the variables in an RDF term, recursing into quoted triples. */
+/**
+ * Collects the variables in an RDF term, recursing into quoted triples.
+ * @param term - The term to read
+ * @returns its variables
+ */
 export function termVars(term: RDF.Term): Set<string> {
   if (term.termType === 'Variable') {
     return new Set([ term.value ]);

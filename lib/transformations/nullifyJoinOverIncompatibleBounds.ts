@@ -53,7 +53,7 @@ export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
     { join: {
       transform: (join) => {
         // Find for each member of the join whether variables are bound to known terms
-        const varSets = variableExtensionsOverJoin(c, join);
+        const varSets = variableExtensionsOverJoin(join);
 
         // We optimize: iterate extends and unions. An extend who's term does not match is replaced by filterFalse.
         // Finding an extend where the var is bound to another var, you can bind both vars to the new static value,
@@ -221,13 +221,13 @@ function createFilterBound(
   return AF.createFilter(input, andOfVars(mappedEntries));
 }
 
-function variableExtensionsOverJoin(c: TransformContext, join: Algebra.Join): Record<string, VariableSet> {
+function variableExtensionsOverJoin(join: Algebra.Join): Record<string, VariableSet> {
   const head = join.input[0];
   // Not knowing the variable makes it be noFixed, and that is identity of disjuntion
-  const varSets: Record<string, VariableSet> = directExtensionOverUnionsAndMore(c, head);
+  const varSets: Record<string, VariableSet> = directExtensionOverUnionsAndMore(head);
 
   for (const op of join.input.slice(1)) {
-    for (const [ var_, varSet ] of Object.entries(directExtensionOverUnionsAndMore(c, op))) {
+    for (const [ var_, varSet ] of Object.entries(directExtensionOverUnionsAndMore(op))) {
       if (varSets[var_]) {
         varSets[var_] = varSets[var_].disjunct(varSet);
       } else {
@@ -239,7 +239,7 @@ function variableExtensionsOverJoin(c: TransformContext, join: Algebra.Join): Re
   return varSets;
 }
 
-function directExtensionOverUnionsAndMore(c: TransformContext, op: Algebra.Operation): Record<string, VariableSet> {
+function directExtensionOverUnionsAndMore(op: Algebra.Operation): Record<string, VariableSet> {
   const varSets: Record<string, VariableSet> = {};
   const traverse = (op: Algebra.Operation): void => {
     if (op.type === Algebra.Types.EXTEND) {
@@ -248,7 +248,7 @@ function directExtensionOverUnionsAndMore(c: TransformContext, op: Algebra.Opera
       }
       traverse(op.input);
     } else if (op.type === Algebra.Types.UNION) {
-      Object.assign(varSets, directExtensionOverUnions(c, op));
+      Object.assign(varSets, directExtensionOverUnions(op));
     }
   };
 
@@ -256,14 +256,14 @@ function directExtensionOverUnionsAndMore(c: TransformContext, op: Algebra.Opera
   return varSets;
 }
 
-function directExtensionOverUnions(c: TransformContext, union: Algebra.Union): Record<string, VariableSet> {
+function directExtensionOverUnions(union: Algebra.Union): Record<string, VariableSet> {
   const head = union.input[0];
   // Not knowing the variable makes it be noFixed, which is absorbing element under union
-  const varSets: Record<string, VariableSet> = Object.fromEntries(Object.entries(directExtensions(c, head))
+  const varSets: Record<string, VariableSet> = Object.fromEntries(Object.entries(directExtensions(head))
     .map(([ var_, term ]) => [ var_, new VariableSet((term)) ]));
   for (const op of union.input.slice(1)) {
     let trackedVars = Object.keys(varSets);
-    for (const [ var_, term ] of Object.entries(directExtensions(c, op))) {
+    for (const [ var_, term ] of Object.entries(directExtensions(op))) {
       // Register you saw this var
       trackedVars = trackedVars.filter(x => x !== var_);
       if (varSets[var_]) {

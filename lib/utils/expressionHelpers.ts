@@ -7,6 +7,9 @@ import { termFalse, termTrue } from './operationhelpers.js';
 /**
  * Splits a filter expression on top level logical conjunctions (`&&`), implementing (SDecompI):
  * `FILTER_{R1 && R2}(A) == FILTER_R1(FILTER_R2(A))`.
+ * @param expression - The condition to split
+ * @param accumulator - The conjuncts collected so far, filled in by the recursion
+ * @returns the conjuncts
  */
 export function splitConjunction(
   expression: Algebra.Expression,
@@ -22,12 +25,21 @@ export function splitConjunction(
   return accumulator;
 }
 
-/** Combines a non-empty list of expressions into a single conjunction (`&&`). */
+/**
+ * Combines a non-empty list of expressions into a single conjunction (`&&`).
+ * @param c - The transformation context
+ * @param expressions - The conjuncts to combine
+ * @returns the conjunction
+ */
 export function conjunctionOf(c: TransformContext, expressions: Algebra.Expression[]): Algebra.Expression {
   return expressions.reduce((acc, expr) => c.AF.createOperatorExpression('&&', [ acc, expr ]));
 }
 
-/** The boolean an expression is the constant for, or `undefined` when it is not a boolean constant. */
+/**
+ * The boolean an expression is the constant for.
+ * @param expression - The expression to read
+ * @returns the boolean, or `undefined` when it is not a boolean constant
+ */
 export function booleanConstantOf(expression: Algebra.Expression): boolean | undefined {
   if (expression.subType !== Algebra.ExpressionTypes.TERM) {
     return undefined;
@@ -38,11 +50,23 @@ export function booleanConstantOf(expression: Algebra.Expression): boolean | und
   return expression.term.equals(termFalse) ? false : undefined;
 }
 
-/** Creates the constant `true` or `false` expression, as an `xsd:boolean` term. */
+/**
+ * Creates the constant `true` or `false` expression, as an `xsd:boolean` term.
+ * @param c - The transformation context
+ * @param value - The boolean to write
+ * @returns the term expression
+ */
 export function createBooleanExpression(c: TransformContext, value: boolean): Algebra.Expression {
   return c.AF.createTermExpression(value ? termTrue : termFalse);
 }
 
+/**
+ * Whether an expression evaluates to the same value in every solution: no variables, and no operator whose
+ * value is not stable.
+ * @param c - The transformation context
+ * @param expression - The expression to check
+ * @returns whether it is static
+ */
 export function isStaticExpression(c: TransformContext, expression: Algebra.Expression): boolean {
   // TODO: when you have operations like `&&` or `||` you could shortcut potentially on if one branch is static.
   let isStatic = true;
@@ -74,13 +98,23 @@ export function isStaticExpression(c: TransformContext, expression: Algebra.Expr
   return isStatic;
 }
 
-/** Whether an expression is an IRI spelled out as a term. */
+/**
+ * Whether an expression is an IRI spelled out as a term.
+ * @param expression - The expression to check
+ * @returns whether it is a term expression holding a NamedNode
+ */
 export function isIriExpression(expression: Algebra.Expression):
     expression is Algebra.Expression & { term: { termType: 'NamedNode' }} {
   return expression.subType === Algebra.ExpressionTypes.TERM && expression.term.termType === 'NamedNode';
 }
 
-/** Creates `sameTerm(expression, term)`. */
+/**
+ * Creates `sameTerm(expression, term)`.
+ * @param c - The transformation context
+ * @param expression - One side of the equality
+ * @param term - The other
+ * @returns the condition
+ */
 export function sameTermExpression(
   c: TransformContext,
   expression: Algebra.Expression,

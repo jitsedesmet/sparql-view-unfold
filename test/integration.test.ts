@@ -12,6 +12,7 @@ import { transformContextFromConstructs } from '../lib/transformContext.js';
 import {
   nonSingletonTripleConstruct,
   nonTripleTermConstruct,
+  predicateReifierConstruct,
   singletonPropertyConstruct,
   tripleTermConstruct,
 } from './queryConsts.js';
@@ -392,6 +393,46 @@ describe('integration tests', () => {
         store11,
         mappers,
         'SELECT ?x ?o WHERE { ?x ?x ?o }',
+      );
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+    });
+  });
+
+  describe('mapping head triple terms - single mapping', () => {
+    // With a single mapping the head keeps its own shape rather than being merged behind ?m_s ?m_p ?m_o,
+    // so these are the queries where a pattern is unified with a triple term the *head* writes.
+
+    it('binding the whole triple term of a head returns the same results', async({ expect }) => {
+      const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        [ tripleTermConstruct ],
+        `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+         SELECT ?t ?s ?p ?o WHERE {
+           ?t rdf:reifies ?tt .
+           BIND(SUBJECT(?tt) AS ?s)
+           BIND(PREDICATE(?tt) AS ?p)
+           BIND(OBJECT(?tt) AS ?o)
+         }`,
+      );
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+    });
+
+    it('deciding a position of the head triple term returns the same results', async({ expect }) => {
+      // The reifier is the predicate of the triple term it reifies, so fixing it decides that position,
+      // which the rewriting writes into the triple term it constructs.
+      const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        [ predicateReifierConstruct ],
+        `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+         PREFIX : <ex://>
+         SELECT ?s ?p ?o WHERE {
+           :knows rdf:reifies ?tt .
+           BIND(SUBJECT(?tt) AS ?s)
+           BIND(PREDICATE(?tt) AS ?p)
+           BIND(OBJECT(?tt) AS ?o)
+         }`,
       );
       expect(resOnMappedData).toEqual(resUsingRewriter);
     });

@@ -1,55 +1,43 @@
 import type * as RDF from '@rdfjs/types';
 
 /**
- * A set of RDF term types that represents valid types for a position.
- * Supports computing the disjunction (intersection) of two ranges.
- *
+ * The term types a position or a variable may hold, ordered by set inclusion.
  * @example
  * const subjectRange = new RangeSet(['BlankNode', 'NamedNode']);
- * const objectRange = new RangeSet(['Quad', 'NamedNode', 'BlankNode', 'Literal']);
- * const combined = subjectRange.disjunct(objectRange);
- * // Result: ['BlankNode', 'NamedNode']
+ * subjectRange.meet(objectRange); // RangeSet(['BlankNode', 'NamedNode'])
  */
 export class RangeSet extends Set<RDF.Term['termType']> {
   /**
-   * Computes the intersection of this range with another range.
-   * Returns a new RangeSet containing only term types present in both sets.
-   * @param other - The other RangeSet to intersect with
-   * @returns A new RangeSet with the intersection of term types
+   * The term types this range and another both admit.
+   * @param other - The range to meet with
+   * @returns a new range holding their intersection
    */
-  public disjunct(other: RangeSet): RangeSet {
+  public meet(other: RangeSet): RangeSet {
     return new RangeSet([ ...other.values() ].filter(x => this.has(x)));
   }
 }
 
-/**
- * Valid term types for the subject position of a triple.
- * Per RDF spec: subjects can be BlankNodes or NamedNodes.
- */
+/** The term types the subject position of a triple admits: BlankNodes and NamedNodes. */
 export const subjectRange = new RangeSet([ 'BlankNode', 'NamedNode' ]);
 
-/**
- * Valid term types for the predicate position of a triple.
- * Per RDF spec: predicates can only be NamedNodes.
- */
+/** The term types the predicate position of a triple admits: NamedNodes only. */
 export const predicateRange = new RangeSet([ 'NamedNode' ]);
 
 /**
- * Valid term types for the object position of a triple.
- * Per RDF spec: objects can be Quads (triple terms), NamedNodes, BlankNodes, or Literals.
+ * The term types the object position of a triple admits: Quads (triple terms), NamedNodes, BlankNodes and
+ * Literals.
  *
- * Every term an RDF triple can hold anywhere occurs here, so this is the *top* of the lattice: the
- * range of something nothing is known about, and the value a missing entry stands for wherever ranges
- * are stored per variable or per group.
+ * Every term an RDF triple can hold anywhere occurs here, so this is the *top* of the lattice: the range of
+ * something nothing is known about, and the value a missing entry stands for wherever ranges are stored per
+ * variable or per group.
  */
 export const objectRange = new RangeSet([ 'Quad', 'NamedNode', 'BlankNode', 'Literal' ]);
 
 /**
- * Valid term types for the graph position of a quad.
- * Per RDF spec: graph names are NamedNodes or BlankNodes.
+ * The term types a graph name admits: NamedNodes and BlankNodes.
  *
- * The SPARQL grammar only allows an IRI to be written in a `GRAPH` clause, but a variable there
- * (`GRAPH ?g`) can still bind to a BlankNode graph name, so the range cannot be narrowed to NamedNode.
+ * The SPARQL grammar only allows an IRI to be written in a `GRAPH` clause, but a variable there (`GRAPH
+ * ?g`) can still bind to a BlankNode graph name, so this cannot be narrowed to NamedNode.
  */
 export const graphRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
 
@@ -57,23 +45,27 @@ export const graphRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
 export const tripleTermRange = new RangeSet([ 'Quad' ]);
 
 /**
- * Valid term types for the name of a `SERVICE`, where it is a variable.
+ * The term types the name of a `SERVICE` admits, where it is a variable.
  *
  * TODO: verify. Unlike every other range here this is an **assumption**, not something a spec states.
  */
 export const serviceNameRange = new RangeSet([ 'NamedNode' ]);
 
 /**
- * The range no term satisfies, the *bottom* of the lattice: a variable that provably never takes a
- * value. Reached by narrowing two ranges with nothing in common - `?x` a Literal here and a NamedNode
- * there - which proves the operation binding it yields no solutions at all.
+ * The range no term satisfies, the *bottom* of the lattice: a variable that provably never takes a value.
  *
- * Distinct from a variable that is simply absent: bottom says the variable is in scope and never bound,
- * where absent says it is not in scope. See {@link VRanges}.
+ * Reached by narrowing two ranges with nothing in common - `?x` a Literal here and a NamedNode there -
+ * which proves the operation binding it yields no solutions at all. Distinct from a variable that is simply
+ * absent: bottom says the variable is in scope and never bound, where absent says it is not in scope. See
+ * {@link utils/certainlyBoundVars!VRanges}.
  */
 export const emptyRange = new RangeSet([]);
 
-/** The range of the position a triple term holds its component in. */
+/**
+ * The range of the position a triple term holds its component in.
+ * @param position - The position to read
+ * @returns the term types it admits
+ */
 export function rangeOfPosition(position: 'object' | 'predicate' | 'subject'): RangeSet {
   switch (position) {
     case 'subject': {

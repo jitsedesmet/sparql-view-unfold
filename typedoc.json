@@ -2,6 +2,19 @@
   "name": "Traqula",
   "out": "documentation",
   "theme": "default",
-  "entryPointStrategy": "packages",
-  "entryPoints": ["engines/*", "packages/*"]
+  "entryPointStrategy": "expand",
+  "entryPoints": ["lib"],
+  "excludePrivate": false,
+  "externalSymbolLinkMappings": {
+    "typescript": {
+      "Array.sort":
+        "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/sort"
+    }
+  },
+  "validation": {
+    "invalidLink": true,
+    "notExported": false,
+    "notDocumented": false
+  },
+  "treatValidationWarningsAsErrors": true
 }

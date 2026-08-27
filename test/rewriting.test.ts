@@ -11,6 +11,7 @@ import {
   expectedQuery,
   expectedQueryToValues,
   nonTripleTermConstruct,
+  predicateReifierConstruct,
   testQuery,
   tripleTermConstruct,
 } from './queryConsts.js';
@@ -56,6 +57,38 @@ describe('dummy', () => {
   }
 }`,
     [ 'CONSTRUCT { <ex://x> <ex://p> ?y } WHERE { ?y ?y ?y }' ],
+  ));
+
+  // A mapping head writing a triple term, unified with a pattern that binds it as a whole: the head
+  // triple term is decomposed into a shape, and read back off it as the term the BIND constructs.
+  it('mapping head triple term bound to a pattern variable', ({ expect }) => testConstructMappers(
+    expect,
+    'PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT * { ?x rdf:reifies ?y }',
+    `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
+  SELECT ( ?p0_mi_t AS ?uq_x ) ( <<( ?p0_mi_s ?p0_mi_p ?p0_mi_o )>> AS ?uq_y ) WHERE {
+    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p0_mi_s .
+    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p0_mi_p .
+    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p0_mi_o .
+  }
+}`,
+    [ tripleTermConstruct ],
+  ));
+
+  // Every position of that shape is a group of its own, so a position the pattern decides is written
+  // into the constructed triple term rather than left to the variable naming it.
+  it('a decided position is written into the constructed triple term', ({ expect }) => testConstructMappers(
+    expect,
+    `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+     PREFIX : <ex://>
+     SELECT * { :knows rdf:reifies ?y }`,
+    `SELECT ( ?uq_y AS ?y ) WHERE {
+  SELECT ( <<( ?p0_mi_s <ex://knows> ?p0_mi_o )>> AS ?uq_y ) WHERE {
+    ?p0_mi_s ?p0_mi_p ?p0_mi_o .
+    FILTER ( SAMETERM( ?p0_mi_p , <ex://knows> ) )
+  }
+}`,
+    [ predicateReifierConstruct ],
   ));
 
   it('simple pass through', ({ expect }) => testConstructMappers(

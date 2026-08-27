@@ -33,6 +33,22 @@ CONSTRUCT {
 `;
 
 /**
+ * Maps every triple to a triple term reified by its own predicate.
+ *
+ * Contrived as a mapping, but it is the smallest head that writes one variable both at the top level and
+ * inside its triple term, which is what lets a pattern *decide a position* of that triple term: fixing
+ * the reifier fixes the predicate of the value it reifies.
+ */
+export const predicateReifierConstruct = `
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+CONSTRUCT {
+  ?p rdf:reifies <<( ?s ?p ?o )>>
+} WHERE {
+  ?s ?p ?o .
+}
+`;
+
+/**
  * Maps non-singleton triples (excluding singleton property predicates and their metadata)
  * to normal form for use alongside singletonPropertyConstruct.
  */

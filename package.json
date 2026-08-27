@@ -42,6 +42,7 @@
     "build:cjs": "node \"node_modules/typescript/bin/tsc\" -b tsconfig.cjs.json",
     "clean": "git clean -dfx",
     "doc": "typedoc",
+    "doc:check": "typedoc --emit none",
     "lint": "eslint . --cache",
     "postinstall": "yarn husky && yarn run build",
     "test": "vitest test --run"

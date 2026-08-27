@@ -35,7 +35,7 @@ export function pushUpBoundedFromUnion<T extends Algebra.Operation>(c: Transform
           const first = union.input[0];
           // Start with assignments from first branch; any not in subsequent branches
           // will be removed
-          const assignments = directExtensions(c, first);
+          const assignments = directExtensions(first);
           const needsVisit = new Set<string>();
           const nonStaticBoundVars = new Set<string>();
 
@@ -45,7 +45,7 @@ export function pushUpBoundedFromUnion<T extends Algebra.Operation>(c: Transform
               needsVisit.add(key);
             }
 
-            for (const [ var_, term ] of Object.entries(directExtensions(c, op))) {
+            for (const [ var_, term ] of Object.entries(directExtensions(op))) {
               needsVisit.delete(var_);
               const assignment = assignments[var_];
               // If bound to different term, cannot hoist
@@ -64,7 +64,7 @@ export function pushUpBoundedFromUnion<T extends Algebra.Operation>(c: Transform
 
           // Remove the common extensions from each UNION branch
           const staticVars = Object.keys(assignments);
-          union.input = union.input.map(op => deleteVarExtensionsInPlace(c, op, staticVars));
+          union.input = union.input.map(op => deleteVarExtensionsInPlace(op, staticVars));
 
           // Add hoisted bindings after the UNION
           let ret: Algebra.Operation = union;
