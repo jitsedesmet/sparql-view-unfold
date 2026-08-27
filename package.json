@@ -45,7 +45,8 @@
     "doc:check": "typedoc --emit none",
     "lint": "eslint . --cache",
     "postinstall": "yarn husky && yarn run build",
-    "test": "vitest test --run"
+    "test": "vitest test --run",
+    "bench": "tsx test/bench/cli.ts"
   },
   "dependencies": {
     "@traqula/algebra-sparql-1-2": "^1.2.0",
@@ -65,6 +66,7 @@
     "eslint": "^8.57.0",
     "husky": "^9.1.7",
     "n3": "^2.0.1",
+    "oxigraph": "^0.5.9",
     "rdf-isomorphic": "^2.0.1",
     "rdf-string": "^2.0.1",
     "rdf-terms": "^2.0.0",

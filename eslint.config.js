@@ -66,9 +66,23 @@ export default config([
       '**/*.test.ts',
       '**/*.bench.ts',
       '**/*.util.ts',
+      'test/bench/**/*.ts',
     ],
     rules: {
       'import/no-extraneous-dependencies': 'off',
+    },
+  },
+  {
+    // The bench harness's standalone `.mjs` scripts (subset generation, the
+    // Oxigraph one-shot worker, SVG plotting) are CLI tools, not library code:
+    // they legitimately use `console`/`process.exit`/Node builtins, and follow
+    // the same camelCase naming as their `.ts` siblings in this directory.
+    files: [ 'test/bench/**/*.mjs' ],
+    rules: {
+      'import/no-nodejs-modules': 'off',
+      'no-console': 'off',
+      'unicorn/no-process-exit': 'off',
+      'unicorn/filename-case': 'off',
     },
   },
   {

@@ -7889,6 +7889,11 @@ own-keys@^1.0.1:
     object-keys "^1.1.1"
     safe-push-apply "^1.0.0"
 
+oxigraph@^0.5.9:
+  version "0.5.9"
+  resolved "https://registry.yarnpkg.com/oxigraph/-/oxigraph-0.5.9.tgz#92439db4a0588c44380f40c5f9c7877f12083bc8"
+  integrity sha512-Oyxo/NE9imMvTPcK/TkQmAPALnJOns0XBk/r90SjnWg1fwBPSSZaNlVQ8YDKqeXHD2QISe1FfIVQtbgpKulqCQ==
+
 p-limit@^2.2.0:
   version "2.3.0"
   resolved "https://registry.npmjs.org/p-limit/-/p-limit-2.3.0.tgz"

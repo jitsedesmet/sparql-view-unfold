@@ -6,5 +6,12 @@
     "declaration": false,
     "outDir": "dist/cjs",
     "skipLibCheck": true
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "dist/**",
+    "test/statics/REF-Benchmark/BKR/data/**",
+    "test/bench/**",
+    "test/bench.test.ts"
+  ]
 }

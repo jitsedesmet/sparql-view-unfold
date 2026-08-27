@@ -225,8 +225,21 @@ process.stdout.write(`Streaming source: ${sourcePath}\n`);
 const rdfjsSource = new StreamingTurtleSource(sourcePath, 'bkr_', 'text/turtle', false, SKOLEM_PREFIX);
 
 // Run all mappings sequentially; print the full error and exit on failure.
+// An optional CLI filter selects a subset of mappings by name, e.g.
+//   npx tsx mapBkrStar.ts mapToWikiData
+const only = new Set(process.argv.slice(2));
+const selected = only.size > 0 ? mappings.filter(m => only.has(m.name)) : mappings;
+if (only.size > 0 && selected.length === 0) {
+  process.stderr.write(
+    `No mapping matched ${[ ...only ].join(', ')}. ` +
+    `Available: ${mappings.map(m => m.name).join(', ')}\n`,
+  );
+  // eslint-disable-next-line unicorn/no-process-exit
+  process.exit(1);
+}
+
 try {
-  for (const mapping of mappings) {
+  for (const mapping of selected) {
     await executeMapping(mapping, rdfjsSource);
   }
 } catch (err: unknown) {

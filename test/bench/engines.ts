@@ -1,0 +1,512 @@
+/**
+ * @fileoverview Engine adapters for the cross-engine SPARQL 1.2 benchmark.
+ *
+ * The benchmark compares two ways of answering a SPARQL 1.2 query:
+ *  1. **native**   — run the SPARQL 1.2 query directly on RDF 1.2 data
+ *                    (only possible on engines that support SPARQL 1.2).
+ *  2. **rewriting** — rewrite the SPARQL 1.2 query (using this library) so its
+ *                    triple *patterns* match the materialized RDF 1.1 data instead
+ *                    of RDF 1.2 triple terms, then run it on that data. The
+ *                    rewritten query can still construct/compare triple-term
+ *                    *values* (e.g. via `SUBJECT()`/`PREDICATE()`/`OBJECT()`), so
+ *                    it still requires a SPARQL 1.2-capable engine — the gain is
+ *                    that the *data* no longer needs native RDF 1.2 support.
+ *
+ * Every engine is accessed through the small {@link BenchEngine} interface so the
+ * runner does not need to know whether it is talking to an in-process library
+ * (Comunica) or a remote SPARQL HTTP endpoint (Apache Jena/Fuseki, Oxigraph, ...).
+ *
+ * See {@link ./README.md} for the survey of which engines support SPARQL 1.2.
+ */
+import { spawn, spawnSync } from 'node:child_process';
+import type { ChildProcessByStdio } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import type { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
+import { QueryEngine } from '@comunica/query-sparql-file';
+import type * as RDF from '@rdfjs/types';
+import * as arrayifyStreamNS from 'arrayify-stream';
+import type { Store } from 'n3';
+
+// Crazy workaround to support both CJS and ESM (and tsx vs vitest interop):
+// `arrayify-stream` may arrive as a bare function or wrapped one or more levels
+// deep behind `.default`, depending on the loader. Unwrap until callable.
+function resolveArrayify(mod: unknown): <T>(stream: unknown) => Promise<T[]> {
+  let candidate: any = mod;
+  while (candidate && typeof candidate !== 'function' && 'default' in candidate) {
+    candidate = candidate.default;
+  }
+  if (typeof candidate !== 'function') {
+    throw new TypeError('Could not resolve arrayify-stream to a callable.');
+  }
+  return candidate;
+}
+const arrayifyStream = resolveArrayify(arrayifyStreamNS);
+
+/**
+ * A logical dataset to run a query against. In-process engines use `file`/`store`,
+ * while HTTP engines resolve the dataset by `name` to a pre-loaded endpoint.
+ */
+export interface EngineSource {
+  /** Logical dataset name, e.g. `BKR-Reification`. Used by HTTP engines. */
+  name: string;
+  /** Local Turtle file path (used by in-process engines). */
+  file?: string;
+  /** In-memory quad store (used by in-process engines, e.g. for small tests). */
+  store?: Store;
+}
+
+/** Outcome of running a single SELECT query on a single engine. */
+export interface SelectResult {
+  /** Canonical, sorted string form of every solution mapping (for comparison). */
+  rows: string[];
+  /** Number of solution mappings returned. */
+  count: number;
+  /** Wall-clock execution time in milliseconds. */
+  durationMs: number;
+}
+
+/** Common interface implemented by every engine the benchmark can drive. */
+export interface BenchEngine {
+  /** Human-readable engine name, e.g. `comunica` or `oxigraph`. */
+  readonly name: string;
+  /** Whether the engine can evaluate SPARQL 1.2 (RDF 1.2 triple terms) natively. */
+  readonly supportsSparql12: boolean;
+  /** Run a SELECT query against the given source and return canonicalized results. */
+  runSelect: (query: string, source: EngineSource, timeoutMs?: number) => Promise<SelectResult>;
+  /**
+   * Releases any resources held across calls (e.g. a child server process). Optional —
+   * only engines that own long-lived external state (like {@link JenaEngine}) need it.
+   * Callers should invoke this once they are done with the engine, best-effort.
+   */
+  dispose?: () => Promise<void>;
+}
+
+/** Thrown when a query exceeds its allotted time budget. */
+export class BenchTimeoutError extends Error {
+  public constructor(public readonly timeoutMs: number) {
+    super(`Query exceeded timeout of ${timeoutMs}ms`);
+    this.name = 'BenchTimeoutError';
+  }
+}
+
+/**
+ * Converts an RDFJS Bindings object to a canonical, deterministic string so that
+ * two result sets can be compared regardless of ordering. Variables are sorted
+ * alphabetically. (Same canonical form used by the integration tests.)
+ */
+export function bindingToString(binding: RDF.Bindings): string {
+  const entries = [ ...binding ]
+    .map(([ variable, term ]) => `${variable.value}=${term.termType}:${term.value}`)
+    .sort()
+    .join(',');
+  return `{${entries}}`;
+}
+
+function summarize(rows: string[], durationMs: number): SelectResult {
+  return { rows: [ ...rows ].sort(), count: rows.length, durationMs };
+}
+
+/**
+ * In-process engine backed by Comunica. Comunica >= 5.0 fully supports
+ * SPARQL 1.2 / RDF 1.2 triple terms, so it can act both as a rewriting target
+ * (SPARQL 1.1 queries over RDF 1.1 data) and as a native SPARQL 1.2 reference.
+ */
+export class ComunicaEngine implements BenchEngine {
+  public readonly name: string;
+  public readonly supportsSparql12 = true;
+  private readonly engine = new QueryEngine();
+
+  public constructor(name = 'comunica') {
+    this.name = name;
+  }
+
+  public async runSelect(query: string, source: EngineSource, timeoutMs?: number): Promise<SelectResult> {
+    const sources = ComunicaEngine.resolveSources(source);
+    const start = performance.now();
+    const bindingsStream = await this.engine.queryBindings(query, { sources });
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const bindings = await new Promise<RDF.Bindings[]>((resolve, reject) => {
+        if (timeoutMs !== undefined) {
+          timer = setTimeout(() => {
+            // Cancel the underlying Comunica work so it stops consuming CPU.
+            (<{ destroy: (error?: Error) => void }><unknown> bindingsStream).destroy();
+            reject(new BenchTimeoutError(timeoutMs));
+          }, timeoutMs);
+        }
+        arrayifyStream<RDF.Bindings>(bindingsStream).then(resolve, reject);
+      });
+      const durationMs = performance.now() - start;
+      return summarize(bindings.map(bindingToString), durationMs);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  private static resolveSources(
+    source: EngineSource,
+  ): NonNullable<Parameters<QueryEngine['queryBindings']>[1]>['sources'] {
+    if (source.store) {
+      return [ source.store ];
+    }
+    if (source.file) {
+      return [ source.file ];
+    }
+    throw new Error(
+      `ComunicaEngine needs a 'file' or 'store' for dataset '${source.name}'.`,
+    );
+  }
+}
+
+/**
+ * Adapter for any engine exposing the standard SPARQL 1.1/1.2 Protocol over HTTP
+ * (Apache Jena/Fuseki, Oxigraph, GraphDB, ...). The dataset is expected to be
+ * pre-loaded into the endpoint; the {@link EngineSource.name} is mapped to a
+ * concrete endpoint URL through `datasetEndpoints`.
+ */
+export class SparqlHttpEngine implements BenchEngine {
+  public constructor(
+    public readonly name: string,
+    /** Map from logical dataset name to the SPARQL endpoint holding that dataset. */
+    private readonly datasetEndpoints: Record<string, string>,
+    public readonly supportsSparql12 = true,
+  ) {}
+
+  public async runSelect(query: string, source: EngineSource, timeoutMs?: number): Promise<SelectResult> {
+    const endpoint = this.datasetEndpoints[source.name];
+    if (!endpoint) {
+      throw new Error(
+        `Engine '${this.name}' has no endpoint configured for dataset '${source.name}'.`,
+      );
+    }
+    const start = performance.now();
+    let json: SparqlJsonResults;
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/sparql-query',
+          Accept: 'application/sparql-results+json',
+        },
+        body: query,
+        signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) {
+        throw new Error(`Engine '${this.name}' returned HTTP ${response.status}: ${await response.text()}`);
+      }
+      // The abort can fire while still streaming the body (query already running server-side,
+      // headers sent, but the result set not yet fully written) — not just during connect/fetch()
+      // itself — so this call needs to be inside the same try as `fetch`, not after it.
+      json = <SparqlJsonResults> await response.json();
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new BenchTimeoutError(timeoutMs ?? 0);
+      }
+      throw error;
+    }
+    const durationMs = performance.now() - start;
+    return summarize(SparqlHttpEngine.canonicalizeJsonResults(json), durationMs);
+  }
+
+  /** Turns SPARQL Results JSON into the same canonical form as {@link bindingToString}. */
+  private static canonicalizeJsonResults(json: SparqlJsonResults): string[] {
+    return json.results.bindings.map((row) => {
+      const entries = Object.entries(row)
+        .map(([ variable, value ]) => `${variable}=${SparqlHttpEngine.canonicalizeJsonTerm(value)}`)
+        .sort()
+        .join(',');
+      return `{${entries}}`;
+    });
+  }
+
+  /**
+   * Canonicalizes a single SPARQL Results JSON term, including the `"type": "triple"`
+   * extension engines use to represent RDF 1.2 triple terms (RDF-star) in results
+   * (e.g. Apache Jena/Fuseki) — recursing into `value.subject`/`predicate`/`object`.
+   */
+  private static canonicalizeJsonTerm(value: SparqlJsonTerm): string {
+    if (value.type === 'triple' && value.value && typeof value.value === 'object') {
+      const t = value.value;
+      return `Quad:<<${SparqlHttpEngine.canonicalizeJsonTerm(t.subject)}|` +
+        `${SparqlHttpEngine.canonicalizeJsonTerm(t.predicate)}|` +
+        `${SparqlHttpEngine.canonicalizeJsonTerm(t.object)}>>`;
+    }
+    const termType = value.type === 'uri' ? 'NamedNode' : (value.type === 'bnode' ? 'BlankNode' : 'Literal');
+    return `${termType}:${<string> value.value}`;
+  }
+}
+
+interface SparqlJsonTripleValue {
+  subject: SparqlJsonTerm;
+  predicate: SparqlJsonTerm;
+  object: SparqlJsonTerm;
+}
+
+interface SparqlJsonTerm {
+  type: string;
+  value: string | SparqlJsonTripleValue;
+}
+
+interface SparqlJsonResults {
+  results: { bindings: Record<string, SparqlJsonTerm>[] };
+}
+
+/**
+ * In-process engine backed by Oxigraph (Rust, compiled to WASM). Oxigraph >= 0.4
+ * supports SPARQL 1.2 / RDF 1.2 triple terms natively.
+ *
+ * Oxigraph's `Store.query` is *synchronous* and blocks the event loop, so it
+ * cannot be cancelled with an in-process timer. To keep the benchmark bounded,
+ * each query is executed in a short-lived child process (`oxiOneShot.mjs`) that
+ * loads the dataset file and answers a single query; the parent enforces a hard
+ * wall-clock timeout by killing that child. The dataset is taken from
+ * {@link EngineSource.file}.
+ */
+export class OxigraphEngine implements BenchEngine {
+  public readonly supportsSparql12 = true;
+  private readonly oneShot = join(dirname(fileURLToPath(import.meta.url)), 'oxiOneShot.mjs');
+
+  public constructor(public readonly name = 'oxigraph') {}
+
+  public async runSelect(query: string, source: EngineSource, timeoutMs?: number): Promise<SelectResult> {
+    if (!source.file) {
+      throw new Error(`OxigraphEngine needs a 'file' for dataset '${source.name}'.`);
+    }
+    const result = spawnSync(process.execPath, [ this.oneShot, source.file ], {
+      input: query,
+      timeout: timeoutMs,
+      maxBuffer: 512 * 1024 * 1024,
+      encoding: 'utf8',
+    });
+    if (result.error !== undefined && (<NodeJS.ErrnoException> result.error).code === 'ETIMEDOUT') {
+      throw new BenchTimeoutError(timeoutMs ?? 0);
+    }
+    if (result.signal !== null) {
+      throw new BenchTimeoutError(timeoutMs ?? 0);
+    }
+    if (result.status !== 0) {
+      throw new Error(`oxigraph one-shot failed: ${result.stderr.slice(0, 500)}`);
+    }
+    const parsed = <{ durationMs: number; count: number; rows: string[] }> JSON.parse(result.stdout);
+    return { rows: parsed.rows, count: parsed.count, durationMs: parsed.durationMs };
+  }
+}
+
+/**
+ * In-process-managed engine backed by **Apache Jena / Fuseki** (Java, HTTP SPARQL
+ * endpoint). Jena 5.x/6.x has full SPARQL 1.2 / RDF 1.2 support (new `<<( )>>`
+ * triple-term syntax, `rdf:reifies`) — see the survey in `README.md`. Verified in
+ * this session against Fuseki 6.2.0, which requires a **Java 21+** runtime (Fuseki
+ * 6.x class files are too new for Java 17; earlier Fuseki releases, e.g. 4.10.x,
+ * work with Java 11/17 — see `README.md` for details).
+ *
+ * Unlike {@link OxigraphEngine} (one-shot child process per query, since Oxigraph's
+ * `Store.query` is synchronous), Fuseki is a long-lived HTTP server, so this engine
+ * keeps one `fuseki-server.jar` child process running and reuses it across every
+ * query against the same dataset {@link EngineSource.file}. It only pays the
+ * (JVM startup + dataset load) cost again when the requested `file` changes — which
+ * matches `run.ts`'s loop order (one dataset file per (engine, scheme, scale)
+ * block, queried by every benchmark case in that block). Call {@link dispose} once
+ * done to shut the child process down; `run.ts` does this for every engine after
+ * its scheme/scale loops finish.
+ *
+ * Needs the `fuseki-server.jar` from an Apache Jena Fuseki distribution
+ * (<https://jena.apache.org/download/>) and a Java runtime on `PATH` — see
+ * `README.md` for the exact download/setup steps. Configurable via env vars
+ * (or constructor options): `JENA_FUSEKI_JAR` (path to the jar, required),
+ * `JENA_JAVA` (java binary, default `java`), `JENA_FUSEKI_PORT` (default 3131),
+ * `JENA_JVM_OPTS` (extra JVM args, space-separated, e.g. `-Xmx4g` for the
+ * larger `m`/`l` scale subsets).
+ */
+export class JenaEngine implements BenchEngine {
+  public readonly supportsSparql12 = true;
+  private readonly jarPath: string;
+  private readonly javaBin: string;
+  private readonly port: number;
+  private readonly extraJavaArgs: string[];
+  private readonly startupTimeoutMs: number;
+
+  private child: ChildProcessByStdio<null, Readable, Readable> | undefined;
+  private currentFile: string | undefined;
+  private readonly recentOutput: string[] = [];
+
+  public constructor(public readonly name = 'jena', options: {
+    jarPath?: string;
+    javaBin?: string;
+    port?: number;
+    extraJavaArgs?: string[];
+    startupTimeoutMs?: number;
+  } = {}) {
+    this.jarPath = options.jarPath ?? process.env.JENA_FUSEKI_JAR ?? '';
+    this.javaBin = options.javaBin ?? process.env.JENA_JAVA ?? 'java';
+    this.port = options.port ?? Number.parseInt(process.env.JENA_FUSEKI_PORT ?? '3131', 10);
+    this.extraJavaArgs = options.extraJavaArgs ?? (process.env.JENA_JVM_OPTS ?? '').split(/\s+/u).filter(Boolean);
+    // Loading the `m`/`l` scale subsets (hundreds of MB of Turtle) can take well
+    // over a minute; this is independent of, and not charged against, the
+    // per-query `timeoutMs` passed to `runSelect`.
+    this.startupTimeoutMs = options.startupTimeoutMs ?? 180_000;
+  }
+
+  private get baseUrl(): string {
+    return `http://localhost:${this.port}`;
+  }
+
+  public async runSelect(query: string, source: EngineSource, timeoutMs?: number): Promise<SelectResult> {
+    if (!source.file) {
+      throw new Error(`JenaEngine needs a 'file' for dataset '${source.name}'.`);
+    }
+    await this.ensureServer(source.file);
+
+    const start = performance.now();
+    let json: { results: { bindings: Record<string, { type: string; value: unknown }>[] }};
+    try {
+      const response = await fetch(`${this.baseUrl}/ds/sparql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/sparql-query',
+          Accept: 'application/sparql-results+json',
+        },
+        body: query,
+        signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) {
+        throw new Error(`Engine '${this.name}' returned HTTP ${response.status}: ${await response.text()}`);
+      }
+      // The abort can fire while still streaming the body (query already running server-side,
+      // headers sent, but the result set not yet fully written) — not just during connect/fetch()
+      // itself — so this call needs to be inside the same try as `fetch`, not after it.
+      json = <{ results: { bindings: Record<string, { type: string; value: unknown }>[] }}> await response.json();
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new BenchTimeoutError(timeoutMs ?? 0);
+      }
+      throw error;
+    }
+    const durationMs = performance.now() - start;
+    const rows = json.results.bindings.map((row) => {
+      const entries = Object.entries(row)
+        .map(([ variable, value ]) => `${variable}=${JenaEngine.canonicalizeTerm(value)}`)
+        .sort()
+        .join(',');
+      return `{${entries}}`;
+    });
+    return summarize(rows, durationMs);
+  }
+
+  /** Same canonicalization as {@link SparqlHttpEngine}, including RDF 1.2 triple terms. */
+  private static canonicalizeTerm(value: { type: string; value: unknown }): string {
+    if (value.type === 'triple' && value.value && typeof value.value === 'object') {
+      const t = <{ subject: unknown; predicate: unknown; object: unknown }> value.value;
+      return `Quad:<<${JenaEngine.canonicalizeTerm(<{ type: string; value: unknown }> t.subject)}|` +
+        `${JenaEngine.canonicalizeTerm(<{ type: string; value: unknown }> t.predicate)}|` +
+        `${JenaEngine.canonicalizeTerm(<{ type: string; value: unknown }> t.object)}>>`;
+    }
+    const termType = value.type === 'uri' ? 'NamedNode' : (value.type === 'bnode' ? 'BlankNode' : 'Literal');
+    return `${termType}:${<string> value.value}`;
+  }
+
+  /** Starts (or restarts, if `file` differs from what is currently loaded) the Fuseki child process. */
+  private async ensureServer(file: string): Promise<void> {
+    if (this.child && this.currentFile === file) {
+      return;
+    }
+    await this.stop();
+    if (!this.jarPath) {
+      throw new Error(
+        'JenaEngine: no fuseki-server.jar configured. Set JENA_FUSEKI_JAR to the path of a Jena Fuseki ' +
+        'distribution\'s fuseki-server.jar (see test/bench/README.md for download/setup instructions).',
+      );
+    }
+    // Guard against a stray process (from a previous crashed/killed run) already
+    // squatting on the port: if it answers /$/ping before we've spawned anything,
+    // it is *not* guaranteed to hold the dataset we're about to request.
+    if (await JenaEngine.ping(this.baseUrl)) {
+      throw new Error(
+        `JenaEngine: port ${this.port} is already in use by another process (not started by this ` +
+        'JenaEngine instance) — refusing to query it, since it may not have the expected dataset ' +
+        'loaded. Free the port or pass a different `port` option.',
+      );
+    }
+
+    this.recentOutput.length = 0;
+    const args = [
+      ...this.extraJavaArgs,
+      '-jar',
+      this.jarPath,
+      `--file=${file}`,
+      '--port',
+      String(this.port),
+      '/ds',
+    ];
+    const child = spawn(this.javaBin, args, { stdio: [ 'ignore', 'pipe', 'pipe' ]});
+    this.child = child;
+    this.currentFile = file;
+    let exited = false;
+    child.on('exit', () => {
+      exited = true;
+    });
+    const capture = (chunk: Buffer): void => {
+      this.recentOutput.push(chunk.toString('utf8'));
+      if (this.recentOutput.length > 200) {
+        this.recentOutput.shift();
+      }
+    };
+    child.stdout.on('data', capture);
+    child.stderr.on('data', capture);
+
+    const deadline = Date.now() + this.startupTimeoutMs;
+    while (Date.now() < deadline) {
+      if (exited) {
+        throw new Error(
+          `JenaEngine: fuseki-server exited during startup (dataset '${file}'). Recent output:\n${
+          this.recentOutput.join('')}`,
+        );
+      }
+      if (await JenaEngine.ping(this.baseUrl)) {
+        return;
+      }
+      await new Promise((resolve) => {
+        setTimeout(resolve, 500);
+      });
+    }
+    await this.stop();
+    throw new Error(
+      `JenaEngine: fuseki-server did not become ready within ${this.startupTimeoutMs}ms (dataset '${file}').`,
+    );
+  }
+
+  private static async ping(baseUrl: string): Promise<boolean> {
+    try {
+      const response = await fetch(`${baseUrl}/$/ping`, { signal: AbortSignal.timeout(2_000) });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Stops the current Fuseki child process, if any, and waits for it to exit. */
+  private async stop(): Promise<void> {
+    const child = this.child;
+    this.child = undefined;
+    this.currentFile = undefined;
+    if (!child || child.exitCode !== null || child.signalCode !== null) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      child.once('exit', () => resolve());
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL');
+        }
+      }, 5_000);
+    });
+  }
+
+  public async dispose(): Promise<void> {
+    await this.stop();
+  }
+}

@@ -63,7 +63,7 @@ The rewriter transforms each triple pattern in your BGP (Basic Graph Pattern) in
 
 3. **Transformation Pipeline**: Multiple optimization passes can be applied:
    - `operationTransform`: Core BGP-to-UNION rewriting
-   - `substituteVarsThatArePreBoundToTerms`: Inline known variable bindings
+   - `pushDownAssertions`: Push `sameTerm`/unification assertions down into patterns
    - `transformFilterFalse`: Remove impossible branches (FILTER FALSE)
    - `nullifyJoinOverIncompatibleBounds`: Detect incompatible join conditions
    - `pushUpBoundedFromUnion`: Hoist common bindings out of UNIONs
@@ -102,6 +102,32 @@ There is also a [working draft for RDF 1.2 interoperability](https://w3c.github.
 - `SELECT * { FILTER(FALSE) }` → 0 bindings
 
 This means a mapping that doesn't match uses `FILTER(FALSE)` (zero results), not an empty group.
+
+## Benchmarking across SPARQL engines
+
+The [`test/bench`](test/bench) directory contains a system that benchmarks the
+rewriting approach against **native SPARQL 1.2 evaluation** on multiple engines,
+using the BKR reification benchmark datasets.
+
+Only three well-known engines currently implement SPARQL 1.2 with the new RDF 1.2
+triple-term syntax (`<<( s p o )>>` / `rdf:reifies`): **Comunica** (≥ 5.0),
+**Apache Jena/Fuseki** (≥ 4.10, default syntax) and **Oxigraph** (≥ 0.5). RDF4J and
+GraphDB only support the older RDF-star `<< >>` syntax, while QLever, Blazegraph,
+Stardog and Virtuoso are SPARQL 1.1 only. SPARQL 1.2 / RDF 1.2 remain W3C Working
+Drafts as of mid-2026.
+
+```bash
+# Comunica only (in-process, no external services):
+npx tsx test/bench/cli.ts --pattern reification --limit 5
+
+# Also benchmark Fuseki / Oxigraph endpoints that have the dataset loaded:
+npx tsx test/bench/cli.ts --pattern reification \
+  --fuseki http://localhost:3030/bkr/sparql \
+  --oxigraph http://localhost:7878/query --json results.json
+```
+
+See [`test/bench/README.md`](test/bench/README.md) for the full engine survey and
+instructions. The harness is validated by `test/bench.test.ts`.
 
 ## API Reference
 

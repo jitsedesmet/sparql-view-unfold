@@ -1,7 +1,8 @@
 ##BKR-S dataset, Query A-Q4
 ##
 ## Not comparable with BKR-R and BKR-star! Similar shape, different results. ##
-PREFIX bkr: <http://mor.nlm.nih.gov/bkr/> 
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX bkr: <http://mor.nlm.nih.gov/bkr/>
 PREFIX dc: <http://purl.org/dc/elements/1.1/> 
 PREFIX provenir: <http://knoesis.wright.edu/provenir/> 
 PREFIX umls: <http://mor.nlm.nih.gov/umls/> 

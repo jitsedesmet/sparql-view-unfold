@@ -24,11 +24,15 @@ CONSTRUCT {
 } WHERE {
     ?t rdf:reifies <<( ?s ?p ?o )>> .
 
-    # Assume ?p is like the `wdt` namespace
-    # Create a `wd` namespace
-    BIND ( <internal://bnode>(?p) as ?propertyTerm )
-    # Create a `p` namespace
-    BIND ( <internal://bnode>(?p) as ?claim )
-    # Create a `ps` namespace
-    BIND ( <internal://bnode>(?p) as ?statementProp )
+    # ?p is the direct property (like the `wdt` namespace).  Each of the three
+    # related Wikidata IRIs must be DISTINCT, so we pass a per-role discriminator
+    # string as the first argument to `<internal://bnode>`; the function is
+    # memoized on all of its arguments, so different discriminators yield
+    # different (but per-property stable) terms.
+    # Create a `wd` namespace term
+    BIND ( <internal://bnode>("asPropertyTerm", ?p) as ?propertyTerm )
+    # Create a `p` namespace term
+    BIND ( <internal://bnode>("asClaim", ?p) as ?claim )
+    # Create a `ps` namespace term
+    BIND ( <internal://bnode>("asStatementProp", ?p) as ?statementProp )
 }
