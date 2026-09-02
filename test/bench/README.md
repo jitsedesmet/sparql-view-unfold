@@ -184,7 +184,11 @@ triple-term-valued variable's binding gets silently dropped across certain
 sub-`SELECT` joins) that makes the `rewriting`/`standard` approach's fast,
 `ok`-status results wrong on this benchmark's queries more often than not.
 `pushDownAssertions` measured clean; `standard` and (rarely) even
-`removeProjections` did not.**
+`removeProjections` did not. — **Fixed upstream 2026-08-29** (Jena `main`
+commit `e9f7445a`, not yet in a release); see `jena-bug.md` at the repo root
+for the root cause and the fix commit. Anyone re-running this benchmark
+against a Jena build newer than 6.2.0 should re-verify `standard`'s results
+rather than assume the caveat still applies.
 
 ## Results (2026-07-28, xs/s/m subsets, 30s timeout, 1 rep)
 

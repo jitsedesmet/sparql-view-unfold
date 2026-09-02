@@ -1,5 +1,34 @@
 # Apache Jena / ARQ: triple-term binding lost across a sub-`SELECT` join boundary
 
+## Status: fixed upstream (2026-09-02)
+
+Fixed on Jena's `main` branch by commit
+[`e9f7445a`](https://github.com/apache/jena/commit/e9f7445a9585cc7877d0941a384fe30ef0dca2d2)
+("GH-4174: Add `ExprTransform.transform(ExprTripleTerm)`; use in
+`ApplyTransformVisitor`"), landed 2026-08-29 — two days after this file was
+written. **Not yet in a release**; 6.2.0 (the version this file's repro was
+run against) still has the bug.
+
+Root cause, per that commit: `TransformScopeRename` — the algebra optimizer
+pass that renames variables to avoid scope collisions when a sub-`SELECT` is
+joined against a sibling pattern (exactly this bug's trigger) — renames
+variables by walking expressions via `ExprTransformCopy`/`NodeTransformExpr`.
+Neither had a `transform(ExprTripleTerm)` case, so the walk never descended
+into a triple-term expression's three components; the `BIND(<<( s p o )>> AS
+?tt)` expression was left un-renamed/mishandled during the rename pass,
+which is what made the binding disappear specifically when a sub-`SELECT`
+containing such a `BIND` got joined against something else. This lines up
+with, and sharpens, the "Suspected area" hypothesis below — the mechanism
+was a rename/scope step over expressions, not the join execution itself.
+
+The fix adds `ExprTransform.transform(ExprTripleTerm)` (default impl in
+`ExprTransformBase`/`ExprTransformCopy`) and implements it in
+`NodeTransformExpr` to walk into the triple term's components; `OpProject`
+also picked up minor cleanup in the same commit. No test-writing or
+fix-implementation work described in "Task" below is still needed — this
+file is kept as a record of the investigation and repro, not an open
+task.
+
 ## Audience
 
 This file is a handoff to whoever picks up the fix — it is **not** about this
