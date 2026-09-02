@@ -640,6 +640,35 @@ achievement, and even `removeProjections` isn't fully safe from it — only
   are generated per scheme × engine: `..._correctness_materialized.svg` and
   `..._correctness_proj-removed.svg`.)
 
+## Post-merge re-run (2026-09-02, xs/s subsets, 30s SLA, 1 rep)
+
+Re-ran the full 3-engine sweep (`comunica,oxigraph,jena` × `reification,singleton`
+× `xs,s`, same shape as the runs above) after merging `origin/main`
+(`3997551`, memoization in `assertionConjunction`) into this branch, to check
+whether that merge changed anything observable here. Results:
+`test/bench/results/post-merge-run.json` (576 rows), figures in
+`test/bench/results/figures-post-merge/`.
+
+**It didn't, and structurally couldn't.** `run.ts` calls `rewriteToSparql11`
+once per case, *outside* `timedRun` — `medianMs` only measures the engine's
+query round-trip, not the JS rewrite step the merged commit sped up. Diffed
+row-by-row (`engine`/`scheme`/`scale`/`caseId`/`approach` as key) against the
+pre-merge baseline (`pushdown3-run.json` + `jena-run.json`, both 2026-08-27):
+Comunica and Oxigraph's ok/timeout/error counts are byte-identical to all
+three prior baseline runs. Jena moved by one row: a `removeProjections` query
+that previously timed out finished at 29,930 ms — 70ms under the 30s cutoff,
+noise at the SLA boundary, not a behavior change. Jena's `pushDownAssertions`
+rows that succeeded on both sides came back ~400ms faster on average (up to
+3.4s on the slowest queries), which is HTTP/Fuseki round-trip variance
+between runs rather than anything attributable to the merge, for the same
+structural reason.
+
+This run still targets the released **Fuseki 6.2.0** jar, so the
+triple-term-join bug documented above (and in `jena-bug.md`, now fixed on
+Jena's `main` as of 2026-08-29 — not yet released) still fully applies:
+treat `standard`/`rewriting`-status-`ok` results on Jena the same way this
+section already tells you to.
+
 ## Extending
 
 - **New engine**: implement `BenchEngine` (or reuse `SparqlHttpEngine` for any
