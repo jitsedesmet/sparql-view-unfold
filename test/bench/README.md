@@ -608,13 +608,14 @@ achievement, and even `removeProjections` isn't fully safe from it — only
   in the run above: `singleton/A-Q4 materialized` on Oxigraph now succeeds
   (previously `error`).
 - **The `s`/`m` scale subsets (random noise-sampled from the real
-  multi-GB datasets) contain at least one malformed percent-encoded IRI**
+  multi-GB datasets) contained at least one malformed percent-encoded IRI**
   (literal `%%-`) that Oxigraph's Turtle parser rejects
   (`Invalid IRI percent encoding '%%-'`) while N3 (used by Comunica) accepts
-  it silently — this is a pre-existing data-quality issue in the source BKR
-  Turtle dumps, surfaced by noise sampling; it explains most of Oxigraph's
-  `error` rows at `s`/`m` scale (xs mostly avoided sampling it). Not fixed —
-  it's in the source data, not something this benchmark generates.
+  it silently — a pre-existing data-quality issue in the source BKR Turtle
+  dumps, surfaced by noise sampling; it explained most of Oxigraph's `error`
+  rows at `s`/`m` scale (xs mostly avoided sampling it). **Fixed 2026-09-02**
+  by dropping such quads during the RDF-1.2 migration step and regenerating
+  every downstream file — see "Data cleanup" below.
 - **The `BKR-S_*.rq` (singleton scheme) baseline query files test different
   sample facts than the shared `BKR-star_*.rq` queries they're nominally the
   baseline for**, for at least `A-Q2`/`A-Q3`/`A-Q4`/`F-Q1`/`F-Q4`/`F-Q5`
@@ -668,6 +669,43 @@ triple-term-join bug documented above (and in `jena-bug.md`, now fixed on
 Jena's `main` as of 2026-08-29 — not yet released) still fully applies:
 treat `standard`/`rewriting`-status-`ok` results on Jena the same way this
 section already tells you to.
+
+## Data cleanup: dropping invalid-IRI quads (2026-09-02)
+
+The "Other findings" note above ("malformed percent-encoded IRI") was fixed
+at the source rather than left as a known quirk. `skolemize.ts` — the script
+that turns the raw Zenodo `BKR-star.ttl` dump into the blank-node-free RDF 1.2
+representation the rest of the pipeline builds on — now drops any quad
+carrying a syntactically invalid IRI (checked recursively into RDF 1.2
+triple-term components and literal datatypes) instead of writing it out, and
+logs what it dropped to `<output>.dropped.ttl` for audit. Full pipeline
+re-run from the cleaned data (`skolemize.ts` → `mapBkrStar.ts
+mapToReification mapToSingleton` → `makeSubset.mjs` for both schemes; the
+`mapToWikiData` mapping was skipped — unused by `test/bench` and by far the
+slowest stage at ~16h in the original build):
+
+- **120 quads dropped** out of 82,432,741 in `BKR-star.ttl` — all for the same
+  `%%-` percent-encoding defect.
+- **0 occurrences of `%%-`** remain in any of the regenerated `xs/s/m/l`
+  subset files (was 1 each in `reification-s.ttl`/`singleton-s.ttl`).
+- Verified against **Oxigraph** specifically, since it's the engine whose
+  strict IRI parsing turned this into a whole-file load failure: re-ran
+  `--engines oxigraph --schemes reification,singleton --scales xs,s` on the
+  cleaned data (`test/bench/results/oxigraph-cleaned-run.json`, 192 rows)
+  — **0 `error` rows**, down from 96/192 before the cleanup. `materialized`
+  went from 23 ok/1 timeout/24 error to 46 ok/2 timeout/0 error;
+  `rewriting+pushDownAssertions` from 6 ok/18 timeout/24 error to
+  12 ok/36 timeout/0 error.
+- The pipeline (all three stages, reification + singleton) took ~5h46m
+  end-to-end this run — much faster than the ~10.6h the original build's logs
+  implied for the same two mappings, most likely disk-cache warmth rather
+  than anything about the cleanup itself.
+
+Re-running the full 3-engine sweep against the cleaned data (to get a
+refreshed `post-merge-run.json`-style comparison across Comunica/Oxigraph/Jena
+together) hasn't been done yet as part of this cleanup — the Oxigraph-only
+check above was enough to confirm the fix; a full sweep is a good next step
+if a complete refreshed baseline is needed.
 
 ## Extending
 
