@@ -22,3 +22,4 @@ dist
 # Fuseki's default runtime/config directory when fuseki-server.jar is launched
 # from the repo root (e.g. via JenaEngine / test/bench) with no --base override.
 /run
+bench-*.json

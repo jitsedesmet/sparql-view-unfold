@@ -63,9 +63,10 @@ import { DF } from './rdfDatatypes.js';
  * what the groups it already wrote out contribute.
  *
  * The two travel together because the second is a function of the first, of the pins and of the strengths -
- * so the memo lives for exactly one walk, and nothing read off the clusters could stand in for it: a
+ * so the memo lives for exactly one walk, rather than being stamped on the cluster set's
+ * {@link datastructures/ClusterSet!ClusterSet.revision | revision} the way `readingsPerGroup` is. A
  * strength alone can change without the clusters being written at all (`assertBound` completing a weak
- * member).
+ * member), which that stamp would not catch.
  */
 interface Decomposition {
   /** The readings of every group, from `readingsPerGroup`. */
@@ -125,6 +126,24 @@ export class AssertionConjunction {
    * The variables in the order they were first mentioned, used to keep a pass idempotent.
    */
   private order: Set<string>;
+  /**
+   * The last {@link readingsPerGroup} taken, with the {@link datastructures/ClusterSet!ClusterSet.revision |
+   * revision} of {@link clusters} it was taken at.
+   *
+   * Nothing invalidates it: the decomposition is a function of `clusters` alone, and a stamp is unique to
+   * one state of one set, so a write - or {@link adopt} putting a different set here altogether - leaves
+   * the stamp it was taken at unreachable. See {@link readingsPerGroup} for why that is the whole of it.
+   */
+  private readings: { revision: number; value: ReadonlyMap<number, readonly Access[]> } | undefined;
+  /**
+   * The groups {@link namedMembers} was asked about, with the
+   * {@link datastructures/ClusterSet!ClusterSet.revision | revision} of {@link clusters} they were read at.
+   *
+   * Filled in group by group rather than in one walk, most of the callers wanting a single group. It goes
+   * stale the way {@link readings} does, and for the same reason: the members of a group are a function of
+   * `clusters` alone, and no two states of any two sets share a stamp.
+   */
+  private members: { revision: number; value: Map<number, readonly string[]> } | undefined;
 
   public constructor() {
     this.clusters = new AssertionClusterSet();
@@ -305,8 +324,8 @@ export class AssertionConjunction {
    * A group pinned to a term is not one of them: every reading of it is that term, which already states it.
    * @returns the readings per group, each list representative first
    */
-  public equatedReadings(): Access[][] {
-    const result: Access[][] = [];
+  public equatedReadings(): (readonly Access[])[] {
+    const result: (readonly Access[])[] = [];
     for (const [ group, readings ] of this.readingsPerGroup()) {
       if (this.clusters.pinOf(group)?.kind !== 'term' && readings.length > 1) {
         result.push(readings);
@@ -979,10 +998,28 @@ export class AssertionConjunction {
    *   `[?s, SUBJECT(?o)]`, giving the edge `SUBJECT(?o) = ?s`. The other two positions are anonymous.
    * - `FILTER(sameTerm(SUBJECT(?o), :a))` - the subject position has one reading, so no edge; it writes
    *   `SUBJECT(?o) = :a` from that single reading.
+   * Memoised per state of {@link clusters}, which is the only thing the walk reads: an operation asks for the
+   * decomposition several times over ({@link conjuncts}, {@link equatedReadings}, {@link patternValues}), and
+   * the walk is a BFS over every group plus a sort per group. Handed out read-only, the memo being shared.
    * @returns the readings per group; a group nothing reaches is left out, being what is left of a shape a
    * variable was taken out of, which nothing may be written about
    */
-  private readingsPerGroup(): Map<number, Access[]> {
+  private readingsPerGroup(): ReadonlyMap<number, readonly Access[]> {
+    // Stamped before the walk rather than after it: a walk that wrote something - it does not, reading only
+    // the groups, their members and their shapes - would then leave a stamp the next call misses on, rather
+    // than one it wrongly trusts.
+    const revision = this.clusters.revision;
+    if (this.readings?.revision !== revision) {
+      this.readings = { revision, value: this.walkReadingsPerGroup() };
+    }
+    return this.readings.value;
+  }
+
+  /**
+   * The walk {@link readingsPerGroup} memoises, run once per state of {@link clusters}.
+   * @returns the readings per group, each list representative first
+   */
+  private walkReadingsPerGroup(): Map<number, Access[]> {
     // The shortest access pattern into a group
     const representatives = new Map<number, Access>();
     // Seed with every group that has a named member, including groups created for
@@ -1034,12 +1071,29 @@ export class AssertionConjunction {
   }
 
   /**
-   * The variables in a group.
+   * The variables in a group, memoised per state of {@link clusters}.
+   *
+   * Sorting is what makes a group's representative the same one every time, and so what keeps the pass
+   * idempotent - but hardly anything asks about a group once. {@link get} takes a representative per
+   * variable it is asked about, {@link rebuildingSubstitution} one per group it rebuilds, and
+   * {@link walkReadingsPerGroup} two per group, so a pushdown over a filter of a few hundred conditions
+   * sorts some thousands of times over, under an eighth of which reads a group this has not already got.
    * @param group - The group to read
-   * @returns them lexicographically, the first being the group's representative
+   * @returns them lexicographically, the first being the group's representative; handed out read-only, the
+   * memo being shared
    */
-  private namedMembers(group: number): string[] {
-    return [ ...this.clusters.valuesOf(group) ].sort((left, right) => left.localeCompare(right));
+  private namedMembers(group: number): readonly string[] {
+    const revision = this.clusters.revision;
+    if (this.members?.revision !== revision) {
+      this.members = { revision, value: new Map() };
+    }
+    const known = this.members.value.get(group);
+    if (known !== undefined) {
+      return known;
+    }
+    const sorted = [ ...this.clusters.valuesOf(group) ].sort((left, right) => left.localeCompare(right));
+    this.members.value.set(group, sorted);
+    return sorted;
   }
 
   /**

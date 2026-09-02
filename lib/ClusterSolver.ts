@@ -133,6 +133,8 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     } else {
       // Neither `from` nor `to` is a var. First condition would have checked this in case `from` is a term.
       const expression = <Exclude<typeof from, RDF.Term>> from;
+      // The one branch that writes without going through a group, so the only one with a `touch` of its own.
+      this.touch();
       // TODO: decide statically whether the expression can produce this term at all, rather than leaving
       //   every such pair to the `sameTerm` the rewriting emits.
       this.staticExpressionValidation.push({
@@ -178,6 +180,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * @param expression - The expression every value of the group equals
    */
   protected registerExpressionToGroup(group: number, expression: Algebra.Expression): void {
+    this.touch();
     this.groupToExpressions[group].push(expression);
   }
 
@@ -310,8 +313,12 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * the first variable of a cluster is the one the subselect really projects, so a user query variable
    * landing there would name a variable nothing binds. It is ordered on `isUserQueryVar` rather than
    * left to the names, which only happen to sort that way while the prefixes both start where they do.
+   *
+   * Sorts the lists in place, which is a write like any other: what a group's first value is decides what
+   * every read of it names, so the stamp has to move on even though the members themselves do not change.
    */
   public sortClusters(): void {
+    this.touch();
     for (const groupVars of Object.values(this.groupToValues)) {
       groupVars.sort((a, b) =>
         (isUserQueryVar(a) ? 1 : 0) - (isUserQueryVar(b) ? 1 : 0) ||

@@ -977,7 +977,7 @@ function placeOverTargets(assertions: AssertionConjunction, targets: PushTarget[
  * @param connects - Per target, whether it enforces the equalities its sub-group states on the output
  * @returns the conjuncts per target, and the edges that have to stay above the operation
  */
-function splitClique(readings: Access[], licensedPer: Access[][], connects: boolean[]): {
+function splitClique(readings: readonly Access[], licensedPer: Access[][], connects: boolean[]): {
   intoTarget: AssertionConjunct[][];
   kept: AssertionConjunct[];
 } {

@@ -275,6 +275,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    * @returns `false` when nothing is left for it to be, or when its pin is not one of those terms
    */
   public narrowRange(group: number, range: RangeSet): boolean {
+    this.touch();
     const resolved = this.resolveGroup(group);
     const narrowed = this.rangeOf(resolved).meet(range);
     this.groupToRange[resolved] = narrowed;
@@ -316,6 +317,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    * @returns `false` on a contradiction
    */
   private resolveAllConstraints(work: GroupConstraint<Term>[]): boolean {
+    this.touch();
     // The groups the run pins or merges, which is where a cycle it closed has to pass through.
     const touched: number[] = [];
     while (work.length > 0) {

@@ -52,11 +52,15 @@ export default config([
     // Specific rules for NodeJS-specific files
     files: [
       '**/test/**/*.ts',
+      // The benchmark runner drives git and vitest, so it is a Node script rather than library code.
+      '**/test/**/*.mjs',
     ],
     rules: {
       'import/no-nodejs-modules': 'off',
       'ts/no-require-imports': 'off',
       'ts/no-var-requires': 'off',
+      // The benchmark runner really is a CLI, and reports a bad revision or a dirty tree by exiting.
+      'unicorn/no-process-exit': 'off',
     },
   },
   {

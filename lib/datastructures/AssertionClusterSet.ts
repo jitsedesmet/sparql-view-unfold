@@ -67,6 +67,10 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
    * @returns `false` when nothing is left for it to be, or when its pin is not one of those terms
    */
   public assertTermTypeRange(group: number, range: RangeSet): boolean {
+    // Stamped on its own account rather than through the `narrowRange` below: the asserted range is state
+    // of this class, which nothing further up writes, and leaning on that delegation would make the stamp
+    // depend on where another class happens to put its own `touch`.
+    this.touch();
     const resolved = this.resolveGroup(group);
     this.groupToAssertedRange[resolved] = this.assertedRangeOf(resolved).meet(range);
     return this.narrowRange(resolved, range);
