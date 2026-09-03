@@ -701,11 +701,45 @@ slowest stage at ~16h in the original build):
   implied for the same two mappings, most likely disk-cache warmth rather
   than anything about the cleanup itself.
 
-Re-running the full 3-engine sweep against the cleaned data (to get a
-refreshed `post-merge-run.json`-style comparison across Comunica/Oxigraph/Jena
-together) hasn't been done yet as part of this cleanup — the Oxigraph-only
-check above was enough to confirm the fix; a full sweep is a good next step
-if a complete refreshed baseline is needed.
+The full 3-engine sweep against the cleaned data was run next — see "Third
+re-run" below.
+
+## Third re-run (2026-09-03, xs/s subsets, 60s SLA, 1 rep)
+
+Full 3-engine sweep on the cleaned data, after merging `origin/main` again
+(`a762124`, "Pull-up Extend phase-1 (#40)" — adds the `pullUpExtends`
+transformation) and doubling the SLA to 60s. Results:
+`test/bench/results/double-timeout-run.json` (576 rows), figures in
+`test/bench/results/figures-double-timeout/`. Diffed against the previous
+full sweep (`post-merge-run.json`, 30s SLA, pre-cleanup) — three changes
+landed at once, so the deltas below are attributed rather than just reported:
+
+- **The invalid-IRI cleanup holds at full scale**: every Oxigraph `error` row
+  is gone (96/576 → 0/576). `materialized` on Oxigraph: 23 ok/1 timeout/24
+  error → 46 ok/2 timeout/0 error; `pushDownAssertions`: 6/18/24 → 12/36/0.
+  Matches the standalone Oxigraph-only check from the cleanup exactly.
+- **The merge itself changed nothing here**: `pullUpExtends` isn't wired into
+  any of this benchmark's three pipelines (see `runner.ts`), so it has no
+  direct effect on these numbers. It did surface an unrelated environment
+  issue — after resolving the one README conflict, 3 tests failed
+  (`pullUpExtends.test.ts`, `pushDownAssertions.test.ts`), all on GRAPH-scoped
+  `BIND`-pulling assertions. Turned out to be stale `node_modules`: the merged
+  `package.json` bumped `@traqula/algebra-sparql-1-2`/`algebra-transformations-1-2`
+  to `^1.2.2`, but `node_modules` still had `1.2.0` installed. Confirmed by
+  checking out `origin/main` alone in a scratch worktree (fresh install, all
+  505 tests pass) before concluding it wasn't a real conflict; `yarn install`
+  in the merged tree fixed it, all 513 tests pass.
+- **Doubling the SLA only moved Comunica**: 4 rows flipped timeout→ok (2
+  `pushDownAssertions`, 2 `materialized`) purely from the extra 30s. Jena's
+  status counts are byte-identical to the previous sweep — whatever it's
+  timing out on isn't close to finishing at 30s either, so the extra budget
+  bought nothing. Oxigraph's ok/timeout split (ignoring the now-gone errors)
+  also matches its earlier 30s-only cleaned-data check exactly.
+
+78 rows are `ok` but `correct: false`, all 78 on Jena, none on Comunica or
+Oxigraph — the documented ARQ triple-term-join bug (`jena-bug.md`) making the
+`standard`-pipeline reference itself wrong on Jena, re-confirmed rather than
+a new regression.
 
 ## Extending
 
