@@ -1,12 +1,14 @@
 /**
  * @fileoverview Turns the benchmark results JSON into a collection of SVG figures.
  *
- * Produces, per reification scheme × engine, comparing four approaches — the
+ * Produces, per reification scheme × engine, comparing five approaches — the
  * standard rewriting, the same rewriting with {@link removeProjections} applied
  * (anonymizing hidden sub-`SELECT` variables and flattening the nested projections
  * away), the same rewriting with {@link pushDownAssertions} applied ("assertion
  * pushdown" — pushes `FILTER(sameTerm(?x, c))` constraints down into the triple
  * patterns that use them instead of matching generically and filtering afterwards),
+ * the pushdown pipeline plus {@link pullUpExtends} applied twice (floats the `BIND`s
+ * the pushdown leaves at every leaf back up to where they cost less, or drops them),
  * and the hand-written materialized baseline query:
  *   - time-by-query bar chart at the largest scale with data,
  *   - a scaling line chart (median time vs dataset size) per approach,
@@ -33,12 +35,18 @@ const COLORS = {
   rewriting: '#2b7bba',
   'rewriting+removeProjections': '#7a52c7',
   'rewriting+pushDownAssertions': '#17a398',
+  'rewriting+pullUpExtends': '#c0399f',
   materialized: '#e08214',
   grid: '#cccccc',
   text: '#222222',
 };
-/** The three rewriting pipeline variants, compared against each other and against `materialized`. */
-const REWRITING_APPROACHES = [ 'rewriting', 'rewriting+removeProjections', 'rewriting+pushDownAssertions' ];
+/** The four rewriting pipeline variants, compared against each other and against `materialized`. */
+const REWRITING_APPROACHES = [
+  'rewriting',
+  'rewriting+removeProjections',
+  'rewriting+pushDownAssertions',
+  'rewriting+pullUpExtends',
+];
 const esc = s => String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
 function svgDoc(width, height, body) {
@@ -314,12 +322,18 @@ function correctness(scheme, engine, approach) {
 }
 
 /** The approaches that have a reference to be checked against (see {@link correctness}). */
-const CHECKABLE_APPROACHES = [ 'materialized', 'rewriting+removeProjections', 'rewriting+pushDownAssertions' ];
+const CHECKABLE_APPROACHES = [
+  'materialized',
+  'rewriting+removeProjections',
+  'rewriting+pushDownAssertions',
+  'rewriting+pullUpExtends',
+];
 /** Filename suffix for each checkable approach's correctness heat-strip. */
 const CORRECTNESS_SUFFIX = {
   materialized: 'materialized',
   'rewriting+removeProjections': 'proj-removed',
   'rewriting+pushDownAssertions': 'pushdown',
+  'rewriting+pullUpExtends': 'pullup',
 };
 
 const generators = { time_by_query: timeByQuery, scaling, overhead };

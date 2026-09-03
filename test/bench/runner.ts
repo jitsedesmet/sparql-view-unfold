@@ -13,6 +13,7 @@
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { transformFilterFalse } from '../../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
+import { pullUpExtends } from '../../lib/transformations/pullUpExtends.js';
 import { pushDownAssertions } from '../../lib/transformations/pushDownAssertions.js';
 import { removeProjections } from '../../lib/transformations/removeProjections.js';
 import { operationTransform, queryTransform } from '../../lib/transformBgp.js';
@@ -77,6 +78,30 @@ const WITH_PUSH_DOWN_ASSERTIONS_TRANSFORMATIONS = <const>[
   removeProjections,
 ];
 
+/**
+ * The pushdown pipeline plus {@link pullUpExtends}, applied twice: `pushDownAssertions`
+ * leaves an `EXTEND` at every leaf it substitutes into (see its own `@fileoverview`), and
+ * `pullUpExtends` is the pass built to be its other half — floating those back up past
+ * joins/optionals/unions to where they cost less, or dropping them outright when nothing
+ * above ends up reading them. It runs once right after the pushdown to clean that up, and
+ * once more after `removeProjections`: flattening away the nested sub-`SELECT`s changes the
+ * join topology `pullUpExtends`'s soundness checks read (fewer, flatter operands to reason
+ * about), so a second pass can float — or drop — binds the first pass could not have,
+ * without the sub-`SELECT` boundaries in the way. `removeProjections` itself still runs
+ * where the plain `pushDownAssertions` pipeline needs it (see that pipeline's own comment) —
+ * a required workaround for a generator quirk on statically-emptied `UNION` branches, not an
+ * optional extra.
+ */
+const WITH_PULL_UP_EXTENDS_TRANSFORMATIONS = <const>[
+  ...STANDARD_TRANSFORMATIONS,
+  pushDownAssertions,
+  transformFilterFalse,
+  pullUpExtends,
+  transformFilterFalse,
+  removeProjections,
+  pullUpExtends,
+];
+
 /** A single benchmark case: one SPARQL 1.2 query against one reification pattern. */
 export interface BenchCase {
   /** Unique id, e.g. `reification/A-Q1`. */
@@ -119,12 +144,13 @@ export interface BenchRecord {
 }
 
 /** Which optimization pipeline {@link rewriteToSparql11} should apply. */
-export type RewriteVariant = 'standard' | 'removeProjections' | 'pushDownAssertions';
+export type RewriteVariant = 'standard' | 'removeProjections' | 'pushDownAssertions' | 'pullUpExtends';
 
 function pipelineFor(variant: RewriteVariant): readonly Transformation[] {
   switch (variant) {
     case 'removeProjections': return WITH_PROJECTION_REMOVAL_TRANSFORMATIONS;
     case 'pushDownAssertions': return WITH_PUSH_DOWN_ASSERTIONS_TRANSFORMATIONS;
+    case 'pullUpExtends': return WITH_PULL_UP_EXTENDS_TRANSFORMATIONS;
     default: return STANDARD_TRANSFORMATIONS;
   }
 }

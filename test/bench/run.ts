@@ -1,7 +1,7 @@
 /**
  * @fileoverview Benchmark orchestration for the BKR reification benchmark.
  *
- * For every engine, reification scheme and dataset-size subset it measures four
+ * For every engine, reification scheme and dataset-size subset it measures five
  * ways of answering each SPARQL 1.2 benchmark query on the SAME materialized
  * RDF 1.1 data:
  *   - `rewriting`                  : the SPARQL 1.2 query rewritten to SPARQL 1.1
@@ -13,6 +13,10 @@
  *     applied (assertion pushdown — pushes `FILTER(sameTerm(?x, c))` constraints down
  *     into the triple patterns that use ?x, instead of matching generically and
  *     filtering afterwards),
+ *   - `rewriting+pullUpExtends`    : the pushdown pipeline plus `pullUpExtends`, applied
+ *     once right after the pushdown and once more after `removeProjections` (see
+ *     `runner.ts`'s pipeline comment for why twice) — floats the `BIND`s the pushdown
+ *     leaves at every leaf back up to where they cost less, or drops them outright,
  *   - `materialized`               : the hand-written baseline query (BKR-R / BKR-S).
  * It also checks that the rewriting variants and the materialized baseline return
  * identical results to the standard `rewriting` approach (used as the reference,
@@ -70,7 +74,8 @@ interface ResultRow {
   quads: number;
   loadMs: number;
   caseId: string;
-  approach: 'rewriting' | 'rewriting+removeProjections' | 'rewriting+pushDownAssertions' | 'materialized';
+  approach: 'rewriting' | 'rewriting+removeProjections' | 'rewriting+pushDownAssertions' | 'rewriting+pullUpExtends' |
+  'materialized';
   status: 'ok' | 'timeout' | 'error';
   medianMs: number;
   minMs: number;
@@ -245,10 +250,12 @@ async function runEngine(
         const rewritten = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12);
         const rewrittenAnon = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12, 'removeProjections');
         const rewrittenPushDown = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12, 'pushDownAssertions');
+        const rewrittenPullUp = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12, 'pullUpExtends');
         const approaches: { approach: ResultRow['approach']; query: string }[] = [
           { approach: 'rewriting', query: rewritten },
           { approach: 'rewriting+removeProjections', query: rewrittenAnon },
           { approach: 'rewriting+pushDownAssertions', query: rewrittenPushDown },
+          { approach: 'rewriting+pullUpExtends', query: rewrittenPullUp },
         ];
         if (benchCase.baselineQuery !== undefined) {
           approaches.push({ approach: 'materialized', query: benchCase.baselineQuery });
