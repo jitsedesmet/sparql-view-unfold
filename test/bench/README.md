@@ -741,6 +741,47 @@ Oxigraph — the documented ARQ triple-term-join bug (`jena-bug.md`) making the
 `standard`-pipeline reference itself wrong on Jena, re-confirmed rather than
 a new regression.
 
+## Fourth pipeline: `pullUpExtends` (2026-09-03, xs/s subsets, 60s SLA, 1 rep)
+
+Added a fourth rewrite pipeline (`RewriteVariant: 'pullUpExtends'` in
+`runner.ts`): the `pushDownAssertions` pipeline plus `pullUpExtends` applied
+twice — once right after the pushdown (its documented "other half":
+`pushDownAssertions` leaves an `EXTEND` at every leaf it substitutes into,
+`pullUpExtends` floats those back up to where they cost less, or drops them),
+and once more after `removeProjections`, since flattening the nested
+sub-`SELECT`s changes the join topology `pullUpExtends`'s soundness checks
+read — a second pass can float or drop binds the first pass couldn't with
+the sub-`SELECT` boundaries still in place. Verified before benchmarking: all
+96 case/variant combinations (2 schemes × 12 cases × 4 variants) parse as
+valid SPARQL 1.1 (no repeat of the generator-quirk shape
+`pushDownAssertions` hit — see "Other findings" above), and a Jena
+correctness spot-check against the hand-written baseline found 8 apparent
+mismatches, every one tracing back to an already-documented pre-existing
+issue (the ARQ join bug, or the singleton baseline testing different sample
+constants — see "Other findings" above), confirmed by cross-referencing that
+`removeProjections`/`pushDownAssertions`/`materialized` already show the
+identical row counts on those exact cases in the previous run.
+
+Full 3-engine sweep results: `test/bench/results/pullup-run.json` (720
+rows), figures in `test/bench/results/figures-pullup/`. Head-to-head against
+the plain `pushDownAssertions` pipeline it extends, on the 58 rows where
+both succeeded: **53 got faster, 5 got slower, average −480ms**. Every one
+of the 44 comparable Jena rows got faster, several substantially (−6.6s on
+Comunica's slowest reification query, −1 to −2.7s on a dozen Jena rows).
+`pullUpExtends` also reached 2 rows `pushDownAssertions` couldn't at all
+(Comunica `reification/A-Q2` at 54s, Oxigraph `singleton/B-Q2` at 44s), with
+zero rows lost the other way. The only regressions are 5 rows, all on
+Oxigraph, all on the same three already-borderline singleton queries
+(`A-Q3`/`A-Q4`/`F-Q1`, already past 15s before the extra pass) — the cleanup
+pass's own cost catching up with the largest queries, not a sign it hurts
+elsewhere. Status counts: `jena` unchanged at 44/48 ok (already at the same
+ceiling as `pushDownAssertions`/`removeProjections`); `comunica` 3/48 ok
+(vs 2/48); `oxigraph` 13/48 ok (vs 12/48). 32 of `pullUpExtends`'s 44 Jena
+`ok` rows are `correct: false` — the same ARQ bug pattern, not new. The
+other four approaches barely moved from the previous sweep: 2 status flips
+out of 576 shared rows (both borderline `materialized` timeouts on
+Comunica), confirming this was an apples-to-apples comparison.
+
 ## Extending
 
 - **New engine**: implement `BenchEngine` (or reuse `SparqlHttpEngine` for any
