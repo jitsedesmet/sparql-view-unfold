@@ -243,7 +243,8 @@ export function impliesBound(assertion: Assertion): boolean {
  */
 export function isAssertableTerm(term: RDF.Term): boolean {
   // Ground *is* variable-free, so the two cases - a variable, and a triple term holding one - are the one
-  // question {@link termVars} already answers, and the one `isStaticExpression` asks of a term expression.
+  // question {@link termVars} already answers, and the one the pull-up asks of a term expression before
+  // it writes it into a reader.
   // Blank nodes need no exclusion here: by the time this pass runs, the ones in a WHERE clause have
   // already been converted to variables, so no assertion can ever carry one.
   return termVars(term).size === 0;

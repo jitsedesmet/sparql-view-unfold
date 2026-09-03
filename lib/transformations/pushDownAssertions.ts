@@ -27,8 +27,7 @@ import {
   variablesOfTransferSource,
   asWeakenedConjunct,
 } from '../utils/assertions.js';
-import type { CPMeta } from '../utils/certainlyBoundVars.js';
-import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
@@ -167,7 +166,7 @@ function pushAssertions(
   assertions: AssertionConjunction,
   op: Algebra.Operation,
 ): PreOrderMappingReturn {
-  const normalised = assertions.normalisedFor(cpVars(op));
+  const normalised = assertions.normalisedFor(cpMetaOf(op));
   if (normalised === undefined) {
     return empty(c, op);
   }
@@ -227,7 +226,7 @@ function swapWith(
     }
     case Algebra.Types.FILTER: {
       // The conjunction we manage absorbs the assertions of the filter we pass (SDecompI),
-      const collected = collectAssertions(c, op.expression, assertions, cpVars(op.input).cVars);
+      const collected = collectAssertions(c, op.expression, assertions, cpMetaOf(op.input).cVars);
       if (collected === undefined) {
         return empty(c, op);
       }
@@ -385,7 +384,7 @@ function rewritePattern(
   // for it. So it reads what the pattern itself binds, and belongs as deep as that goes.
   const condition = residual.size === 0 ?
     undefined :
-    substituteInExpression(c, residual.toExpression(c), asWritten, cpVars(pattern).cVars);
+    substituteInExpression(c, residual.toExpression(c), asWritten, cpMetaOf(pattern).cVars);
   // A conjunct the values decide - `bound(?x)` of a variable the pattern writes, say - leaves nothing to
   // ask. `false` is not the mirror of this and keeps its filter: that is the empty operation, which
   // {@link transformFilterFalse} normalises away afterwards.
@@ -555,7 +554,7 @@ function pushIntoExtend(
   const expression = extend.expression;
   const assertionOfTarget = assertions.get(target);
   // The expression is evaluated over the input of the EXTEND, wherever this rewrite ends up putting it.
-  const { cVars } = cpVars(extend.input);
+  const { cVars } = cpMetaOf(extend.input);
   // SPARQL spec keeps BINDing an in-scope variable explicitly undefined. We assume it errors,
   // so in `bind(e AS ?x)` ?x is not bound below the EXTEND. It has to leave Θ before descending,
   // or the (FBndII) check at the top of the swap wrongly yields empty.
@@ -659,7 +658,7 @@ function pushIntoGraph(
     // the second falls through to the general path below rather than being treated as an emptiness.
     assertedGraphName.term.termType === 'NamedNode') {
     // Read before the rewrite, which preserves the scope exactly and never shrinks `cVars`.
-    const { cVars, vRanges } = cpVars(graph.input);
+    const { cVars, vRanges } = cpMetaOf(graph.input);
     // `?g` travels on into the pattern, in the *weak* form: `P` need not bind it at all, and the join
     // with `{?g ↦ c}` is what would have dropped the solutions binding it to anything else.
     const graphIndependentAssertions = assertions.split(name => name !== graphVar).inside;
@@ -750,7 +749,7 @@ function pushIntoJoin(
 
   // Read before any rewriting: every rewrite preserves pVars and never shrinks cVars, so these licences
   // stay valid while the operands are rewritten.
-  const operands = join.input.map(operand => cpVars(operand));
+  const operands = join.input.map(operand => cpMetaOf(operand));
   // An operand takes what it certainly binds, or what nothing else can bind; it takes the weakened form
   // of anything else it can bind, which the join consumes; and it *connects* what it takes, join
   // compatibility being what enforces an equality between two accesses it binds on the output.
@@ -825,7 +824,7 @@ function pushIntoLeftJoin(
 ): PreOrderMappingReturn {
   const { AF } = c;
   const [ left, right ] = leftJoin.input;
-  const leftVars = cpVars(left);
+  const leftVars = cpMetaOf(left);
 
   if ([ ...assertions.boundImpliedBy() ].some(name => leftVars.vRanges.neverBinds(name))) {
     // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
@@ -834,7 +833,7 @@ function pushIntoLeftJoin(
     return { ...keepMetadata, newValue: assertionFilter(c, rebuilt, assertions), reTransform: true };
   }
 
-  const rightVars = cpVars(right);
+  const rightVars = cpMetaOf(right);
   // (FLPush) on the left, and `?x ∈ cVars(A₁) ∩ cVars(A₂)` on the right - which implies the left's
   // licence, so the replication only ever happens beside a push the LHS already took.
   //
@@ -1078,15 +1077,6 @@ function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjun
     .filter(({ assertion }) => impliesBound(assertion))
     .map(conjunct => asWeakenedConjunct(conjunct))
     .filter(conjunct => conjunct !== undefined));
-}
-
-/**
- * The certainly and possibly bound variables of an operation, computed once and cached on it.
- * @param op - The operation to read
- * @returns its metadata
- */
-function cpVars(op: Algebra.Operation): CPMeta {
-  return withCpVars(op).metadata;
 }
 
 /**

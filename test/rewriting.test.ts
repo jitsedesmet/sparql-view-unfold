@@ -200,7 +200,7 @@ describe('dummy', () => {
 //   BIND( <ex://b> AS ?uq_p )
 // }`,
 //     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://b> ?o }` ],
-//     [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse, pushUpBoundedFromUnion ],
+//     [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse, pullUpExtends ],
 //   ));
 //
 //   it('no join optimization', ({ expect }) => testConstructMappers(

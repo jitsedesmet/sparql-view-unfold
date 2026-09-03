@@ -11,6 +11,7 @@ import {
   subjectRange,
   tripleTermRange,
 } from '../RangeSet.js';
+import { constructedTermOf } from './expressionHelpers.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
 
@@ -380,16 +381,19 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       const input = withCpVars(resOp.input);
       const certain = new Set(input.metadata.cVars);
       const ranges = new VRanges(input.metadata.vRanges);
-      // Maybe the var we will create is also certain:
-      if (resOp.expression.subType === ExpressionTypes.TERM &&
+      // Maybe the var we will create is also certain. Read through {@link constructedTermOf}, so that the
+      // two spellings of one construction - `<<( s p o )>>` and the `TRIPLE(s, p, o)` the parser keeps
+      // distinct from it - are the same fact here.
+      const constructed = constructedTermOf(resOp.expression);
+      if (constructed !== undefined &&
           // If it is a var, and that var is certain, we also certain
-          isSubsetOf(termVars(resOp.expression.term), certain) &&
+          isSubsetOf(termVars(constructed), certain) &&
           // A triple-term construction is the one term expression that can *fail*: it raises an
           // evaluation error - leaving the target unbound - when a component is not a term the position
           // it lands in admits. Where the ranges of the components rule that out, and a ground one rules
           // it out by itself, the construction is as certain as any other term.
-          (resOp.expression.term.termType !== 'Quad' ||
-            constructionCannotFail(resOp.expression.term, input.metadata.vRanges))) {
+          (constructed.termType !== 'Quad' ||
+            constructionCannotFail(constructed, input.metadata.vRanges))) {
         certain.add(resOp.variable.value);
       }
       resOp.metadata.cVars = certain;
@@ -490,6 +494,16 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       resOp.metadata.vRanges = new VRanges();
       return resOp;
   }
+}
+
+/**
+ * What an operation binds, which is {@link withCpVars} read for its answer rather than for its side effect
+ * of caching one - what every pass reading licences off the plan actually wants.
+ * @param op - The operation to read
+ * @returns its metadata
+ */
+export function cpMetaOf(op: Algebra.Operation): CPMeta {
+  return withCpVars(op).metadata;
 }
 
 /**

@@ -3,6 +3,7 @@ import { bench, describe } from 'vitest';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { nullifyUnbindableVars } from '../lib/transformations/nullifyUnbindableVars.js';
+import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
 import { pushDownAssertions } from '../lib/transformations/pushDownAssertions.js';
 import { removeProjections } from '../lib/transformations/removeProjections.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
@@ -46,6 +47,7 @@ const standardTransformations = <const>[
   nullifyJoinOverIncompatibleBounds,
   nullifyUnbindableVars,
   transformFilterFalse,
+  pullUpExtends,
   removeProjections,
 ];
 
@@ -57,6 +59,7 @@ const withPushdown = <const>[
   nullifyJoinOverIncompatibleBounds,
   nullifyUnbindableVars,
   transformFilterFalse,
+  pullUpExtends,
   removeProjections,
 ];
 

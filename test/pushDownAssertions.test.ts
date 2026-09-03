@@ -358,9 +358,12 @@ describe('pushDownAssertions', () => {
       expectTransformGraphOperation(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?x :p ?y } FILTER(sameTerm(?x, :c)) }',
-        `SELECT ?g ( <ex://c> AS ?x ) ?y WHERE {
+        `SELECT ?g ?x ?y WHERE {
   GRAPH ?g {
-    <ex://c> <ex://p> ?y .
+    {
+      <ex://c> <ex://p> ?y .
+      BIND( <ex://c> AS ?x )
+    }
   }
 }`,
       );

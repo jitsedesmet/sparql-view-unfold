@@ -6,6 +6,7 @@ import { describe, it } from 'vitest';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { nullifyUnbindableVars } from '../lib/transformations/nullifyUnbindableVars.js';
+import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
 import { removeProjections } from '../lib/transformations/removeProjections.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import { transformContextFromConstructs } from '../lib/transformContext.js';
@@ -39,6 +40,7 @@ describe('integration tests', () => {
     nullifyJoinOverIncompatibleBounds,
     nullifyUnbindableVars,
     transformFilterFalse,
+    pullUpExtends,
     // TODO: remove once https://github.com/comunica/comunica/pull/1734 is merged
     removeProjections,
   ];

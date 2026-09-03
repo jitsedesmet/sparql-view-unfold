@@ -152,30 +152,3 @@ export function directExtensions(op: Algebra.Operation): Record<string, RDF.Term
   findAssignments(op);
   return assignments;
 }
-
-/**
- * Removes the EXTEND operations binding the given variables from the top of an operation tree. Modifies the
- * tree in place.
- * @param op - The operation to modify
- * @param vars - Variable names whose extensions should be removed
- * @returns the modified operation
- */
-export function deleteVarExtensionsInPlace(
-  op: Algebra.Operation,
-  vars: string[],
-): Algebra.Operation {
-  if (vars.length === 0) {
-    return op;
-  }
-  const pruneExtensions = (op: Algebra.Operation): Algebra.Operation => {
-    if (op.type === 'extend') {
-      if (vars.includes(op.variable.value)) {
-        return pruneExtensions(op.input);
-      }
-      op.input = pruneExtensions(op.input);
-      return op;
-    }
-    return op;
-  };
-  return pruneExtensions(op);
-}
