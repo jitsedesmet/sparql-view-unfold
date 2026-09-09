@@ -7,8 +7,10 @@
  *  - **native** (optional): execute the SPARQL 1.2 query directly over the native
  *    RDF 1.2 dataset — only on engines that support SPARQL 1.2.
  *
- * A single SPARQL 1.2 reference engine computes the "ground truth" answer once per
- * case so every engine's rewriting result can be checked for correctness.
+ * A single reference engine computes the "ground truth" answer once per case — the
+ * hand-written `materialized` baseline where the case has one — so every engine's result
+ * can be checked against it. See {@link runBenchmark} for why the baseline, and not the
+ * rewriting being measured, is what the answers are judged against.
  */
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { transformFilterFalse } from '../../lib/transformations/filterFalse.js';
@@ -138,7 +140,12 @@ export interface BenchRecord {
   approach: 'rewriting' | 'materialized' | 'native';
   durationMs: number | null;
   count: number | null;
-  /** Whether the result matched the reference answer (null if no reference). */
+  /**
+   * Whether the result matched the reference answer (null if no reference). The
+   * reference is computed once per case on the reference engine, so this is a genuine
+   * cross-engine check for every other engine; the one row it cannot testify about is
+   * the reference engine's own `materialized` record, which is compared to itself.
+   */
   correct: boolean | null;
   error?: string;
 }
@@ -200,7 +207,12 @@ function lowercaseBooleanLiterals(query: string): string {
     `FILTER ( ${bool.toLowerCase()} )`);
 }
 
-function compareRows(a: SelectResult, b: SelectResult): boolean {
+/**
+ * Whether two result sets are the same solution multiset. Both engines canonicalize
+ * and sort their rows (see `engines.ts`'s `summarize`), so an element-wise comparison
+ * of equally long row arrays is order-insensitive.
+ */
+export function sameSolutions(a: SelectResult, b: SelectResult): boolean {
   if (a.count !== b.count) {
     return false;
   }
@@ -209,7 +221,17 @@ function compareRows(a: SelectResult, b: SelectResult): boolean {
 
 /**
  * Runs a full benchmark: every engine against every case, both approaches where
- * applicable. `referenceEngine` (a SPARQL 1.2 engine) provides the ground truth.
+ * applicable. `referenceEngine` provides the ground truth.
+ *
+ * The ground truth is the **hand-written `materialized` baseline** query, run on the
+ * reference engine, and only falls back to the reference engine's own `rewriting`
+ * result when a case has no baseline. Using `rewriting` as the reference would make
+ * the pipeline under test its own oracle — which silently inverts the verdict whenever
+ * that pipeline is the broken one (exactly what the Fuseki/ARQ triple-term bug does on
+ * Jena: `rewriting` returns 0 rows there, so every variant that agrees with the
+ * baseline gets marked incorrect). The baseline is plain SPARQL 1.1 over plain RDF 1.1
+ * with no triple terms anywhere, so it is the one query in the set that no engine's
+ * RDF 1.2 support can get wrong.
  */
 export async function runBenchmark(
   cases: BenchCase[],
@@ -220,16 +242,7 @@ export async function runBenchmark(
 
   for (const benchCase of cases) {
     const rewritten = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12);
-
-    // Ground truth: native SPARQL 1.2 over the materialized RDF 1.1 data is not
-    // possible, so we use the reference engine's *rewriting* result as truth, and
-    // additionally cross-check against native RDF 1.2 evaluation when available.
-    let reference: SelectResult | undefined;
-    try {
-      reference = await referenceEngine.runSelect(rewritten, benchCase.materialized);
-    } catch {
-      reference = undefined;
-    }
+    const reference = await referenceAnswer(benchCase, rewritten, referenceEngine);
 
     for (const engine of engines) {
       records.push(
@@ -259,6 +272,30 @@ export async function runBenchmark(
   return records;
 }
 
+/**
+ * The ground-truth answer for one case: the hand-written baseline on the reference
+ * engine, falling back to that engine's rewriting result when the case has no
+ * baseline. `undefined` when neither can be produced, which leaves `correct` unknown
+ * rather than asserting agreement with nothing.
+ */
+async function referenceAnswer(
+  benchCase: BenchCase,
+  rewritten: string,
+  referenceEngine: BenchEngine,
+): Promise<SelectResult | undefined> {
+  for (const query of [ benchCase.baselineQuery, rewritten ]) {
+    if (query === undefined) {
+      continue;
+    }
+    try {
+      return await referenceEngine.runSelect(query, benchCase.materialized);
+    } catch {
+      // Try the next candidate; an unanswerable case simply has no reference.
+    }
+  }
+  return undefined;
+}
+
 async function measure(
   benchCase: BenchCase,
   engine: BenchEngine,
@@ -274,7 +311,7 @@ async function measure(
       ...base,
       durationMs: result.durationMs,
       count: result.count,
-      correct: reference ? compareRows(result, reference) : null,
+      correct: reference ? sameSolutions(result, reference) : null,
     };
   } catch (error: unknown) {
     return {

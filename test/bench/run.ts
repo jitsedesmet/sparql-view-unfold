@@ -18,14 +18,17 @@
  *     `runner.ts`'s pipeline comment for why twice) — floats the `BIND`s the pushdown
  *     leaves at every leaf back up to where they cost less, or drops them outright,
  *   - `materialized`               : the hand-written baseline query (BKR-R / BKR-S).
- * It also checks that the rewriting variants and the materialized baseline return
- * identical results to the standard `rewriting` approach (used as the reference,
- * when it succeeds). CAVEAT (see README.md, "Adding Jena as a third engine"): on
- * Jena specifically, `rewriting` can return a wrong-but-`ok`-status result (a known
- * Fuseki 6.2.0 ARQ bug drops triple-term-valued bindings across certain sub-`SELECT`
- * joins), which makes this reference choice actively misleading for that engine —
- * cross-check against `materialized`/`pushDownAssertions` rather than trusting
- * `correct` at face value there.
+ * It also checks every approach against a ground-truth answer for the case: the
+ * hand-written `materialized` baseline, which is plain SPARQL 1.1 over plain RDF 1.1
+ * and so is the one query in the set no engine's RDF 1.2 support can get wrong. Only
+ * when a case has no baseline, or the baseline itself fails, does it fall back to the
+ * `rewriting` result; `referenceApproach` on every row records which was used, and the
+ * row that *is* the reference carries `correct: null` rather than a self-comparison.
+ * This matters concretely on Jena: a known Fuseki 6.2.0 ARQ bug drops triple-term-valued
+ * bindings across certain sub-`SELECT` joins, so `rewriting` there returns 0 rows with an
+ * `ok` status (see README.md, "Adding Jena as a third engine"). Against the baseline that
+ * shows up as `rewriting` being marked incorrect, which is the truth; against `rewriting`
+ * as its own oracle it used to show up as every *working* variant being marked incorrect.
  *
  * Engines:
  *   - `comunica`: in-process; the store is loaded once per scale (async, queries
@@ -51,7 +54,7 @@ import { StreamParser, Store } from 'n3';
 import { buildCases, PATTERNS } from './config.js';
 import { BenchTimeoutError, ComunicaEngine, JenaEngine, OxigraphEngine } from './engines.js';
 import type { BenchEngine, EngineSource, SelectResult } from './engines.js';
-import { rewriteToSparql11 } from './runner.js';
+import { rewriteToSparql11, sameSolutions } from './runner.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SUBSET_DIR = join(HERE, 'subsets');
@@ -71,7 +74,12 @@ interface ResultRow {
   engine: string;
   scheme: string;
   scale: string;
+  /** Size of the dataset subset, in quads. Measured per file and shared by every engine. */
   quads: number;
+  /**
+   * Time to load the subset into Comunica's in-memory N3 store, or 0 for engines that
+   * load the file themselves (Oxigraph's child process, Fuseki's server startup).
+   */
   loadMs: number;
   caseId: string;
   approach: 'rewriting' | 'rewriting+removeProjections' | 'rewriting+pushDownAssertions' | 'rewriting+pullUpExtends' |
@@ -80,8 +88,16 @@ interface ResultRow {
   medianMs: number;
   minMs: number;
   count: number;
-  /** Whether this approach's result matched the rewriting reference (null if unknown). */
+  /**
+   * Whether this approach's result matched the case's reference answer. `null` when
+   * unknown — the run produced no result, no reference could be computed, or this row
+   * *is* the reference (see {@link ResultRow.referenceApproach}).
+   */
   correct: boolean | null;
+  /** Which approach supplied the ground truth `correct` was judged against. */
+  referenceApproach: ResultRow['approach'] | null;
+  /** The per-query time budget this row was run under; a `timeout` row is censored at it. */
+  timeoutMs: number;
   error?: string;
 }
 
@@ -144,14 +160,39 @@ async function loadStore(file: string): Promise<{ store: Store; loadMs: number }
   return { store, loadMs: performance.now() - start };
 }
 
+/**
+ * Number of quads in a subset file, counted by streaming it through the parser without
+ * building a store. Cached per file: the count is a property of the dataset, not of the
+ * engine reading it, and every engine's rows need it as the x-axis of the scaling plot.
+ * Comunica seeds this cache for free from the store it loads anyway
+ * ({@link loadStore}), so the extra parse is only paid for a file no Comunica run in
+ * this process has already loaded.
+ */
+const quadCounts = new Map<string, number>();
+
+async function countQuads(file: string): Promise<number> {
+  const cached = quadCounts.get(file);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const count = await new Promise<number>((resolve, reject) => {
+    let quads = 0;
+    const parser = new StreamParser();
+    const input = createReadStream(file, { highWaterMark: 1 << 20 });
+    parser.on('data', () => quads++);
+    parser.on('end', () => resolve(quads));
+    parser.on('error', reject);
+    input.on('error', reject);
+    input.pipe(parser);
+  });
+  quadCounts.set(file, count);
+  return count;
+}
+
 function median(values: number[]): number {
   const sorted = [ ...values ].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-}
-
-function sameResult(a: SelectResult, b: SelectResult): boolean {
-  return a.count === b.count && a.rows.every((row, i) => row === b.rows[i]);
 }
 
 function makeEngine(name: string): BenchEngine {
@@ -193,7 +234,8 @@ async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
   mkdirSync(RESULTS_DIR, { recursive: true });
   const rows: ResultRow[] = [];
-  const flush = (): void => writeFileSync(opts.out, JSON.stringify(rows, null, 2));
+  // The trailing newline keeps the committed results file lint-clean (`style/eol-last`).
+  const flush = (): void => writeFileSync(opts.out, `${JSON.stringify(rows, null, 2)}\n`);
 
   for (const engineName of opts.engines) {
     const engine = makeEngine(engineName);
@@ -208,6 +250,37 @@ async function main(): Promise<void> {
 
   flush();
   process.stderr.write(`\nWrote ${rows.length} rows to ${opts.out}\n`);
+}
+
+/**
+ * Fills in `correct`/`referenceApproach` for one case's rows, once every approach has
+ * run. Ground truth is the hand-written `materialized` baseline — plain SPARQL 1.1 over
+ * plain RDF 1.1, the one query in the set that no engine's RDF 1.2 support can get wrong
+ * — falling back to `rewriting` only when the baseline produced nothing. The reference
+ * row itself keeps `correct: null`: comparing it to itself would report agreement it
+ * cannot testify to.
+ */
+interface CaseRow {
+  row: ResultRow;
+  result?: SelectResult;
+}
+
+function grade(caseRows: CaseRow[]): void {
+  let reference: (CaseRow & { result: SelectResult }) | undefined;
+  for (const approach of <const>[ 'materialized', 'rewriting' ]) {
+    const candidate = caseRows.find(r => r.row.approach === approach);
+    if (candidate?.result) {
+      reference = { ...candidate, result: candidate.result };
+      break;
+    }
+  }
+  if (!reference) {
+    return;
+  }
+  for (const { row, result } of caseRows) {
+    row.referenceApproach = reference.row.approach;
+    row.correct = row === reference.row || !result ? null : sameSolutions(result, reference.result);
+  }
 }
 
 async function runEngine(
@@ -231,18 +304,24 @@ async function runEngine(
       // Oxigraph loads per query in its child process, so only needs the file.
       let store: Store | undefined;
       let loadMs = 0;
-      let quads = 0;
-      if (engineName === 'comunica') {
-        try {
+      let quads: number;
+      try {
+        if (engineName === 'comunica') {
           const loaded = await loadStore(file);
           store = loaded.store;
           loadMs = Math.round(loaded.loadMs);
           quads = store.size;
+          quadCounts.set(file, quads);
           process.stderr.write(`  loaded ${quads} quads in ${(loadMs / 1000).toFixed(1)}s\n`);
-        } catch (error: unknown) {
-          process.stderr.write(`  load failed: ${error instanceof Error ? error.message : String(error)}\n`);
-          continue;
+        } else {
+          // Every engine's rows need the dataset size: it is the x-axis of the scaling
+          // plot, and a plot whose x-axis is 0 for every scale collapses to one point.
+          quads = await countQuads(file);
+          process.stderr.write(`  ${quads} quads\n`);
         }
+      } catch (error: unknown) {
+        process.stderr.write(`  load failed: ${error instanceof Error ? error.message : String(error)}\n`);
+        continue;
       }
       const source: EngineSource = { name: `${scheme}-${scale}`, store, file };
 
@@ -258,17 +337,19 @@ async function runEngine(
           { approach: 'rewriting+pullUpExtends', query: rewrittenPullUp },
         ];
         if (benchCase.baselineQuery !== undefined) {
-          approaches.push({ approach: 'materialized', query: benchCase.baselineQuery });
+          // Run the baseline first so it is available as the reference for everything
+          // else, and so a case whose rewritings all time out still gets a ground truth.
+          approaches.unshift({ approach: 'materialized', query: benchCase.baselineQuery });
         }
 
-        let reference: SelectResult | undefined;
+        // Rows go in as they are measured (each one flushed, so a run killed halfway
+        // still leaves usable JSON) and are graded once the whole case is in — the
+        // reference is whichever of `materialized`/`rewriting` actually produced an
+        // answer, which is not known until both have run.
+        const caseRows: CaseRow[] = [];
         for (const { approach, query } of approaches) {
           const run = await timedRun(engine, query, source, opts.reps, opts.timeoutMs);
-          if (approach === 'rewriting' && run.result) {
-            reference = run.result;
-          }
-          const correct = run.result && reference ? sameResult(run.result, reference) : null;
-          rows.push({
+          const row: ResultRow = {
             engine: engineName,
             scheme,
             scale,
@@ -280,16 +361,22 @@ async function runEngine(
             medianMs: run.durations.length > 0 ? Math.round(median(run.durations)) : -1,
             minMs: run.durations.length > 0 ? Math.round(Math.min(...run.durations)) : -1,
             count: run.result?.count ?? -1,
-            correct,
+            correct: null,
+            referenceApproach: null,
+            timeoutMs: opts.timeoutMs,
             error: run.error,
-          });
+          };
+          rows.push(row);
+          caseRows.push({ row, result: run.result });
           process.stderr.write(
-              `  ${benchCase.id.padEnd(22)} ${approach.padEnd(12)} ${run.status.padEnd(7)} ` +
+              `  ${benchCase.id.padEnd(22)} ${approach.padEnd(30)} ${run.status.padEnd(7)} ` +
               `${run.durations.length > 0 ? `${Math.round(median(run.durations))}ms` : '-'} ` +
               `rows=${run.result?.count ?? '-'}\n`,
           );
           flush();
         }
+        grade(caseRows);
+        flush();
       }
       store = undefined;
       if (globalThis.gc) {
