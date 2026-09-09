@@ -116,18 +116,24 @@ GraphDB only support the older RDF-star `<< >>` syntax, while QLever, Blazegraph
 Stardog and Virtuoso are SPARQL 1.1 only. SPARQL 1.2 / RDF 1.2 remain W3C Working
 Drafts as of mid-2026.
 
-```bash
-# Comunica only (in-process, no external services):
-npx tsx test/bench/cli.ts --pattern reification --limit 5
+The experiment itself is `test/bench/run.ts`: for every engine × reification scheme ×
+dataset scale it runs the four rewrite pipelines and the hand-written baseline query
+over the *same* materialized RDF 1.1 data, then `plot.mjs` turns the results JSON into
+figures.
 
-# Also benchmark Fuseki / Oxigraph endpoints that have the dataset loaded:
-npx tsx test/bench/cli.ts --pattern reification \
-  --fuseki http://localhost:3030/bkr/sparql \
-  --oxigraph http://localhost:7878/query --json results.json
+```bash
+# The real run (needs the subsets generated first — see test/bench/README.md):
+npx tsx test/bench/run.ts --engines comunica,oxigraph,jena \
+  --schemes reification,singleton --scales xs,s --timeout 300000 \
+  --out test/bench/results/results.json
+node test/bench/plot.mjs test/bench/results/results.json test/bench/results/figures
+
+# Ad-hoc single-pipeline run against the full datasets or endpoints you started yourself:
+npx tsx test/bench/cli.ts --pattern reification --limit 5
 ```
 
-See [`test/bench/README.md`](test/bench/README.md) for the full engine survey and
-instructions. The harness is validated by `test/bench.test.ts`.
+See [`test/bench/README.md`](test/bench/README.md) for the full engine survey, the
+one-time Fuseki setup and the results. The harness is validated by `test/bench.test.ts`.
 
 ## API Reference
 

@@ -1,51 +1,79 @@
 # Cross-engine SPARQL 1.2 benchmark
 
-This directory contains a small system to benchmark the query-rewriting approach of
-this library against **native SPARQL 1.2 evaluation**, across multiple SPARQL engines.
+This directory benchmarks the query-rewriting approach of this library against the two
+alternatives a user actually has, across three SPARQL engines.
 
 ## What it measures
 
-For a SPARQL 1.2 user query (using RDF 1.2 triple terms / `rdf:reifies`) there are two
-ways to get an answer:
+A SPARQL 1.2 user query (RDF 1.2 triple terms / `rdf:reifies`) against data that is
+physically stored as RDF 1.1 can be answered in two ways:
 
 1. **rewriting** — rewrite the query into an equivalent **SPARQL 1.1** query with this
-   library and run it over the *materialized RDF 1.1* representation
-   (`data/BKR-Reification.ttl`, `data/BKR-Singleton.ttl`, …).
-   This works on **any** SPARQL 1.1 engine.
-2. **native** — run the SPARQL 1.2 query directly over the *native RDF 1.2* data.
-   This only works on engines that support SPARQL 1.2.
+   library, using the CONSTRUCT mappers that expose the RDF 1.1 data as an RDF 1.2 view,
+   and run that over the materialized RDF 1.1 data. Works on any SPARQL 1.1 engine.
+2. **materialized** — hand-write a SPARQL 1.1 query directly against the RDF 1.1
+   representation. This is what people do today, and it is the bar the rewriting has to
+   be judged against: it is both the speed target and the correctness oracle.
 
-The runner records execution time and row counts for every engine/approach, and checks
-each result against a reference answer for correctness.
+Four rewrite pipelines are measured, each a superset of the one before it, so the
+difference between two adjacent bars is the contribution of one transformation:
+
+| Approach | Pipeline |
+|---|---|
+| `rewriting` | `operationTransform` → `transformFilterFalse` → `nullifyJoinOverIncompatibleBounds` → `transformFilterFalse` |
+| `rewriting+removeProjections` | the above, then `removeProjections` (flattens the nested sub-`SELECT`s each mapper branch is wrapped in) |
+| `rewriting+pushDownAssertions` | the above, then `pushDownAssertions` (pushes `FILTER(sameTerm(?x, c))` into the triple patterns that use `?x`, turning a free position into an indexed lookup) |
+| `rewriting+pullUpExtends` | the above, then `pullUpExtends` twice (floats the `BIND`s the pushdown leaves at every leaf back up, or drops them) |
+
+See `runner.ts` for the exact composition and why `removeProjections` is a *required*
+step of the pushdown pipeline rather than an optional extra.
+
+## Reading the output
+
+Every row in the results JSON is one (engine, scheme, scale, query, approach)
+measurement. Three fields decide how to read it:
+
+- **`status`** is `ok`, `timeout` or `error`. A `timeout` row is **censored**, not
+  missing: the query took *at least* `timeoutMs`, and nothing more is known. The plots
+  draw it at the budget, hatched and marked `≥`, and dash any aggregate that contains
+  one. This matters more than it sounds — the slowest runs are exactly the ones that
+  time out, so dropping them makes an approach look *better* the more often it fails,
+  and lets a scaling line fall as the dataset grows.
+- **`correct`** compares this approach's solution multiset against the case's reference
+  answer, and **`referenceApproach`** says which approach supplied it: the hand-written
+  `materialized` baseline, or `rewriting` as a fallback when the case has no baseline or
+  the baseline itself failed. The baseline is plain SPARQL 1.1 over plain RDF 1.1 with no
+  triple terms anywhere, which makes it the one query in the set that an engine's RDF 1.2
+  support cannot get wrong. `null` means unknown — no reference could be computed, or the
+  row *is* the reference.
+- **`quads`** is the size of the subset the row ran against, measured per file and shared
+  by every engine; it is the x-axis of the scaling plot.
+
+A note on `reps`: the default is 1, so `medianMs` is a single sample and there is no
+warm-up. Query-to-query ratios within one run are the signal here; small differences
+between runs are not.
 
 ## Which engines support SPARQL 1.2? (survey, July 2026)
 
-SPARQL 1.2 / RDF 1.2 are **W3C Working Drafts** (not yet Recommendations; the
-RDF-star WG is chartered until April 2027). Triple terms use the new
-`<<( s p o )>>` syntax with `rdf:reifies` (the old RDF-star `<< s p o >>` reifier
-syntax is being retired). The engines usable for an automated SPARQL 1.2 benchmark are:
+SPARQL 1.2 / RDF 1.2 are **W3C Working Drafts** (not yet Recommendations; the RDF-star WG
+is chartered until April 2027). Triple terms use the new `<<( s p o )>>` syntax with
+`rdf:reifies`; the old RDF-star `<< s p o >>` reifier syntax is being retired but still
+parses, which is why the BKR-star query files can be fed to the rewriter verbatim.
 
 | Engine | SPARQL 1.2 native | New `<<( )>>` syntax | Min version | How to drive it |
 |---|---|---|---|---|
 | **Comunica** | ✅ full | ✅ | 5.0.0 (Jan 2026) | npm library (`@comunica/query-sparql*`) — used in-process here |
 | **Apache Jena / Fuseki** | ✅ full (default) | ✅ | 4.10+ (rec. 5.x/6.x) | Java, Fuseki HTTP SPARQL endpoint |
-| **Oxigraph** | ✅ full | ✅ | 0.5.0 (2025) | Rust binary / Docker HTTP SPARQL endpoint |
+| **Oxigraph** | ✅ full | ✅ | 0.5.0 (2025) | Rust binary / WASM, one-shot child process here |
 | Eclipse RDF4J | ⚠️ old `<< >>` only | ❌ | — | (cannot run the new syntax) |
 | Ontotext GraphDB | ⚠️ old `<< >>` only | ❌ | — | inherits RDF4J limitation |
 | QLever, Blazegraph, Stardog, Virtuoso, MillenniumDB | ❌ SPARQL 1.1 only | ❌ | — | not usable for native SPARQL 1.2 |
 
-So the three engines this benchmark targets are **Comunica**, **Apache Jena/Fuseki**
-and **Oxigraph** — all three implement the new triple-term syntax, `{| |}` annotation
-shorthand and the `VERSION 1.2` declaration.
-
-Verified directly (2026-08-27): **Fuseki 6.2.0** parses and evaluates the new
-`<<( s p o )>>` syntax natively and returns triple terms in SPARQL Results JSON
-via the `"type": "triple"` extension — confirmed with a `<<( )>>`-constructing
-`SELECT` against a running instance. One correction to the version guidance
-above: **Fuseki 6.2.0's class files require a Java 21+ runtime** — it fails to
-start under Java 17 (`UnsupportedClassVersionError`, class file version 65 vs.
-Java 17's 61). Earlier Fuseki releases (e.g. the 4.10.x line) target older
-bytecode and work with Java 11/17; only the newest 6.x line needs Java 21.
+Verified directly (2026-08-27): **Fuseki 6.2.0** parses and evaluates `<<( s p o )>>`
+natively and returns triple terms in SPARQL Results JSON via the `"type": "triple"`
+extension. Its class files require a **Java 21+** runtime (it fails to start under Java 17
+with `UnsupportedClassVersionError`, class file version 65 vs. 61); the 4.10.x line targets
+older bytecode and works with Java 11/17.
 
 - SPARQL 1.2 Query WD: <https://www.w3.org/TR/sparql12-query/>
 - SPARQL 1.2 test suite: <https://w3c.github.io/rdf-tests/sparql/sparql12/>
@@ -57,20 +85,21 @@ bytecode and work with Java 11/17; only the newest 6.x line needs Java 21.
 
 | File | Purpose |
 |---|---|
-| `engines.ts` | `BenchEngine` interface + `ComunicaEngine` (in-process, cancellable), `OxigraphEngine` (one-shot child process, killed on timeout — Oxigraph's `Store.query` is synchronous), `JenaEngine` (manages its own long-lived `fuseki-server.jar` child process, restarted only when the requested dataset file changes — see "Adding Jena / Fuseki" below) and `SparqlHttpEngine` (any *externally managed* SPARQL HTTP endpoint: a Fuseki/Oxigraph server you started yourself, used by `cli.ts`'s `--fuseki`/`--oxigraph` flags). |
-| `oxiOneShot.mjs` | Loads one Turtle file, runs one query with Oxigraph, prints canonicalized JSON results. Run in a child process by `OxigraphEngine` so a hard wall-clock timeout can be enforced by killing it. |
-| `starQuery.ts` | Converts BKR-star `<< s p o >>` queries into RDF 1.2 `rdf:reifies <<( s p o )>>` form. Not needed for the actual pipeline below — the parser auto-desugars `<< >>` — kept for `test/bench.test.ts`. |
-| `config.ts` | Maps each reification pattern (`reification` → `BKR-Reification.ttl`/`BKR-R_*.rq`, `singleton` → `BKR-Singleton.ttl`/`BKR-S_*.rq`) to its CONSTRUCT mappers, materialized dataset and hand-written baseline query, and builds benchmark cases from `queries/BKR-star_*.rq`. |
-| `runner.ts` | `rewriteToSparql11(mappers, query, withProjectionRemoval?)` (the core rewrite call — the third argument selects the standard pipeline or the standard pipeline plus `removeProjections`) plus a simpler single-engine `runBenchmark()`/`formatRecords()` used by `cli.ts`. |
-| `cli.ts` | Simple CLI entry point for ad-hoc runs against the **full** multi-GB datasets or external Fuseki/Oxigraph endpoints (see below). Does not do scale subsetting. |
-| `makeSubset.mjs` | Streams a full multi-GB dataset once and writes 4 smaller self-contained subsets (`xs`/`s`/`m`/`l`) that always include the closure of every benchmark query's target entities plus a uniform random noise sample, so results are comparable across scales. **This is what the actual experiment run below uses** — the full datasets (13–17GB) cannot be loaded into an in-memory store. |
-| `run.ts` | The real orchestrator: for every engine × scheme × scale it runs both the rewritten query and the hand-written baseline over the *same* subset, records timing/correctness/status, and writes a results JSON for `plot.mjs`. |
-| `plot.mjs` | Turns a results JSON into hand-rolled SVG figures (time-by-query, scaling, overhead, correctness) per scheme × engine, saved under `results/figures/`. |
+| `run.ts` | The orchestrator: for every engine × scheme × scale it runs the four pipelines and the baseline over the *same* subset, grades them against the reference answer, and writes the results JSON. Flushes after every row, so an interrupted run still leaves usable JSON. |
+| `runner.ts` | `rewriteToSparql11(mappers, query, variant)` — the core rewrite call, where `variant` selects one of the four pipelines — plus `sameSolutions()` and a simpler single-engine `runBenchmark()`/`formatRecords()` used by `cli.ts`. |
+| `config.ts` | Maps each reification pattern (`reification` → `BKR-Reification.ttl`/`BKR-R_*.rq`, `singleton` → `BKR-Singleton.ttl`/`BKR-S_*.rq`) to its CONSTRUCT mappers, materialized dataset and hand-written baseline query, and builds cases from `queries/BKR-star_*.rq`. |
+| `engines.ts` | `BenchEngine` interface + `ComunicaEngine` (in-process, cancellable), `OxigraphEngine` (one-shot child process, killed on timeout — Oxigraph's `Store.query` is synchronous), `JenaEngine` (manages its own long-lived `fuseki-server.jar` child process, restarted only when the dataset file changes) and `SparqlHttpEngine` (any *externally managed* SPARQL HTTP endpoint, used by `cli.ts`). |
+| `oxiOneShot.mjs` | Loads one Turtle file, runs one query with Oxigraph, prints canonicalized JSON. Run as a child process by `OxigraphEngine` so a hard wall-clock timeout can be enforced by killing it. |
+| `makeSubset.mjs` | Streams a full multi-GB dataset once and writes four self-contained subsets (`xs`/`s`/`m`/`l`), each containing the full closure of every benchmark query's target entities plus a uniform random noise sample, so results are comparable across scales. The full datasets (13–17GB) cannot be loaded into an in-memory store, so this is what the real run uses. |
+| `plot.mjs` | Turns a results JSON into hand-rolled SVG figures (time-by-query, scaling, overhead, correctness) per scheme × engine. No dependencies. |
+| `cli.ts` | Ad-hoc single-pipeline runs against the **full** datasets or SPARQL endpoints you started yourself. No scale subsetting. |
+| `jena-bug.md` | Write-up of the ARQ triple-term bug found through this benchmark (fixed upstream). |
 
-The harness itself is validated by `test/bench.test.ts` on small in-memory datasets
-(no multi-GB data needed).
+Figures are **not committed** — they are regenerated from the results JSON with
+`plot.mjs` (`test/bench/results/figures/` is gitignored). The harness itself is validated
+by `test/bench.test.ts` on small in-memory datasets, no multi-GB data needed.
 
-## Running the real experiment (subset-based)
+## Running the experiment
 
 ```bash
 # 1. Generate subsets once per scheme (streams the full dataset twice; ~10 min each)
@@ -79,718 +108,123 @@ node --max-old-space-size=8000 test/bench/makeSubset.mjs \
 node --max-old-space-size=8000 test/bench/makeSubset.mjs \
   test/statics/REF-Benchmark/BKR/data/BKR-Singleton.ttl   test/bench/subsets singleton
 
-# 2. Run the benchmark (give Node extra heap for the `m` scale's in-memory N3 store)
-NODE_OPTIONS="--max-old-space-size=16000" npx tsx test/bench/run.ts \
-  --engines comunica,oxigraph,jena --schemes reification,singleton --scales xs,s,m \
-  --reps 1 --timeout 30000 --out test/bench/results/results.json
+# 2. Run (see below on choosing --timeout; jena first so complete data lands early)
+export JENA_FUSEKI_JAR=/path/to/apache-jena-fuseki-6.2.0/fuseki-server.jar
+NODE_OPTIONS="--max-old-space-size=12000 --expose-gc" npx tsx test/bench/run.ts \
+  --engines jena,oxigraph,comunica --schemes reification,singleton --scales xs,s \
+  --reps 1 --timeout 300000 --out test/bench/results/results.json
 
 # 3. Plot
 node test/bench/plot.mjs test/bench/results/results.json test/bench/results/figures
 ```
 
-`--engines` accepts `comunica`, `oxigraph` and/or `jena` (see "Adding Jena / Fuseki"
-below for the one-time setup `jena` needs — it manages its own Fuseki server
-process, no external service to stand up by hand).
+**Choosing `--timeout` is the single biggest lever on how much signal the run
+produces**, because the interesting queries sit far above any conservative budget. At the
+`xs` scale on Comunica the plain `rewriting` pipeline needs **184–289 s** per query, and
+`pushDownAssertions`/`pullUpExtends` need **45–73 s**. A 60 s budget therefore censors
+*every* `rewriting` measurement outside Jena — which is how earlier runs of this benchmark
+ended up with zero valid data points for the approach the whole comparison is about.
+300 s is the smallest budget that measures all four pipelines at `xs`; below ~100 s only
+the pushdown-based ones survive. Budget accordingly: a full 3-engine × 2-scheme × 2-scale
+sweep at 300 s is a many-hour run.
 
-`test/bench/results/reification.json` / `singleton.json` and the SVGs under
-`results/figures/` in this repo are the actual output of the run described below.
-
-## Simple / ad-hoc runs (`cli.ts`, full datasets or external endpoints)
-
-```bash
-npx tsx test/bench/cli.ts --pattern reification --limit 5
-```
-
-This rewrites the BKR-star queries and runs them with Comunica over the *full*
-materialized RDF 1.1 dataset (no subsetting) — only practical for a handful of
-cases (`--limit`), since the full datasets are 13–17GB. Stand up Fuseki/Oxigraph
-endpoints with the dataset pre-loaded to benchmark those too:
-
-```bash
-# Apache Jena Fuseki (Java 21+)
-java -jar fuseki-server.jar --file data/BKR-Reification.ttl /bkr
-
-# Oxigraph (Docker)
-docker run -p 7878:7878 -v "$PWD/data:/data" docker.io/oxigraph/oxigraph \
-  serve --location /data
-
-npx tsx test/bench/cli.ts --pattern reification \
-  --fuseki   http://localhost:3030/bkr/sparql \
-  --oxigraph http://localhost:7878/query \
-  --json results.json
-```
-
-| Flag | Meaning |
-|---|---|
-| `--pattern <name>` | `reification` (default) or `singleton`. |
-| `--limit <N>` | Only run the first N query cases. |
-| `--fuseki <url>` | Add an Apache Jena/Fuseki SPARQL endpoint. |
-| `--oxigraph <url>` | Add an Oxigraph SPARQL endpoint. |
-| `--json <path>` | Also write the raw records as JSON. |
+`--engines` accepts `comunica`, `oxigraph` and/or `jena`.
 
 ## Adding Jena / Fuseki
 
-`jena` is now a first-class engine for `run.ts` (the subset-based orchestrator),
-alongside `comunica`/`oxigraph`. Unlike `SparqlHttpEngine` (used by `cli.ts`'s
-`--fuseki`/`--oxigraph` flags, which talk to a server *you* already started and
-loaded), `JenaEngine` manages its own `fuseki-server.jar` child process: it
-starts it lazily on the first query against a given dataset file
-(`--file=<path> --port=<port> /ds`, an in-memory dataset loaded at startup —
-same idea as `OxigraphEngine`'s per-file loading, but Fuseki is a long-lived
-HTTP server, so the process is kept running and reused across every query
-against that file, and only restarted when `run.ts` moves on to a different
-scale/scheme's dataset file). `dispose()` shuts it down; `run.ts` calls it
-automatically once an engine's run is done.
-
-Setup (one-time):
+Unlike `SparqlHttpEngine` (used by `cli.ts`, which talks to a server *you* started and
+loaded), `JenaEngine` manages its own `fuseki-server.jar` child process: it starts one
+lazily on the first query against a given dataset file (`--file=<path> --port=<port> /ds`,
+an in-memory dataset loaded at startup), keeps it running across every query against that
+file, and restarts it only when `run.ts` moves on to a different scale/scheme. `run.ts`
+calls `dispose()` once an engine's run is done.
 
 ```bash
-# 1. Download a Fuseki distribution (needs Java 21+ for the 6.x line — see the
-#    engine survey above; 4.10.x works with Java 11/17 if 21 isn't available)
+# 1. Download a Fuseki distribution (6.x needs Java 21+; 4.10.x works with Java 11/17)
 curl -LO https://dlcdn.apache.org/jena/binaries/apache-jena-fuseki-6.2.0.tar.gz
 tar xzf apache-jena-fuseki-6.2.0.tar.gz
 
-# 2. Point JenaEngine at the jar (only env var actually required)
+# 2. Point JenaEngine at the jar (the only env var actually required)
 export JENA_FUSEKI_JAR="$PWD/apache-jena-fuseki-6.2.0/fuseki-server.jar"
-
-# 3. Run as usual
-npx tsx test/bench/run.ts --engines jena --schemes reification,singleton \
-  --scales xs,s --reps 1 --timeout 30000 --out test/bench/results/jena-run.json
 ```
 
 | Env var | Meaning | Default |
 |---|---|---|
-| `JENA_FUSEKI_JAR` | Path to `fuseki-server.jar`. **Required** — `JenaEngine` throws a clear error if unset when it first needs to start a server. | — |
+| `JENA_FUSEKI_JAR` | Path to `fuseki-server.jar`. **Required** — `JenaEngine` throws a clear error if unset when it first needs a server. | — |
 | `JENA_JAVA` | Java binary to invoke. | `java` |
 | `JENA_FUSEKI_PORT` | Port the child Fuseki server listens on. | `3131` |
-| `JENA_JVM_OPTS` | Extra space-separated JVM args, e.g. `-Xmx4g` for the larger `m`/`l` scale subsets (the default JVM heap can be too small to load an 800MB Turtle file in-memory). | (none) |
-
-`JenaEngine` refuses to query a port that already answers `/$/ping` before it
-has started its own child process — it can't otherwise tell whether a
-leftover/foreign process on that port holds the dataset it's about to ask for,
-so it errors instead of silently querying the wrong data; free the port (or
-pick a different one via `JENA_FUSEKI_PORT`) if you see that error.
-
-**Verified working (2026-08-27, xs subset, reification scheme):** startup, the
-"reuse the running server across queries against the same file" path, a
-genuine client-side timeout (`AbortSignal`-based, same mechanism as
-`SparqlHttpEngine`), restart-on-file-switch (reification → singleton), and
-`"type": "triple"` JSON canonicalization for RDF 1.2 triple-term-valued
-projections all check out.
-
-**⚠️ Before trusting Jena's results for anything, read "Adding Jena as a third
-engine" below in full — Fuseki 6.2.0 has a real correctness bug (a
-triple-term-valued variable's binding gets silently dropped across certain
-sub-`SELECT` joins) that makes the `rewriting`/`standard` approach's fast,
-`ok`-status results wrong on this benchmark's queries more often than not.
-`pushDownAssertions` measured clean; `standard` and (rarely) even
-`removeProjections` did not. — **Fixed upstream 2026-08-29** (Jena `main`
-commit `e9f7445a`, not yet in a release); see `jena-bug.md` at the repo root
-for the root cause and the fix commit. Anyone re-running this benchmark
-against a Jena build newer than 6.2.0 should re-verify `standard`'s results
-rather than assume the caveat still applies.
-
-## Results (2026-07-28, xs/s/m subsets, 30s timeout, 1 rep)
-
-Ran both reification schemes across Comunica and Oxigraph, 12 BKR-star queries ×
-**3 approaches** × 3 scales × 2 engines = 216 rows per scheme. The three approaches:
-
-1. `rewriting` — the standard rewrite pipeline (`operationTransform` +
-   `transformFilterFalse` + `nullifyJoinOverIncompatibleBounds` + `transformFilterFalse`).
-2. `rewriting+removeProjections` — the same pipeline with
-   [`removeProjections`](../../lib/transformations/removeProjections.ts) appended: it
-   anonymizes the variables each mapper's nested sub-`SELECT` hides and then drops the
-   `PROJECT` node, flattening the deeply-nested sub-`SELECT`-per-mapper-branch structure
-   into a single flat tree of `UNION`/`JOIN`/`FILTER`/`BIND` (see the file's doc comment).
-   The hypothesis was that this structural simplification might help engines that
-   handle nested sub-`SELECT`s poorly plan the query better.
-3. `materialized` — the hand-written baseline query on the same subset.
-
-**Headline finding — neither rewriting variant ever completes within the
-timeout, on either engine, at any scale, for either scheme, and
-`removeProjections` makes *no measurable difference*: the two variants have
-byte-for-byte identical timeout/error counts in every (engine, scheme)
-bucket** (0/288 "ok" for `rewriting` and 0/288 "ok" for
-`rewriting+removeProjections`, across both result sets combined):
-
-| | rewriting | rewriting+removeProjections | materialized |
-|---|---|---|---|
-| reification / comunica | 0/36 ok, 36 timeout | 0/36 ok, 36 timeout | 16/36 ok, 20 timeout |
-| reification / oxigraph | 0/36 ok, 12 timeout, 24 error | 0/36 ok, 12 timeout, 24 error | 11/36 ok, 1 timeout, 24 error |
-| singleton / comunica   | 0/36 ok, 36 timeout | 0/36 ok, 36 timeout | 33/36 ok, 3 timeout |
-| singleton / oxigraph   | 0/36 ok, 12 timeout, 24 error | 0/36 ok, 12 timeout, 24 error | 12/36 ok, 0 timeout, 24 error |
-
-Spot-checked on a single query (`reification/A-Q1`, `xs` scale): `removeProjections`
-does structurally simplify the query — 3415 → 2827 characters, the nested
-`{ SELECT ... WHERE { ... } }` blocks collapse into a flat `UNION` of `BGP`s with
-fresh (`?v_N`) variable names — but both the flat and nested forms still exceed
-30s on both Comunica and Oxigraph on this dataset size. The bottleneck is the
-*join plan* over the reification star-join (reconstructing every reified
-statement, a wide 4-way star join, before any selectivity from the outer
-query's constants can prune it), not the presence of sub-`SELECT`s per se, so
-removing them doesn't help. This reproduces and extends the earlier finding
-(see `plan.md` at the repo root): Comunica spends the timeout window
-reconstructing every reification statement via that wide star-join, and
-Oxigraph's block1 is fast in isolation but the full rewritten query
-cross-products its nested subqueries — both blow past 30s on real data sizes,
-even though the same rewriting logic returns instantly and correctly on small
-synthetic data (verified separately: the multi-pattern variable-collision fix
-from the `PURE GAV` refactor is confirmed correct — see the merge commit — the
-remaining problem is purely a query-planning/performance one, not a
-correctness one).
-
-Materialized-query median latency (Comunica, ms) scales roughly linearly with
-subset size, as expected:
-
-| scale | reification (quads) | avg ms | singleton (quads) | avg ms |
-|---|---|---|---|---|
-| xs | ~298k | 3404 | ~301k | 451 |
-| s  | ~671k | 2289 | ~709k | 764 |
-| m  | ~2.2M | 9865 | ~2.2M | 2065 |
-
-Oxigraph's materialized queries that *do* complete are noticeably faster than
-Comunica's (single/double-digit ms vs. hundreds), but only ~30% of Oxigraph
-runs completed at all (see below).
-
-## `pushDownAssertions` (2026-08-20, xs/s subsets, 30s timeout, 1 rep)
-
-`origin/main` replaced the earlier `substituteVarsThatArePreBoundToTerms`
-prototype (which never fired on this benchmark — see git history) with
-[`pushDownAssertions`](../../lib/transformations/pushDownAssertions.ts): a
-`UNION`-aware, `FILTER`-aware pass that pushes `FILTER(sameTerm(?x, c))`
-constraints down into the patterns that use `?x`, substituting the term into
-BGPs, pruning `VALUES` rows, and emptying `UNION` branches that can never bind
-the variable. It was merged into this branch and wired in as a fourth
-approach, `rewriting+pushDownAssertions`
-([`runner.ts`](runner.ts)), and re-run on the reification and singleton
-schemes across both engines at the `xs`/`s` scales
-(`results/pushdown-run.json`, figures in `results/figures-pushdown/`).
-
-**Two bugs surfaced and were fixed before any timing was meaningful:**
-
-1. `pushDownAssertions` alone can produce syntactically invalid SPARQL 1.1:
-   when it statically empties a `UNION` branch, the surviving branch can end
-   up as a bare sub-`SELECT` directly followed by sibling `BIND`s with no
-   wrapping `{ }` around the sub-`SELECT` — a shape the standard pipeline
-   never produces and the generator serializes as `Parse error: Expecting -->
-   } <-- but found --> 'BIND' <--`. Every single benchmark query hit this
-   (every rewritten triple pattern has a reification/non-reification `UNION`,
-   and constants routinely empty one arm). Fixed by appending
-   `removeProjections` to the pipeline as a required workaround (see the doc
-   comment on `WITH_PUSH_DOWN_ASSERTIONS_TRANSFORMATIONS` in `runner.ts`) —
-   flattening the offending `PROJECT` node avoids the shape entirely.
-2. Oxigraph errored on *every* row, including `materialized` — unrelated to
-   pushdown: the merge picked up a new `oxigraph` devDependency that hadn't
-   been `yarn install`ed yet (`Cannot find package 'oxigraph'`). Fixed by
-   reinstalling.
-
-**With both fixed, `rewriting+pushDownAssertions` still has byte-for-byte
-identical pass/fail outcomes to plain `rewriting` in every (scheme, engine)
-bucket** — 0/24 "ok" everywhere, same timeout/error split:
-
-| | rewriting / +removeProjections / +pushDownAssertions | materialized |
-|---|---|---|
-| reification / comunica | 0/24 ok, 24 timeout (×3, identical) | 11/24 ok, 13 timeout |
-| reification / oxigraph | 0/24 ok, 12 timeout, 12 error (×3, identical) | 11/24 ok, 1 timeout, 12 error |
-| singleton / comunica   | 0/24 ok, 24 timeout (×3, identical) | 22/24 ok, 2 timeout |
-| singleton / oxigraph   | 0/24 ok, 12 timeout, 12 error (×3, identical) | 12/24 ok, 0 timeout, 12 error |
-
-So within the benchmark's 30s SLA, it changes nothing. But pass/fail hides
-*how far* a query got, so `reification/A-Q1` (xs scale, Comunica) was probed
-directly at a 120s timeout instead of 30s:
-
-| approach | Comunica | Oxigraph |
-|---|---|---|
-| `rewriting` (standard) | still running after 120s | still running after 120s |
-| `rewriting+pushDownAssertions` | **41.5s, correct (3 rows)** | still running after 120s |
-
-This is a real, large speedup on Comunica — over 2.9x faster (>120s down to
-41.5s) — but the mechanism explains both why it helps here and why it can't
-help most queries. `A-Q1`'s second triple pattern (`<< s p o >>
-provenir:derives_from ?source`) has a literal-bound object; `pushDownAssertions`
-proves the reification-reconstruction arm of that pattern's `UNION` can never
-satisfy the constraint (a reified statement's constructed predicate is always
-`rdf:reifies`, never `derives_from`) and deletes it outright, then substitutes
-the bound object straight into the surviving arm's triple pattern — turning an
-unbound-predicate scan into an indexed lookup. That's a genuine win, just not
-the *dominant* cost: `A-Q1`'s *first* triple pattern (the actual `<< s p o
->>`, with no baseline binding) still needs the wide, unselective 4-way
-star-join reconstruction of every reified statement in the dataset, and
-`pushDownAssertions` leaves that arm completely untouched, because the
-constraint it satisfies (`SAMETERM(?m_p, rdf:reifies)`) is *unconditionally*
-true for that arm — there's no term left over to push further down. Queries
-whose selective constants land on the *reification* pattern itself (the
-`F-Q*` queries, which filter `SUBJECT()`/`PREDICATE()`/`OBJECT()` of the
-constructed triple term against literal IRIs) get zero benefit even in
-principle: pushing those constants into the `rdf:subject`/`rdf:predicate`/
-`rdf:object` legs of the star join would require pushing *through* the
-`<<( )>>` construction and extraction functions, which this version of
-`pushDownAssertions` does not do (confirmed by diffing the rewritten
-`F-Q4` query before/after: the star-join arms are byte-identical). Oxigraph
-shows no improvement even on `A-Q1` — consistent with its established failure
-mode being nested-subquery cross-products at the whole-query level, not
-purely the cost of one `UNION` arm.
-
-**Bottom line: `pushDownAssertions` is a real optimization, correctly
-implemented for the constraints it targets, but the dominant cost in this
-benchmark's rewritten queries is a constraint it cannot reach — pushing a
-bound term through triple-term construction/extraction into the reification
-star-join's legs remains the open problem.**
-
-### Update: triple-term pushdown (2026-08-25, same xs/s subsets, 30s timeout, 1 rep)
-
-`origin/main` gained exactly the missing piece flagged above: `#34`/`#35`
-("Feat/assert variable access", "Materialise triple terms") extend
-`pushDownAssertions` with a *pin lattice* over triple-term shapes, so a
-conjunct can now be about `SUBJECT(?o)`/`PREDICATE(?o)`/`OBJECT(?o)` — not just
-`?o` itself — and gets pushed/materialized accordingly (see the very thorough
-[`report.md`](../../report.md) on main for the design). Merged into this
-branch (no conflicts) and re-run unchanged
-(`results/pushdown2-run.json`, figures in `results/figures-pushdown2/`).
-
-**One more quirk surfaced, unrelated to the new triple-term logic itself —
-and not a bug in this library.** The library's custom generator
-([`lib/generator/generator.ts`](../../lib/generator/generator.ts)) emits the
-`xsd:boolean` shorthand (`FILTER(FALSE)`/`FILTER(TRUE)`) upper-cased. That is
-spec-compliant: per the SPARQL grammar notes
-(https://www.w3.org/TR/sparql12-query/#sparqlGrammar), "Keywords are matched
-in a case-insensitive manner with the exception of the keyword `a`" — so
-`BooleanLiteral` is case-insensitive like any other keyword, not the
-exception. **Oxigraph's installed build (`oxigraph@0.5.9`) rejects the
-uppercase form anyway** (`error at N:M: expected ENCODE_FOR_URI` — a generic
-fallback message from deep in its expression grammar), while accepting
-lowercase `true`/`false`; a direct repro against the installed WASM binary
-confirms it (`FILTER(TRUE)` and `FILTER(True)` both error, only
-`FILTER(true)` parses) — and, oddly, Oxigraph's own tagged source for this
-version defines `BooleanLiteral` with the case-insensitive `i()` keyword
-helper, so the published build appears to disagree with its own grammar
-source, not only with the spec. Comunica's parser is lenient and never
-surfaced this. It started mattering *here* because the new triple-term
-reasoning now statically proves 10/12 benchmark queries' "already a native
-quad" `UNION` branch empty and materializes that as a literal `FILTER(FALSE)`
-— 10/12 cases vs. 0/12 under `standard`/`removeProjections` — so every one of
-those newly-pruned branches hit this Oxigraph quirk (pushed Oxigraph's
-`rewriting+pushDownAssertions` error count from 12/24 to 22/24 per scheme,
-with no matching drop in `standard`). Worked around with a narrow text-level
-post-processing step scoped to exactly the shape the generator produces
-(`FILTER ( TRUE|FALSE )` → lowercased), applied only to the query text sent to
-engines in `rewriteToSparql11` — see the doc comment on
-`lowercaseBooleanLiterals` in [`runner.ts`](runner.ts). The generator itself
-is untouched, since its output was correct all along.
-
-**With that fixed, the pass/fail picture within the 30s SLA is *still*
-byte-for-byte identical** to both the original `pushDownAssertions` run and
-plain `rewriting` — 0/24 ok on Comunica, and Oxigraph's `rewriting+pushDownAssertions`
-error/timeout split (12/12 per scheme) now matches `rewriting`/`removeProjections`
-exactly (no longer inflated by the generator bug, but not reduced either).
-
-The two structural probes from the original investigation were re-run at a
-120s timeout with the triple-term-aware pushdown:
-
-| case | approach | Comunica | Oxigraph |
-|---|---|---|---|
-| `reification/A-Q1` | `rewriting` (standard) | still running after 120s | still running after 120s |
-| `reification/A-Q1` | `rewriting+pushDownAssertions` | **36.4s, correct (3 rows)** — unchanged mechanism (predicate-arm pruning), same order of magnitude as before | still running after 120s |
-| `reification/F-Q4` | `rewriting` (standard) | still running after 120s | still running after 120s |
-| `reification/F-Q4` | `rewriting+pushDownAssertions` | **still running after 120s** | still running after 120s |
-
-`F-Q4` is the interesting negative result: its rewritten query *did* change
-structurally this time (confirmed by diffing standard vs. pushdown output —
-no longer byte-identical, unlike the original finding). Every reification
-`UNION`'s non-reified/"native quad" branch is now statically proven empty via
-the triple-term shape (`ISTRIPLE(?o)` implied by the ground triple-term
-constants contradicts that branch's own `!ISTRIPLE(?o)` guard, so it collapses
-to `FILTER(FALSE)`). But that pruned branch was already the *cheap* side of
-each `UNION` (a single unconstrained triple pattern) — the expensive side (the
-4-way reification star-join: `?st rdf:type Statement . ?st rdf:subject ?s .
-?st rdf:predicate ?p . ?st rdf:object ?o . BIND(<<( ?s ?p ?o )>> AS ?target)`)
-is left completely untouched, because the constant comparison
-(`SAMETERM(SUBJECT(?target), const)`) still sits as a `FILTER` *above* the
-`BIND` that constructs `?target`, rather than being substituted through it
-into `?s`/`?p`/`?o` directly. That confirms the diagnosis from the original
-investigation was exactly right: pushing through triple-term
-construction/extraction is necessary but not sufficient — the win here comes
-from proving a sibling branch empty, not from turning the star-join into an
-indexed lookup, and the star-join is still what dominates the cost. The
-author's own [`report.md`](../../report.md) marks this precisely: "EXTEND
-transfer (`BIND(<<( ?a ?b ?c )>> AS ?o)` and `BIND(subject(?o) AS ?x)`)" as
-still open (phase 5).
-
-**Updated bottom line: the triple-term extension is real, additional progress
-— it makes `pushDownAssertions` correctly prove more `UNION` branches empty —
-but it still doesn't reach the specific pattern this benchmark is bottlenecked
-on. Until pushdown can substitute a bound term through a `BIND(<<(...)>> AS
-?o)` back into the triple pattern that feeds it (turning the reification
-star-join's legs into indexed lookups), no version of `pushDownAssertions`
-will change this benchmark's 30s pass/fail outcome.**
-
-### Update: phase 5 operation rules (2026-08-26, same xs/s subsets, 30s SLA + 120s probes, 1 rep)
-
-`origin/main` landed exactly the piece the previous update called out as
-missing: `#36` ("Feat/phase 5 operation rules") adds `pruneValues`, EXTEND
-transfer through `BIND(<<( ?a ?b ?c )>> AS ?o)` / `BIND(SUBJECT(?o) AS ?x)`,
-and the GRAPH/MINUS cases — closing every phase `report.md` had marked open.
-Merged cleanly (no conflicts); full suite green (394 passed, 1 skipped).
-Re-run unchanged (`results/pushdown3-run.json`, figures in
-`results/figures-pushdown3/`).
-
-**Within the 30s SLA, the reification scheme is still 0/24 ok on both
-engines for every rewriting variant — unchanged.** But `singleton/oxigraph`
-moved for the first time: `rewriting+pushDownAssertions` went from 0/24 to
-**6/24 ok** (`A-Q2`, `A-Q3`, `A-Q4`, `F-Q1`, `F-Q4`, `F-Q5`, all at `xs`),
-with no change on `standard`/`removeProjections` or on Comunica for either
-scheme. One of those (`A-Q2`) now finishes in under a second.
-
-**That 6/24 can't be scored against `materialized`, though — not because of
-a rewriter bug, but because of a pre-existing mismatch in the benchmark
-corpus itself**, only now exposed because these queries finally finish
-instead of timing out. The shared canonical query
-([`BKR-star_A-Q2.rq`](../statics/REF-Benchmark/BKR/queries/BKR-star_A-Q2.rq))
-and the reification baseline
-([`BKR-R_A-Q2.rq`](../statics/REF-Benchmark/BKR/queries/BKR-R_A-Q2.rq)) agree
-on the same constants (`bkr_meta:C0543467-INST bkr_sn:TREATS
-bkr_meta:C0178292-INST`), but the singleton baseline
-([`BKR-S_A-Q2.rq`](../statics/REF-Benchmark/BKR/queries/BKR-S_A-Q2.rq)) asks
-about an unrelated fact (`meta:C0012963 sn:STIMULATES meta:C0598981`) — same
-shape of query, different sample data, not even the same relation. Checked
-this holds for `F-Q4` too and confirmed which side is real: in
-`singleton-xs.ttl`, `bkr:META_C0040300-INST` (the star query's subject) is
-used 16700 times, `umls:META_C0040300` (the baseline's subject) exactly
-once — the star query is asking about substantial, real data in this
-dataset, the singleton baseline query just happens to ask about something
-else. `pushDownAssertions` returning 20004/3386 rows for `F-Q4`/`F-Q5` where
-`materialized` returns 0 is this mismatch becoming visible, not a wrong
-answer; see the new "Other findings" entry below. Filed as a benchmark-corpus
-issue, isolated to `BKR-S_*.rq`, unrelated to this session's changes.
-
-**The reification scheme is where phase 5's claim can actually be checked**,
-since its baseline files do use the star query's own constants. Re-probed
-`A-Q1` and `F-Q4` at 120s:
-
-| case | approach | Comunica | Oxigraph |
-|---|---|---|---|
-| `reification/A-Q1` | `standard` | still running after 120s | still running after 120s |
-| `reification/A-Q1` | `pushDownAssertions` | 40.7s, correct (3 rows) — unchanged mechanism, same order of magnitude as the two earlier runs (41.5s, then 36.4s) | still running after 120s |
-| `reification/F-Q4` | `standard` | still running after 120s | still running after 120s |
-| `reification/F-Q4` | `pushDownAssertions` | **119.1s, 20004 rows** — first time this case has ever finished | still running after 120s |
-
-`F-Q4`'s `materialized` baseline (Oxigraph, 722ms) also returns exactly
-**20004** rows, confirming the pushdown result is correct, not a regression.
-Diffing the rewritten query against `standard` shows the mechanism directly:
-where `standard` still has `?p0_mi_t rdf:subject ?p0_mi_s` (an unconstrained
-scan, the constant checked afterwards in a `FILTER`), the phase-5 build
-emits `?v_3 rdf:subject <...META_C0040300-INST> .` — the ground term
-substituted straight into the star-join's `subject`/`predicate`/`object`
-legs, on all three reification arms. That is precisely the "EXTEND transfer"
-`report.md` described as the missing piece, and it now measurably turns
-three unindexed scans into three indexed lookups per arm — the reason
-`F-Q4` moved from *no engine finishes it even at 120s* to *Comunica finishes
-it, correctly, at 119.1s*.
-
-It still doesn't clear this benchmark's 30s SLA, and Oxigraph still can't
-finish it at 120s either (consistent with Oxigraph's established
-whole-query nested-subquery cost, orthogonal to this). But the specific gap
-the previous update identified — pushing a bound term *through*
-triple-term construction/extraction into the star-join's legs — is now
-implemented and demonstrably works.
-
-**Updated bottom line: phase 5 closes the gap the previous update
-identified — the star-join legs are genuinely indexed now, not just the
-sibling `UNION` branch — and it produces a real, validated (matches
-`materialized` exactly) improvement on `F-Q4` from "unbounded" to 119s.
-That's not yet under this benchmark's 30s SLA, so the practical pass/fail
-conclusion for the reification scheme is still unchanged; closing the
-remaining ~90s is a join-ordering/engine-planning question now, not a
-missing rewrite capability. `pushDownAssertions` has no correctness issues
-of its own in either scheme — the one apparent regression found
-(`singleton`'s 20004/3386-row results) traces to a pre-existing benchmark
-corpus mismatch, not the rewriter.**
-
-## Adding Jena as a third engine (2026-08-27, xs/s subsets, 30s SLA, 1 rep)
-
-`jena` (Fuseki 6.2.0, Java 21) is now wired into `run.ts` as a first-class
-engine (see "Adding Jena / Fuseki" above for the `JenaEngine` design and
-setup). Re-ran the same xs/s sweep used for every update above, this time
-with `--engines jena` only (`results/jena-run.json`) — Comunica/Oxigraph
-numbers are unchanged from the phase 5 update.
-
-**Headline result: on `pushDownAssertions`, Jena clears this benchmark's 30s
-SLA on almost every case — 22/24 reification, 22/24 singleton — where
-Comunica and Oxigraph have been stuck at 0/24 through every update above.**
-Median latency 1.7s (reification) / 3.0s (singleton), worst case 13.9s, all
-comfortably inside the SLA. Verified correct: for every one of the 18
-reification cases where both `pushDownAssertions` and `materialized`
-completed, their row counts match exactly (0 mismatches) — this is a *real*,
-validated pass/fail change for the reification scheme, the first this
-benchmark has seen (every earlier update's "still 0/24, unchanged" line no
-longer holds once Jena is one of the engines).
-
-**But this comes with a serious correctness caveat that has to be read before
-the numbers above mean anything: Jena/ARQ 6.2.0 has a real bug that makes the
-plain `rewriting` (`standard`) approach silently wrong, not just slow.**
-Across both schemes, `rewriting` reports `ok` status on **48/48** cases (it
-*never* times out on Jena) — which looks, at a glance, like Jena trivially
-solves the whole benchmark. It doesn't: checked against `materialized` on the
-18 comparable reification cases, `rewriting`'s row count is wrong on **11 of
-18 (61%)** — always by silently returning too few rows (typically 0 where the
-correct answer is nonzero: `A-Q1` 0 vs. 3, `B-Q1` 0 vs. 5, `F-Q1` 0 vs. 2,
-etc.), never an HTTP error or a timeout. `removeProjections` is *mostly* but
-not *entirely* immune (1 mismatch of its own: `reification/A-Q3` at `s`
-scale, 0 vs. 1) — only `pushDownAssertions` was clean across every comparable
-case in this run.
-
-Root-caused with a minimal, portable repro (isolated outside this repo's
-query shapes, directly against a plain Fuseki instance):
-
-```sparql
-PREFIX : <urn:>
-SELECT ?tt ?b ?g WHERE {
-  { SELECT ?g ?tt WHERE { ?g :hasX ?x . BIND( <<( ?x :p :o )>> AS ?tt ) } }
-  { SELECT ?g ?b WHERE { ?g :hasB ?b } }
-}
-```
-Run standalone, the first block's `?tt` (an RDF 1.2 triple-term value
-constructed by `<<( )>>` inside a `BIND`) is returned correctly. Joined
-against the sibling `{ SELECT ?g ?b ... }` block on the shared `?g` — exactly
-the shape every mapper branch in this benchmark's rewritten queries
-produces — the join still finds the right rows (`?g`/`?b` come back correct),
-but **`?tt`'s binding silently disappears from every result row**, with no
-error. It doesn't matter whether the projected variable is renamed
-(`?tt AS ?a`), has a function applied to it (`SUBJECT(?tt) AS ?a`, `?x IN
-?tt`, ...), or not — the trigger is purely "a triple-term-valued variable
-from a joined sub-`SELECT`'s projection, at an outer join boundary". Confirmed
-directly on this benchmark's actual `reification/A-Q1` query too: both
-`p0` and `p1`'s sub-`SELECT` blocks independently return the right rows (and
-share exactly the 3 expected `?uq_g_0` join values — confirmed by
-restricting `p0` with an explicit `FILTER (?uq_g_0 IN (...))`), but the
-literal join of the two full, unrestricted blocks (`standard`'s actual
-shape) returns 0 rows; a version of the query with `p0`'s inner `UNION`
-removed instead returns the right *count* of rows but with the
-triple-term-derived `?uq_s`/`?uq_p`/`?uq_o` columns all unbound — same bug,
-different visible symptom depending on exact structure. This is not a
-correctness issue in this library or in `pushDownAssertions`/
-`removeProjections` — it's an ARQ evaluation bug that happens to be
-*structurally* dodged (not intentionally worked around) by whichever
-pipeline flattens away the sub-`SELECT` boundary the triple term crosses.
-No existing report of this was found in a quick search of Jena's issue
-tracker; consider filing it upstream if this is going to be relied on.
-
-**Practical implication for reading `jena-run.json` (or any future Jena run):
-don't trust `rewriting`'s (`standard`) row counts or its "0/N timeouts" as a
-pass signal — cross-check against `materialized` or `pushDownAssertions`.**
-`run.ts`'s own `correct` field gets this backwards for Jena specifically: it
-uses `rewriting` as the reference answer (reasonable when `rewriting` reliably
-either gets the right answer or times out, which held for every engine before
-Jena), so on Jena's data the *wrong* fast `rewriting` result is trivially
-"correct" against itself while the *right* `pushDownAssertions`/`materialized`
-results get marked `correct: false` against it — exactly backwards. Not
-changed in `run.ts` here, since fixing the reference-selection strategy in
-general (e.g. preferring `materialized` when available, or majority vote
-across approaches) is a broader methodology question outside this session's
-scope — flagging it so it isn't misread from the raw JSON.
-
-**Bottom line: Jena is now available for `run.ts`, and on the one pipeline
-verified trustworthy on it (`pushDownAssertions`), it comfortably clears the
-30s SLA where Comunica/Oxigraph cannot — a genuinely different practical
-result for the reification scheme. But `standard`'s apparent 100% "ok" rate on
-Jena is an illusion caused by a real Jena/ARQ correctness bug, not a rewriter
-achievement, and even `removeProjections` isn't fully safe from it — only
-`pushDownAssertions` measured clean in this run.**
-
-### Other findings (engine/data quirks, not rewriter bugs)
-
-- **Two of the 24 hand-written baseline query files were missing a `PREFIX
-  rdf:` declaration** (`BKR-R_B-Q3.rq`, `BKR-S_A-Q4.rq`). Comunica's parser
-  tolerated the undeclared prefix; Oxigraph's stricter parser correctly
-  rejected it (`error at 8:14: expected one of Prefix not found`). **Fixed**
-  by adding the missing `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>`
-  line to both files (matching each file's existing prefix style) — confirmed
-  in the run above: `singleton/A-Q4 materialized` on Oxigraph now succeeds
-  (previously `error`).
-- **The `s`/`m` scale subsets (random noise-sampled from the real
-  multi-GB datasets) contained at least one malformed percent-encoded IRI**
-  (literal `%%-`) that Oxigraph's Turtle parser rejects
-  (`Invalid IRI percent encoding '%%-'`) while N3 (used by Comunica) accepts
-  it silently — a pre-existing data-quality issue in the source BKR Turtle
-  dumps, surfaced by noise sampling; it explained most of Oxigraph's `error`
-  rows at `s`/`m` scale (xs mostly avoided sampling it). **Fixed 2026-09-02**
-  by dropping such quads during the RDF-1.2 migration step and regenerating
-  every downstream file — see "Data cleanup" below.
-- **The `BKR-S_*.rq` (singleton scheme) baseline query files test different
-  sample facts than the shared `BKR-star_*.rq` queries they're nominally the
-  baseline for**, for at least `A-Q2`/`A-Q3`/`A-Q4`/`F-Q1`/`F-Q4`/`F-Q5`
-  (found via the phase 5 update above, once `pushDownAssertions` made these
-  queries fast enough to actually return an answer instead of timing out).
-  The reification baseline files (`BKR-R_*.rq`) use the exact same constants
-  as the star query; the singleton ones don't — e.g. `F-Q4`'s star/`BKR-R`
-  constant `bkr:META_C0040300-INST` occurs 16700 times as a subject in
-  `singleton-xs.ttl`, while `BKR-S_F-Q4.rq`'s `umls:META_C0040300` occurs
-  once. Pre-existing in the benchmark corpus, not something this session or
-  `pushDownAssertions` introduced; it just was never observable before
-  because the singleton rewritten queries always timed out on both sides of
-  the comparison. Not fixed — it's a discrepancy in the shipped `.rq` files,
-  out of scope here; flagging it so a future correctness comparison for the
-  singleton scheme isn't misread as a rewriter bug.
-- The **correctness heat-strip figures show mostly "?" (unknown), not "✓/✗"**:
-  because the standard `rewriting` approach never completes, `run.ts` has no
-  reference answer to compare `materialized` or `rewriting+removeProjections`
-  against, so `correct` is `null` rather than `false`. This is *not* evidence
-  of an incorrect result — see the separate small-scale correctness
-  verification above. A meaningful correctness figure would need either a much
-  longer timeout or a fix to the rewritten query's join plan. (Two heat-strips
-  are generated per scheme × engine: `..._correctness_materialized.svg` and
-  `..._correctness_proj-removed.svg`.)
-
-## Post-merge re-run (2026-09-02, xs/s subsets, 30s SLA, 1 rep)
-
-Re-ran the full 3-engine sweep (`comunica,oxigraph,jena` × `reification,singleton`
-× `xs,s`, same shape as the runs above) after merging `origin/main`
-(`3997551`, memoization in `assertionConjunction`) into this branch, to check
-whether that merge changed anything observable here. Results:
-`test/bench/results/post-merge-run.json` (576 rows), figures in
-`test/bench/results/figures-post-merge/`.
-
-**It didn't, and structurally couldn't.** `run.ts` calls `rewriteToSparql11`
-once per case, *outside* `timedRun` — `medianMs` only measures the engine's
-query round-trip, not the JS rewrite step the merged commit sped up. Diffed
-row-by-row (`engine`/`scheme`/`scale`/`caseId`/`approach` as key) against the
-pre-merge baseline (`pushdown3-run.json` + `jena-run.json`, both 2026-08-27):
-Comunica and Oxigraph's ok/timeout/error counts are byte-identical to all
-three prior baseline runs. Jena moved by one row: a `removeProjections` query
-that previously timed out finished at 29,930 ms — 70ms under the 30s cutoff,
-noise at the SLA boundary, not a behavior change. Jena's `pushDownAssertions`
-rows that succeeded on both sides came back ~400ms faster on average (up to
-3.4s on the slowest queries), which is HTTP/Fuseki round-trip variance
-between runs rather than anything attributable to the merge, for the same
-structural reason.
-
-This run still targets the released **Fuseki 6.2.0** jar, so the
-triple-term-join bug documented above (and in `jena-bug.md`, now fixed on
-Jena's `main` as of 2026-08-29 — not yet released) still fully applies:
-treat `standard`/`rewriting`-status-`ok` results on Jena the same way this
-section already tells you to.
-
-## Data cleanup: dropping invalid-IRI quads (2026-09-02)
-
-The "Other findings" note above ("malformed percent-encoded IRI") was fixed
-at the source rather than left as a known quirk. `skolemize.ts` — the script
-that turns the raw Zenodo `BKR-star.ttl` dump into the blank-node-free RDF 1.2
-representation the rest of the pipeline builds on — now drops any quad
-carrying a syntactically invalid IRI (checked recursively into RDF 1.2
-triple-term components and literal datatypes) instead of writing it out, and
-logs what it dropped to `<output>.dropped.ttl` for audit. Full pipeline
-re-run from the cleaned data (`skolemize.ts` → `mapBkrStar.ts
-mapToReification mapToSingleton` → `makeSubset.mjs` for both schemes; the
-`mapToWikiData` mapping was skipped — unused by `test/bench` and by far the
-slowest stage at ~16h in the original build):
-
-- **120 quads dropped** out of 82,432,741 in `BKR-star.ttl` — all for the same
-  `%%-` percent-encoding defect.
-- **0 occurrences of `%%-`** remain in any of the regenerated `xs/s/m/l`
-  subset files (was 1 each in `reification-s.ttl`/`singleton-s.ttl`).
-- Verified against **Oxigraph** specifically, since it's the engine whose
-  strict IRI parsing turned this into a whole-file load failure: re-ran
-  `--engines oxigraph --schemes reification,singleton --scales xs,s` on the
-  cleaned data (`test/bench/results/oxigraph-cleaned-run.json`, 192 rows)
-  — **0 `error` rows**, down from 96/192 before the cleanup. `materialized`
-  went from 23 ok/1 timeout/24 error to 46 ok/2 timeout/0 error;
-  `rewriting+pushDownAssertions` from 6 ok/18 timeout/24 error to
-  12 ok/36 timeout/0 error.
-- The pipeline (all three stages, reification + singleton) took ~5h46m
-  end-to-end this run — much faster than the ~10.6h the original build's logs
-  implied for the same two mappings, most likely disk-cache warmth rather
-  than anything about the cleanup itself.
-
-The full 3-engine sweep against the cleaned data was run next — see "Third
-re-run" below.
-
-## Third re-run (2026-09-03, xs/s subsets, 60s SLA, 1 rep)
-
-Full 3-engine sweep on the cleaned data, after merging `origin/main` again
-(`a762124`, "Pull-up Extend phase-1 (#40)" — adds the `pullUpExtends`
-transformation) and doubling the SLA to 60s. Results:
-`test/bench/results/double-timeout-run.json` (576 rows), figures in
-`test/bench/results/figures-double-timeout/`. Diffed against the previous
-full sweep (`post-merge-run.json`, 30s SLA, pre-cleanup) — three changes
-landed at once, so the deltas below are attributed rather than just reported:
-
-- **The invalid-IRI cleanup holds at full scale**: every Oxigraph `error` row
-  is gone (96/576 → 0/576). `materialized` on Oxigraph: 23 ok/1 timeout/24
-  error → 46 ok/2 timeout/0 error; `pushDownAssertions`: 6/18/24 → 12/36/0.
-  Matches the standalone Oxigraph-only check from the cleanup exactly.
-- **The merge itself changed nothing here**: `pullUpExtends` isn't wired into
-  any of this benchmark's three pipelines (see `runner.ts`), so it has no
-  direct effect on these numbers. It did surface an unrelated environment
-  issue — after resolving the one README conflict, 3 tests failed
-  (`pullUpExtends.test.ts`, `pushDownAssertions.test.ts`), all on GRAPH-scoped
-  `BIND`-pulling assertions. Turned out to be stale `node_modules`: the merged
-  `package.json` bumped `@traqula/algebra-sparql-1-2`/`algebra-transformations-1-2`
-  to `^1.2.2`, but `node_modules` still had `1.2.0` installed. Confirmed by
-  checking out `origin/main` alone in a scratch worktree (fresh install, all
-  505 tests pass) before concluding it wasn't a real conflict; `yarn install`
-  in the merged tree fixed it, all 513 tests pass.
-- **Doubling the SLA only moved Comunica**: 4 rows flipped timeout→ok (2
-  `pushDownAssertions`, 2 `materialized`) purely from the extra 30s. Jena's
-  status counts are byte-identical to the previous sweep — whatever it's
-  timing out on isn't close to finishing at 30s either, so the extra budget
-  bought nothing. Oxigraph's ok/timeout split (ignoring the now-gone errors)
-  also matches its earlier 30s-only cleaned-data check exactly.
-
-78 rows are `ok` but `correct: false`, all 78 on Jena, none on Comunica or
-Oxigraph — the documented ARQ triple-term-join bug (`jena-bug.md`) making the
-`standard`-pipeline reference itself wrong on Jena, re-confirmed rather than
-a new regression.
-
-## Fourth pipeline: `pullUpExtends` (2026-09-03, xs/s subsets, 60s SLA, 1 rep)
-
-Added a fourth rewrite pipeline (`RewriteVariant: 'pullUpExtends'` in
-`runner.ts`): the `pushDownAssertions` pipeline plus `pullUpExtends` applied
-twice — once right after the pushdown (its documented "other half":
-`pushDownAssertions` leaves an `EXTEND` at every leaf it substitutes into,
-`pullUpExtends` floats those back up to where they cost less, or drops them),
-and once more after `removeProjections`, since flattening the nested
-sub-`SELECT`s changes the join topology `pullUpExtends`'s soundness checks
-read — a second pass can float or drop binds the first pass couldn't with
-the sub-`SELECT` boundaries still in place. Verified before benchmarking: all
-96 case/variant combinations (2 schemes × 12 cases × 4 variants) parse as
-valid SPARQL 1.1 (no repeat of the generator-quirk shape
-`pushDownAssertions` hit — see "Other findings" above), and a Jena
-correctness spot-check against the hand-written baseline found 8 apparent
-mismatches, every one tracing back to an already-documented pre-existing
-issue (the ARQ join bug, or the singleton baseline testing different sample
-constants — see "Other findings" above), confirmed by cross-referencing that
-`removeProjections`/`pushDownAssertions`/`materialized` already show the
-identical row counts on those exact cases in the previous run.
-
-Full 3-engine sweep results: `test/bench/results/pullup-run.json` (720
-rows), figures in `test/bench/results/figures-pullup/`. Head-to-head against
-the plain `pushDownAssertions` pipeline it extends, on the 58 rows where
-both succeeded: **53 got faster, 5 got slower, average −480ms**. Every one
-of the 44 comparable Jena rows got faster, several substantially (−6.6s on
-Comunica's slowest reification query, −1 to −2.7s on a dozen Jena rows).
-`pullUpExtends` also reached 2 rows `pushDownAssertions` couldn't at all
-(Comunica `reification/A-Q2` at 54s, Oxigraph `singleton/B-Q2` at 44s), with
-zero rows lost the other way. The only regressions are 5 rows, all on
-Oxigraph, all on the same three already-borderline singleton queries
-(`A-Q3`/`A-Q4`/`F-Q1`, already past 15s before the extra pass) — the cleanup
-pass's own cost catching up with the largest queries, not a sign it hurts
-elsewhere. Status counts: `jena` unchanged at 44/48 ok (already at the same
-ceiling as `pushDownAssertions`/`removeProjections`); `comunica` 3/48 ok
-(vs 2/48); `oxigraph` 13/48 ok (vs 12/48). 32 of `pullUpExtends`'s 44 Jena
-`ok` rows are `correct: false` — the same ARQ bug pattern, not new. The
-other four approaches barely moved from the previous sweep: 2 status flips
-out of 576 shared rows (both borderline `materialized` timeouts on
-Comunica), confirming this was an apples-to-apples comparison.
+| `JENA_JVM_OPTS` | Extra space-separated JVM args, e.g. `-Xmx8g` for the larger subsets (the default heap cannot load an 800MB Turtle file in-memory). | (none) |
+
+`JenaEngine` refuses to query a port that already answers `/$/ping` before it has started
+its own child: it cannot tell whether a leftover process on that port holds the dataset it
+is about to ask for, so it errors rather than silently querying the wrong data.
+
+## Known issues in the corpus and the engines
+
+Each of these was found through this benchmark and is *not* a rewriter bug. They are
+listed here because every one of them can be misread as one.
+
+- **Fuseki 6.2.0 drops triple-term bindings across a sub-`SELECT` join** — the plain
+  `rewriting` pipeline returns 0 rows on Jena with an `ok` status for most of these
+  queries, fast, and wrong. Root cause and repro in [`jena-bug.md`](jena-bug.md);
+  **fixed upstream** on Jena's `main` (commit `e9f7445a`, 2026-08-29), not yet in a
+  release. This is why the correctness reference is the hand-written baseline and not
+  `rewriting`: against the baseline the bug shows up as `rewriting` being marked
+  incorrect, which is the truth. Anyone running against a build newer than 6.2.0 should
+  re-verify rather than assume the caveat still applies.
+- **The `BKR-S_*.rq` (singleton) baseline files test different sample facts than the
+  `BKR-star_*.rq` queries they are nominally the baseline for**, for at least
+  `A-Q2`/`A-Q3`/`A-Q4`/`F-Q1`/`F-Q4`/`F-Q5` — e.g. `F-Q4`'s star constant
+  `bkr:META_C0040300-INST` occurs 16,700 times as a subject in `singleton-xs.ttl`, while
+  `BKR-S_F-Q4.rq`'s `umls:META_C0040300` occurs once. Pre-existing in the shipped corpus.
+  Since the baseline is now the correctness reference, a singleton `correct: false` on one
+  of those cases is this discrepancy, not a rewriting error; the reification baselines
+  (`BKR-R_*.rq`) use the same constants as the star queries and are unaffected.
+- **Two baseline files were missing a `PREFIX rdf:` declaration** (`BKR-R_B-Q3.rq`,
+  `BKR-S_A-Q4.rq`). Comunica's parser tolerated it; Oxigraph's correctly rejected it.
+  **Fixed** in both files.
+- **The source BKR Turtle dumps contained malformed percent-encoded IRIs** (literal
+  `%%-`), which Oxigraph's parser rejects — a whole-file load failure — while N3 accepts
+  them silently. **Fixed** in `skolemize.ts`, which now drops quads carrying a
+  syntactically invalid IRI (checked recursively into triple-term components and literal
+  datatypes) and logs them to `<output>.dropped.ttl`. 120 quads out of 82,432,741 were
+  dropped, all the same defect; Oxigraph's `error` rows went from 96/192 to 0/192.
+- **Oxigraph 0.5.9 rejects the spec-compliant uppercase `FILTER(FALSE)`** our generator
+  emits, accepting only lowercase `false`. Worked around by lowercasing that exact shape in
+  the query text sent to engines (`runner.ts`'s `lowercaseBooleanLiterals`); the generator
+  is left alone, since its output is correct. Only started mattering once
+  `pushDownAssertions` gained triple-term support and began proving `UNION` branches
+  statically empty.
+
+## Results
+
+<!-- RESULTS -->
+
+## History
+
+Earlier runs and their write-ups live in git history rather than in this file; the
+results JSON and figures of superseded runs are not kept, since `plot.mjs` regenerates
+figures from any results JSON. In summary:
+
+| Date | What changed |
+|---|---|
+| 2026-07-28 | First run: Comunica + Oxigraph, three approaches, 30 s budget. |
+| 2026-08-20 → 08-26 | `pushDownAssertions` added and extended (triple-term support, phase-5 operation rules). |
+| 2026-08-27 | Jena added as a third engine; the ARQ triple-term bug found (`jena-bug.md`). |
+| 2026-09-02 | Invalid-IRI data cleanup; full pipeline regenerated from the cleaned dumps. |
+| 2026-09-03 | `pullUpExtends` added as a fourth pipeline; budget raised to 60 s. |
+| 2026-09-07 | Reference switched from `rewriting` to the hand-written baseline, timeouts rendered as censored, dataset size recorded for every engine, budget raised to 300 s. |
 
 ## Extending
 
 - **New engine**: implement `BenchEngine` (or reuse `SparqlHttpEngine` for any
-  standards-compliant HTTP endpoint you start/load yourself) and add it to
-  `makeEngine()` in `run.ts` (or the engine list in `cli.ts`). If the engine
-  needs its own long-lived external process (like `JenaEngine`'s Fuseki child
-  process), implement optional `dispose(): Promise<void>` on `BenchEngine` so
-  `run.ts` can shut it down once it's done with that engine.
-- **New reification pattern**: add an entry to `PATTERNS` in `config.ts` with its
-  CONSTRUCT mappers, materialized dataset filename and baseline query prefix, then
-  generate its subsets with `makeSubset.mjs` (check whether its data structure
-  needs its own `isClosureSeed` branch, like `singleton` does).
+  standards-compliant HTTP endpoint you start and load yourself) and add it to
+  `makeEngine()` in `run.ts`. If it owns a long-lived external process (like
+  `JenaEngine`'s Fuseki child), implement the optional `dispose()` so `run.ts` can shut
+  it down.
+- **New reification pattern**: add an entry to `PATTERNS` in `config.ts` with its CONSTRUCT
+  mappers, materialized dataset filename and baseline query prefix, then generate its
+  subsets with `makeSubset.mjs` (check whether its data structure needs its own
+  `isClosureSeed` branch, like `singleton` does).
+- **New pipeline**: add a `RewriteVariant` in `runner.ts`, its composition, an entry in
+  `run.ts`'s `approaches` list, and a colour in `plot.mjs`'s `COLORS`.
