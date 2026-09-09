@@ -31,7 +31,7 @@
  * as its own oracle it used to show up as every *working* variant being marked incorrect.
  *
  * Engines:
- *   - `comunica`: each query runs in a short-lived child process, killed on timeout —
+ *   - `comunica`: a long-lived worker process per dataset (loaded and indexed once) —
  *     Comunica's join state can outgrow any heap, and inline that takes the sweep with it.
  *   - `oxigraph`: each query runs in a short-lived child process that is killed
  *     on timeout (Oxigraph's query call is synchronous).

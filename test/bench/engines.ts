@@ -19,8 +19,9 @@
  * See {@link ./README.md} for the survey of which engines support SPARQL 1.2.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import type { ChildProcessByStdio } from 'node:child_process';
+import type { ChildProcessByStdio, ChildProcessWithoutNullStreams } from 'node:child_process';
 import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline';
 import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { QueryEngine } from '@comunica/query-sparql-file';
@@ -101,12 +102,12 @@ const MAX_RESPONSE_BYTES = 256 * 1024 * 1024;
 const MAX_BINDINGS = 2_000_000;
 
 /**
- * Heap ceiling for a one-shot Comunica worker. Deliberately well below the machine's
- * memory: the cap exists so a runaway query *fails fast* rather than thrashing a huge
- * heap for an hour before dying anyway, and nothing this benchmark legitimately computes
- * comes close (the largest real result is ~20k solutions over a 700k-quad subset).
+ * Heap ceiling for a Comunica worker. Deliberately well below the machine's memory: the
+ * cap exists so a runaway query *fails fast* rather than thrashing a huge heap for an hour
+ * before dying anyway, and nothing this benchmark legitimately computes comes close (the
+ * largest real result is ~20k solutions over a 700k-quad subset).
  */
-const ONE_SHOT_HEAP_MB = 8000;
+const WORKER_HEAP_MB = 8000;
 
 /** Reads a fetch `Response` as JSON, refusing (with a catchable error) past {@link MAX_RESPONSE_BYTES}. */
 async function readJsonResponse(response: Response, engineName: string): Promise<unknown> {
@@ -157,19 +158,140 @@ function summarize(rows: string[], durationMs: number): SelectResult {
   return { rows: [ ...rows ].sort(), count: rows.length, durationMs };
 }
 
+/** One reply from `comunicaWorker.mjs`; `ok` carries the result, the others explain themselves. */
+type WorkerReply =
+  | { status: 'ok'; durationMs: number; count: number; rows: string[] }
+  | { status: 'timeout' }
+  | { status: 'error'; message: string };
+
+/**
+ * Grace period on top of a query's budget before the parent gives up on a worker that
+ * should have answered by now. The worker enforces the budget itself and replies
+ * `timeout`; this only catches one wedged badly enough not to run its own timer.
+ */
+const WORKER_GRACE_MS = 30_000;
+
+/**
+ * A `comunicaWorker.mjs` child process holding one loaded dataset, driven over
+ * newline-delimited JSON. Queries are asked one at a time, matching `run.ts`'s sequential
+ * loop; the worker answers in the same order.
+ */
+class ComunicaWorker {
+  public alive = true;
+  private readonly child: ChildProcessWithoutNullStreams;
+  private pending: ((reply: WorkerReply | Error) => void) | undefined;
+  /** Kept only to quote back in an error message when the worker dies. */
+  private stderr = '';
+
+  public constructor(script: string, private readonly file: string, private readonly engineName: string) {
+    this.child = spawn(process.execPath, [ `--max-old-space-size=${WORKER_HEAP_MB}`, script, file ], {
+      stdio: [ 'pipe', 'pipe', 'pipe' ],
+    });
+    this.child.stderr.setEncoding('utf8');
+    this.child.stderr.on('data', (chunk: string) => {
+      this.stderr = `${this.stderr}${chunk}`.slice(-2000);
+    });
+    // A result line can be many megabytes; readline reassembles it across chunks.
+    createInterface({ input: this.child.stdout }).on('line', (line) => {
+      if (line.trim() === '') {
+        return;
+      }
+      const reply = <WorkerReply & { status: string }> JSON.parse(line);
+      // The worker announces itself once the dataset is loaded; nothing is waiting yet.
+      if (reply.status !== 'ready') {
+        this.settle(reply);
+      }
+    });
+    this.child.on('exit', (code, signal) => {
+      this.alive = false;
+      this.settle(new Error(
+        `Engine '${this.engineName}' worker exited (code ${code}, signal ${signal}) — ` +
+        `most likely its heap was exhausted by this query: ${this.stderr.slice(-500)}`,
+      ));
+    });
+  }
+
+  /** Whether this worker holds `file` and can still answer. */
+  public usable(file: string): boolean {
+    return this.alive && this.file === file;
+  }
+
+  public kill(): void {
+    this.alive = false;
+    this.child.kill('SIGKILL');
+  }
+
+  /** Kills the worker and waits for the OS to reap it, so the caller can move on cleanly. */
+  public async stop(): Promise<void> {
+    if (this.child.exitCode !== null || this.child.signalCode !== null) {
+      return;
+    }
+    const exited = new Promise<void>((resolve) => {
+      this.child.once('exit', () => resolve());
+    });
+    this.kill();
+    await exited;
+  }
+
+  public async ask(query: string, timeoutMs: number): Promise<SelectResult> {
+    if (this.pending) {
+      throw new Error(`Engine '${this.engineName}' worker is already answering a query.`);
+    }
+    if (!this.alive) {
+      throw new Error(`Engine '${this.engineName}' worker is not running.`);
+    }
+    const reply = await new Promise<WorkerReply | Error>((resolve) => {
+      this.pending = resolve;
+      const backstop = timeoutMs > 0 ?
+        setTimeout(() => {
+          this.kill();
+          this.settle(new BenchTimeoutError(timeoutMs));
+        }, timeoutMs + WORKER_GRACE_MS) :
+        undefined;
+      const done = this.pending;
+      this.pending = (settled): void => {
+        clearTimeout(backstop);
+        done(settled);
+      };
+      this.child.stdin.write(`${JSON.stringify({ query, timeoutMs })}\n`);
+    });
+    if (reply instanceof Error) {
+      throw reply;
+    }
+    if (reply.status === 'timeout') {
+      throw new BenchTimeoutError(timeoutMs);
+    }
+    if (reply.status === 'error') {
+      throw new Error(`Engine '${this.engineName}' worker: ${reply.message}`);
+    }
+    return { rows: reply.rows, count: reply.count, durationMs: reply.durationMs };
+  }
+
+  /** Hands the outcome to whoever is waiting, if anyone still is. */
+  private settle(outcome: WorkerReply | Error): void {
+    const pending = this.pending;
+    this.pending = undefined;
+    pending?.(outcome);
+  }
+}
+
 /**
  * Engine backed by Comunica. Comunica >= 5.0 fully supports SPARQL 1.2 / RDF 1.2 triple
  * terms, so it can act both as a rewriting target (SPARQL 1.1 queries over RDF 1.1 data)
  * and as a native SPARQL 1.2 reference.
  *
- * A {@link EngineSource.file} is queried through a one-shot child process
- * (`comunicaOneShot.mjs`), like {@link OxigraphEngine} but for a different reason.
- * Comunica buffers its own join state, which no cap on the *output* stream can bound: on
- * this corpus `reification/F-Q3` grows past a 12GB heap and dies as `FATAL ERROR: Reached
- * heap limit` — not a catchable exception, so run inline it takes the whole sweep down
- * with it, as it did twice (once 16.5 hours in). In a child process it costs one `error`
- * row. The child also gets a clean heap and a cold cache per query, so no query benefits
- * from state left behind by the ones before it.
+ * A {@link EngineSource.file} is queried through a long-lived worker process
+ * (`comunicaWorker.mjs`), which loads and indexes the dataset once and then stays warm for
+ * every query against it — the same store reuse the in-process engine had, since that is
+ * both how Comunica is really used and what keeps the fast baseline rows honest.
+ *
+ * The worker exists because Comunica buffers its own join state, which no cap on the
+ * *output* stream can bound: on this corpus `reification/F-Q3` grows past a 12GB heap and
+ * dies as `FATAL ERROR: Reached heap limit` — not a catchable exception, so evaluated
+ * inline it takes the whole sweep down with it, as it did twice (once 16.5 hours in).
+ * Across a process boundary it costs one `error` row and a fresh worker. Timeouts are
+ * handled *inside* the worker by cancelling the stream, so a slow query does not also
+ * throw away the loaded store.
  *
  * A `store`-only source (the in-memory datasets in `bench.test.ts`) cannot cross a
  * process boundary and is still evaluated in-process.
@@ -178,7 +300,8 @@ export class ComunicaEngine implements BenchEngine {
   public readonly name: string;
   public readonly supportsSparql12 = true;
   private readonly engine = new QueryEngine();
-  private readonly oneShot = join(dirname(fileURLToPath(import.meta.url)), 'comunicaOneShot.mjs');
+  private readonly workerScript = join(dirname(fileURLToPath(import.meta.url)), 'comunicaWorker.mjs');
+  private worker: ComunicaWorker | undefined;
 
   public constructor(name = 'comunica') {
     this.name = name;
@@ -186,37 +309,39 @@ export class ComunicaEngine implements BenchEngine {
 
   public async runSelect(query: string, source: EngineSource, timeoutMs?: number): Promise<SelectResult> {
     if (source.file) {
-      return this.runOneShot(query, source.file, timeoutMs);
+      return this.runInWorker(query, source.file, timeoutMs);
     }
     return this.runInProcess(query, source, timeoutMs);
   }
 
+  /** Shuts the worker down; `run.ts` calls this once an engine's scheme/scale loops finish. */
+  public async dispose(): Promise<void> {
+    await this.worker?.stop();
+    this.worker = undefined;
+  }
+
   /**
-   * Runs the query in a child process with its own heap, so that exhausting it kills only
-   * the worker. Mirrors {@link OxigraphEngine}'s signal handling: only a kill we asked for
-   * is a timeout, and any other signal — `SIGABRT` from V8's OOM handler, most often — has
-   * to stay an error, since reporting a crash as "too slow" would fabricate a data point.
+   * Runs the query on the worker holding `file`, starting one if there is none or the
+   * previous one died (an OOM abort, most often — which is reported as an `error` row by
+   * the caller, never as a timeout, since calling a crash "too slow" fabricates a data
+   * point). A worker outlives timeouts, so it is normally started once per dataset.
    */
-  private runOneShot(query: string, file: string, timeoutMs?: number): SelectResult {
-    const result = spawnSync(process.execPath, [ `--max-old-space-size=${ONE_SHOT_HEAP_MB}`, this.oneShot, file ], {
-      input: query,
-      timeout: timeoutMs,
-      maxBuffer: 512 * 1024 * 1024,
-      encoding: 'utf8',
-    });
-    const killedByUs = (<NodeJS.ErrnoException | undefined> result.error)?.code === 'ETIMEDOUT' ||
-      result.signal === 'SIGTERM';
-    if (killedByUs) {
-      throw new BenchTimeoutError(timeoutMs ?? 0);
+  private async runInWorker(query: string, file: string, timeoutMs?: number): Promise<SelectResult> {
+    if (this.worker && !this.worker.usable(file)) {
+      this.worker.kill();
+      this.worker = undefined;
     }
-    if (result.signal !== null) {
-      throw new Error(`comunica one-shot killed by ${result.signal}: ${result.stderr.slice(0, 500)}`);
+    this.worker ??= new ComunicaWorker(this.workerScript, file, this.name);
+    try {
+      return await this.worker.ask(query, timeoutMs ?? 0);
+    } catch (error: unknown) {
+      // A dead worker cannot answer the next query either; drop it so the next call
+      // starts a fresh one against the same dataset.
+      if (!this.worker.alive) {
+        this.worker = undefined;
+      }
+      throw error;
     }
-    if (result.status !== 0) {
-      throw new Error(`comunica one-shot failed: ${result.stderr.slice(0, 500)}`);
-    }
-    const parsed = <{ durationMs: number; count: number; rows: string[] }> JSON.parse(result.stdout);
-    return { rows: parsed.rows, count: parsed.count, durationMs: parsed.durationMs };
   }
 
   private async runInProcess(query: string, source: EngineSource, timeoutMs?: number): Promise<SelectResult> {

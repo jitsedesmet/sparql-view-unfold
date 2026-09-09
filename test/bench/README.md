@@ -62,7 +62,7 @@ parses, which is why the BKR-star query files can be fed to the rewriter verbati
 
 | Engine | SPARQL 1.2 native | New `<<( )>>` syntax | Min version | How to drive it |
 |---|---|---|---|---|
-| **Comunica** | ✅ full | ✅ | 5.0.0 (Jan 2026) | npm library (`@comunica/query-sparql*`) — one-shot child process here |
+| **Comunica** | ✅ full | ✅ | 5.0.0 (Jan 2026) | npm library (`@comunica/query-sparql*`) — long-lived worker process here |
 | **Apache Jena / Fuseki** | ✅ full (default) | ✅ | 4.10+ (rec. 5.x/6.x) | Java, Fuseki HTTP SPARQL endpoint |
 | **Oxigraph** | ✅ full | ✅ | 0.5.0 (2025) | Rust binary / WASM, one-shot child process here |
 | Eclipse RDF4J | ⚠️ old `<< >>` only | ❌ | — | (cannot run the new syntax) |
@@ -88,9 +88,9 @@ older bytecode and works with Java 11/17.
 | `run.ts` | The orchestrator: for every engine × scheme × scale it runs the four pipelines and the baseline over the *same* subset, grades them against the reference answer, and writes the results JSON. Flushes after every row, so an interrupted run still leaves usable JSON. |
 | `runner.ts` | `rewriteToSparql11(mappers, query, variant)` — the core rewrite call, where `variant` selects one of the four pipelines — plus `sameSolutions()` and a simpler single-engine `runBenchmark()`/`formatRecords()` used by `cli.ts`. |
 | `config.ts` | Maps each reification pattern (`reification` → `BKR-Reification.ttl`/`BKR-R_*.rq`, `singleton` → `BKR-Singleton.ttl`/`BKR-S_*.rq`) to its CONSTRUCT mappers, materialized dataset and hand-written baseline query, and builds cases from `queries/BKR-star_*.rq`. |
-| `engines.ts` | `BenchEngine` interface + `ComunicaEngine` (one-shot child process, so a query whose join state outgrows the heap costs one `error` row instead of the whole sweep; in-process for the in-memory stores the unit tests use), `OxigraphEngine` (one-shot child process, killed on timeout — Oxigraph's `Store.query` is synchronous), `JenaEngine` (manages its own long-lived `fuseki-server.jar` child process, restarted only when the dataset file changes) and `SparqlHttpEngine` (any *externally managed* SPARQL HTTP endpoint, used by `cli.ts`). |
+| `engines.ts` | `BenchEngine` interface + `ComunicaEngine` (a long-lived worker process per dataset, so the store is loaded and indexed once and the engine stays warm, while a query whose join state outgrows the heap costs one `error` row instead of the whole sweep; in-process for the in-memory stores the unit tests use), `OxigraphEngine` (one-shot child process, killed on timeout — Oxigraph's `Store.query` is synchronous), `JenaEngine` (manages its own long-lived `fuseki-server.jar` child process, restarted only when the dataset file changes) and `SparqlHttpEngine` (any *externally managed* SPARQL HTTP endpoint, used by `cli.ts`). |
 | `oxiOneShot.mjs` | Loads one Turtle file, runs one query with Oxigraph, prints canonicalized JSON. Run as a child process by `OxigraphEngine` so a hard wall-clock timeout can be enforced by killing it. |
-| `comunicaOneShot.mjs` | The same for Comunica, run as a child process by `ComunicaEngine`. Here the point is memory, not cancellation: Comunica buffers join state that no cap on the output stream can bound, and a `FATAL ERROR: Reached heap limit` is not catchable, so an unbounded query has to be able to die without taking the run with it. |
+| `comunicaWorker.mjs` | A long-lived Comunica worker driven by `ComunicaEngine` over newline-delimited JSON: it loads and indexes the dataset once, then answers every query against it. The separate process is about memory, not cancellation — Comunica buffers join state that no cap on the output stream can bound, and a `FATAL ERROR: Reached heap limit` is not catchable, so an unbounded query has to be able to die without taking the run with it. Timeouts are handled inside the worker, so they cost the budget but not the loaded store. |
 | `makeSubset.mjs` | Streams a full multi-GB dataset once and writes four self-contained subsets (`xs`/`s`/`m`/`l`), each containing the full closure of every benchmark query's target entities plus a uniform random noise sample, so results are comparable across scales. The full datasets (13–17GB) cannot be loaded into an in-memory store, so this is what the real run uses. |
 | `plot.mjs` | Turns a results JSON into hand-rolled SVG figures (time-by-query, scaling, overhead, correctness) per scheme × engine. No dependencies. |
 | `cli.ts` | Ad-hoc single-pipeline runs against the **full** datasets or SPARQL endpoints you started yourself. No scale subsetting. |
@@ -195,8 +195,12 @@ listed here because every one of them can be misread as one.
   before being contained (the second 16.5 hours in), because `FATAL ERROR: Reached heap
   limit` is a process abort, not a catchable exception, and `--timeout` cannot save it:
   the OOM can arrive before the timer fires, and once the heap is exhausted the event loop
-  no longer gets to run it. This is why `ComunicaEngine` evaluates through a one-shot
-  child process — the abort now costs one `error` row. Expect `F-Q3` to be that row.
+  no longer gets to run it. It is not a Comunica defect: `F-Q3` is a quadratic self-join
+  (`?source1`/`?source2` over the same `derives_from` set, filtered to ordered pairs) on an
+  entity with 16,687 occurrences, and no engine here answers it — Oxigraph times out on all
+  five approaches including the hand-written baseline, and Jena's answer comes back as
+  268MB of JSON. This is why `ComunicaEngine` evaluates through a worker process: the abort
+  now costs one `error` row. Expect `F-Q3` to be that row.
 - **Oxigraph 0.5.9 rejects the spec-compliant uppercase `FILTER(FALSE)`** our generator
   emits, accepting only lowercase `false`. Worked around by lowercasing that exact shape in
   the query text sent to engines (`runner.ts`'s `lowercaseBooleanLiterals`); the generator
