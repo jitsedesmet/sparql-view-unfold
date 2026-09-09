@@ -25,23 +25,7 @@ import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
-import * as arrayifyStreamNS from 'arrayify-stream';
 import type { Store } from 'n3';
-
-// Crazy workaround to support both CJS and ESM (and tsx vs vitest interop):
-// `arrayify-stream` may arrive as a bare function or wrapped one or more levels
-// deep behind `.default`, depending on the loader. Unwrap until callable.
-function resolveArrayify(mod: unknown): <T>(stream: unknown) => Promise<T[]> {
-  let candidate: any = mod;
-  while (candidate && typeof candidate !== 'function' && 'default' in candidate) {
-    candidate = candidate.default;
-  }
-  if (typeof candidate !== 'function') {
-    throw new TypeError('Could not resolve arrayify-stream to a callable.');
-  }
-  return candidate;
-}
-const arrayifyStream = resolveArrayify(arrayifyStreamNS);
 
 /**
  * A logical dataset to run a query against. In-process engines use `file`/`store`,
@@ -91,6 +75,64 @@ export class BenchTimeoutError extends Error {
 }
 
 /**
+ * Hard cap on a SPARQL JSON response body, in bytes. A pathological rewrite (or a
+ * legitimately huge join at a bigger scale) can make an engine return a response of
+ * multiple gigabytes; `Response.json()`/`.text()` decode the whole body as one V8
+ * string first, and past roughly 1-2GB that decode hits a native `CHECK failed:
+ * i::kMaxInt >= len` and aborts the *Node process* — not a catchable exception, so no
+ * amount of try/catch around the call helps. {@link readJsonResponse} turns that crash
+ * into an ordinary `error` row for the one case that hit it, instead of losing an
+ * entire multi-hour run.
+ */
+const MAX_RESPONSE_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Hard cap on how many solutions an in-process engine may accumulate for one query.
+ * The HTTP engines are bounded by {@link MAX_RESPONSE_BYTES}, but {@link ComunicaEngine}
+ * runs in *this* process and collects the whole solution stream in memory, so a
+ * pathological join has no backstop other than the V8 heap limit — which it reaches as a
+ * `FATAL ERROR: Reached heap limit`, killing the run outright rather than raising a
+ * catchable error. (`--timeout` does not save it either: the OOM can arrive before the
+ * timer fires, and once the heap is exhausted the event loop no longer gets to run it.)
+ * The largest legitimate result in this benchmark is ~20k solutions, so this cap sits two
+ * orders of magnitude above real data and only ever trips on a runaway query, which then
+ * lands as an ordinary `error` row.
+ */
+const MAX_BINDINGS = 2_000_000;
+
+/** Reads a fetch `Response` as JSON, refusing (with a catchable error) past {@link MAX_RESPONSE_BYTES}. */
+async function readJsonResponse(response: Response, engineName: string): Promise<unknown> {
+  const tooLarge = (bytes: number): Error => new Error(
+    `Engine '${engineName}' response is over the ${MAX_RESPONSE_BYTES}-byte cap ` +
+    `(${bytes} bytes) — refusing to decode it, likely a pathologically large join result.`,
+  );
+  const declared = response.headers.get('content-length');
+  if (declared !== null && Number(declared) > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel();
+    throw tooLarge(Number(declared));
+  }
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return response.json();
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    total += value.byteLength;
+    if (total > MAX_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw tooLarge(total);
+    }
+    chunks.push(value);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+/**
  * Converts an RDFJS Bindings object to a canonical, deterministic string so that
  * two result sets can be compared regardless of ordering. Variables are sorted
  * alphabetically. (Same canonical form used by the integration tests.)
@@ -125,20 +167,37 @@ export class ComunicaEngine implements BenchEngine {
     const sources = ComunicaEngine.resolveSources(source);
     const start = performance.now();
     const bindingsStream = await this.engine.queryBindings(query, { sources });
+    const destroy = (): void =>
+      (<{ destroy: (error?: Error) => void }><unknown> bindingsStream).destroy();
     let timer: NodeJS.Timeout | undefined;
     try {
-      const bindings = await new Promise<RDF.Bindings[]>((resolve, reject) => {
+      const rows = await new Promise<string[]>((resolve, reject) => {
         if (timeoutMs !== undefined) {
           timer = setTimeout(() => {
             // Cancel the underlying Comunica work so it stops consuming CPU.
-            (<{ destroy: (error?: Error) => void }><unknown> bindingsStream).destroy();
+            destroy();
             reject(new BenchTimeoutError(timeoutMs));
           }, timeoutMs);
         }
-        arrayifyStream<RDF.Bindings>(bindingsStream).then(resolve, reject);
+        // Canonicalized as it streams rather than via `arrayifyStream(...).map(...)`: only
+        // the strings are retained, instead of the Bindings objects *and* their strings.
+        const collected: string[] = [];
+        bindingsStream.on('data', (binding: RDF.Bindings) => {
+          if (collected.length >= MAX_BINDINGS) {
+            destroy();
+            reject(new Error(
+              `Engine '${this.name}' produced over ${MAX_BINDINGS} solutions — abandoning ` +
+              `the query, since collecting them would exhaust the heap and kill the run.`,
+            ));
+            return;
+          }
+          collected.push(bindingToString(binding));
+        });
+        bindingsStream.on('error', reject);
+        bindingsStream.on('end', () => resolve(collected));
       });
       const durationMs = performance.now() - start;
-      return summarize(bindings.map(bindingToString), durationMs);
+      return summarize(rows, durationMs);
     } finally {
       if (timer !== undefined) {
         clearTimeout(timer);
@@ -200,7 +259,7 @@ export class SparqlHttpEngine implements BenchEngine {
       // The abort can fire while still streaming the body (query already running server-side,
       // headers sent, but the result set not yet fully written) — not just during connect/fetch()
       // itself — so this call needs to be inside the same try as `fetch`, not after it.
-      json = <SparqlJsonResults> await response.json();
+      json = <SparqlJsonResults> await readJsonResponse(response, this.name);
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'TimeoutError') {
         throw new BenchTimeoutError(timeoutMs ?? 0);
@@ -281,11 +340,18 @@ export class OxigraphEngine implements BenchEngine {
       maxBuffer: 512 * 1024 * 1024,
       encoding: 'utf8',
     });
-    if (result.error !== undefined && (<NodeJS.ErrnoException> result.error).code === 'ETIMEDOUT') {
+    // `spawnSync`'s own timeout reports both ways depending on platform and timing: an
+    // ETIMEDOUT error, or a plain SIGTERM signal with no error. Any *other* signal is the
+    // worker dying on its own (the OOM killer on a large subset, most often) and must
+    // stay an error — reporting it as a timeout would quietly turn a crash into a
+    // "too slow" data point.
+    const killedByUs = (<NodeJS.ErrnoException | undefined> result.error)?.code === 'ETIMEDOUT' ||
+      result.signal === 'SIGTERM';
+    if (killedByUs) {
       throw new BenchTimeoutError(timeoutMs ?? 0);
     }
     if (result.signal !== null) {
-      throw new BenchTimeoutError(timeoutMs ?? 0);
+      throw new Error(`oxigraph one-shot killed by ${result.signal}: ${result.stderr.slice(0, 500)}`);
     }
     if (result.status !== 0) {
       throw new Error(`oxigraph one-shot failed: ${result.stderr.slice(0, 500)}`);
@@ -378,7 +444,8 @@ export class JenaEngine implements BenchEngine {
       // The abort can fire while still streaming the body (query already running server-side,
       // headers sent, but the result set not yet fully written) — not just during connect/fetch()
       // itself — so this call needs to be inside the same try as `fetch`, not after it.
-      json = <{ results: { bindings: Record<string, { type: string; value: unknown }>[] }}> await response.json();
+      json = <{ results: { bindings: Record<string, { type: string; value: unknown }>[] }}>
+        await readJsonResponse(response, this.name);
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'TimeoutError') {
         throw new BenchTimeoutError(timeoutMs ?? 0);
@@ -410,7 +477,11 @@ export class JenaEngine implements BenchEngine {
 
   /** Starts (or restarts, if `file` differs from what is currently loaded) the Fuseki child process. */
   private async ensureServer(file: string): Promise<void> {
-    if (this.child && this.currentFile === file) {
+    // `exitCode`/`signalCode` are the liveness check that matters: a server that died
+    // after startup (OOM on a large subset, say) leaves `this.child` set, and reusing it
+    // would turn every remaining query into a connection-refused `error` row instead of
+    // restarting the server once.
+    if (this.child && this.currentFile === file && this.child.exitCode === null && this.child.signalCode === null) {
       return;
     }
     await this.stop();
@@ -496,13 +567,18 @@ export class JenaEngine implements BenchEngine {
       return;
     }
     await new Promise<void>((resolve) => {
-      child.once('exit', () => resolve());
-      child.kill('SIGTERM');
-      setTimeout(() => {
+      // Cleared on exit: an uncleared 5s timer keeps the Node event loop alive, so a run
+      // that has written its last row would sit idle before the process could exit.
+      const escalate = setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) {
           child.kill('SIGKILL');
         }
       }, 5_000);
+      child.once('exit', () => {
+        clearTimeout(escalate);
+        resolve();
+      });
+      child.kill('SIGTERM');
     });
   }
 
