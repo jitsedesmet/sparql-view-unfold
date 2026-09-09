@@ -103,12 +103,6 @@ export default config([
   {
     ignores: [
       'documentation',
-      // Working documents rather than sources: the task, the design it was turned into, and the per-PR
-      // plan. Their code blocks are algebra sketches and interface excerpts, not files the build compiles,
-      // so `parserOptions.project` has nothing to type-check them against.
-      'task.md',
-      'report.md',
-      'agent-task.md',
     ],
   },
 ], { disableJest: true });

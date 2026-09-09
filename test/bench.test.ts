@@ -3,21 +3,25 @@ import type * as RDF from '@rdfjs/types';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import { Store } from 'n3';
 import { describe, it } from 'vitest';
-import { buildCases, listStarQueryFiles, loadStarQuery, PATTERNS } from './bench/config.js';
+import { buildCases, listStarQueryFiles, PATTERNS } from './bench/config.js';
 import { ComunicaEngine } from './bench/engines.js';
 import { rewriteToSparql11, runBenchmark } from './bench/runner.js';
 import type { BenchCase } from './bench/runner.js';
-import { bkrStarToRdf12 } from './bench/starQuery.js';
 import { nonTripleTermConstruct, tripleTermConstruct } from './queryConsts.js';
 
 const arrayifyStream: <T>(stream: unknown) => Promise<T[]> =
   (<any> arrayifyStreamNS).default ?? arrayifyStreamNS;
 
 /**
- * Validates the benchmark harness (engine adapters, star-query converter, runner)
- * on the small in-memory reification dataset. The heavy BKR datasets are exercised
- * separately via `test/bench/cli.ts`; here we only prove the machinery is correct.
+ * Validates the benchmark harness (engine adapters, case building, runner) on the
+ * small in-memory reification dataset. The heavy BKR datasets are exercised
+ * separately via `test/bench/run.ts`; here we only prove the machinery is correct.
  */
+
+/** A SPARQL 1.2 query in reifier syntax — the shape the BKR-star query files use. */
+const starQuery = `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX : <ex://>
+SELECT ?s ?p ?o WHERE { << ?s ?p ?o >> :statedBy :wikipedia . }`;
 describe('benchmark harness', () => {
   const engine = new QueryEngine();
   const mappers = [ tripleTermConstruct, nonTripleTermConstruct ];
@@ -42,28 +46,9 @@ describe('benchmark harness', () => {
     return result;
   }
 
-  describe('bkrStarToRdf12', () => {
-    it('rewrites subject-position << >> into an rdf:reifies triple term', ({ expect }) => {
-      const converted = bkrStarToRdf12(
-        'SELECT ?s ?p ?o WHERE { << ?s ?p ?o >> :statedBy :wikipedia . }',
-      );
-      expect(converted).toContain('reifies');
-      expect(converted).toContain('<<( ?s ?p ?o )>>');
-      expect(converted).not.toMatch(/<<\s*\?s/u);
-    });
-
-    it('leaves a query without << >> unchanged', ({ expect }) => {
-      const query = 'SELECT * WHERE { ?s ?p ?o }';
-      expect(bkrStarToRdf12(query)).toBe(query);
-    });
-
-    it('produces a query the rewriter can turn into SPARQL 1.1', ({ expect }) => {
-      const converted = bkrStarToRdf12(
-        `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-         PREFIX : <ex://>
-         SELECT ?s ?p ?o WHERE { << ?s ?p ?o >> :statedBy :wikipedia . }`,
-      );
-      const rewritten = rewriteToSparql11(mappers, converted);
+  describe('rewriteToSparql11', () => {
+    it('turns a reifier-syntax SPARQL 1.2 query into SPARQL 1.1', ({ expect }) => {
+      const rewritten = rewriteToSparql11(mappers, starQuery);
       expect(rewritten).toContain('SELECT');
       // The rewriter replaces triple *patterns* matching against RDF 1.2 triple
       // terms with plain RDF 1.1 triple patterns over the materialized data; it may
@@ -94,12 +79,6 @@ describe('benchmark harness', () => {
       expect(files.every(f => f.startsWith('BKR-star_') && f.endsWith('.rq'))).toBe(true);
     });
 
-    it('loads and converts a real BKR-star query to RDF 1.2 form', ({ expect }) => {
-      const converted = loadStarQuery('BKR-star_B-Q1.rq');
-      expect(converted).toContain('reifies');
-      expect(converted).toContain('<<(');
-    });
-
     it('builds runnable cases whose queries the rewriter accepts', ({ expect }) => {
       const cases = buildCases('reification');
       expect(cases.length).toBeGreaterThan(0);
@@ -116,17 +95,11 @@ describe('benchmark harness', () => {
       const store11 = await loadStore(dataFile);
       const store12 = await toRdf12Store(store11);
 
-      const userQuery12 = bkrStarToRdf12(
-        `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-         PREFIX : <ex://>
-         SELECT ?s ?p ?o WHERE { << ?s ?p ?o >> :statedBy :wikipedia . }`,
-      );
-
       const benchCase: BenchCase = {
         id: 'reification/test',
         pattern: 'reification',
         mappers,
-        userQuery12,
+        userQuery12: starQuery,
         materialized: { name: 'store11', store: store11 },
         native12: { name: 'store12', store: store12 },
       };
@@ -134,12 +107,14 @@ describe('benchmark harness', () => {
       const engines = [ new ComunicaEngine() ];
       const records = await runBenchmark([ benchCase ], engines, engines[0]);
 
-      // Expect both a rewriting record and a native record, both correct.
+      // Expect both a rewriting record and a native record, both correct. This case
+      // carries no hand-written baseline, so the reference falls back to the rewriting
+      // result — which is what makes `native` agreeing with it the real assertion here:
+      // rewriting to SPARQL 1.1 over RDF 1.1 answers what SPARQL 1.2 over RDF 1.2 does.
       const rewriting = records.find(r => r.approach === 'rewriting');
       const native = records.find(r => r.approach === 'native');
       expect(rewriting?.correct).toBe(true);
       expect(native?.correct).toBe(true);
-      // The reference itself is the rewriting result, so counts must agree.
       expect(rewriting?.count).toBe(native?.count);
       expect(rewriting?.count).toBeGreaterThan(0);
     });

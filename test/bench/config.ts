@@ -5,9 +5,9 @@
  *  - the CONSTRUCT mappers that expose the RDF 1.1 data as an RDF 1.2 view, and
  *  - the materialized RDF 1.1 dataset produced by `data/run-conversion.sh`.
  *
- * The SPARQL 1.2 user queries come from `queries/BKR-star_*.rq` and are converted
- * from old RDF-star `<< >>` syntax to RDF 1.2 `rdf:reifies` form by
- * {@link bkrStarToRdf12}.
+ * The SPARQL 1.2 user queries come from `queries/BKR-star_*.rq` and are fed to the
+ * rewriter verbatim: the parser desugars their `<< s p o >>` reifier syntax into the
+ * `rdf:reifies <<( s p o )>>` triple-term form itself, so no pre-conversion is needed.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -19,7 +19,6 @@ import {
   singletonPropertyConstruct,
 } from '../queryConsts.js';
 import type { BenchCase } from './runner.js';
-import { bkrStarToRdf12 } from './starQuery.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BKR_ROOT = join(HERE, '..', 'statics', 'REF-Benchmark', 'BKR');
@@ -62,13 +61,7 @@ export const PATTERNS: Record<string, PatternConfig> = {
   },
 };
 
-/** Loads a single BKR-star query file and converts it to RDF 1.2 form. */
-export function loadStarQuery(fileName: string): string {
-  const raw = readFileSync(join(QUERY_DIR, fileName), 'utf8');
-  return bkrStarToRdf12(raw);
-}
-
-/** Reads a query file verbatim (no conversion). */
+/** Reads a query file verbatim. */
 export function loadRawQuery(fileName: string): string {
   return readFileSync(join(QUERY_DIR, fileName), 'utf8');
 }

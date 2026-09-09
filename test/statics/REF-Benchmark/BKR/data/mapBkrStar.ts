@@ -83,14 +83,13 @@ interface MappingSpec {
   context?: Record<string, unknown>;
 }
 
+// The named-graph representation is not built: `test/bench` only exercises the
+// `reification` and `singleton` patterns (see `PATTERNS` in `test/bench/config.ts`), and
+// this is the slowest stage to produce. Its mappers are kept as `mapToGraph-Q1.rq` /
+// `mapToGraph-Q2.rq`; re-enable it by adding a spec here with `output: 'BKR-Graph.trig'`
+// and `format: 'application/trig'` (Q1 places triples inside named graphs, so TriG is
+// required to represent them).
 const mappings: MappingSpec[] = [
-  // {
-  //   name: 'mapToGraph',
-  //   queries: [ 'mapToGraph-Q1.rq', 'mapToGraph-Q2.rq' ],
-  //   // Q1 places triples inside named graphs; TriG is required to represent them.
-  //   output: 'BKR-Graph.trig',
-  //   format: 'application/trig',
-  // },
   {
     name: 'mapToReification',
     queries: [ 'mapToReification-Q1.rq', 'mapToReification-Q2.rq' ],
@@ -234,7 +233,6 @@ if (only.size > 0 && selected.length === 0) {
     `No mapping matched ${[ ...only ].join(', ')}. ` +
     `Available: ${mappings.map(m => m.name).join(', ')}\n`,
   );
-  // eslint-disable-next-line unicorn/no-process-exit
   process.exit(1);
 }
 
@@ -245,7 +243,6 @@ try {
 } catch (err: unknown) {
   const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
   process.stderr.write(`\nFatal: ${msg}\n`);
-  // eslint-disable-next-line unicorn/no-process-exit
   process.exit(1);
 }
 
