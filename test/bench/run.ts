@@ -31,8 +31,8 @@
  * as its own oracle it used to show up as every *working* variant being marked incorrect.
  *
  * Engines:
- *   - `comunica`: in-process; the store is loaded once per scale (async, queries
- *     are cancelled on timeout).
+ *   - `comunica`: each query runs in a short-lived child process, killed on timeout —
+ *     Comunica's join state can outgrow any heap, and inline that takes the sweep with it.
  *   - `oxigraph`: each query runs in a short-lived child process that is killed
  *     on timeout (Oxigraph's query call is synchronous).
  *   - `jena`: HTTP, via a long-lived `fuseki-server.jar` child process managed by
@@ -47,10 +47,8 @@
  */
 import { createReadStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
-import type * as RDF from '@rdfjs/types';
-import { StreamParser, Store } from 'n3';
+import { StreamParser } from 'n3';
 import { buildCases, PATTERNS } from './config.js';
 import { BenchTimeoutError, ComunicaEngine, JenaEngine, OxigraphEngine } from './engines.js';
 import type { BenchEngine, EngineSource, SelectResult } from './engines.js';
@@ -76,11 +74,6 @@ interface ResultRow {
   scale: string;
   /** Size of the dataset subset, in quads. Measured per file and shared by every engine. */
   quads: number;
-  /**
-   * Time to load the subset into Comunica's in-memory N3 store, or 0 for engines that
-   * load the file themselves (Oxigraph's child process, Fuseki's server startup).
-   */
-  loadMs: number;
   caseId: string;
   approach: 'rewriting' | 'rewriting+removeProjections' | 'rewriting+pushDownAssertions' | 'rewriting+pullUpExtends' |
   'materialized';
@@ -144,29 +137,10 @@ function parseArgs(argv: string[]): RunOptions {
   return opts;
 }
 
-/** Streams a Turtle file into an in-memory N3 store, with read backpressure. */
-async function loadStore(file: string): Promise<{ store: Store; loadMs: number }> {
-  const start = performance.now();
-  const store = new Store();
-  await new Promise<void>((resolve, reject) => {
-    const parser = new StreamParser();
-    const input = createReadStream(file, { highWaterMark: 1 << 20 });
-    parser.on('data', (quad: RDF.Quad) => store.addQuad(quad));
-    parser.on('end', () => resolve());
-    parser.on('error', reject);
-    input.on('error', reject);
-    input.pipe(parser);
-  });
-  return { store, loadMs: performance.now() - start };
-}
-
 /**
  * Number of quads in a subset file, counted by streaming it through the parser without
  * building a store. Cached per file: the count is a property of the dataset, not of the
  * engine reading it, and every engine's rows need it as the x-axis of the scaling plot.
- * Comunica seeds this cache for free from the store it loads anyway
- * ({@link loadStore}), so the extra parse is only paid for a file no Comunica run in
- * this process has already loaded.
  */
 const quadCounts = new Map<string, number>();
 
@@ -300,30 +274,19 @@ async function runEngine(
       }
       process.stderr.write(`\n== ${engineName} / ${scheme} / ${scale} ==\n`);
 
-      // Comunica shares one in-memory store across all queries of this scale;
-      // Oxigraph loads per query in its child process, so only needs the file.
-      let store: Store | undefined;
-      let loadMs = 0;
+      // Every engine now loads the subset inside its own worker (Comunica and Oxigraph
+      // per query, Fuseki once per dataset), so this process only needs the dataset
+      // *size*: it is the x-axis of the scaling plot, and a plot whose x-axis is 0 for
+      // every scale collapses to a single point.
       let quads: number;
       try {
-        if (engineName === 'comunica') {
-          const loaded = await loadStore(file);
-          store = loaded.store;
-          loadMs = Math.round(loaded.loadMs);
-          quads = store.size;
-          quadCounts.set(file, quads);
-          process.stderr.write(`  loaded ${quads} quads in ${(loadMs / 1000).toFixed(1)}s\n`);
-        } else {
-          // Every engine's rows need the dataset size: it is the x-axis of the scaling
-          // plot, and a plot whose x-axis is 0 for every scale collapses to one point.
-          quads = await countQuads(file);
-          process.stderr.write(`  ${quads} quads\n`);
-        }
+        quads = await countQuads(file);
+        process.stderr.write(`  ${quads} quads\n`);
       } catch (error: unknown) {
         process.stderr.write(`  load failed: ${error instanceof Error ? error.message : String(error)}\n`);
         continue;
       }
-      const source: EngineSource = { name: `${scheme}-${scale}`, store, file };
+      const source: EngineSource = { name: `${scheme}-${scale}`, file };
 
       for (const benchCase of cases) {
         const rewritten = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12);
@@ -354,7 +317,6 @@ async function runEngine(
             scheme,
             scale,
             quads,
-            loadMs,
             caseId: benchCase.id,
             approach,
             status: run.status,
@@ -377,10 +339,6 @@ async function runEngine(
         }
         grade(caseRows);
         flush();
-      }
-      store = undefined;
-      if (globalThis.gc) {
-        globalThis.gc();
       }
     }
   }

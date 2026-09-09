@@ -100,6 +100,14 @@ const MAX_RESPONSE_BYTES = 256 * 1024 * 1024;
  */
 const MAX_BINDINGS = 2_000_000;
 
+/**
+ * Heap ceiling for a one-shot Comunica worker. Deliberately well below the machine's
+ * memory: the cap exists so a runaway query *fails fast* rather than thrashing a huge
+ * heap for an hour before dying anyway, and nothing this benchmark legitimately computes
+ * comes close (the largest real result is ~20k solutions over a 700k-quad subset).
+ */
+const ONE_SHOT_HEAP_MB = 8000;
+
 /** Reads a fetch `Response` as JSON, refusing (with a catchable error) past {@link MAX_RESPONSE_BYTES}. */
 async function readJsonResponse(response: Response, engineName: string): Promise<unknown> {
   const tooLarge = (bytes: number): Error => new Error(
@@ -150,20 +158,68 @@ function summarize(rows: string[], durationMs: number): SelectResult {
 }
 
 /**
- * In-process engine backed by Comunica. Comunica >= 5.0 fully supports
- * SPARQL 1.2 / RDF 1.2 triple terms, so it can act both as a rewriting target
- * (SPARQL 1.1 queries over RDF 1.1 data) and as a native SPARQL 1.2 reference.
+ * Engine backed by Comunica. Comunica >= 5.0 fully supports SPARQL 1.2 / RDF 1.2 triple
+ * terms, so it can act both as a rewriting target (SPARQL 1.1 queries over RDF 1.1 data)
+ * and as a native SPARQL 1.2 reference.
+ *
+ * A {@link EngineSource.file} is queried through a one-shot child process
+ * (`comunicaOneShot.mjs`), like {@link OxigraphEngine} but for a different reason.
+ * Comunica buffers its own join state, which no cap on the *output* stream can bound: on
+ * this corpus `reification/F-Q3` grows past a 12GB heap and dies as `FATAL ERROR: Reached
+ * heap limit` — not a catchable exception, so run inline it takes the whole sweep down
+ * with it, as it did twice (once 16.5 hours in). In a child process it costs one `error`
+ * row. The child also gets a clean heap and a cold cache per query, so no query benefits
+ * from state left behind by the ones before it.
+ *
+ * A `store`-only source (the in-memory datasets in `bench.test.ts`) cannot cross a
+ * process boundary and is still evaluated in-process.
  */
 export class ComunicaEngine implements BenchEngine {
   public readonly name: string;
   public readonly supportsSparql12 = true;
   private readonly engine = new QueryEngine();
+  private readonly oneShot = join(dirname(fileURLToPath(import.meta.url)), 'comunicaOneShot.mjs');
 
   public constructor(name = 'comunica') {
     this.name = name;
   }
 
   public async runSelect(query: string, source: EngineSource, timeoutMs?: number): Promise<SelectResult> {
+    if (source.file) {
+      return this.runOneShot(query, source.file, timeoutMs);
+    }
+    return this.runInProcess(query, source, timeoutMs);
+  }
+
+  /**
+   * Runs the query in a child process with its own heap, so that exhausting it kills only
+   * the worker. Mirrors {@link OxigraphEngine}'s signal handling: only a kill we asked for
+   * is a timeout, and any other signal — `SIGABRT` from V8's OOM handler, most often — has
+   * to stay an error, since reporting a crash as "too slow" would fabricate a data point.
+   */
+  private runOneShot(query: string, file: string, timeoutMs?: number): SelectResult {
+    const result = spawnSync(process.execPath, [ `--max-old-space-size=${ONE_SHOT_HEAP_MB}`, this.oneShot, file ], {
+      input: query,
+      timeout: timeoutMs,
+      maxBuffer: 512 * 1024 * 1024,
+      encoding: 'utf8',
+    });
+    const killedByUs = (<NodeJS.ErrnoException | undefined> result.error)?.code === 'ETIMEDOUT' ||
+      result.signal === 'SIGTERM';
+    if (killedByUs) {
+      throw new BenchTimeoutError(timeoutMs ?? 0);
+    }
+    if (result.signal !== null) {
+      throw new Error(`comunica one-shot killed by ${result.signal}: ${result.stderr.slice(0, 500)}`);
+    }
+    if (result.status !== 0) {
+      throw new Error(`comunica one-shot failed: ${result.stderr.slice(0, 500)}`);
+    }
+    const parsed = <{ durationMs: number; count: number; rows: string[] }> JSON.parse(result.stdout);
+    return { rows: parsed.rows, count: parsed.count, durationMs: parsed.durationMs };
+  }
+
+  private async runInProcess(query: string, source: EngineSource, timeoutMs?: number): Promise<SelectResult> {
     const sources = ComunicaEngine.resolveSources(source);
     const start = performance.now();
     const bindingsStream = await this.engine.queryBindings(query, { sources });
