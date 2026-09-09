@@ -23,3 +23,5 @@ dist
 # from the repo root (e.g. via JenaEngine / test/bench) with no --base override.
 /run
 bench-*.json
+# Benchmark figures are regenerated from the results JSON with `node test/bench/plot.mjs`.
+test/bench/results/figures/
