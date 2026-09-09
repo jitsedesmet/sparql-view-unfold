@@ -190,6 +190,12 @@ listed here because every one of them can be misread as one.
   syntactically invalid IRI (checked recursively into triple-term components and literal
   datatypes) and logs them to `<output>.dropped.ttl`. 120 quads out of 82,432,741 were
   dropped, all the same defect; Oxigraph's `error` rows went from 96/192 to 0/192.
+- **The `F-Q1`/`F-Q2` baselines use `SELECT *`, so they bind one variable more than the
+  star query does** — the reification baseline has to name the statement node (`?st`) to
+  walk the encoding, and the singleton one likewise. The solutions agree on every shared
+  variable; the extra binding alone makes the multiset comparison report a difference, so a
+  `correct: false` on `F-Q1`/`F-Q2` is this, not a rewriting error. Pre-existing in the
+  shipped corpus, same class as the singleton-constants issue above.
 - **Comunica exhausts any heap on `reification/F-Q3`** at `xs` — the subset is only
   298k quads, so this is intermediate join state, not data. It took down two full sweeps
   before being contained (the second 16.5 hours in), because `FATAL ERROR: Reached heap
@@ -210,7 +216,81 @@ listed here because every one of them can be misread as one.
 
 ## Results
 
-<!-- RESULTS -->
+720 rows: 3 engines × 2 schemes × 2 scales (`xs` ≈ 300k quads, `s` ≈ 680k) × 12 queries ×
+5 approaches, 1 rep, 300 s budget. `results.json` holds them; `plot.mjs` regenerates the
+figures. 457 `ok`, 245 censored at the budget, 18 `error`.
+
+Because so much is censored, **comparisons below are paired**: two approaches are compared
+only on the (engine, scheme, scale, query) cells where both produced a real measurement,
+and "rescued" counts the cells one finished and the other did not. Comparing raw medians
+across approaches would reward failure, since the slowest queries are the ones that drop out.
+
+### The pipelines rank in order, and `pullUpExtends` strictly dominates
+
+| Comparison | paired cells | A faster | median A/B | A rescues | B rescues |
+|---|---|---|---|---|---|
+| `pullUpExtends` vs `pushDownAssertions` | 100 | **91** | **0.79** | **3** | 0 |
+| `pullUpExtends` vs `rewriting` | 57 | 49 | **0.34** | 46 | 4 |
+| `pushDownAssertions` vs `rewriting` | 57 | 44 | 0.46 | 43 | 4 |
+| `removeProjections` vs `rewriting` | 56 | 19 | **1.97** | 2 | 5 |
+
+`pullUpExtends` wins 91 of 100 head-to-head cells against `pushDownAssertions`, is ~21%
+faster at the median, finishes 3 queries the pushdown pipeline cannot, and loses none. It
+is the pipeline to use.
+
+**`removeProjections` on its own is a net regression** — roughly 2× *slower* than plain
+`rewriting` at the median, and it loses more queries than it rescues. It earns its place
+only as the enabler that lets `pushDownAssertions` see through the nested sub-`SELECT`s;
+judged as a standalone optimization it is a pessimization, which is why `runner.ts`
+composes it as a required step of the pushdown pipeline rather than offering it alone.
+
+### What the rewriting can answer at all
+
+Queries answered within the budget, out of 48 per engine:
+
+| Engine | `materialized` | `rewriting` | `+removeProjections` | `+pushDownAssertions` | `+pullUpExtends` |
+|---|---|---|---|---|---|
+| Jena | 45 | 48* | 44 | 44 | 44 |
+| Oxigraph | 46 | **0** | **0** | 19 | **20** |
+| Comunica | 44 | 13 | 14 | 37 | **39** |
+
+On Oxigraph the unoptimized rewriting answers *nothing* in 300 s; the pushdown pipelines
+take it to 20/48. On Comunica it goes 13 → 39. This is the practical case for the
+optimizations: without them the rewriting approach is not merely slow on two of the three
+engines, it is unusable. (*Jena's 48 is not a success — see the correctness section.)
+
+### The honest cost: ~88× the hand-written query
+
+Against the `materialized` baseline, `pullUpExtends` is **88× slower at the median** over
+the 102 cells where both finish, and the baseline additionally answers 33 queries the
+rewriting cannot. Rewriting buys you a SPARQL 1.2 interface over RDF 1.1 data without
+touching the data; it does not buy you the performance of a query written against the
+storage layout. Two orders of magnitude is the price at these scales.
+
+### Correctness: 139 mismatches, none of them the rewriter
+
+Every `correct: false` row traces to a known defect in the corpus or an engine — verified
+individually, with nothing left over:
+
+| Cause | Rows |
+|---|---|
+| Singleton baselines query different sample constants than the star queries | 71 |
+| Jena's ARQ triple-term bug (affects `rewriting` and `+removeProjections`) | 33 |
+| `F-Q1`/`F-Q2` baselines use `SELECT *`, so they also bind the structural node | 32 |
+| Graded against the fallback reference on Jena, where `rewriting` is the buggy one | 3 |
+
+The third row is the one this run added to the known-issues list. `F-Q1`'s star query and
+its baseline both use `SELECT *`, but the reification baseline must name the statement node
+(`?st`) to walk the encoding, so it projects a variable the RDF 1.2 query has no counterpart
+for. Both return the same 2 solutions with identical `?o1`/`?source` bindings; the baseline
+rows just carry an extra `st=...`, and the multiset comparison — correctly — calls that a
+difference. Verified by diffing the actual rows.
+
+The fourth row is the fallback reference biting on Jena: when the baseline itself fails
+(`F-Q4` at `s` times out), the reference falls back to `rewriting`, which on Jena returns 0
+rows because of the ARQ bug, so the three pipelines that return the right 20,004 rows are
+marked wrong. Rare, but it is the one case where `correct` inverts, and it is why
+`referenceApproach` is recorded on every row.
 
 ## History
 
@@ -226,6 +306,7 @@ figures from any results JSON. In summary:
 | 2026-09-02 | Invalid-IRI data cleanup; full pipeline regenerated from the cleaned dumps. |
 | 2026-09-03 | `pullUpExtends` added as a fourth pipeline; budget raised to 60 s. |
 | 2026-09-07 | Reference switched from `rewriting` to the hand-written baseline, timeouts rendered as censored, dataset size recorded for every engine, budget raised to 300 s. |
+| 2026-09-09 | Comunica moved into a worker process after `reification/F-Q3` OOM-killed two sweeps; the full 300 s run above completed. |
 
 ## Extending
 
