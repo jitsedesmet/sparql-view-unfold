@@ -69,4 +69,17 @@ describe('removeProjections', () => {
       );
     });
   });
+
+  describe('a SLICE (LIMIT / OFFSET) below a projection', () => {
+    // Dropping the projection is sound - it preserves multiplicity - but SPARQL cannot write a LIMIT
+    // that is not on a SELECT, and `toAst` throws on the bare Slice it would be left holding.
+    it('keeps the projection of a sub-SELECT with LIMIT', ({ expect }) => {
+      expect(transform('SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } LIMIT 1 } }'))
+        .toContain('LIMIT 1');
+    });
+
+    it('a sub-SELECT with LIMIT returns the same results', async({ expect }) => {
+      await assertEquivalent(expect, 'SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } LIMIT 1 } }');
+    });
+  });
 });

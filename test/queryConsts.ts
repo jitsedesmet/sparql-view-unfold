@@ -458,3 +458,32 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     BIND( ?rm1_s_AND_p AS ?uq_s1 )
   }
 }`;
+
+/**
+ * Maps standard RDF 1.1 reification (`rdf:subject`, not the capitalised spelling of
+ * {@link tripleTermConstruct}) to triple terms reified by the statement node.
+ */
+export const rdfReificationConstruct = `
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+CONSTRUCT {
+  ?t rdf:reifies <<( ?s ?p ?o )>>
+} WHERE {
+  ?t rdf:type rdf:Statement ;
+     rdf:subject ?s ;
+     rdf:predicate ?p ;
+     rdf:object ?o .
+}
+`;
+
+/** Passes through every triple that is not reification structure, complementing {@link rdfReificationConstruct}. */
+export const nonReificationTripleConstruct = `
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+CONSTRUCT {
+  ?s ?p ?o .
+} WHERE {
+  ?s ?p ?o .
+  FILTER ( !isTriple(?o) ) .
+  FILTER ( ?p != rdf:subject && ?p != rdf:predicate && ?p != rdf:object ) .
+  FILTER ( ?p != rdf:type || ?o != rdf:Statement ) .
+}
+`;

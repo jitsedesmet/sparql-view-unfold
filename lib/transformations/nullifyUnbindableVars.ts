@@ -18,9 +18,8 @@ import { createFilterFalse } from '../utils/operationhelpers.js';
  * graph is named by, a `VALUES` with no rows, and `FILTER(bound(?x))` over an operation that cannot bind
  * `?x`, which is (FBndII).
  *
- * The replacement wraps the operation rather than dropping it - `pVars(Empty_S) := S`, never the empty set,
- * or `SELECT *` scoping changes silently - and {@link transformFilterFalse} does the structural
- * normalisation afterwards.
+ * The replacement wraps the operation rather than dropping it, so the metadata this traversal carries still
+ * describes the tree; {@link transformFilterFalse} drops it afterwards.
  */
 
 /** Metadata is a cache to carry along, never a tree to iterate into: its sets do not survive that. */

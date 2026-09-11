@@ -102,6 +102,34 @@ describe('dummy', () => {
     [ 'CONSTRUCT WHERE { ?s <ex://p> ?o  }' ],
   ));
 
+  // A SLICE (LIMIT/OFFSET) wraps the Project in the algebra, so it must be peeled to reach the
+  // Project for variable renaming and re-applied afterwards - otherwise the outer projection is
+  // skipped and columns keep their internal `uq_` names.
+  it('pass through with LIMIT/OFFSET', ({ expect }) => testConstructMappers(
+    expect,
+    'SELECT * { ?s <ex://p> ?o } LIMIT 10 OFFSET 5',
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
+  SELECT ( ?p0_mi_o AS ?uq_o ) ( ?p0_mi_s AS ?uq_s ) WHERE {
+    ?p0_mi_s <ex://p> ?p0_mi_o .
+  }
+}
+LIMIT 10 OFFSET 5`,
+    [ 'CONSTRUCT WHERE { ?s <ex://p> ?o  }' ],
+  ));
+
+  // A SLICE combined with DISTINCT must re-wrap in the right order: Slice(Distinct(Project(...))).
+  it('pass through with DISTINCT and LIMIT', ({ expect }) => testConstructMappers(
+    expect,
+    'SELECT DISTINCT * { ?s <ex://p> ?o } LIMIT 10',
+    `SELECT DISTINCT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
+  SELECT ( ?p0_mi_o AS ?uq_o ) ( ?p0_mi_s AS ?uq_s ) WHERE {
+    ?p0_mi_s <ex://p> ?p0_mi_o .
+  }
+}
+LIMIT 10`,
+    [ 'CONSTRUCT WHERE { ?s <ex://p> ?o  }' ],
+  ));
+
   it('simple', ({ expect }) =>
     testConstructMappers(expect, testQuery, expectedQuery, [ tripleTermConstruct, nonTripleTermConstruct ]));
 

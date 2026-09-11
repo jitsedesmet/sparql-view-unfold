@@ -5,6 +5,7 @@ import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import { termFalse, termTrue } from './operationhelpers.js';
 import { DF } from './rdfDatatypes.js';
+import { termIsStaticTerm } from './typeGuards.js';
 
 /**
  * Splits a filter expression on top level logical conjunctions (`&&`), implementing (SDecompI):
@@ -116,6 +117,30 @@ export function isStableExpression(c: TransformContext, expression: Algebra.Expr
     wildcard: neverStable,
   }});
   return isStable;
+}
+
+/**
+ * Whether an expression is a stable, rewrite-time function of constant arguments, so it evaluates to one
+ * constant term. Meant for a bottom-up pass: a static argument is by then already such a term, so this is
+ * decided from the direct arguments without recursing. `NOW` is excluded - it is constant per execution but
+ * its value is only fixed at execution time, not at rewrite time.
+ * @param expression - The expression to inspect
+ * @returns whether the expression folds to a constant term
+ */
+export function foldsToConstantTerm(expression: Algebra.Expression): boolean {
+  function argumentsAreConstant(args: Algebra.Expression[]): boolean {
+    return args.every(argument => argument.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(argument.term));
+  }
+  switch (expression.subType) {
+    case Algebra.ExpressionTypes.OPERATOR:
+      return expression.operator !== 'now' && !unstableOperators.has(expression.operator) &&
+        argumentsAreConstant(expression.args);
+    case Algebra.ExpressionTypes.NAMED:
+      return stableNamedFunctions.has(expression.name.value) && argumentsAreConstant(expression.args);
+    default:
+      // A term already is a constant; an EXISTS, aggregate, or wildcard never folds to one.
+      return false;
+  }
 }
 
 /**

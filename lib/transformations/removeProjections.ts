@@ -20,6 +20,11 @@ import { collectVariableNames, freshVarGenerator, renameVariables } from '../uti
  * exactly the variables their input exposes, so anonymizing the hidden variables instead of
  * dropping them would make the deduplication consider them too, changing the result.
  *
+ * A projection directly below a SLICE is kept for a different reason: dropping it is sound - a projection
+ * without a DISTINCT preserves multiplicity, so the same rows fall in the window either way - but SPARQL
+ * has no way to *write* a LIMIT or OFFSET that is not on a SELECT, and `toAst` rejects the `Slice` it
+ * would be left holding.
+ *
  * @param c - The transformation context
  * @param op - The operation to transform
  * @returns The transformed operation without any PROJECT operations
@@ -35,7 +40,7 @@ export function removeProjections<T extends Algebra.Operation>(c: TransformConte
 
   // Filled top-down (preVisitor) before the projection itself is transformed bottom-up.
   const keptProjections = new Set<Algebra.Operation>();
-  const keepProjectedInput = (operation: Algebra.Distinct | Algebra.Reduced): object => {
+  const keepProjectedInput = (operation: Algebra.Distinct | Algebra.Reduced | Algebra.Slice): object => {
     if (operation.input.type === Algebra.Types.PROJECT) {
       keptProjections.add(operation.input);
     }
@@ -46,6 +51,7 @@ export function removeProjections<T extends Algebra.Operation>(c: TransformConte
   return algebraUtils.mapOperation<'unsafe', typeof op>(op, {
     [Algebra.Types.DISTINCT]: { preVisitor: keepProjectedInput },
     [Algebra.Types.REDUCED]: { preVisitor: keepProjectedInput },
+    [Algebra.Types.SLICE]: { preVisitor: keepProjectedInput },
     [Algebra.Types.PROJECT]: { transform: (project, original) => {
       if (keptProjections.has(original)) {
         return project;

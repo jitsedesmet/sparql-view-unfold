@@ -23,4 +23,5 @@ export { operationTransform, queryTransform } from './transformBgp.js';
 export { createPartialContext, transformContextFromConstructs } from './transformContext.js';
 export type { TransformContext } from './transformContext.js';
 export type { Mapping, MappingHead } from './types.js';
+export { simplifyStaticExpressions } from './utils/staticExpressionEvaluation.js';
 export * from './transformations/index.js';

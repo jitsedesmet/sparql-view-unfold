@@ -89,6 +89,22 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
     delete this.groupToAssertedRange[oldGroup];
   }
 
+  /**
+   * A group a condition narrowed the range of carries information however few members it has: what it was
+   * told is what its last member is still constrained by, and what {@link
+   * utils/assertionConjunction!AssertionConjunction.get} reads back out of it as `T⟨?x : τ⟩`.
+   *
+   * Without this the whole of `FILTER(isTRIPLE(?x))` would be dropped the moment its group falls to one
+   * member - which the transfer through a `BIND(?y AS ?x)` does at once, `?x` leaving the group it just
+   * put `?y` in - and a condition dropped from Θ is a condition dropped from the query.
+   * @param group - The group to check
+   * @returns whether it is worth keeping
+   */
+  protected override carriesInformation(group: number): boolean {
+    // A meet only ever shrinks, so a range that is not the top is one something narrowed.
+    return super.carriesInformation(group) || this.assertedRangeOf(group).size < objectRange.size;
+  }
+
   protected override createEmptyGroup(): number {
     const group = super.createEmptyGroup();
     this.groupToAssertedRange[group] = objectRange;

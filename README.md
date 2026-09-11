@@ -150,7 +150,7 @@ one-time Fuseki setup and the results. The harness is validated by `test/bench.t
 | Transformation | Description |
 |----------------|-------------|
 | `substituteVarsThatArePreBoundToTerms` | Inline known variable values into patterns |
-| `transformFilterFalse` | Remove FILTER(FALSE) branches and simplify |
+| `transformFilterFalse` | Remove FILTER(FALSE) branches and simplify, seeing an empty sub-SELECT through its `PROJECT` |
 | `nullifyJoinOverIncompatibleBounds` | Replace incompatible join branches with FILTER(FALSE) |
 | `pushDownAssertions` | Push assertion filters (`FILTER(sameTerm(?x, c))`) as deep as possible: substitute the term into BGPs and paths, prune VALUES rows, empty UNION branches that cannot bind the variable, and turn an OPTIONAL over an asserted variable into a plain join |
 | `pullUpExtends` | Float every `BIND` as high as the plan allows: past joins, optionals, unions (when every branch carries it) and modifiers, merging the copies several operands carry into one, and deleting a bind a `PROJECT` or a `GROUP` discards |

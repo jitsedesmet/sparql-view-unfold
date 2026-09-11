@@ -17,6 +17,7 @@ import { peelExtends, replantExtends } from '../utils/extendChain.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import type { SSet } from '../utils/setUtils.js';
 import { differenceSets } from '../utils/setUtils.js';
+import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
 import { collectVariableNames } from '../utils.js';
 
 /**
@@ -155,41 +156,6 @@ interface PeeledInputs {
 }
 
 /**
- * The operations that make up a query's solution-modifier chain: what stands between the root of what this
- * pass is handed and the pattern the query is about, and so what a bind may not rise into.
- *
- * An `ORDER_BY` is deliberately absent. It stands *below* the projection, so the gap a bind rises into
- * there is the one a `SELECT` expression is written in, and SPARQL has a place for it; stopping the walk
- * at one costs nothing either, a query's chain holding no further modifier below its ordering. That is
- * what lets a bind an ordering no longer reads reach the projection that discards it.
- */
-const solutionModifierTypes = new Set<string>([
-  Algebra.Types.ASK,
-  Algebra.Types.CONSTRUCT,
-  Algebra.Types.DESCRIBE,
-  Algebra.Types.PROJECT,
-  Algebra.Types.DISTINCT,
-  Algebra.Types.REDUCED,
-  Algebra.Types.SLICE,
-  Algebra.Types.FROM,
-]);
-
-/**
- * The nodes of the solution-modifier chain at the top of `root` ({@link solutionModifierTypes}).
- * @param root - The root of the tree the traversal is about to run over
- * @returns those nodes, by identity, so that a callback can recognise its own original
- */
-function solutionModifierChainOf(root: Algebra.Operation): Set<Algebra.Operation> {
-  const sealed = new Set<Algebra.Operation>();
-  let current = root;
-  while (solutionModifierTypes.has(current.type)) {
-    sealed.add(current);
-    current = (<Algebra.Single> current).input;
-  }
-  return sealed;
-}
-
-/**
  * Floats every `BIND` in `op` as high as the plan allows and deletes the ones nothing above reads.
  *
  * Works on a subtree as happily as on a whole query, the invariant being anchored per swap.
@@ -209,6 +175,8 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformContext, 
   // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out
   // for the same reason, the rewrites having since invalidated what the licences cached.
   const entered = withoutCpVars(op);
+  // SPARQL has nowhere to write a `BIND` in the chain. It excludes `ORDER_BY`, so a bind can still rise
+  // past an ordering to the projection that discards it.
   const sealed = solutionModifierChainOf(entered);
   return withoutCpVars(algebraUtils.mapOperation<'unsafe', T>(entered, {
     [Algebra.Types.FILTER]: {

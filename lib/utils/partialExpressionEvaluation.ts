@@ -69,8 +69,10 @@ function substitute(
   assertions: AssertionView,
   boundVariables: ReadonlySet<string>,
 ): Algebra.Expression {
-  // TODO(other PR):
-  //  part of future works includes evaluating the functions statically using the Comunica Expression Evaluator
+  // Only the folds the pushdown depends on are done here, synchronously. Evaluating arbitrary static
+  // operators (`1 + 2`, `CONCAT(...)`, ...) is handled separately by the asynchronous
+  // {@link utils/staticExpressionEvaluation!simplifyStaticExpressions} pass, which hands them to the
+  // Comunica Expression Evaluator.
   const { AF } = c;
   switch (expression.subType) {
     case Algebra.ExpressionTypes.TERM: {

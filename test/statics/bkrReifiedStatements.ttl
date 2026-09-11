@@ -1,0 +1,35 @@
+# A BKR-star shaped slice: reified statements, each annotated with its provenance.
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX bkr: <http://mor.nlm.nih.gov/bkr/>
+PREFIX bkr_sn: <http://mor.nlm.nih.gov/bkr/SEMNET_>
+PREFIX provenir: <http://knoesis.wright.edu/provenir/>
+
+bkr:ST1 a rdf:Statement ;
+  rdf:subject bkr:META_C0040300-INST ;
+  rdf:predicate bkr_sn:PART_OF ;
+  rdf:object bkr:META_C0005767-INST ;
+  provenir:derives_from bkr:PUBMED_10001 .
+
+bkr:ST2 a rdf:Statement ;
+  rdf:subject bkr:META_C0040300-INST ;
+  rdf:predicate bkr_sn:PART_OF ;
+  rdf:object bkr:META_C0018787-INST ;
+  provenir:derives_from bkr:PUBMED_10002 .
+
+# A statement about another subject, so the constant in the query actually selects.
+bkr:ST3 a rdf:Statement ;
+  rdf:subject bkr:META_C0007102-INST ;
+  rdf:predicate bkr_sn:PART_OF ;
+  rdf:object bkr:META_C0021853-INST ;
+  provenir:derives_from bkr:PUBMED_10003 .
+
+# A statement carrying a different predicate, which the PART_OF constant has to exclude.
+bkr:ST4 a rdf:Statement ;
+  rdf:subject bkr:META_C0040300-INST ;
+  rdf:predicate bkr_sn:LOCATION_OF ;
+  rdf:object bkr:META_C0005767-INST ;
+  provenir:derives_from bkr:PUBMED_10004 .
+
+# Plain triples, mapped by the pass-through mapper rather than the reification one.
+bkr:META_C0040300-INST bkr_sn:PART_OF bkr:META_C0005767-INST .
+bkr:PUBMED_10001 provenir:derives_from bkr:PUBMED_10002 .

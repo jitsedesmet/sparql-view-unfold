@@ -22,7 +22,8 @@ import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils
  *
  * Key presence and range are independent on purpose, which is what makes the merge sound. A key at
  * {@link emptyRange} is a variable in scope that provably never binds, and it has to stay a key:
- * `pVars(Empty_S) := S`, never the empty set, or `SELECT *` scoping changes silently.
+ * `pVars(Empty_S) := S`. A rewrite may still shrink the scope of an empty operation, as
+ * {@link transformations/filterFalse!transformFilterFalse} does.
  *
  * One case deliberately drops a key rather than bottoming its range: a `FILTER(!bound(?x))` takes `?x` out
  * of scope, which is what the `pVars` this replaced did too. The bottom range would say it more precisely,
