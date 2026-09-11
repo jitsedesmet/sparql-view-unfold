@@ -210,9 +210,10 @@ listed here because every one of them can be misread as one.
 - **Oxigraph 0.5.9 rejects the spec-compliant uppercase `FILTER(FALSE)`** our generator
   emits, accepting only lowercase `false`. Worked around by lowercasing that exact shape in
   the query text sent to engines (`runner.ts`'s `lowercaseBooleanLiterals`); the generator
-  is left alone, since its output is correct. Only started mattering once
-  `pushDownAssertions` gained triple-term support and began proving `UNION` branches
-  statically empty.
+  is left alone, since its output is correct. It mattered while `pushDownAssertions` left
+  the `UNION` branches it proved statically empty behind as `FILTER(FALSE)`; now that
+  `transformFilterFalse` collapses those through sub-`SELECT`s, none of the benchmark
+  rewrites contains a boolean-literal `FILTER`, and the workaround stays only as a guard.
 
 ## Results
 

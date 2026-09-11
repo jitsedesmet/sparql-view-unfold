@@ -59,17 +59,22 @@ const WITH_PROJECTION_REMOVAL_TRANSFORMATIONS = <const>[
  * through `UNION` and reaches constants that only arrive via a `FILTER`, which is how
  * every constant in this benchmark's rewritten queries actually appears.
  * `transformFilterFalse` runs once more afterwards to clean up any `FILTER(FALSE)`
- * branches the pushdown introduces (contradictory bindings).
+ * branches the pushdown introduces (contradictory bindings). It collapses them through
+ * sub-`SELECT`s too, so a `UNION` branch the pushdown proves empty disappears entirely.
+ * Before that pass could see past a `PROJECT`, such a branch survived as a dead
+ * `FILTER(FALSE)` over a full `?s ?p ?o` pattern in 20 of the 24 cases — harmless to the
+ * answer, but it inflated Comunica's cardinality estimate enough to invert its join order
+ * on `F-Q3`.
  *
  * `removeProjections` is appended last as a **required workaround, not an optional
- * extra**: when `pushDownAssertions` statically empties a `UNION` branch (e.g. a
- * mapper branch whose head predicate can never equal the outer query's asserted
- * constant), the branch it leaves behind can end up as a bare sub-`SELECT` directly
- * followed by sibling `BIND`s with no wrapping `{ }` group around the sub-`SELECT` —
- * an algebra shape `STANDARD_TRANSFORMATIONS` never produces, and one the SPARQL 1.1
- * generator serializes as syntactically invalid SPARQL (`Parse error: Expecting --> }
- * <-- but found --> 'BIND' <--`). Flattening away the offending `PROJECT` node with
- * `removeProjections` avoids the shape entirely; the order relative to
+ * extra**: the pushdown leaves `BIND`s directly over the sub-`SELECT`s that mapper
+ * branches are wrapped in, with no `{ }` group around the sub-`SELECT` — an algebra shape
+ * `STANDARD_TRANSFORMATIONS` never produces, and one the SPARQL 1.1 generator serializes
+ * as syntactically invalid SPARQL (`Parse error: Expecting --> } <-- but found -->
+ * 'BIND' <--`). It is not limited to branches the pushdown empties: without
+ * `removeProjections`, every pushdown and pull-up rewrite of the 24 benchmark cases fails
+ * to parse, `B-Q1` included, which has no emptied branch at all. Flattening away the
+ * offending `PROJECT` nodes avoids the shape entirely; the order relative to
  * `pushDownAssertions` does not matter (verified both ways), so it runs last to also
  * pick up any new sub-`SELECT`s the pushdown itself introduces.
  */
@@ -91,8 +96,8 @@ const WITH_PUSH_DOWN_ASSERTIONS_TRANSFORMATIONS = <const>[
  * about), so a second pass can float — or drop — binds the first pass could not have,
  * without the sub-`SELECT` boundaries in the way. `removeProjections` itself still runs
  * where the plain `pushDownAssertions` pipeline needs it (see that pipeline's own comment) —
- * a required workaround for a generator quirk on statically-emptied `UNION` branches, not an
- * optional extra.
+ * a required workaround for a generator quirk on `BIND`s over sub-`SELECT`s, not an optional
+ * extra.
  */
 const WITH_PULL_UP_EXTENDS_TRANSFORMATIONS = <const>[
   ...STANDARD_TRANSFORMATIONS,
@@ -192,11 +197,11 @@ export function rewriteToSparql11(
  * helper — so the published build appears to disagree with its own grammar source,
  * not just with the spec. Comunica's parser is lenient and never surfaced this.
  *
- * This only started mattering for this benchmark once `pushDownAssertions` gained
- * triple-term support: it now statically proves 10/12 benchmark queries' "already a
- * native quad" `UNION` branch empty and materializes that as a literal
- * `FILTER(FALSE)` (10/12 cases vs. 0/12 for `standard`/`removeProjections`), so
- * every one of those newly-emptied branches hit Oxigraph's parser quirk.
+ * This mattered for this benchmark while `pushDownAssertions` proved 10/12 queries'
+ * "already a native quad" `UNION` branch statically empty and the `FILTER(FALSE)` it
+ * materialized survived into the query text. Now that `transformFilterFalse` collapses
+ * such branches through sub-`SELECT`s, none of the benchmark rewrites contains a
+ * boolean-literal `FILTER`; this stays as a guard for queries that still would.
  *
  * A narrow text-level fix scoped to exactly the shape the generator produces
  * (`FILTER ( TRUE|FALSE )`), applied only to the query text sent to engines here —
