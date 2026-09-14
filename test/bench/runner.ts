@@ -66,17 +66,15 @@ const WITH_PROJECTION_REMOVAL_TRANSFORMATIONS = <const>[
  * answer, but it inflated Comunica's cardinality estimate enough to invert its join order
  * on `F-Q3`.
  *
- * `removeProjections` is appended last as a **required workaround, not an optional
- * extra**: the pushdown leaves `BIND`s directly over the sub-`SELECT`s that mapper
- * branches are wrapped in, with no `{ }` group around the sub-`SELECT` — an algebra shape
- * `STANDARD_TRANSFORMATIONS` never produces, and one the SPARQL 1.1 generator serializes
- * as syntactically invalid SPARQL (`Parse error: Expecting --> } <-- but found -->
- * 'BIND' <--`). It is not limited to branches the pushdown empties: without
- * `removeProjections`, every pushdown and pull-up rewrite of the 24 benchmark cases fails
- * to parse, `B-Q1` included, which has no emptied branch at all. Flattening away the
- * offending `PROJECT` nodes avoids the shape entirely; the order relative to
- * `pushDownAssertions` does not matter (verified both ways), so it runs last to also
- * pick up any new sub-`SELECT`s the pushdown itself introduces.
+ * `removeProjections` is appended last. It used to be a required workaround: the pushdown
+ * leaves `BIND`s directly over the sub-`SELECT`s that mapper branches are wrapped in, and
+ * Traqula's generator before 1.3.1 serialized that as a sub-`SELECT` followed by sibling
+ * `BIND`s in one group — invalid SPARQL (`Parse error: Expecting --> } <-- but found -->
+ * 'BIND' <--`) for every pushdown and pull-up rewrite of the 24 benchmark cases. Traqula
+ * 1.3.1 fixes that serialization, and all 48 of those rewrites now parse without
+ * `removeProjections`. It stays in this pipeline because the pipelines are cumulative — each
+ * approach is the one before it plus one pass — and the recorded results were measured with
+ * it; it runs last to also pick up any new sub-`SELECT`s the pushdown itself introduces.
  */
 const WITH_PUSH_DOWN_ASSERTIONS_TRANSFORMATIONS = <const>[
   ...STANDARD_TRANSFORMATIONS,
@@ -95,9 +93,8 @@ const WITH_PUSH_DOWN_ASSERTIONS_TRANSFORMATIONS = <const>[
  * join topology `pullUpExtends`'s soundness checks read (fewer, flatter operands to reason
  * about), so a second pass can float — or drop — binds the first pass could not have,
  * without the sub-`SELECT` boundaries in the way. `removeProjections` itself still runs
- * where the plain `pushDownAssertions` pipeline needs it (see that pipeline's own comment) —
- * a required workaround for a generator quirk on `BIND`s over sub-`SELECT`s, not an optional
- * extra.
+ * where the plain `pushDownAssertions` pipeline has it (see that pipeline's own comment for why
+ * it is kept now that Traqula 1.3.1 no longer needs it as a workaround).
  */
 const WITH_PULL_UP_EXTENDS_TRANSFORMATIONS = <const>[
   ...STANDARD_TRANSFORMATIONS,

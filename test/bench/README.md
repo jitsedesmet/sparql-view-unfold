@@ -25,8 +25,8 @@ difference between two adjacent bars is the contribution of one transformation:
 | `rewriting+pushDownAssertions` | the above, then `pushDownAssertions` (pushes `FILTER(sameTerm(?x, c))` into the triple patterns that use `?x`, turning a free position into an indexed lookup) |
 | `rewriting+pullUpExtends` | the above, then `pullUpExtends` twice (floats the `BIND`s the pushdown leaves at every leaf back up, or drops them) |
 
-See `runner.ts` for the exact composition and why `removeProjections` is a *required*
-step of the pushdown pipeline rather than an optional extra.
+See `runner.ts` for the exact composition, and for why `removeProjections` stays a step of the
+pushdown pipelines even though Traqula 1.3.1 no longer needs it to keep their output parseable.
 
 ## Reading the output
 
@@ -260,9 +260,9 @@ to use.
 `rewriting` at the median, and faster on only 13 of 55 cells. The 4 queries plain `rewriting`
 finishes and it does not are Jena's `F-Q3` cells, where `rewriting` returns an empty and wrong
 answer quickly because of the ARQ bug. It earns its place only as the enabler that lets
-`pushDownAssertions` see through the nested sub-`SELECT`s — and, in the current generator, as
-the workaround that keeps the pushdown's output parseable (see `runner.ts`); judged as a
-standalone optimization it is a pessimization.
+`pushDownAssertions` see through the nested sub-`SELECT`s; judged as a standalone
+optimization it is a pessimization. (Until Traqula 1.3.1 it was also the workaround that kept
+the pushdown's output parseable; see `runner.ts`.)
 
 ### What the rewriting can answer at all
 
