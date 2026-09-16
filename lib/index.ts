@@ -1,17 +1,19 @@
 /**
- * @fileoverview SPARQL Query Rewriting for RDF 1.2 over RDF 1.1.
+ * @fileoverview View unfolding and query optimisation for SPARQL 1.2.
  *
- * Rewrites SPARQL 1.2 queries - which may contain triple terms and other RDF 1.2 features - into equivalent
- * SPARQL 1.1 queries that can be executed against RDF 1.1 data sources.
+ * Rewrites a SPARQL 1.2 query posed over views into an equivalent query over the data those views are
+ * defined on.
  *
- * **Mappings** are SPARQL CONSTRUCT queries defining how RDF 1.2 data is represented in RDF 1.1: the
- * template (head) shows the RDF 1.2 pattern, the WHERE clause (body) the equivalent RDF 1.1
- * representation. Each triple pattern of the user query is then rewritten to a UNION of subselects, one per
- * mapping that could produce matching data.
- * @module query-rewriting-1-2
+ * **Mappings** are SPARQL CONSTRUCT queries defining a view: the template (head) says which triples the
+ * view holds, the WHERE clause (body) how they are found in the data. Each triple pattern of the user
+ * query is then rewritten to a UNION of subselects, one per mapping that could produce matching data.
+ *
+ * Running SPARQL 1.2 queries - triple terms and all - against RDF 1.1 data is the case this was built for:
+ * a view then says how RDF 1.1 data represents RDF 1.2, and the rewrite hands back plain SPARQL 1.1.
+ * @module sparql-view-unfold
  * @see {@link https://w3c.github.io/rdf-interop/spec/} RDF 1.2 Interoperability Spec
  * @example
- * import { operationTransform, queryTransform, transformContextFromConstructs } from 'query-rewriting-1-2';
+ * import { operationTransform, queryTransform, transformContextFromConstructs } from 'sparql-view-unfold';
  *
  * const context = transformContextFromConstructs([
  *   'CONSTRUCT { ?t rdf:reifies <<( ?s ?p ?o )>> } WHERE { ... RDF 1.1 pattern ... }'
