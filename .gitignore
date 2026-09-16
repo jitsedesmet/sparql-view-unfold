@@ -13,7 +13,12 @@ tsconfig.tsbuildinfo
 !.gitignore
 !.husky
 !.github
-dist
+# The CommonJS build needs a package.json marking it as such, since the root package is a module.
+# It is committed rather than generated, as the Traqula packages do it.
+dist/*
+!dist/cjs/
+dist/cjs/*
+!dist/cjs/package.json
 *.ttl
 *.nt
 !test/statics/*.ttl
