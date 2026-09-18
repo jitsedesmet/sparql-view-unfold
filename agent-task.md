@@ -364,8 +364,9 @@ invisible in their results — `CONSTRUCT` carries `?uq_s ?uq_o` consistently th
 Make the peeling in `rewriteQuery` explicit per form rather than "whatever is not a `PROJECT` falls
 through": reuse `solutionModifierChainOf` (`lib/utils/solutionModifierChain.ts`) to find the sealed
 chain, and handle `SELECT` (rebuild the projection with the renaming EXTENDs, as today), `ASK`,
-`CONSTRUCT` and `DESCRIBE` each by name, with an exhaustive `switch`. Updates (`INSERT`/`DELETE`) are
-rejected by the Phase 3 precheck.
+`CONSTRUCT` and `DESCRIBE` each by name, with an exhaustive `switch`. An update (`INSERT`/`DELETE`)
+has its `WHERE` rewritten like any pattern and its templates only renamed: the RDF 1.2 graph they would
+write to is virtual, so what they write goes to the RDF 1.1 source as written.
 
 ### Tests
 

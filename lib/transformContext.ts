@@ -42,23 +42,25 @@ export interface TransformationContext {
 }
 
 /**
- * Parses a SPARQL query string into its algebra representation, with blank nodes converted to variables.
+ * Parses a SPARQL query or update string into its algebra representation, with blank nodes converted to
+ * variables.
  *
- * Not in quad mode: a `GRAPH` then survives as an operation of its own rather than as the graph component
- * of every pattern below it, which is what lets the GRAPH rules of the passes - and the precheck of
- * {@link userQueryRestrictions!assertUserQueryIsSupported} - see it at all.
+ * A query is parsed out of quad mode, so that a `GRAPH` survives as an operation of its own rather than as
+ * the graph component of every pattern below it, which is what lets the GRAPH rules of the passes see it at
+ * all. An update has an algebra only in quad mode, so it gets one, and
+ * {@link userQueryRestrictions!assertUserQueryIsSupported} reads the graph of each pattern instead.
  * @param context - Object containing the parser
- * @param query - SPARQL query string to parse
- * @param quads - Whether to parse in quad mode, every pattern carrying its graph
+ * @param query - SPARQL query or update string to parse
+ * @param config - What to override of that, `quads` above all
  * @returns the parsed algebra operation
  */
 export function parseQuery(
   { parser }: Pick<TransformationContext, 'parser'>,
   query: string,
-  config: ContextConfigs,
+  config: ContextConfigs = {},
 ): Algebra.Operation {
   const ast = parser.parse(query);
-  return <Algebra.Construct> toAlgebra(ast, { quads: false, blankToVariable: true, ...config });
+  return toAlgebra(ast, { quads: ast.type === 'update', blankToVariable: true, ...config });
 }
 
 /**

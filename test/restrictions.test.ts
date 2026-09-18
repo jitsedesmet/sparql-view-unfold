@@ -3,7 +3,6 @@ import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createQueryRewriter } from '../lib/queryRewriter.js';
 import { rewriteNonRecursivePathsTransformation } from '../lib/transformations/pathTransformation.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
-import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 
 /**
  * The restrictions of {@link userQueryRestrictions!assertUserQueryIsSupported}, over the pass-through
@@ -51,20 +50,10 @@ describe('the restrictions on a user query', () => {
       .rejects.toThrow('Querying a named graph (GRAPH) is not supported');
   });
 
-  // TODO: again, should be allowed bot the cods should be clear on what it means.
-  //   Where clause retargetting, destination retarget.
-  describe('an update, the rewriting being defined over queries', () => {
-    const update = 'INSERT DATA { <ex://s> <ex://p> <ex://o> }';
-
-    it('is rejected as a query string', async({ expect }) => {
-      // The parse itself refuses it - an update only has an algebra in quad mode - so the precheck
-      // never sees this one.
-      await expect(rewriter.rewriteQuery(update)).rejects.toThrow();
-    });
-
-    it('is rejected as an algebra a caller hands in', async({ expect }) => {
-      const parsedUpdate = parseQuery(createTransformationContext(), update, true);
-      await expect(rewriter.rewriteOperation(parsedUpdate)).rejects.toThrow('cannot be rewritten');
-    });
+  // An update parses in quad mode, the only mode it has an algebra in, so its GRAPH is the graph component
+  // of a pattern rather than an operation of its own.
+  it('rejects a GRAPH an update names as the graph of a pattern', async({ expect }) => {
+    await expect(rewriter.rewriteQuery('DELETE { ?s <ex://p> ?o } WHERE { GRAPH ?g { ?s <ex://p> ?o } }'))
+      .rejects.toThrow('Querying a named graph (GRAPH) is not supported');
   });
 });

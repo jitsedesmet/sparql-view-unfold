@@ -15,21 +15,25 @@ import { createTransformationContext, parseQuery, prefixVarsInOperation } from '
 import type { TransformationContext } from './transformContext.js';
 import type { Mapping, QueryTransformation } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
-import { solutionModifierChainOf } from './utils/solutionModifierChain.js';
+import { queryFormTypes, solutionModifierTypes } from './utils/solutionModifierChain.js';
 
 /**
  * @fileoverview The pipeline runner: a list of {@link QueryTransformation}s applied to a query in order.
  *
  * Around that list sits the bookkeeping every rewrite needs and no single pass should have to know about.
- * The user query's variables are renamed under {@link VAR_PREFIX_USER_QUERY} before anything runs, so that
- * a mapping variable and a user variable of the same name cannot be unified by accident; the query's own
- * solution modifiers - {@link solutionModifierChainOf} - are peeled off first and rebuilt afterwards, one
- * rule per query form.
+ * The pipeline runs over the *query part* of what it is handed - the pattern below a query's solution
+ * modifiers, the `WHERE` of an update - whose variables are renamed under {@link VAR_PREFIX_USER_QUERY}
+ * first, so that a mapping variable and a user variable of the same name cannot be unified by accident.
+ * Everything standing over that part is rebuilt on top of the result, one rule per operation.
  *
  * **Which form the query has matters only at the top.** A `SELECT` gets its projection rebuilt over an
  * `EXTEND` per projected variable, restoring the name the user wrote; an `ASK` has no names to restore; a
  * `CONSTRUCT` template and the terms of a `DESCRIBE` name variables the pattern below binds, so they are
- * renamed along with it rather than restored. Updates never reach here, the precheck rejecting them.
+ * renamed along with it rather than restored.
+ *
+ * **An update's templates are left as they stand**, renamed and no more. Its `WHERE` reads the RDF 1.2
+ * graph the mapping denotes and so is rewritten, but that graph is virtual and nothing can be written to
+ * it: what the update inserts and deletes goes to the RDF 1.1 source, exactly as written.
  *
  * Every rewrite gets a {@link TransformationContext} of its own: the {@link ClusterSolver} in it is
  * stateful, and the pipeline is asynchronous, so two concurrent rewrites sharing one context would
@@ -39,13 +43,13 @@ import { solutionModifierChainOf } from './utils/solutionModifierChain.js';
 /** A configured pipeline, ready to rewrite queries. */
 export interface QueryRewriter {
   /**
-   * Rewrites a SPARQL query string.
-   * @param query - The query to rewrite
+   * Rewrites a SPARQL query or update string.
+   * @param query - The query or update to rewrite
    * @returns the rewritten query
    */
   rewriteQuery: (query: string) => Promise<string>;
   /**
-   * Rewrites a query that is already in algebra form.
+   * Rewrites a query or update that is already in algebra form.
    * @param operation - The operation to rewrite
    * @returns the rewritten operation
    */
@@ -76,42 +80,22 @@ function hasGroupInTopLevelChain(op: Algebra.Operation): boolean {
   return false;
 }
 
-/**
- * The operations that say what a query *answers with*. Exactly one of them is the query's own, and it ends
- * the chain: a `PROJECT` below it is a sub-SELECT, part of the pattern the pipeline rewrites.
- */
-const queryFormTypes = new Set<string>([
-  Algebra.Types.PROJECT,
-  Algebra.Types.ASK,
-  Algebra.Types.CONSTRUCT,
-  Algebra.Types.DESCRIBE,
+/** The updates that write without reading, so that the pipeline has nothing to run over. */
+const updateTypesWithoutQueryPart = new Set<string>([
+  Algebra.Types.LOAD,
+  Algebra.Types.CLEAR,
+  Algebra.Types.CREATE,
+  Algebra.Types.DROP,
+  Algebra.Types.ADD,
+  Algebra.Types.MOVE,
+  Algebra.Types.COPY,
+  Algebra.Types.NOP,
 ]);
 
 /** The operations a query's solution-modifier chain can be made of, the query form among them. */
 type SolutionModifier =
   Algebra.Ask | Algebra.Construct | Algebra.Describe | Algebra.Project |
   Algebra.Distinct | Algebra.Reduced | Algebra.Slice | Algebra.From;
-
-/**
- * Splits a parsed query into the solution modifiers at its top and the pattern below them.
- * @param root - The parsed user query
- * @returns the modifiers, outermost first, and the pattern the pipeline runs over
- */
-function peelSolutionModifiers(root: Algebra.Operation): {
-  solutionModifiers: SolutionModifier[];
-  pattern: Algebra.Operation;
-} {
-  const sealedChain = solutionModifierChainOf(root);
-  const solutionModifiers: SolutionModifier[] = [];
-  let iter = root;
-  let reachedQueryForm = false;
-  while (!reachedQueryForm && sealedChain.has(iter)) {
-    solutionModifiers.push(<SolutionModifier> iter);
-    reachedQueryForm = queryFormTypes.has(iter.type);
-    iter = (<Algebra.Single> iter).input;
-  }
-  return { solutionModifiers, pattern: iter };
-}
 
 /**
  * Rebuilds the projection of a `SELECT` over the rewritten pattern, restoring the variable names the user
@@ -185,10 +169,60 @@ function rebuildSolutionModifier(
 }
 
 /**
- * Runs the pipeline over the pattern of a query, rebuilding the solution modifiers it was peeled out of.
+ * Runs the pipeline over one query part, its variables renamed and the restrictions checked first.
  * @param c - The transformation context of this rewrite
  * @param transformations - The pipeline to run
- * @param operation - The parsed user query
+ * @param queryPart - The pattern of a query, or the `WHERE` of an update
+ * @returns the rewritten query part, binding the prefixed variables
+ * @throws Error if the query part asks something the rewriting is not defined for
+ */
+async function rewriteQueryPart(
+  c: TransformationContext,
+  transformations: readonly QueryTransformation[],
+  queryPart: Algebra.Operation,
+): Promise<Algebra.Operation> {
+  assertUserQueryIsSupported(queryPart);
+  let rewritten = prefixVarsInOperation(c, queryPart, VAR_PREFIX_USER_QUERY);
+  for (const transformation of transformations) {
+    rewritten = await transformation(c, rewritten);
+  }
+  return rewritten;
+}
+
+/**
+ * Rewrites the `WHERE` of an update, leaving what it writes to the RDF 1.1 source as the user wrote it.
+ * @param c - The transformation context of this rewrite
+ * @param transformations - The pipeline to run
+ * @param deleteInsert - The update to rewrite
+ * @returns the update, over the rewritten `WHERE`
+ */
+async function rewriteUpdateWhere(
+  c: TransformationContext,
+  transformations: readonly QueryTransformation[],
+  deleteInsert: Algebra.DeleteInsert,
+): Promise<Algebra.Operation> {
+  // `INSERT DATA` and `DELETE DATA` name their triples outright: there is no query part to rewrite.
+  if (deleteInsert.where === undefined) {
+    return deleteInsert;
+  }
+  const rewrittenWhere = await rewriteQueryPart(c, transformations, deleteInsert.where);
+  // The templates name the variables the WHERE binds, which are now the prefixed ones. What they write is
+  // untouched otherwise: it goes to the source, the RDF 1.2 graph the WHERE read being virtual.
+  const prefixTemplate = (template?: Algebra.Pattern[]): Algebra.Pattern[] | undefined =>
+    template && prefixVarsInOperation(c, template, VAR_PREFIX_USER_QUERY);
+  return c.AF.createDeleteInsert(
+    prefixTemplate(deleteInsert.delete),
+    prefixTemplate(deleteInsert.insert),
+    rewrittenWhere,
+  );
+}
+
+/**
+ * Rewrites every query part of a parsed query or update, rebuilding what stands over each on top of the
+ * result.
+ * @param c - The transformation context of this rewrite
+ * @param transformations - The pipeline to run
+ * @param operation - The parsed user query or update
  * @returns the rewritten query, modifiers and projected variable names as the user wrote them
  */
 async function rewriteParsedQuery(
@@ -196,23 +230,38 @@ async function rewriteParsedQuery(
   transformations: readonly QueryTransformation[],
   operation: Algebra.Operation,
 ): Promise<Algebra.Operation> {
-  assertUserQueryIsSupported(operation);
-
-  const { solutionModifiers, pattern } = peelSolutionModifiers(operation);
-
-  let rewritten = prefixVarsInOperation(c, pattern, VAR_PREFIX_USER_QUERY);
-  for (const transformation of transformations) {
-    rewritten = await transformation(c, rewritten);
+  if (operation.type === Algebra.Types.COMPOSITE_UPDATE) {
+    const rewrittenUpdates: Algebra.Operation[] = [];
+    // Sequentially: the updates share one context, whose ClusterSolver is stateful.
+    for (const update of operation.updates) {
+      rewrittenUpdates.push(await rewriteParsedQuery(c, transformations, update));
+    }
+    return c.AF.createCompositeUpdate(rewrittenUpdates);
   }
-
-  // Innermost modifier first, so each is rebuilt over what its own input became.
-  for (const solutionModifier of [ ...solutionModifiers ].reverse()) {
-    // TODO: could we use a mapOperation instead? Maybe starting from:
-    //  `new Transformer({continue: false, copy: false})
-    //  .transformNode(continue on solution modifiers and perform their mapping)
-    rewritten = rebuildSolutionModifier(c, solutionModifier, rewritten);
+  if (operation.type === Algebra.Types.DELETE_INSERT) {
+    return rewriteUpdateWhere(c, transformations, operation);
   }
-  return rewritten;
+  // The query form ends the chain, so its input is the pattern itself rather than another modifier.
+  if (queryFormTypes.has(operation.type)) {
+    const pattern = (<Algebra.Single> operation).input;
+    return rebuildSolutionModifier(
+      c,
+      <SolutionModifier> operation,
+      await rewriteQueryPart(c, transformations, pattern),
+    );
+  }
+  if (solutionModifierTypes.has(operation.type)) {
+    return rebuildSolutionModifier(
+      c,
+      <SolutionModifier> operation,
+      await rewriteParsedQuery(c, transformations, (<Algebra.Single> operation).input),
+    );
+  }
+  // An update that writes without reading, or a bare pattern a caller handed to `rewriteOperation`.
+  if (updateTypesWithoutQueryPart.has(operation.type)) {
+    return operation;
+  }
+  return rewriteQueryPart(c, transformations, operation);
 }
 
 /**

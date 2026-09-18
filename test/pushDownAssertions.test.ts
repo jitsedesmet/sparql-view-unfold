@@ -38,11 +38,12 @@ describe('pushDownAssertions', () => {
 
   /**
    * Transforms a query parsed *in quad mode*, where a GRAPH clause is the graph component of every pattern
-   * below it rather than an operation of its own. The rewriter no longer parses that way, but it is the
-   * only shape in which one pattern carries both a graph and a triple term, which two rules below are about.
+   * below it rather than an operation of its own. The rewriter parses a query out of quad mode, but this is
+   * the only shape in which one pattern carries both a graph and a triple term, which two rules below are
+   * about.
    */
   function transformOverQuads(query: string): string {
-    return c.generator.generate(toAst(pushDownAssertions(c, parseQuery(c, prefixes + query, true)))).trim();
+    return c.generator.generate(toAst(pushDownAssertions(c, parseQuery(c, prefixes + query, { quads: true })))).trim();
   }
 
   function expectTransformOverQuads(expect: typeof Expect, query: string, expected: string): void {
@@ -643,9 +644,9 @@ GROUP BY ?x`,
     });
 
     it('empties the plan where that `!bound` meets a variable that is certainly bound', ({ expect }) => {
-      // The inference the residual used to lose: a BGP binds ?x certainly, so `!bound(?x)` cannot hold
-      // and the whole plan is empty. Before the merge this substituted :c and stranded the second
-      // conjunct above it - correct, but a plan that does work to return nothing.
+      // A BGP binds ?x certainly, so `!bound(?x)` cannot hold and the whole plan is empty. Substituting
+      // :c and stranding the second conjunct above it would be correct too, but it is a plan that does
+      // work to return nothing.
       expectTransform(
         expect,
         `SELECT * WHERE {

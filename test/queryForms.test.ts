@@ -29,6 +29,11 @@ PREFIX : <ex://>
  * `DESCRIBE` is the one form that cannot: it answers with a description of the data it is run against, so
  * a rewritten `DESCRIBE` describes its resources in RDF 1.1. What it owes is that it picks the same
  * resources, which is what the test below checks.
+ *
+ * An update is the other asymmetric one: its `WHERE` reads the RDF 1.2 graph and so is rewritten, but that
+ * graph is virtual and the triples it writes go to the RDF 1.1 source as written. What it owes is that the
+ * source ends up holding exactly the triples the template instantiates over the solutions the mapped data
+ * gives its `WHERE`.
  */
 describe('the query forms', () => {
   const engine = new QueryEngine();
@@ -149,6 +154,55 @@ describe('the query forms', () => {
       );
       expect(describedOverRdf11.length).toBeGreaterThan(0);
       expect(usingRewriter).toBeRdfIsomorphic(describedOverRdf11);
+    });
+  });
+
+  describe('an update', () => {
+    /** A quad as the key its three terms make, so that two stores can be compared by content. */
+    const quadKey = (quad: RDF.Quad): string =>
+      `${quad.subject.value}|${quad.predicate.value}|${quad.object.value}`;
+
+    it('inserts what its template makes of the solutions the mapped data gives its WHERE', async({ expect }) => {
+      const { store11, store12 } = await stores();
+      const where = 'WHERE { ?t rdf:reifies <<( ?s :knows ?o )>> }';
+
+      // What the same template instantiates over the RDF 1.2 graph: the triples the update owes the source.
+      const owed: RDF.Quad[] = await arrayifyStream(
+        await engine.queryQuads(`${prefixes}CONSTRUCT { ?s :knownBy ?o } ${where}`, { sources: [ store12 ]}),
+      );
+      expect(owed.length).toBeGreaterThan(0);
+
+      const before = new Set(store11.getQuads(null, null, null, null).map(quadKey));
+      await engine.queryVoid(
+        await rewriter.rewriteQuery(`${prefixes}INSERT { ?s :knownBy ?o } ${where}`),
+        { sources: [ store11 ]},
+      );
+
+      const inserted = store11.getQuads(null, null, null, null).filter(quad => !before.has(quadKey(quad)));
+      expect(new Set(inserted.map(quadKey))).toEqual(new Set(owed.map(quadKey)));
+    });
+
+    it('deletes the triples its template names, the WHERE reading the mapped data', async({ expect }) => {
+      const { store11 } = await stores();
+      const before = store11.getQuads(null, null, null, null);
+      expect(before.some(quad => quad.predicate.value.endsWith('#Subject'))).toBe(true);
+
+      await engine.queryVoid(
+        await rewriter.rewriteQuery(
+          `${prefixes}DELETE { ?t rdf:Subject ?s } WHERE { ?t rdf:reifies <<( ?s :knows ?o )>> }`,
+        ),
+        { sources: [ store11 ]},
+      );
+
+      const after = new Set(store11.getQuads(null, null, null, null).map(quadKey));
+      const deleted = before.filter(quad => !after.has(quadKey(quad)));
+      expect(deleted.length).toBeGreaterThan(0);
+      expect(deleted.every(quad => quad.predicate.value.endsWith('#Subject'))).toBe(true);
+    });
+
+    it('leaves an update with no WHERE to read exactly as it was', async({ expect }) => {
+      expect((await rewriter.rewriteQuery('INSERT DATA { <ex://a> <ex://b> <ex://c> }'))
+        .replaceAll(/\s+/gu, ' ').trim()).toBe('INSERT DATA { <ex://a> <ex://b> <ex://c> . }');
     });
   });
 

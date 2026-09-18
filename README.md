@@ -125,7 +125,6 @@ literal or as a prefixed IRI respectively.
 |---|---|
 | No `+` or `*` property path in the user query | The rewrite throws. A recursive path cannot be expanded into triple patterns, so the mapping could not be unfolded into it. `?`, `|`, `/`, `^` and `!(…)` are all fine. |
 | No `GRAPH` in the user query | The rewrite throws. What unfolding a mapping inside a named graph means is not settled. |
-| No updates | The rewrite throws. The rewriting is defined over queries. |
 | No unstable function (`BNODE`, `RAND`, `UUID`, `STRUUID`) in a mapping body | Building the mapping throws, naming the function. A mapping has to denote one fixed graph, and those answer differently on every evaluation. `NOW` is allowed: SPARQL 1.1 §17.4.5.1 fixes it per query execution. |
 | A mapping head holds exactly one triple | Nothing — `mappingFromConstructQueries` splits a larger CONSTRUCT template into one mapping per triple for you, which denotes the same graph. |
 | No blank nodes in the RDF 1.1 dataset, unless skolemised | **Wrong answers, silently.** A blank node cannot be referenced across the sub-queries the unfolding produces, so triples reached through one are lost. Skolemise them into IRIs before querying. |
@@ -133,6 +132,12 @@ literal or as a prefixed IRI respectively.
 `DESCRIBE` is supported, with the caveat inherent to it: a `DESCRIBE` answers with a description of the
 data it is run against, so a rewritten one describes its resources in RDF 1.1. It selects the same
 resources the query over the mapped data would.
+
+Updates are supported, with the caveat inherent to *them*: only the `WHERE` reads the RDF 1.2 graph, and
+only the `WHERE` is rewritten. That graph is virtual, so nothing can be written to it — an `INSERT` or
+`DELETE` template goes to the RDF 1.1 source exactly as you wrote it, with its variables bound by the
+rewritten `WHERE`. Writing RDF 1.2 through the mapping is a different problem (the view update problem) and
+is not what this does.
 
 ## API
 
