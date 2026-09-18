@@ -184,7 +184,7 @@ The tables below are the short version; the generated
 
 One transformation needs a Comunica runtime, and lives behind its own subpath:
 
-```js
+```typescript
 import { simplifyStaticExpressionsTransformation } from 'sparql-view-unfold/comunica';
 ```
 
