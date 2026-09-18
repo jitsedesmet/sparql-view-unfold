@@ -3,13 +3,8 @@ import type * as RDF from '@rdfjs/types';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import { DataFactory, Store } from 'n3';
 import { describe, it } from 'vitest';
-import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
-import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
-import { nullifyUnbindableVars } from '../lib/transformations/nullifyUnbindableVars.js';
-import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
-import { removeProjections } from '../lib/transformations/removeProjections.js';
-import { operationTransform, queryTransform } from '../lib/transformBgp.js';
-import { transformContextFromConstructs } from '../lib/transformContext.js';
+import { mappingFromConstructQueries } from '../lib/mapping.js';
+import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import {
   nonSingletonTripleConstruct,
   nonTripleTermConstruct,
@@ -34,16 +29,10 @@ describe('integration tests', () => {
   const engine = new QueryEngine();
   const DF = DataFactory;
 
-  const standardTransformations = <const>[
-    operationTransform,
-    transformFilterFalse,
-    nullifyJoinOverIncompatibleBounds,
-    nullifyUnbindableVars,
-    transformFilterFalse,
-    pullUpExtends,
-    // TODO: remove once https://github.com/comunica/comunica/pull/1734 is merged
-    removeProjections,
-  ];
+  /** Every comparison below goes through the default pipeline, which is what these tests are here to check. */
+  function rewriterFor(mappers: string[]): ReturnType<typeof createQueryRewriter> {
+    return createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries(mappers)));
+  }
 
   async function sourceToStore(
     sources: NonNullable<Parameters<typeof engine.queryQuads>[1]>['sources'],
@@ -78,8 +67,7 @@ describe('integration tests', () => {
     const store12 = await storeTo12Store(store11, mappers);
     const resOnMappedData = (await sourceToStore([ store12 ], userQuery)).getQuads(null, null, null, null);
 
-    const transformerContext = transformContextFromConstructs(mappers);
-    const rewrittenQuery = queryTransform(transformerContext, userQuery, [ ...standardTransformations ]);
+    const rewrittenQuery = await rewriterFor(mappers).rewriteQuery(userQuery);
     const resUsingRewriter = (await sourceToStore([ store11 ], rewrittenQuery)).getQuads(null, null, null, null);
 
     return { resOnMappedData, resUsingRewriter };
@@ -113,8 +101,7 @@ describe('integration tests', () => {
       await engine.queryBindings(userQuery, { sources: [ store12 ]}),
     );
 
-    const transformerContext = transformContextFromConstructs(mappers);
-    const rewrittenQuery = queryTransform(transformerContext, userQuery, [ ...standardTransformations ]);
+    const rewrittenQuery = await rewriterFor(mappers).rewriteQuery(userQuery);
     const rewrittenBindings: RDF.Bindings[] = await arrayifyStream(
       await engine.queryBindings(rewrittenQuery, { sources: [ store11 ]}),
     );
@@ -385,7 +372,7 @@ describe('integration tests', () => {
 
     it('selecting with a variable reused across positions (?x ?x ?o) returns the same results', async({ expect }) => {
       // Reusing the same variable in subject and predicate position unifies two mapping-head
-      // variables, which previously produced an invalid double BIND to the same variable.
+      // variables, which has to bind that variable once rather than twice.
       // The store deliberately contains a triple whose subject equals its predicate.
       const store11 = new Store([
         DF.quad(DF.namedNode('ex://loop'), DF.namedNode('ex://loop'), DF.namedNode('ex://x')),

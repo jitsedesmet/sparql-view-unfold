@@ -4,6 +4,7 @@ import { VAR_PREFIX_USER_QUERY } from './consts.js';
 import type { Pin, PinMeet } from './datastructures/TermClusterSet.js';
 import { meetShapes, TermClusterSet, triplePositions } from './datastructures/TermClusterSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
+import { RewriteNoMatchError } from './RewriteNoMatchError.js';
 import type { RangedVar } from './utils/RangedVar.js';
 import { DF } from './utils/rdfDatatypes.js';
 import { isRdfQuad, isRdfTerm, isRdfVar } from './utils/typeGuards.js';
@@ -88,14 +89,14 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   /**
    * Narrows the group of a variable to the range that variable carries.
    * @param variable - The variable whose range to register
-   * @throws Error if the narrowed range leaves the group nothing to be
+   * @throws RewriteNoMatchError if the narrowed range leaves the group nothing to be
    */
   protected handleVarRange(variable: RangedVar): void {
     const range = variable.range;
     const group = this.getGroup(variable);
     if (range !== undefined && group !== undefined && !this.narrowRange(group, range)) {
       const groupTerm = this.resolvedTermOf(group);
-      throw new Error(`The range [${[ ...range.values() ].join(', ')}] of ${JSON.stringify(variable.value)} leaves nothing for its group, fixed to ${JSON.stringify(groupTerm)}`);
+      throw new RewriteNoMatchError(`The range [${[ ...range.values() ].join(', ')}] of ${JSON.stringify(variable.value)} leaves nothing for its group, fixed to ${JSON.stringify(groupTerm)}`);
     }
   }
 
@@ -104,7 +105,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * adding constraints.
    * @param from - Term, variable, or expression (typically from the mapping head)
    * @param to - Term or variable (typically from the triple pattern)
-   * @throws Error if the terms do not match, or the constraints conflict
+   * @throws RewriteNoMatchError if the terms do not match, or the constraints conflict
    */
   public register(from: RDF.Term | Algebra.Expression, to: RDF.Term): void {
     if (isRdfTerm(from) && !isRdfVar(from) && isRdfTerm(to) && !isRdfVar(to)) {
@@ -113,7 +114,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
       if (from.equals(to)) {
         return;
       }
-      throw new Error(`Cannot match Term ${JSON.stringify(from)} with term ${JSON.stringify(to)}`);
+      throw new RewriteNoMatchError(`Cannot match Term ${JSON.stringify(from)} with term ${JSON.stringify(to)}`);
     } else if (isRdfVar(from) && isRdfVar(to)) {
       // Two vars
       this.mergeGroups(from, to);
@@ -186,11 +187,10 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
 
   /**
    * Registers a concrete term binding to a group: the throwing wrapper around {@link assertTerm} the
-   * unfolding needs, a mapping head asking one group to be two terms at once being a broken mapping rather
-   * than an ordinary contradiction.
+   * unfolding needs, a group asked to be two terms at once matching nothing at all.
    * @param group - The group ID
    * @param term - The term to bind, a triple term included
-   * @throws Error if the term conflicts with an existing binding or range
+   * @throws RewriteNoMatchError if the term conflicts with an existing binding or range
    */
   protected registerTermToGroup(group: number, term: RawTerm): void {
     // Read before asserting: a failed assertion leaves the set in a state no caller may read - narrowed
@@ -198,7 +198,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     const curTerm = this.resolvedTermOf(group);
     const curRange = this.rangeOf(group);
     if (!this.assertTerm(group, term)) {
-      throw new Error(curTerm === undefined ?
+      throw new RewriteNoMatchError(curTerm === undefined ?
         `Cannot assign Term ${JSON.stringify(term)} to a group with range [${[ ...curRange.values() ].join(', ')}]` :
         `Cannot match Term ${JSON.stringify(curTerm)} with term ${JSON.stringify(term)}`);
     }
@@ -294,14 +294,13 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * @param from - One of the variables
    * @param to - The other
    * @returns the ids involved, or `undefined` when both were already in one group
-   * @throws Error when the two are fixed to different terms: a mapping head asking one group to be two terms
-   * at once is broken, rather than the ordinary contradiction it is for an assertion conjunction
+   * @throws RewriteNoMatchError when the two are fixed to different terms, which no solution can satisfy
    */
   public override mergeGroups(from: RangedVar, to: RangedVar):
     { oldGroup: number; newGroup: number; conflict: boolean } | undefined {
     const merged = super.mergeGroups(from, to);
     if (merged?.conflict === true) {
-      throw new Error(`Cannot unify ${JSON.stringify(from.value)} with ${JSON.stringify(to.value)}: they are fixed to different terms`);
+      throw new RewriteNoMatchError(`Cannot unify ${JSON.stringify(from.value)} with ${JSON.stringify(to.value)}: they are fixed to different terms`);
     }
     return merged;
   }

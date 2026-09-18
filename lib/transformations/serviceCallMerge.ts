@@ -1,6 +1,7 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { termToString } from 'rdf-string';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
+import type { QueryTransformation } from '../types.js';
 
 /**
  * Merges and hoists SERVICE calls, so that as much of the plan as possible is evaluated by the endpoint
@@ -14,7 +15,7 @@ import type { TransformContext } from '../transformContext.js';
  * @param op - The operation to transform
  * @returns the transformed operation
  */
-export function transformServiceCallPushUp(c: TransformContext, op: Algebra.Operation): Algebra.Operation {
+export function transformServiceCallPushUp(c: TransformationContext, op: Algebra.Operation): Algebra.Operation {
   const { AF } = c;
 
   /**
@@ -154,4 +155,12 @@ export function transformServiceCallPushUp(c: TransformContext, op: Algebra.Oper
       // TODO: investigate if others work the same way.
     },
   );
+}
+
+/**
+ * The pipeline step merging and hoisting SERVICE calls so the endpoint evaluates as much of the plan as it can.
+ * @returns the transformation
+ */
+export function serviceCallPushUpTransformation(): QueryTransformation {
+  return transformServiceCallPushUp;
 }

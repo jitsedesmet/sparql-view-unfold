@@ -1,14 +1,14 @@
 import { describe, it } from 'vitest';
-import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext } from '../lib/transformContext.js';
+import type { TransformationContext } from '../lib/transformContext.js';
+import { createTransformationContext } from '../lib/transformContext.js';
 import { withCpVars } from '../lib/utils/certainlyBoundVars.js';
 
-const c = <TransformContext> createPartialContext();
+const c = createTransformationContext();
 const x = c.DF.variable('x');
 const g = c.DF.variable('g');
 
 /** A one-row VALUES over `?x`, either UNDEF or holding a literal. */
-function column(bound: boolean): ReturnType<TransformContext['AF']['createValues']> {
+function column(bound: boolean): ReturnType<TransformationContext['AF']['createValues']> {
   return c.AF.createValues([ x ], [ bound ? { x: c.DF.literal('l') } : {} ]);
 }
 

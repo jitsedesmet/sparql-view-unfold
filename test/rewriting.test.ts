@@ -1,12 +1,10 @@
-import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
 import type { expect as Expect } from 'vitest';
-import { transformExtendsToValues } from '../lib/transformations/extendsToValues.js';
-import { operationTransform, queryTransform } from '../lib/transformBgp.js';
-import type { TransformContext } from '../lib/transformContext.js';
-import {
-  transformContextFromConstructs,
-} from '../lib/transformContext.js';
+import { mappingFromConstructQueries } from '../lib/mapping.js';
+import { createQueryRewriter } from '../lib/queryRewriter.js';
+import { extendsToValuesTransformation } from '../lib/transformations/extendsToValues.js';
+import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
+import type { QueryTransformation } from '../lib/types.js';
 import {
   expectedQuery,
   expectedQueryToValues,
@@ -17,23 +15,27 @@ import {
 } from './queryConsts.js';
 
 describe('dummy', () => {
-  function transformQueryUsingConstructs(
+  /** Rewrites a query with the unfolding of the given mappings, followed by the given pipeline. */
+  async function transformQueryUsingConstructs(
     userQuery: string,
     mappers: string[],
-    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
-  ): string {
-    const transformerContext = transformContextFromConstructs(mappers);
-    return queryTransform(transformerContext, userQuery, transformations);
+    afterUnfolding: readonly QueryTransformation[] = [],
+  ): Promise<string> {
+    const rewriter = createQueryRewriter([
+      unfoldingTransformation(mappingFromConstructQueries(mappers)),
+      ...afterUnfolding,
+    ]);
+    return rewriter.rewriteQuery(userQuery);
   }
 
-  function testConstructMappers(
+  async function testConstructMappers(
     expect: typeof Expect,
     userQuery: string,
     expectedQuery: string,
     mappers: string[],
-    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
-  ): void {
-    expect(transformQueryUsingConstructs(userQuery, mappers, transformations).trim())
+    afterUnfolding: readonly QueryTransformation[] = [],
+  ): Promise<void> {
+    expect((await transformQueryUsingConstructs(userQuery, mappers, afterUnfolding)).trim())
       .toEqual(expectedQuery.trim());
 
     // Const _expectedAst = parser.parse(expectedQuery);
@@ -48,12 +50,12 @@ describe('dummy', () => {
   SELECT ( <ex://x> AS ?uq_s ) WHERE {
     {
       {
-        ?p0_mi_y ?p0_mi_y ?p0_mi_y .
-        FILTER ( SAMETERM( <ex://x> , SUBJECT( ?p0_mi_y ) ) )
+        ?mi_y ?mi_y ?mi_y .
+        FILTER ( SAMETERM( <ex://x> , SUBJECT( ?mi_y ) ) )
       }
-      FILTER ( SAMETERM( <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> , PREDICATE( ?p0_mi_y ) ) )
+      FILTER ( SAMETERM( <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> , PREDICATE( ?mi_y ) ) )
     }
-    FILTER ( SAMETERM( "b" , OBJECT( ?p0_mi_y ) ) )
+    FILTER ( SAMETERM( "b" , OBJECT( ?mi_y ) ) )
   }
 }`,
     [ 'CONSTRUCT { <ex://x> <ex://p> ?y } WHERE { ?y ?y ?y }' ],
@@ -65,11 +67,12 @@ describe('dummy', () => {
     expect,
     'PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT * { ?x rdf:reifies ?y }',
     `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
-  SELECT ( ?p0_mi_t AS ?uq_x ) ( <<( ?p0_mi_s ?p0_mi_p ?p0_mi_o )>> AS ?uq_y ) WHERE {
-    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p0_mi_s .
-    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p0_mi_p .
-    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p0_mi_o .
+  SELECT ( ?mi_t AS ?uq_x ) ( <<( ?mi_s ?mi_p ?mi_o )>> AS ?uq_y ) WHERE {
+    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+    FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
   }
 }`,
     [ tripleTermConstruct ],
@@ -83,9 +86,9 @@ describe('dummy', () => {
      PREFIX : <ex://>
      SELECT * { :knows rdf:reifies ?y }`,
     `SELECT ( ?uq_y AS ?y ) WHERE {
-  SELECT ( <<( ?p0_mi_s <ex://knows> ?p0_mi_o )>> AS ?uq_y ) WHERE {
-    ?p0_mi_s ?p0_mi_p ?p0_mi_o .
-    FILTER ( SAMETERM( ?p0_mi_p , <ex://knows> ) )
+  SELECT ( <<( ?mi_s <ex://knows> ?mi_o )>> AS ?uq_y ) WHERE {
+    ?mi_s ?mi_p ?mi_o .
+    FILTER ( SAMETERM( ?mi_p , <ex://knows> ) )
   }
 }`,
     [ predicateReifierConstruct ],
@@ -95,8 +98,8 @@ describe('dummy', () => {
     expect,
     'SELECT * { ?s <ex://p> ?o }',
     `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
-  SELECT ( ?p0_mi_o AS ?uq_o ) ( ?p0_mi_s AS ?uq_s ) WHERE {
-    ?p0_mi_s <ex://p> ?p0_mi_o .
+  SELECT ( ?mi_o AS ?uq_o ) ( ?mi_s AS ?uq_s ) WHERE {
+    ?mi_s <ex://p> ?mi_o .
   }
 }`,
     [ 'CONSTRUCT WHERE { ?s <ex://p> ?o  }' ],
@@ -109,8 +112,8 @@ describe('dummy', () => {
     expect,
     'SELECT * { ?s <ex://p> ?o } LIMIT 10 OFFSET 5',
     `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
-  SELECT ( ?p0_mi_o AS ?uq_o ) ( ?p0_mi_s AS ?uq_s ) WHERE {
-    ?p0_mi_s <ex://p> ?p0_mi_o .
+  SELECT ( ?mi_o AS ?uq_o ) ( ?mi_s AS ?uq_s ) WHERE {
+    ?mi_s <ex://p> ?mi_o .
   }
 }
 LIMIT 10 OFFSET 5`,
@@ -122,8 +125,8 @@ LIMIT 10 OFFSET 5`,
     expect,
     'SELECT DISTINCT * { ?s <ex://p> ?o } LIMIT 10',
     `SELECT DISTINCT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
-  SELECT ( ?p0_mi_o AS ?uq_o ) ( ?p0_mi_s AS ?uq_s ) WHERE {
-    ?p0_mi_s <ex://p> ?p0_mi_o .
+  SELECT ( ?mi_o AS ?uq_o ) ( ?mi_s AS ?uq_s ) WHERE {
+    ?mi_s <ex://p> ?mi_o .
   }
 }
 LIMIT 10`,
@@ -139,26 +142,10 @@ LIMIT 10`,
     testQuery,
     expectedQueryToValues,
     [ tripleTermConstruct, nonTripleTermConstruct ],
-    [ operationTransform, transformExtendsToValues ],
+    [ extendsToValuesTransformation() ],
   ));
 
-  // It('simple & optimizeBinds', ({ expect }) => testConstructMappers(
-  //   expect,
-  //   testQuery,
-  //   expectedQueryOptimizedBounds,
-  //   [ tripleTermConstruct, nonTripleTermConstruct ],
-  //   [ operationTransform, substituteVarsThatArePreBoundToTerms ],
-  // ));
-  //
-  // it('simple & optimizeBinds & optimizeEmptyResultSets', ({ expect }) => testConstructMappers(
-  //   expect,
-  //   testQuery,
-  //   expectedQueryOptimizedBoundsAndEmptyRes,
-  //   [ tripleTermConstruct, nonTripleTermConstruct ],
-  //   [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
-  // ));
-  //
-  // it('spo with blank in mapping head', ({ expect }) => {
+  // It('spo with blank in mapping head', ({ expect }) => {
   //   expect(() => transformQueryUsingConstructs(
   //     'SELECT * { { ?s <http://ex.org/a> ?a ; <http://ex.org/b> ?b } UNION { ?s <http://ex.org/b> ?b2 } }',
   //     [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],

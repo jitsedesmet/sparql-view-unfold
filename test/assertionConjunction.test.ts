@@ -4,8 +4,7 @@ import type { Algebra as AlgebraTypes } from '@traqula/algebra-transformations-1
 import { describe, it } from 'vitest';
 import type { RangeSet } from '../lib/RangeSet.js';
 import { emptyRange, graphRange, predicateRange } from '../lib/RangeSet.js';
-import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext } from '../lib/transformContext.js';
+import { createTransformationContext } from '../lib/transformContext.js';
 import { AssertionConjunction, collectAssertions } from '../lib/utils/assertionConjunction.js';
 import type { Access, Assertion, Assertions } from '../lib/utils/assertions.js';
 import {
@@ -23,7 +22,7 @@ import { VRanges } from '../lib/utils/certainlyBoundVars.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
 import { derivedVarNamer } from '../lib/utils.js';
 
-const c = <TransformContext> createPartialContext();
+const c = createTransformationContext();
 const termC = DF.namedNode('ex://c');
 const termD = DF.namedNode('ex://d');
 

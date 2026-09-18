@@ -9,14 +9,22 @@ import { Algebra } from '@traqula/algebra-transformations-1-2';
  */
 
 /**
- * The operation types that make up a query's solution-modifier chain. `ORDER_BY` stands below the
- * projection, inside the pattern, so it is not one of them.
+ * The operations that say what a query *answers with*. Exactly one of them is the query's own and it ends
+ * the chain: a `PROJECT` below it is a sub-SELECT, part of the pattern.
  */
-const solutionModifierTypes = new Set<string>([
+export const queryFormTypes = new Set<string>([
+  Algebra.Types.PROJECT,
   Algebra.Types.ASK,
   Algebra.Types.CONSTRUCT,
   Algebra.Types.DESCRIBE,
-  Algebra.Types.PROJECT,
+]);
+
+/**
+ * The operation types that make up a query's solution-modifier chain. `ORDER_BY` stands below the
+ * projection, inside the pattern, so it is not one of them.
+ */
+export const solutionModifierTypes = new Set<string>([
+  ...queryFormTypes,
   Algebra.Types.DISTINCT,
   Algebra.Types.REDUCED,
   Algebra.Types.SLICE,

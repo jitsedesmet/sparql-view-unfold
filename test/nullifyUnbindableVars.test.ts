@@ -1,10 +1,9 @@
 import { describe, it } from 'vitest';
 import { nullifyUnbindableVars } from '../lib/transformations/nullifyUnbindableVars.js';
-import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext } from '../lib/transformContext.js';
+import { createTransformationContext } from '../lib/transformContext.js';
 import { isFilterFalse } from '../lib/utils/operationhelpers.js';
 
-const c = <TransformContext> createPartialContext();
+const c = createTransformationContext();
 const x = c.DF.variable('x');
 const g = c.DF.variable('g');
 const iri = c.AF.createValues([ x ], [{ x: c.DF.namedNode('ex://c') }]);

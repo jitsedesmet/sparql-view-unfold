@@ -3,7 +3,7 @@ import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
 import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import { RangeSet } from '../RangeSet.js';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
 import { termVars } from './certainlyBoundVars.js';
 import { DF } from './rdfDatatypes.js';
 import { unionSets } from './setUtils.js';
@@ -550,7 +550,7 @@ function variableOfNotBound(expression: Algebra.Expression): string | undefined 
 }
 
 /** The expression reading an access: the variable, wrapped in one accessor per position it reads. */
-function accessAsExpression(c: TransformContext, access: Access): Algebra.Expression {
+function accessAsExpression(c: TransformationContext, access: Access): Algebra.Expression {
   return access.positions.reduce<Algebra.Expression>(
     (inner, position) => c.AF.createOperatorExpression(position, [ inner ]),
     c.AF.createTermExpression(DF.variable(access.name)),
@@ -558,7 +558,7 @@ function accessAsExpression(c: TransformContext, access: Access): Algebra.Expres
 }
 
 /** The expression one side of an assertion stands for. */
-function targetAsExpression(c: TransformContext, target: AssertionTarget): Algebra.Expression {
+function targetAsExpression(c: TransformationContext, target: AssertionTarget): Algebra.Expression {
   if (targetIsAccess(target)) {
     return accessAsExpression(c, target);
   }
@@ -566,7 +566,7 @@ function targetAsExpression(c: TransformContext, target: AssertionTarget): Algeb
 }
 
 /** Creates the strong assertion A⟨a ≡ c⟩: `sameTerm(a, c)`. */
-function strongAssertionAsExpression(c: TransformContext, access: Access, target: AssertionTarget):
+function strongAssertionAsExpression(c: TransformationContext, access: Access, target: AssertionTarget):
 Algebra.Expression {
   return c.AF.createOperatorExpression('sameterm', [
     accessAsExpression(c, access),
@@ -576,7 +576,7 @@ Algebra.Expression {
 
 /** Creates T⟨a : τ⟩: the predicate that states `τ`, applied to `a`. */
 function termTypeAssertionAsExpression(
-  c: TransformContext,
+  c: TransformationContext,
   access: Access,
   termType: AssertableTermType,
 ): Algebra.Expression {
@@ -590,7 +590,7 @@ function termTypeAssertionAsExpression(
  * @param strong - The condition to weaken
  * @returns the disjunction, which may only ever be placed as a filter condition (S1)
  */
-function weakenedExpression(c: TransformContext, name: string, strong: Algebra.Expression):
+function weakenedExpression(c: TransformationContext, name: string, strong: Algebra.Expression):
 Algebra.Expression {
   return c.AF.createOperatorExpression('||', [ unboundAssertionAsExpression(c, name), strong ]);
 }
@@ -602,18 +602,18 @@ Algebra.Expression {
  * @param target - The term it is fixed to where its root is bound
  * @returns the condition
  */
-function weakAssertionAsExpression(c: TransformContext, access: Access, target: AssertionTarget):
+function weakAssertionAsExpression(c: TransformationContext, access: Access, target: AssertionTarget):
 Algebra.Expression {
   return weakenedExpression(c, access.name, strongAssertionAsExpression(c, access, target));
 }
 
 /** Creates the bound assertion B⟨?x⟩: `bound(?x)`. */
-function boundAssertionAsExpression(c: TransformContext, name: string): Algebra.Expression {
+function boundAssertionAsExpression(c: TransformationContext, name: string): Algebra.Expression {
   return c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(DF.variable(name)) ]);
 }
 
 /** Creates the unbound assertion U⟨?x⟩: `!bound(?x)`. */
-function unboundAssertionAsExpression(c: TransformContext, name: string): Algebra.Expression {
+function unboundAssertionAsExpression(c: TransformationContext, name: string): Algebra.Expression {
   return c.AF.createOperatorExpression('!', [ boundAssertionAsExpression(c, name) ]);
 }
 
@@ -622,7 +622,7 @@ function unboundAssertionAsExpression(c: TransformContext, name: string): Algebr
  * that the two can be read against each other.
  * @returns the condition, in the shape the recogniser reads straight back into the same state
  */
-export function conjunctAsExpression(c: TransformContext, { access, assertion }: AssertionConjunct):
+export function conjunctAsExpression(c: TransformationContext, { access, assertion }: AssertionConjunct):
 Algebra.Expression {
   // Nothing new is ever serialised, which is what keeps a second run of the pass from stacking a second
   // copy of what it derived. A shape in particular is never written as `sameTerm(?o, <<( ... )>>)` (S2):
@@ -768,7 +768,7 @@ export function substituteInTerm(
  * longer match any triple.
  */
 export function substituteInPattern(
-  c: TransformContext,
+  c: TransformationContext,
   pattern: Algebra.Pattern,
   assertions: Assertions,
 ): Algebra.Pattern | undefined {

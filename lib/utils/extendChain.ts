@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { Types } from '@traqula/algebra-transformations-1-2';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
 import { collectVariableNames } from '../utils.js';
 
 /**
@@ -40,7 +40,7 @@ export interface PeeledChain {
  * @param op - The operation to peel
  * @returns its core and the binds above it, innermost first
  */
-export function peelExtends(c: TransformContext, op: Algebra.Operation): PeeledChain {
+export function peelExtends(c: TransformationContext, op: Algebra.Operation): PeeledChain {
   // Evaluation order is how every ordering argument in the pull-up is written: `binds[0]` is the innermost
   // bind, and a bind may only read what stands *before* it in the list.
   const binds: ChainBind[] = [];
@@ -66,7 +66,7 @@ export function peelExtends(c: TransformContext, op: Algebra.Operation): PeeledC
  * @returns the rebuilt operation
  */
 export function replantExtends(
-  c: TransformContext,
+  c: TransformationContext,
   core: Algebra.Operation,
   binds: readonly ChainBind[],
 ): Algebra.Operation {

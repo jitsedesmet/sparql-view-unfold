@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
+import type { QueryTransformation } from '../types.js';
 import type { Access } from '../utils/assertions.js';
 import { componentOf } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
@@ -90,7 +91,7 @@ import { collectVariableNames } from '../utils.js';
  * handed, because SPARQL has nowhere to write it there - `BIND` is a graph pattern, and there is no room
  * for one between a `SELECT` and its `LIMIT`. A hoist past the query's own projection is pointless anyway,
  * there being nothing above it to rise to, so what this rules out is a tree no generator could print in
- * exchange for nothing at all. The chain is short and usually empty: `queryTransform` strips the outer
+ * exchange for nothing at all. The chain is short and usually empty: the pipeline runner strips the outer
  * projection before running any transformation.
  *
  * ## What does not move yet
@@ -170,7 +171,7 @@ interface PeeledInputs {
  * // After (nothing projects ?x, so the bind is deleted):
  * // SELECT ?y WHERE { ?y <ex://p> ?o }
  */
-export function pullUpExtends<T extends Algebra.Operation>(c: TransformContext, op: T): T {
+export function pullUpExtends<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   // Starting from a copy without metadata gives both a tree of our own to rewrite and the guarantee that
   // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out
   // for the same reason, the rewrites having since invalidated what the licences cached.
@@ -233,7 +234,7 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformContext, 
  * @param inputs - The inputs as `mapOperation` handed them back, before any rewriting
  * @returns the peeled chains and their floating binds
  */
-function peelInputs(c: TransformContext, inputs: readonly Algebra.Operation[]): PeeledInputs {
+function peelInputs(c: TransformationContext, inputs: readonly Algebra.Operation[]): PeeledInputs {
   const chains = inputs.map(input => peelExtends(c, input));
   const bindsPerInput = chains.map((chain, inputIndex) => chain.binds.map((bind, chainPosition) => {
     const floatingBind: FloatingBind = {
@@ -264,7 +265,7 @@ function peelInputs(c: TransformContext, inputs: readonly Algebra.Operation[]): 
  * which no pinning can change, so those pass `() => true` and mean it exactly
  */
 function settlePartition(
-  c: TransformContext,
+  c: TransformationContext,
   peeled: PeeledInputs,
   stillLicensed: (floatingBind: FloatingBind) => boolean,
 ): void {
@@ -296,7 +297,7 @@ function settlePartition(
  * @param floatingBind - The bind that wants to leave
  * @returns whether every stayer above it either does not read it, or admits `e` written in its place
  */
-function chainOrderAllows(c: TransformContext, peeled: PeeledInputs, floatingBind: FloatingBind): boolean {
+function chainOrderAllows(c: TransformationContext, peeled: PeeledInputs, floatingBind: FloatingBind): boolean {
   for (const bindAbove of peeled.bindsPerInput[floatingBind.inputIndex]) {
     if (bindAbove.chainPosition > floatingBind.chainPosition && bindAbove.disposition === 'stay') {
       // I read a variable that is only assigned AFTER my construction. So the var must remain UNBOUND and cannot move.
@@ -321,7 +322,7 @@ function chainOrderAllows(c: TransformContext, peeled: PeeledInputs, floatingBin
  * @returns whether the reader lets it pass
  */
 function readerAdmitsSubstitution(
-  c: TransformContext,
+  c: TransformationContext,
   peeled: PeeledInputs,
   reader: Algebra.Expression,
   floatingBind: FloatingBind,
@@ -378,7 +379,7 @@ function readerAdmitsSubstitution(
  * @returns whether all of them let it pass
  */
 function allReadersAdmitSubstitution(
-  c: TransformContext,
+  c: TransformationContext,
   peeled: PeeledInputs,
   readers: readonly Algebra.Expression[],
   floatingBind: FloatingBind,
@@ -396,7 +397,7 @@ function allReadersAdmitSubstitution(
  * @returns the rewritten reader
  */
 function substituteDepartedBinds(
-  c: TransformContext,
+  c: TransformationContext,
   expression: Algebra.Expression,
   departedBinds: readonly FloatingBind[],
   cVars: SSet,
@@ -460,7 +461,7 @@ function readThrough(term: RDF.Term, access: Access, departed: FloatingBind): RD
  * @returns its bind, rewritten where it has to be and handed back unchanged where it does not
  */
 function rebindStayerAfterDepartures(
-  c: TransformContext,
+  c: TransformationContext,
   chain: readonly FloatingBind[],
   stayer: FloatingBind,
 ): ChainBind {
@@ -490,7 +491,7 @@ function rebindStayerAfterDepartures(
  * @returns the rewritten operation
  */
 function assembleRewrittenNode(
-  c: TransformContext,
+  c: TransformationContext,
   peeled: PeeledInputs,
   rebuildNode: (rewrittenInputs: Algebra.Operation[], risers: FloatingBind[]) => Algebra.Operation,
 ): Algebra.Operation {
@@ -529,7 +530,7 @@ function noBindLeaves(peeled: PeeledInputs): boolean {
  * @returns the rewritten operation
  */
 function floatThroughCongruentOperation(
-  c: TransformContext,
+  c: TransformationContext,
   op: Algebra.Distinct | Algebra.Reduced | Algebra.Slice | Algebra.From,
   sealed: boolean,
   rebuildOperation: (input: Algebra.Operation) => Algebra.Operation,
@@ -559,7 +560,7 @@ function floatThroughCongruentOperation(
  * @param filter - The filter to float through
  * @returns the rewritten operation
  */
-function floatThroughFilter(c: TransformContext, filter: Algebra.Filter): Algebra.Operation {
+function floatThroughFilter(c: TransformationContext, filter: Algebra.Filter): Algebra.Operation {
   const peeled = peelInputs(c, [ filter.input ]);
   for (const floatingBind of peeled.allBinds) {
     floatingBind.disposition = floatingBind.expressionIsStable ? 'rise' : 'stay';
@@ -586,7 +587,7 @@ function floatThroughFilter(c: TransformContext, filter: Algebra.Filter): Algebr
  * @param orderBy - The ordering to float through
  * @returns the rewritten operation
  */
-function floatThroughOrderBy(c: TransformContext, orderBy: Algebra.OrderBy): Algebra.Operation {
+function floatThroughOrderBy(c: TransformationContext, orderBy: Algebra.OrderBy): Algebra.Operation {
   const peeled = peelInputs(c, [ orderBy.input ]);
   // An EXTEND maps element-wise and preserves the sequence, so the order the comparators produce is the
   // same whether the bind is applied below or above them.
@@ -615,7 +616,7 @@ function floatThroughOrderBy(c: TransformContext, orderBy: Algebra.OrderBy): Alg
  * @param op - The operation whose EXTEND chain to read
  * @returns those variable names
  */
-function constantVariablesOf(c: TransformContext, op: Algebra.Operation): SSet {
+function constantVariablesOf(c: TransformationContext, op: Algebra.Operation): SSet {
   const constant = new Set<string>();
   // One pass in evaluation order is a fixpoint: a bind can only read what stands before it in the chain.
   // Being unbound in every solution counts - `BIND(1/0 AS ?x)` is as constant as `BIND(:a AS ?x)`, and an
@@ -646,7 +647,7 @@ function constantVariablesOf(c: TransformContext, op: Algebra.Operation): SSet {
  * @param orderBy - The ordering to clean
  * @returns the ordering over the comparators that decide something, or its input when none do
  */
-function cleanStaticFromOrder(c: TransformContext, orderBy: Algebra.OrderBy): Algebra.Operation {
+function cleanStaticFromOrder(c: TransformationContext, orderBy: Algebra.OrderBy): Algebra.Operation {
   const constant = constantVariablesOf(c, orderBy.input);
   const deciding = orderBy.expressions.filter(expression => !(isStableExpression(c, expression) &&
     [ ...collectVariableNames(c.astTransformer, expression) ].every(name => constant.has(name))));
@@ -664,7 +665,7 @@ function cleanStaticFromOrder(c: TransformContext, orderBy: Algebra.OrderBy): Al
  * @param sealed - Whether it is the query's own projection, above which a `BIND` cannot be written
  * @returns the rewritten operation
  */
-function floatThroughProject(c: TransformContext, project: Algebra.Project, sealed: boolean): Algebra.Operation {
+function floatThroughProject(c: TransformationContext, project: Algebra.Project, sealed: boolean): Algebra.Operation {
   const peeled = peelInputs(c, [ project.input ]);
   const projected = new Set(project.variables.map(variable => variable.value));
   // Dropping is sound because nothing above the projection can read the variable and `Extend` is total, so
@@ -708,7 +709,7 @@ function floatThroughProject(c: TransformContext, project: Algebra.Project, seal
  * @param group - The grouping to float through
  * @returns the rewritten operation
  */
-function floatThroughGroup(c: TransformContext, group: Algebra.Group): Algebra.Operation {
+function floatThroughGroup(c: TransformationContext, group: Algebra.Group): Algebra.Operation {
   const peeled = peelInputs(c, [ group.input ]);
   // A grouping sees three things, and the third is the easy one to forget: its keys, the variables each
   // aggregate *writes*, and the variables each aggregate *reads* - an `aggregates` entry is a
@@ -746,7 +747,7 @@ function floatThroughGroup(c: TransformContext, group: Algebra.Group): Algebra.O
  * @param graph - The graph operation to float through
  * @returns the rewritten operation
  */
-function floatThroughGraph(c: TransformContext, graph: Algebra.Graph): Algebra.Operation {
+function floatThroughGraph(c: TransformationContext, graph: Algebra.Graph): Algebra.Operation {
   const peeled = peelInputs(c, [ graph.input ]);
   const graphVariableName = graph.name.termType === 'Variable' ? graph.name.value : undefined;
   // SPARQL evaluates a GRAPH as a union over the named graphs, each joined with the binding of the graph
@@ -773,7 +774,7 @@ function floatThroughGraph(c: TransformContext, graph: Algebra.Graph): Algebra.O
  * @param join - The join to float through
  * @returns the rewritten operation
  */
-function floatThroughJoin(c: TransformContext, join: Algebra.Join): Algebra.Operation {
+function floatThroughJoin(c: TransformationContext, join: Algebra.Join): Algebra.Operation {
   const peeled = peelInputs(c, join.input);
   // Read before any rewriting: the licences are about the operands as they stand.
   const operands = join.input.map(input => cpMetaOf(input));
@@ -835,7 +836,7 @@ function floatThroughJoin(c: TransformContext, join: Algebra.Join): Algebra.Oper
  * @param leftJoin - The optional to float through
  * @returns the rewritten operation
  */
-function floatThroughLeftJoin(c: TransformContext, leftJoin: Algebra.LeftJoin): Algebra.Operation {
+function floatThroughLeftJoin(c: TransformationContext, leftJoin: Algebra.LeftJoin): Algebra.Operation {
   const peeled = peelInputs(c, leftJoin.input);
   const operands = leftJoin.input.map(input => cpMetaOf(input));
   // Hoisting out of the right-hand side would bind `?x` on the unmatched left rows, where it has to stay
@@ -880,7 +881,7 @@ function floatThroughLeftJoin(c: TransformContext, leftJoin: Algebra.LeftJoin): 
  * @param minus - The minus to float through
  * @returns the rewritten operation
  */
-function floatThroughMinus(c: TransformContext, minus: Algebra.Minus): Algebra.Operation {
+function floatThroughMinus(c: TransformationContext, minus: Algebra.Minus): Algebra.Operation {
   const peeled = peelInputs(c, minus.input);
   const operands = minus.input.map(input => cpMetaOf(input));
   // `pVars(Minus) = pVars(L)`, so the output mapping *is* `μ_L` and (C2) is vacuous, as it is for a UNION.
@@ -917,7 +918,7 @@ function floatThroughMinus(c: TransformContext, minus: Algebra.Minus): Algebra.O
  * @param union - The union to float through
  * @returns the rewritten operation
  */
-function floatThroughUnion(c: TransformContext, union: Algebra.Union): Algebra.Operation {
+function floatThroughUnion(c: TransformationContext, union: Algebra.Union): Algebra.Operation {
   const peeled = peelInputs(c, union.input);
   groupIdenticalBinds(c, peeled);
   // A solution of a union comes from exactly one branch, so the solution above *is* the branch solution and
@@ -943,7 +944,7 @@ function floatThroughUnion(c: TransformContext, union: Algebra.Union): Algebra.O
  * @param c - The transformation context
  * @param peeled - The floating binds to group, whose {@link FloatingBind.mustLeaveWith} this writes
  */
-function groupIdenticalBinds(c: TransformContext, peeled: PeeledInputs): void {
+function groupIdenticalBinds(c: TransformationContext, peeled: PeeledInputs): void {
   // List of equal groups for a var
   const groupsByVariable = new Map<string, FloatingBind[][]>();
   for (const floatingBind of peeled.allBinds) {
@@ -1011,4 +1012,12 @@ function noOtherOperandBinds(
 ): boolean {
   return operands.every((operand, index) =>
     index === carrierIndex || operand.vRanges.neverBinds(variableName));
+}
+
+/**
+ * The pipeline step floating every `BIND` as high as the plan allows and dropping the ones nothing reads.
+ * @returns the transformation
+ */
+export function pullUpExtendsTransformation(): QueryTransformation {
+  return pullUpExtends;
 }

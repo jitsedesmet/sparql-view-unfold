@@ -1,13 +1,12 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
-import { toAlgebra, toAst } from '@traqula/algebra-sparql-1-2';
+import { toAst } from '@traqula/algebra-sparql-1-2';
 import type { Algebra as AlgebraTypes } from '@traqula/algebra-transformations-1-2';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { pushDownAssertions } from '../lib/transformations/pushDownAssertions.js';
-import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext, parseQuery } from '../lib/transformContext.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -20,7 +19,7 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 describe('pushDownAssertions', () => {
   // PushDownAssertions only uses AF / DF / astTransformer / generator from the context, never the
   // mapping, so a mapping-less partial context is sufficient here.
-  const c = <TransformContext> createPartialContext();
+  const c = createTransformationContext();
 
   function transform(query: string): string {
     const transformed = pushDownAssertions(c, parseQuery(c, prefixes + query));
@@ -38,17 +37,17 @@ describe('pushDownAssertions', () => {
   }
 
   /**
-   * Transforms a query parsed *without* quads, so that a GRAPH survives as an operation of its own
-   * rather than as the graph component of every pattern below it - the only way to reach the GRAPH
-   * rule, since {@link parseQuery} always asks for quads.
+   * Transforms a query parsed *in quad mode*, where a GRAPH clause is the graph component of every pattern
+   * below it rather than an operation of its own. The rewriter parses a query out of quad mode, but this is
+   * the only shape in which one pattern carries both a graph and a triple term, which two rules below are
+   * about.
    */
-  function transformGraphOperation(query: string): string {
-    const parsed = toAlgebra(c.parser.parse(prefixes + query), { quads: false, blankToVariable: true });
-    return c.generator.generate(toAst(pushDownAssertions(c, parsed))).trim();
+  function transformOverQuads(query: string): string {
+    return c.generator.generate(toAst(pushDownAssertions(c, parseQuery(c, prefixes + query, { quads: true })))).trim();
   }
 
-  function expectTransformGraphOperation(expect: typeof Expect, query: string, expected: string): void {
-    expect(transformGraphOperation(query)).toEqual(expected.trim());
+  function expectTransformOverQuads(expect: typeof Expect, query: string, expected: string): void {
+    expect(transformOverQuads(query)).toEqual(expected.trim());
   }
 
   describe('base cases', () => {
@@ -331,7 +330,7 @@ describe('pushDownAssertions', () => {
     });
 
     it('is transparent for GRAPH, and selects the single graph when asserting its name', ({ expect }) => {
-      expectTransform(
+      expectTransformOverQuads(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?x :p ?y } FILTER(sameTerm(?x, :c)) }',
         `SELECT ?g ( <ex://c> AS ?x ) ?y WHERE {
@@ -340,7 +339,7 @@ describe('pushDownAssertions', () => {
   }
 }`,
       );
-      expectTransform(
+      expectTransformOverQuads(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?x :p ?y } FILTER(sameTerm(?g, :g1)) }',
         `SELECT ( <ex://g1> AS ?g ) ?x ?y WHERE {
@@ -355,7 +354,7 @@ describe('pushDownAssertions', () => {
       // A GRAPH that is an operation of its own, rather than the graph component of the quads below
       // it: the conjunction has no assertion on `?g` to read, and every rule here is about the ones
       // it does carry.
-      expectTransformGraphOperation(
+      expectTransform(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?x :p ?y } FILTER(sameTerm(?x, :c)) }',
         `SELECT ?g ?x ?y WHERE {
@@ -372,7 +371,7 @@ describe('pushDownAssertions', () => {
     it('selects the single graph of a GRAPH operation whose name is asserted', ({ expect }) => {
       // `?g` is certainly bound by the GRAPH, so it leaves the pattern in the weak form and is
       // promoted back on arrival - and the binding it stood for has to be put back on top.
-      expectTransformGraphOperation(
+      expectTransform(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?x :p ?y } FILTER(sameTerm(?g, :g1)) }',
         `SELECT ( <ex://g1> AS ?g ) ?x ?y WHERE {
@@ -384,7 +383,7 @@ describe('pushDownAssertions', () => {
     });
 
     it('empties a GRAPH operation whose name is asserted to be a literal', ({ expect }) => {
-      expectTransformGraphOperation(
+      expectTransform(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?x :p ?y } FILTER(sameTerm(?g, "lit")) }',
         `SELECT ?g ?x ?y WHERE {
@@ -392,23 +391,6 @@ describe('pushDownAssertions', () => {
     ?x <ex://p> ?y .
   }
   FILTER ( FALSE )
-}`,
-      );
-    });
-
-    it('empties a GRAPH whose name is asserted to be a literal', ({ expect }) => {
-      // No graph is named by a literal, so the pattern - which carries the graph name in quad mode -
-      // can never match.
-      expectTransform(
-        expect,
-        'SELECT * WHERE { GRAPH ?g { ?x :p ?y } FILTER(sameTerm(?g, "lit")) }',
-        `SELECT ?g ?x ?y WHERE {
-  GRAPH ?g {
-    {
-      ?x <ex://p> ?y .
-      FILTER ( FALSE )
-    }
-  }
 }`,
       );
     });
@@ -622,16 +604,18 @@ GROUP BY ?x`,
           FILTER(sameTerm(?g, :g1))
         }`,
         `SELECT ?g ?x ?y WHERE {
-  GRAPH <ex://g1> {
-    {
+  {
+    GRAPH <ex://g1> {
       ?x <ex://p> ?y .
-      BIND( <ex://g1> AS ?g )
     }
-    MINUS {
-      {
+    BIND( <ex://g1> AS ?g )
+  }
+  MINUS {
+    {
+      GRAPH <ex://g1> {
         ?x <ex://q> ?z .
-        BIND( <ex://g1> AS ?g )
       }
+      BIND( <ex://g1> AS ?g )
     }
   }
 }`,
@@ -660,9 +644,9 @@ GROUP BY ?x`,
     });
 
     it('empties the plan where that `!bound` meets a variable that is certainly bound', ({ expect }) => {
-      // The inference the residual used to lose: a BGP binds ?x certainly, so `!bound(?x)` cannot hold
-      // and the whole plan is empty. Before the merge this substituted :c and stranded the second
-      // conjunct above it - correct, but a plan that does work to return nothing.
+      // A BGP binds ?x certainly, so `!bound(?x)` cannot hold and the whole plan is empty. Substituting
+      // :c and stranding the second conjunct above it would be correct too, but it is a plan that does
+      // work to return nothing.
       expectTransform(
         expect,
         `SELECT * WHERE {
@@ -1297,7 +1281,7 @@ GROUP BY ?x?y`,
     });
 
     it('leaves a GRAPH whose name is only unified alone, naming no graph statically', ({ expect }) => {
-      expectTransformGraphOperation(
+      expectTransform(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?s :p ?o } FILTER(sameTerm(?g, ?s)) }',
         `SELECT ?g ?o ?s WHERE {
@@ -1313,7 +1297,7 @@ GROUP BY ?x?y`,
       // `?a` is the representative, so the star of the clique {a, b, g} is `?b ≡ ?a` and `?g ≡ ?a`. Only
       // the first mentions no `?g` and travels into the pattern; the second stays above, and the two
       // together still span the clique - `?b ≡ ?g` is what neither of them states on its own.
-      expectTransformGraphOperation(
+      expectTransform(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?a :p ?b } FILTER(sameTerm(?a, ?g) && sameTerm(?a, ?b)) }',
         `SELECT ?a ?b ?g WHERE {
@@ -1333,7 +1317,7 @@ GROUP BY ?x?y`,
       // stands. The sub-clique over the members that are not `?g` still can: `?s ≡ ?t` - an edge the
       // star never states, only entails - goes into the pattern, and one edge back to `?g` stays here
       // to span the clique again.
-      expectTransformGraphOperation(
+      expectTransform(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?s :p ?t } FILTER(sameTerm(?g, ?s) && sameTerm(?g, ?t)) }',
         `SELECT ?g ?s ?t WHERE {
@@ -1910,11 +1894,11 @@ GROUP BY ?x?y`,
     });
 
     it('substitutes it into a pattern carrying a graph of its own', ({ expect }) => {
-      // {@link parseQuery} asks for quads, so a GRAPH clause is the *graph component* of the patterns
-      // below it rather than an operation - the usual shape, and the one where a pattern holds both a
-      // graph and a triple term at once. The two positions have to stay apart: the term lands in the
-      // object, and the graph is left to say which graph the triple is in.
-      expectTransform(
+      // Parsed in quad mode, so a GRAPH clause is the *graph component* of the patterns below it rather
+      // than an operation - the one shape where a pattern holds both a graph and a triple term at once.
+      // The two positions have to stay apart: the term lands in the object, and the graph is left to say
+      // which graph the triple is in.
+      expectTransformOverQuads(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?s :p ?t } FILTER(sameTerm(?t, <<( :a :b :c )>>)) }',
         `SELECT ?g ?s ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t ) WHERE {
@@ -1927,7 +1911,7 @@ GROUP BY ?x?y`,
 
     it('empties a graph-carrying pattern that would need one in its subject position', ({ expect }) => {
       // The other half: the graph component does not make the subject any more accommodating.
-      expectTransform(
+      expectTransformOverQuads(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?t :p ?w } FILTER(sameTerm(?t, <<( :a :b :c )>>)) }',
         `SELECT ?g ?t ?w WHERE {

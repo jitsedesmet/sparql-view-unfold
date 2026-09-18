@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
+import type { QueryTransformation } from '../types.js';
 import { collectVariableNames, freshVarGenerator, renameVariables } from '../utils.js';
 
 /**
@@ -33,7 +34,7 @@ import { collectVariableNames, freshVarGenerator, renameVariables } from '../uti
  * // Before: SELECT ?x { ?x ?y ?z }        (?y and ?z are not projected)
  * // After:  ?x ?v_0 ?v_1                  (projection removed, hidden vars anonymized)
  */
-export function removeProjections<T extends Algebra.Operation>(c: TransformContext, op: T): T {
+export function removeProjections<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   // Seed the generator with every variable in the tree so fresh names never collide.
   // We cannot collide in the top level context
   const nextVar = freshVarGenerator(collectVariableNames(c.astTransformer, op));
@@ -68,4 +69,12 @@ export function removeProjections<T extends Algebra.Operation>(c: TransformConte
       return renameVariables(c, project.input, renames);
     } },
   });
+}
+
+/**
+ * The pipeline step removing every inner `PROJECT`, renaming what it hid to keep the scoping.
+ * @returns the transformation
+ */
+export function removeProjectionsTransformation(): QueryTransformation {
+  return removeProjections;
 }

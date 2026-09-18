@@ -1,7 +1,7 @@
 {
   "name": "sparql-view-unfold",
   "type": "module",
-  "version": "0.0.0-alpha.0",
+  "version": "0.0.0-alpha.1",
   "packageManager": "yarn@1.22.22",
   "description": "View unfolding and query optimisation for SPARQL 1.2, with views defined as CONSTRUCT queries",
   "lsd:module": true,
@@ -20,6 +20,11 @@
       "types": "./dist/esm/lib/index.d.ts",
       "import": "./dist/esm/lib/index.js",
       "require": "./dist/cjs/lib/index.js"
+    },
+    "./comunica": {
+      "types": "./dist/esm/lib/comunica.d.ts",
+      "import": "./dist/esm/lib/comunica.js",
+      "require": "./dist/cjs/lib/comunica.js"
     }
   },
   "main": "dist/esm/lib/index.js",

@@ -1,6 +1,7 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
+import type { QueryTransformation } from '../types.js';
 import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 
@@ -20,6 +21,11 @@ import { createFilterFalse } from '../utils/operationhelpers.js';
  *
  * The replacement wraps the operation rather than dropping it, so the metadata this traversal carries still
  * describes the tree; {@link transformFilterFalse} drops it afterwards.
+ *
+ * **Not in the default pipeline.** Its proof is one nothing else in the repository can make, but nothing
+ * the unfolding generates today has an empty range, so on a rewritten query it fires on nothing. It is
+ * exported for a caller whose mapping or query gives it something to decide, and belongs in the default
+ * the day the unfolding starts producing empty ranges of its own.
  */
 
 /** Metadata is a cache to carry along, never a tree to iterate into: its sets do not survive that. */
@@ -34,7 +40,7 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // Before: SELECT * WHERE { GRAPH ?g { { VALUES ?g { "l" } } } }
  * // After:  the GRAPH replaced by FILTER(false), since no graph is named by a literal.
  */
-export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformContext, op: T): T {
+export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
     Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => nullifyIfProvenEmpty(c, copy) ]),
   );
@@ -52,7 +58,7 @@ export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformC
  * @returns the traversal's instruction; it stops descending once it has replaced something, nothing under
  * an operation without solutions being able to contribute any
  */
-function nullifyIfProvenEmpty(c: TransformContext, op: Algebra.Operation): PreOrderMappingReturn {
+function nullifyIfProvenEmpty(c: TransformationContext, op: Algebra.Operation): PreOrderMappingReturn {
   const { cVars, vRanges } = withCpVars(op).metadata;
   for (const name of cVars) {
     if (vRanges.neverBinds(name)) {
@@ -60,4 +66,12 @@ function nullifyIfProvenEmpty(c: TransformContext, op: Algebra.Operation): PreOr
     }
   }
   return { ...keepMetadata, newValue: op };
+}
+
+/**
+ * The pipeline step replacing an operation that binds a variable to nothing its type range admits by `FILTER(FALSE)`.
+ * @returns the transformation
+ */
+export function nullifyUnbindableVarsTransformation(): QueryTransformation {
+  return nullifyUnbindableVars;
 }

@@ -1,5 +1,5 @@
+import { AlgebraFactory } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
-import { AlgebraTemplateFactory } from '../lib/AlgebraTemplateFactory.js';
 import { ClusterSolver } from '../lib/ClusterSolver.js';
 import { AssertionClusterSet } from '../lib/datastructures/AssertionClusterSet.js';
 import type { PinChildren } from '../lib/datastructures/TermClusterSet.js';
@@ -58,7 +58,7 @@ type Stamped = Pick<AssertionClusterSet, 'revision'>;
 describe('cluster set revision', () => {
   const termA = DF.namedNode('ex://a');
   const termB = DF.namedNode('ex://b');
-  const AF = new AlgebraTemplateFactory();
+  const AF = new AlgebraFactory();
 
   /** A set holding `x` and `y` in groups of their own. */
   function twoGroups(): AssertionClusterSet {

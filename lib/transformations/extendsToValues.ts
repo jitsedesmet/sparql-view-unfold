@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
+import type { QueryTransformation } from '../types.js';
 
 /**
  * Transforms binds around the empty BGP or around a VALUES to be a VALUES itself.
@@ -8,7 +9,7 @@ import type { TransformContext } from '../transformContext.js';
  * Only a *ground* term: a VALUES row holds terms, so `BIND(?o AS ?s)` - which the assertion pushdown emits
  * for every variable it unified away - would turn into the nonsense `VALUES ?s { ?o }`.
  */
-export function transformExtendsToValues(c: TransformContext, op: Algebra.Operation): Algebra.Operation {
+export function transformExtendsToValues(c: TransformationContext, op: Algebra.Operation): Algebra.Operation {
   const { AF } = c;
   function transformExtend(op: Algebra.Extend): Algebra.Extend | Algebra.Values {
     if (op.input.type === Algebra.Types.BGP && op.input.patterns.length === 0 &&
@@ -34,4 +35,12 @@ export function transformExtendsToValues(c: TransformContext, op: Algebra.Operat
       [Algebra.Types.EXTEND]: { transform: transformExtend },
     },
   );
+}
+
+/**
+ * The pipeline step rewriting a `BIND` of a ground term over the empty BGP, or over a VALUES, into a VALUES itself.
+ * @returns the transformation
+ */
+export function extendsToValuesTransformation(): QueryTransformation {
+  return transformExtendsToValues;
 }

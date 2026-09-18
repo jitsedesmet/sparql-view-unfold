@@ -1,18 +1,21 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
 import { toAst } from '@traqula/algebra-sparql-1-2';
-import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
-import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
-import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
-import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
-import { pushDownAssertions } from '../lib/transformations/pushDownAssertions.js';
-import { removeProjections } from '../lib/transformations/removeProjections.js';
-import { operationTransform, queryTransform } from '../lib/transformBgp.js';
-import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext, parseQuery, transformContextFromConstructs } from '../lib/transformContext.js';
-import { nonReificationTripleConstruct, nonTripleTermConstruct, rdfReificationConstruct } from './queryConsts.js';
+import { mappingFromConstructQueries } from '../lib/mapping.js';
+import { createQueryRewriter } from '../lib/queryRewriter.js';
+import { filterFalseTransformation, transformFilterFalse } from '../lib/transformations/filterFalse.js';
+import {
+  nullifyJoinOverIncompatibleBoundsTransformation,
+} from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
+import { pullUpExtendsTransformation } from '../lib/transformations/pullUpExtends.js';
+import { pushDownAssertionsTransformation } from '../lib/transformations/pushDownAssertions.js';
+import { removeProjectionsTransformation } from '../lib/transformations/removeProjections.js';
+import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import type { QueryTransformation } from '../lib/types.js';
+import { nonReificationTripleConstruct, rdfReificationConstruct } from './queryConsts.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -41,7 +44,7 @@ async function exposedVariablesOf(query: string, source: string): Promise<string
 
 describe('transformFilterFalse', () => {
   // The pass only ever reads AF / DF / generator off the context, never the mapping.
-  const c = <TransformContext> createPartialContext();
+  const c = createTransformationContext();
 
   /** Asserts the rewritten query, and that running the pass again changes nothing. */
   function expectTransform(expect: typeof Expect, query: string, expected: string): void {
@@ -202,16 +205,15 @@ OFFSET 5`,
   describe('the answer of a rewritten query', () => {
     const source = './test/statics/multipleRdfReifiedTriples.ttl';
 
-    // The pass-through mapping leaves every pattern as it was.
-    function rewriteWithFilterFalse(query: string): string {
-      const passThroughContext = transformContextFromConstructs([ nonTripleTermConstruct ]);
-      return queryTransform(passThroughContext, query, [ transformFilterFalse ]);
+    // No unfolding: the pass is the whole pipeline, so every pattern is left as it was.
+    async function rewriteWithFilterFalse(query: string): Promise<string> {
+      return createQueryRewriter([ filterFalseTransformation() ]).rewriteQuery(query);
     }
 
     it('exposes the same variables and rows when a SELECT * loses an empty sub-SELECT', async({ expect }) => {
       // `?a` is only in scope through the dropped branch.
       const query = `${prefixes}SELECT * WHERE { { ?s :knows ?o } UNION { SELECT ?a WHERE { ?a :p ?b FILTER(false) } } }`;
-      const rewritten = rewriteWithFilterFalse(query);
+      const rewritten = await rewriteWithFilterFalse(query);
       expect(rewritten).not.toContain('FILTER ( FALSE )');
       expect(await exposedVariablesOf(rewritten, source)).toEqual(await exposedVariablesOf(query, source));
       expect(await exposedVariablesOf(rewritten, source)).toContain('a');
@@ -225,7 +227,7 @@ OFFSET 5`,
       // COUNT(*) of nothing is one row, 0.
       const query = `${prefixes}SELECT (COUNT(*) AS ?n) WHERE { ?s :knows ?o FILTER(false) }`;
       expect(await sortedBindingsOf(query, source)).toEqual([ 'n=0' ]);
-      expect(await sortedBindingsOf(rewriteWithFilterFalse(query), source)).toEqual([ 'n=0' ]);
+      expect(await sortedBindingsOf(await rewriteWithFilterFalse(query), source)).toEqual([ 'n=0' ]);
     });
   });
 });
@@ -241,40 +243,38 @@ PREFIX bkr_sn: <http://mor.nlm.nih.gov/bkr/SEMNET_>
 PREFIX provenir: <http://knoesis.wright.edu/provenir/>
 SELECT ?o ?source WHERE { << bkr:META_C0040300-INST bkr_sn:PART_OF ?o >> provenir:derives_from ?source . }`;
 
-  const pushdownPipeline = <const>[
-    operationTransform,
-    transformFilterFalse,
-    nullifyJoinOverIncompatibleBounds,
-    transformFilterFalse,
-    pushDownAssertions,
-    transformFilterFalse,
-    removeProjections,
+  const pushdownPipeline: QueryTransformation[] = [
+    unfoldingTransformation(mappingFromConstructQueries(mappers)),
+    filterFalseTransformation(),
+    nullifyJoinOverIncompatibleBoundsTransformation(),
+    filterFalseTransformation(),
+    pushDownAssertionsTransformation(),
+    filterFalseTransformation(),
+    removeProjectionsTransformation(),
   ];
 
-  const pullUpPipeline = <const>[
-    operationTransform,
-    transformFilterFalse,
-    nullifyJoinOverIncompatibleBounds,
-    transformFilterFalse,
-    pushDownAssertions,
-    transformFilterFalse,
-    pullUpExtends,
-    removeProjections,
-    pullUpExtends,
+  const pullUpPipeline: QueryTransformation[] = [
+    unfoldingTransformation(mappingFromConstructQueries(mappers)),
+    filterFalseTransformation(),
+    nullifyJoinOverIncompatibleBoundsTransformation(),
+    filterFalseTransformation(),
+    pushDownAssertionsTransformation(),
+    filterFalseTransformation(),
+    pullUpExtendsTransformation(),
+    removeProjectionsTransformation(),
+    pullUpExtendsTransformation(),
   ];
 
-  function rewriteWithPipeline(
-    pipeline: readonly ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[],
-  ): string {
-    return queryTransform(transformContextFromConstructs(mappers), query, [ ...pipeline ]);
+  async function rewriteWithPipeline(pipeline: readonly QueryTransformation[]): Promise<string> {
+    return createQueryRewriter(pipeline).rewriteQuery(query);
   }
 
-  it('leaves no dead branch in the pushdown pipeline', ({ expect }) => {
-    expect(rewriteWithPipeline(pushdownPipeline)).not.toContain('FILTER ( FALSE )');
+  it('leaves no dead branch in the pushdown pipeline', async({ expect }) => {
+    expect(await rewriteWithPipeline(pushdownPipeline)).not.toContain('FILTER ( FALSE )');
   });
 
-  it('leaves no dead branch in the pullUpExtends pipeline', ({ expect }) => {
-    expect(rewriteWithPipeline(pullUpPipeline)).not.toContain('FILTER ( FALSE )');
+  it('leaves no dead branch in the pullUpExtends pipeline', async({ expect }) => {
+    expect(await rewriteWithPipeline(pullUpPipeline)).not.toContain('FILTER ( FALSE )');
   });
 
   describe('the rewritten query still answers', () => {
@@ -296,11 +296,11 @@ SELECT ?o ?source WHERE {
       const expectedBindings = await sortedBindingsOf(expectedOverRdf11, source);
       // Sanity: the data actually answers, so the comparison is not two empty lists.
       expect(expectedBindings).toHaveLength(2);
-      expect(await sortedBindingsOf(rewriteWithPipeline(pushdownPipeline), source)).toEqual(expectedBindings);
+      expect(await sortedBindingsOf(await rewriteWithPipeline(pushdownPipeline), source)).toEqual(expectedBindings);
     });
 
     it('agrees with the mapping, run through the pullUpExtends pipeline', async({ expect }) => {
-      expect(await sortedBindingsOf(rewriteWithPipeline(pullUpPipeline), source))
+      expect(await sortedBindingsOf(await rewriteWithPipeline(pullUpPipeline), source))
         .toEqual(await sortedBindingsOf(expectedOverRdf11, source));
     });
   });

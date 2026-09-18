@@ -2,7 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
 import { termFalse, termTrue } from './operationhelpers.js';
 import { DF } from './rdfDatatypes.js';
 import { termIsStaticTerm } from './typeGuards.js';
@@ -34,7 +34,7 @@ export function splitConjunction(
  * @param expressions - The conjuncts to combine
  * @returns the conjunction
  */
-export function conjunctionOf(c: TransformContext, expressions: Algebra.Expression[]): Algebra.Expression {
+export function conjunctionOf(c: TransformationContext, expressions: Algebra.Expression[]): Algebra.Expression {
   return expressions.reduce((acc, expr) => c.AF.createOperatorExpression('&&', [ acc, expr ]));
 }
 
@@ -59,7 +59,7 @@ export function booleanConstantOf(expression: Algebra.Expression): boolean | und
  * @param value - The boolean to write
  * @returns the term expression
  */
-export function createBooleanExpression(c: TransformContext, value: boolean): Algebra.Expression {
+export function createBooleanExpression(c: TransformationContext, value: boolean): Algebra.Expression {
   return c.AF.createTermExpression(value ? termTrue : termFalse);
 }
 
@@ -69,12 +69,12 @@ export function createBooleanExpression(c: TransformContext, value: boolean): Al
  * query execution must return the same value" (SPARQL 1.1 §17.4.5.1) - where `BNODE` is present because
  * §17.4.2.14 fixes a blank node per solution mapping *and* argument.
  */
-const unstableOperators = new Set([ 'bnode', 'rand', 'uuid', 'struuid' ]);
+export const unstableOperators = new Set([ 'bnode', 'rand', 'uuid', 'struuid' ]);
 
 /**
  * The extension functions declared stable, which is what lets a `BIND` over one of them move.
- * `EXTENSION_FUNCTION_BNODE` is the internal form of the README's `bnodeConsistent`, whose "same inputs =
- * same identity" is stability spelled out; every other `named` expression is opaque and so unstable.
+ * `EXTENSION_FUNCTION_BNODE`, whose "same inputs = same identity" is stability spelled out, is the only one;
+ * every other `named` expression is opaque and so unstable.
  */
 const stableNamedFunctions = new Set<string>([ EXTENSION_FUNCTION_BNODE ]);
 
@@ -86,7 +86,7 @@ const stableNamedFunctions = new Set<string>([ EXTENSION_FUNCTION_BNODE ]);
  * @param expression - The expression to check
  * @returns whether it is stable
  */
-export function isStableExpression(c: TransformContext, expression: Algebra.Expression): boolean {
+export function isStableExpression(c: TransformationContext, expression: Algebra.Expression): boolean {
   let isStable = true;
   const neverStable = { preVisitor: () => {
     isStable = false;
@@ -287,7 +287,7 @@ export function isIriExpression(expression: Algebra.Expression):
  * @returns the condition
  */
 export function sameTermExpression(
-  c: TransformContext,
+  c: TransformationContext,
   expression: Algebra.Expression,
   term: RDF.Term,
 ): Algebra.Expression {
