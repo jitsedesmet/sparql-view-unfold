@@ -111,6 +111,17 @@ triple is produced once. It is **hugely costly** — every unfolded pattern mate
 body, where it otherwise streams — so turn it on only when the multiplicity of a solution is part of the
 answer you need.
 
+### Generalized RDF
+
+By default the mapping denotes a standard RDF graph: a solution binding a head variable to a term its
+position cannot hold — a literal subject, a blank node predicate — instantiates no triple, exactly as the
+CONSTRUCT the mapping is written as would not. `mappingFromConstructQueries(constructs, {
+generalizedRdfView: true })` keeps those triples instead, for a view that means to present generalized RDF.
+
+The tests this costs are cheap and are emitted only where the mapping moves a variable into a position
+stricter than the one its body read it from, so a mapping that keeps every variable where it found it pays
+nothing either way.
+
 ### Blank nodes
 
 An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to
@@ -143,7 +154,7 @@ is not what this does.
 
 | Function | Description |
 |---|---|
-| `mappingFromConstructQueries(constructQueries)` | Builds the `Mapping` a set of CONSTRUCT query strings denotes. The only way to build one. |
+| `mappingFromConstructQueries(constructQueries, options?)` | Builds the `Mapping` a set of CONSTRUCT query strings denotes. The only way to build one. |
 | `createQueryRewriter(transformations)` | Builds a `QueryRewriter` running those transformations, in order. |
 | `createDefaultTransformationPipeline(mapping, options?)` | The pipeline to use when you have no reason to build your own. |
 | `rewriter.rewriteQuery(query)` | Rewrites a SPARQL query string, asynchronously. |

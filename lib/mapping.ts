@@ -40,8 +40,27 @@ import { collectVariableNames } from './utils.js';
  * - **Only the head positions RDF admits**, checked per triple of the template. A constant a position
  *   cannot hold is rejected outright; a variable the body could bind to such a term is filtered out
  *   instead, since a CONSTRUCT instantiates no triple for a solution that would make an illegal one
- *   (SPARQL 1.1 §16.2) - the same sentence the `FILTER(bound(?x))` below comes from.
+ *   (SPARQL 1.1 §16.2) - the same sentence the `FILTER(bound(?x))` below comes from. A view that means
+ *   to present generalized RDF says so with {@link MappingOptions.generalizedRdfView} and keeps them.
+ *
+ * Both checks belong to the *template triple*, which is why they happen here rather than at the unfolding:
+ * once several mappings are merged the head is three plain variables and a triple term one of them is a
+ * `BIND` of, whose interior nothing would re-read.
  */
+
+/** What building a mapping may be configured with. */
+export interface MappingOptions {
+  /**
+   * Whether the graph the mapping denotes is a *generalized* RDF graph, one that admits a literal as a
+   * subject and a blank node as a predicate.
+   *
+   * Off by default, and a head variable the body could bind outside the range its position admits then
+   * costs a type test, since a CONSTRUCT instantiates no triple for a solution that would make an illegal
+   * one (SPARQL 1.1 §16.2). Turn it on where the source is read as generalized RDF and those solutions
+   * keep their triples; the tests are cheap, but they are wrong for a view that wants them.
+   */
+  generalizedRdfView?: boolean;
+}
 
 /** The factories building a mapping needs; the solver and the generator of a full context play no part. */
 type MappingConstructionTools = Pick<TransformationContext, 'parser' | 'AF' | 'DF' | 'astTransformer'>;
@@ -100,7 +119,7 @@ function headPositionTypeTests(
   templateTerm: RDF.Term,
   admissibleRange: RangeSet,
   bodyRanges: VRanges,
-): Algebra.Expression[] {
+): Algebra.OperatorExpression[] {
   const { AF } = tools;
   if (templateTerm.termType === 'Quad') {
     return triplePositions.flatMap(position =>
@@ -138,6 +157,7 @@ function assertBodyCallsNoUnstableFunction(body: Algebra.Operation): void {
 /**
  * Builds the mapping one triple of a CONSTRUCT template denotes over that CONSTRUCT's body.
  * @param tools - The factories to build with
+ * @param options - What the mapping is configured with
  * @param templateTriple - The one template triple becoming the head
  * @param constructBody - The WHERE clause of the CONSTRUCT, shared with the template's other triples
  * @returns the mapping
@@ -145,6 +165,7 @@ function assertBodyCallsNoUnstableFunction(body: Algebra.Operation): void {
  */
 function mappingOfSingleTemplateTriple(
   tools: MappingConstructionTools,
+  options: MappingOptions,
   templateTriple: Algebra.Pattern,
   constructBody: Algebra.Operation,
 ): Mapping {
@@ -158,13 +179,13 @@ function mappingOfSingleTemplateTriple(
   // is one its position can hold, so the solutions failing either do not belong to the mapping. Variables
   // that are certainly bound, or certainly of a term type the position admits, already need no condition.
   const { cVars: certainlyBoundVariableNames, vRanges: bodyRanges } = withCpVars(constructBody).metadata;
-  const conditions = [
-    ...headVariableNames
-      .filter(name => !certainlyBoundVariableNames.has(name))
-      .map(name => AF.createOperatorExpression('bound', [ AF.createTermExpression(DF.variable(name)) ])),
-    ...triplePositions.flatMap(position =>
-      headPositionTypeTests(tools, head[position], rangeOfPosition(position), bodyRanges)),
-  ];
+  const conditions = headVariableNames
+    .filter(name => !certainlyBoundVariableNames.has(name))
+    .map(name => AF.createOperatorExpression('bound', [ AF.createTermExpression(DF.variable(name)) ]));
+  if (options.generalizedRdfView !== true) {
+    conditions.push(...triplePositions.flatMap(position =>
+      headPositionTypeTests(tools, head[position], rangeOfPosition(position), bodyRanges)));
+  }
   let body: Algebra.Operation = constructBody;
   if (conditions.length > 0) {
     body = AF.createFilter(body, conditions
@@ -179,17 +200,23 @@ function mappingOfSingleTemplateTriple(
 /**
  * Builds every single-triple mapping a CONSTRUCT query denotes.
  * @param tools - The factories to build with
+ * @param options - What the mapping is configured with
  * @param constructQuery - The SPARQL CONSTRUCT query string
  * @returns one mapping per triple of the CONSTRUCT template
  * @throws Error if the body calls an unstable function, or the template holds an inadmissible term
  */
-function mappingsOfConstructQuery(tools: MappingConstructionTools, constructQuery: string): Mapping[] {
+function mappingsOfConstructQuery(
+  tools: MappingConstructionTools,
+  options: MappingOptions,
+  constructQuery: string,
+): Mapping[] {
   const construct = <Algebra.Construct> parseQuery(tools, constructQuery);
   const body = construct.input;
   assertBodyCallsNoUnstableFunction(body);
   // The mappings share this body object, which is safe because `prefixVarsInOperation` copies what it
   // renames, so every mapping leaving `mappingFromConstructQueries` owns its own tree.
-  return construct.template.map(templateTriple => mappingOfSingleTemplateTriple(tools, templateTriple, body));
+  return construct.template
+    .map(templateTriple => mappingOfSingleTemplateTriple(tools, options, templateTriple, body));
 }
 
 /**
@@ -230,6 +257,7 @@ function mergeMappingsOverGenericHead(
  * Builds the {@link Mapping} a set of SPARQL CONSTRUCT queries denotes, splitting a template of several
  * triples into a mapping per triple and merging what is left into one generic head.
  * @param constructQueries - The SPARQL CONSTRUCT query strings defining the mappings
+ * @param options - What the mapping is configured with
  * @returns the mapping, keeping its own head where there is exactly one and merged behind
  * `?m_s ?m_p ?m_o` otherwise
  * @throws Error if no CONSTRUCT is given, if a body calls an unstable function, or if a template holds a
@@ -240,10 +268,13 @@ function mergeMappingsOverGenericHead(
  *   'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o . FILTER(!isTriple(?o)) }',
  * ]);
  */
-export function mappingFromConstructQueries(constructQueries: readonly string[]): Mapping {
+export function mappingFromConstructQueries(
+  constructQueries: readonly string[],
+  options: MappingOptions = {},
+): Mapping {
   const tools = createTransformationContext();
   const mappings = constructQueries
-    .flatMap(constructQuery => mappingsOfConstructQuery(tools, constructQuery))
+    .flatMap(constructQuery => mappingsOfConstructQuery(tools, options, constructQuery))
     .map(mapping => prefixVarsInOperation(tools, mapping, VAR_PREFIX_MAPPING));
 
   if (mappings.length === 0) {

@@ -112,6 +112,13 @@ describe('mappingFromConstructQueries', () => {
         'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }',
       ])).body).not.toContain('FILTER');
     });
+
+    it('is left alone for a view that means to present generalized RDF', ({ expect }) => {
+      expect(mappingAsStrings(mappingFromConstructQueries(
+        [ 'CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?o }' ],
+        { generalizedRdfView: true },
+      )).body).not.toContain('FILTER');
+    });
   });
 
   describe('an unstable function in the mapping body', () => {
