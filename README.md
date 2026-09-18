@@ -18,9 +18,6 @@ The idea is explained in our [under review, in works paper targeting AMW](https:
 and in an [under review demo paper targeting SEMANTiCS](https://2026-semantics-rewriting.jitsedesmet.be/),
 based on a previous version of this repository. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code.
 
-> **Alpha.** Published as `0.0.0-alpha.0`, to claim the name. The API is a rewriter holding a pipeline of
-> transformations; expect it to change.
-
 ## Installation
 
 ```bash
