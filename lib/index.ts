@@ -11,6 +11,11 @@
  *
  * Running SPARQL 1.2 queries - triple terms and all - against RDF 1.1 data is the case this was built for:
  * a view then says how RDF 1.1 data represents RDF 1.2, and the rewrite hands back plain SPARQL 1.1.
+ *
+ * **This entry point is platform-neutral**, and is kept that way deliberately: the one transformation
+ * needing a Comunica runtime is reached through the `sparql-view-unfold/comunica` subpath instead, because
+ * re-exporting it here would put `node:module` and `node:path` in every consumer's module graph. See
+ * {@link comunica | the Comunica entry point} for why a bundler cannot shake that back out.
  * @module sparql-view-unfold
  * @see {@link https://w3c.github.io/rdf-interop/spec/} RDF 1.2 Interoperability Spec
  * @example

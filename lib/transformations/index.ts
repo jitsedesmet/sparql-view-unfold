@@ -29,13 +29,19 @@
  *   the remaining operands, enabling further push-down.
  * - **extendsToValuesTransformation**: rewrites a BIND of a ground term over the empty BGP or over a VALUES
  *   into a VALUES itself.
- * - **simplifyStaticExpressionsTransformation**: folds every fully static expression to the term Comunica's
- *   expression evaluator says it is. The one asynchronous step.
  * - **serviceCallPushUpTransformation**: merges and hoists SERVICE calls so as much of the plan as possible
  *   is evaluated by the endpoint.
  * - **internalBnodeAsSpecialLiteralTransformation** / **internalBnodeAsSpecialIriTransformation**:
  *   materialise internal blank nodes as typed literals or as prefixed IRIs, since RDF 1.1 sources cannot
  *   reference blank nodes consistently.
+ *
+ * One step is deliberately **not** re-exported here:
+ * {@link comunica!simplifyStaticExpressionsTransformation}, which folds static expressions through
+ * Comunica's expression evaluator. It bootstraps Components.js from Node's module resolution, so importing
+ * it reaches `node:module` and `node:path`; a bundler resolves every import in a module graph before it
+ * tree-shakes, so re-exporting it here would make this barrel - and with it the package entry point -
+ * unresolvable for the browser even in a build that never calls the step. It lives behind the
+ * `sparql-view-unfold/comunica` subpath instead, which only a Node consumer needs to reach for.
  * @module transformations
  */
 export {
@@ -52,6 +58,5 @@ export { pullUpExtendsTransformation } from './pullUpExtends.js';
 export { pushDownAssertionsTransformation } from './pushDownAssertions.js';
 export { removeProjectionsTransformation } from './removeProjections.js';
 export { serviceCallPushUpTransformation } from './serviceCallMerge.js';
-export { simplifyStaticExpressionsTransformation } from './staticExpressionEvaluation.js';
 export type { UnfoldingOptions } from './unfolding.js';
 export { unfoldingTransformation } from './unfolding.js';

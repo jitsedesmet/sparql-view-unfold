@@ -20,6 +20,11 @@
       "types": "./dist/esm/lib/index.d.ts",
       "import": "./dist/esm/lib/index.js",
       "require": "./dist/cjs/lib/index.js"
+    },
+    "./comunica": {
+      "types": "./dist/esm/lib/comunica.d.ts",
+      "import": "./dist/esm/lib/comunica.js",
+      "require": "./dist/cjs/lib/comunica.js"
     }
   },
   "main": "dist/esm/lib/index.js",

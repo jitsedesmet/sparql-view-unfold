@@ -176,10 +176,27 @@ The tables below are the short version; the generated
 | `nullifyUnbindableVarsTransformation()` | The same one level up, for incompatible term *types* rather than terms. Not in the default pipeline. |
 | `extendsToValuesTransformation()` | Rewrites a `BIND` of a ground term over the empty BGP, or over a VALUES, into a VALUES. |
 | `joinValuesToFilterTransformation()` | Rewrites a JOIN with a VALUES into an equality FILTER, enabling further push-down. |
-| `simplifyStaticExpressionsTransformation()` | Folds every fully static expression to the term Comunica's evaluator says it is. |
 | `serviceCallPushUpTransformation()` | Merges and hoists SERVICE calls so the endpoint evaluates as much as it can. |
 | `internalBnodeAsSpecialLiteralTransformation()` | Materialises constructed blank node identities as typed literals. |
 | `internalBnodeAsSpecialIriTransformation()` | Materialises them as prefixed IRIs, SHA-1 keeping the length manageable. |
+
+### `sparql-view-unfold/comunica` — Node only
+
+One transformation needs a Comunica runtime, and lives behind its own subpath:
+
+```js
+import { simplifyStaticExpressionsTransformation } from 'sparql-view-unfold/comunica';
+```
+
+| Transformation | Description |
+|---|---|
+| `simplifyStaticExpressionsTransformation()` | Folds every fully static expression to the term Comunica's evaluator says it is. |
+
+It builds its evaluator through Components.js, which resolves Comunica's actors through Node's own module
+resolution and so imports `node:module` and `node:path`. Bundlers resolve every import in a module graph
+before they tree-shake it, so re-exporting this step from the main entry point would make the whole package
+unresolvable for the browser — even in a build that never calls the step. The main entry point stays
+platform-neutral; reach for this subpath from Node.
 
 ## License
 
