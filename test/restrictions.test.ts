@@ -51,6 +51,8 @@ describe('the restrictions on a user query', () => {
       .rejects.toThrow('Querying a named graph (GRAPH) is not supported');
   });
 
+  // TODO: again, should be allowed bot the cods should be clear on what it means.
+  //   Where clause retargetting, destination retarget.
   describe('an update, the rewriting being defined over queries', () => {
     const update = 'INSERT DATA { <ex://s> <ex://p> <ex://o> }';
 

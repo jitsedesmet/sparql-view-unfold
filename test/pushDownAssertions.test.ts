@@ -328,6 +328,27 @@ describe('pushDownAssertions', () => {
       );
     });
 
+    it('is transparent for GRAPH, and selects the single graph when asserting its name', ({ expect }) => {
+      expectTransformOverQuads(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?x :p ?y } FILTER(sameTerm(?x, :c)) }',
+        `SELECT ?g ( <ex://c> AS ?x ) ?y WHERE {
+  GRAPH ?g {
+    <ex://c> <ex://p> ?y .
+  }
+}`,
+      );
+      expectTransformOverQuads(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?x :p ?y } FILTER(sameTerm(?g, :g1)) }',
+        `SELECT ( <ex://g1> AS ?g ) ?x ?y WHERE {
+  GRAPH <ex://g1> {
+    ?x <ex://p> ?y .
+  }
+}`,
+      );
+    });
+
     it('travels into a GRAPH operation the conjunction says nothing about the name of', ({ expect }) => {
       // A GRAPH that is an operation of its own, rather than the graph component of the quads below
       // it: the conjunction has no assertion on `?g` to read, and every rule here is about the ones

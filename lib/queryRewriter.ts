@@ -103,15 +103,14 @@ function peelSolutionModifiers(root: Algebra.Operation): {
 } {
   const sealedChain = solutionModifierChainOf(root);
   const solutionModifiers: SolutionModifier[] = [];
-  let pattern = root;
+  let iter = root;
   let reachedQueryForm = false;
-  while (!reachedQueryForm && sealedChain.has(pattern)) {
-    const solutionModifier = <SolutionModifier> pattern;
-    solutionModifiers.push(solutionModifier);
-    reachedQueryForm = queryFormTypes.has(solutionModifier.type);
-    pattern = solutionModifier.input;
+  while (!reachedQueryForm && sealedChain.has(iter)) {
+    solutionModifiers.push(<SolutionModifier> iter);
+    reachedQueryForm = queryFormTypes.has(iter.type);
+    iter = (<Algebra.Single> iter).input;
   }
-  return { solutionModifiers, pattern };
+  return { solutionModifiers, pattern: iter };
 }
 
 /**
@@ -208,6 +207,9 @@ async function rewriteParsedQuery(
 
   // Innermost modifier first, so each is rebuilt over what its own input became.
   for (const solutionModifier of [ ...solutionModifiers ].reverse()) {
+    // TODO: could we use a mapOperation instead? Maybe starting from:
+    //  `new Transformer({continue: false, copy: false})
+    //  .transformNode(continue on solution modifiers and perform their mapping)
     rewritten = rebuildSolutionModifier(c, solutionModifier, rewritten);
   }
   return rewritten;

@@ -3,6 +3,9 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 /**
  * @fileoverview What a user query may not ask, checked once before the pipeline runs.
  *
+ *
+ * // TODO: no need to specify how things used to work. Simply describe what is now.
+ *      This holds anywhere, please check your diff.
  * The first two restrictions below used to produce a **silently wrong** query rather than an error, which
  * is the reason this check exists at all rather than living in the passes that trip over them:
  *
@@ -22,6 +25,10 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 /** Where the restrictions are written out for a reader. */
 const restrictionsDocumentation = 'see the "Restrictions" section of the README';
 
+// TODO: just to be sure, updates are simply allowed,
+//  rather it should be specified that the where is rewritten over
+//  the mapping but that the template instantiation happens as is. Over the original source instead
+//  since the view source is only virtual.
 /** The operations that write rather than answer; an update is one of them, at the root of the algebra. */
 const updateOperationTypes = new Set<string>([
   Algebra.Types.COMPOSITE_UPDATE,

@@ -1,7 +1,7 @@
 /* eslint-disable jsdoc/check-param-names */
 import type * as RDF from '@rdfjs/types';
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
-import type { Algebra } from '@traqula/algebra-transformations-1-2';
+import type { Algebra, ContextConfigs } from '@traqula/algebra-transformations-1-2';
 import { AlgebraFactory } from '@traqula/algebra-transformations-1-2';
 import type { Generator } from '@traqula/generator-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
@@ -55,10 +55,10 @@ export interface TransformationContext {
 export function parseQuery(
   { parser }: Pick<TransformationContext, 'parser'>,
   query: string,
-  quads = false,
+  config: ContextConfigs,
 ): Algebra.Operation {
   const ast = parser.parse(query);
-  return <Algebra.Construct> toAlgebra(ast, { quads, blankToVariable: true });
+  return <Algebra.Construct> toAlgebra(ast, { quads: false, blankToVariable: true, ...config });
 }
 
 /**

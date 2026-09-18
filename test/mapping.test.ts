@@ -46,6 +46,7 @@ describe('mappingFromConstructQueries', () => {
         PREFIX : <ex://>
         CONSTRUCT { ?s ?p ?o . ?s :alias ?o } WHERE { ?s ?p ?o }` ]);
 
+      // TODO: this expect confuses me? It does not stay the same? Since we check the value is `mi_s` instead of `s`?
       expect(oneTemplateTriple.head.subject.value).toBe('mi_s');
       expect(twoTemplateTriples.head.subject.value).toBe(`${VAR_PREFIX_MERGED_HEAD}s`);
       expect(twoTemplateTriples.head.predicate.value).toBe(`${VAR_PREFIX_MERGED_HEAD}p`);
@@ -81,6 +82,14 @@ describe('mappingFromConstructQueries', () => {
     });
 
     it('rejects a term a position does not admit', ({ expect }) => {
+      // TODO: nice test! this reminds me, should we add these termType rangeTests to our assertion pushdown?
+      //  In case we do for example a mapping `CONSTRUCT { ?o ?p ?s } where { ?s ?p ?o },
+      //  then only those bindings where ?o is a literal or blankNode should actually be accepted.
+      //   We thus get: `CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?o FILTER( isLiteral(?o) || isBlank(?o) ) }`
+      //  Note that we only need to add assertions there where the range of ?o
+      //  is is larger then the accepted range of the template position it is used in.
+      //  There might be value in putting this correctness check behind a context option,
+      //  just like we have for preserveCardinality.
       expect(() => mappingFromConstructQueries([
         'PREFIX : <ex://>\nCONSTRUCT { "literalSubject" :p ?o } WHERE { ?s :p ?o }',
       ])).toThrow('cannot use Literal in this position');
