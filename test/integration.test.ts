@@ -372,7 +372,7 @@ describe('integration tests', () => {
 
     it('selecting with a variable reused across positions (?x ?x ?o) returns the same results', async({ expect }) => {
       // Reusing the same variable in subject and predicate position unifies two mapping-head
-      // variables, which previously produced an invalid double BIND to the same variable.
+      // variables, which has to bind that variable once rather than twice.
       // The store deliberately contains a triple whose subject equals its predicate.
       const store11 = new Store([
         DF.quad(DF.namedNode('ex://loop'), DF.namedNode('ex://loop'), DF.namedNode('ex://x')),

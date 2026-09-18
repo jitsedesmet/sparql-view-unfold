@@ -4,9 +4,8 @@ import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib
 
 /**
  * `nullifyJoinOverIncompatibleBounds` reads each join operand's top-level `EXTEND` chain and its recursion
- * halts at a `PROJECT`, so a bind still inside a sub-SELECT is invisible to it. It used to sit before
- * `removeProjections` and `pullUpExtends`, where it saw nothing at all; the default pipeline runs it after
- * both, and the query below is what shows the difference.
+ * halts at a `PROJECT`, so a bind still inside a sub-SELECT is invisible to it. That is why the default
+ * pipeline runs it after `removeProjections` and `pullUpExtends`, and the query below is what shows it.
  */
 describe('the default pipeline', () => {
   // The two mappings pin the subject to two different terms, each under its own predicate.
