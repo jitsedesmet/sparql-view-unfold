@@ -118,10 +118,6 @@ position cannot hold — a literal subject, a blank node predicate — instantia
 CONSTRUCT the mapping is written as would not. `mappingFromConstructQueries(constructs, {
 generalizedRdfView: true })` keeps those triples instead, for a view that means to present generalized RDF.
 
-The tests this costs are cheap and are emitted only where the mapping moves a variable into a position
-stricter than the one its body read it from, so a mapping that keeps every variable where it found it pays
-nothing either way.
-
 ### Blank nodes
 
 An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to
