@@ -89,6 +89,7 @@ export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq
                     ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
                     ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
                     ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+                    FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
                   }
                 }
                 BIND( ?mi_t AS ?m_s )
@@ -127,6 +128,7 @@ export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq
                 ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
                 ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
                 ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+                FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
               }
             }
             BIND( ?mi_t AS ?m_s )
@@ -159,6 +161,7 @@ export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq
             ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
             ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
             ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+            FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
           }
         }
         BIND( ?mi_t AS ?m_s )
@@ -186,6 +189,7 @@ export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq
             ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
             ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
             ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+            FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
           }
         }
         BIND( ?mi_t AS ?m_s )
@@ -221,6 +225,7 @@ export const expectedQueryToValues = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o
                     ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
                     ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
                     ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+                    FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
                   }
                 }
                 BIND( ?mi_t AS ?m_s )
@@ -259,6 +264,7 @@ export const expectedQueryToValues = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o
                 ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
                 ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
                 ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+                FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
               }
             }
             BIND( ?mi_t AS ?m_s )
@@ -291,6 +297,7 @@ export const expectedQueryToValues = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o
             ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
             ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
             ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+            FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
           }
         }
         BIND( ?mi_t AS ?m_s )
@@ -318,6 +325,7 @@ export const expectedQueryToValues = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o
             ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
             ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
             ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+            FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
           }
         }
         BIND( ?mi_t AS ?m_s )

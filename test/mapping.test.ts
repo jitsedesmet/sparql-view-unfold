@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { describe, it } from 'vitest';
-import { VAR_PREFIX_MERGED_HEAD } from '../lib/consts.js';
+import { VAR_PREFIX_MAPPING, VAR_PREFIX_MERGED_HEAD } from '../lib/consts.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createTransformationContext } from '../lib/transformContext.js';
 import type { Mapping } from '../lib/types.js';
@@ -46,8 +46,9 @@ describe('mappingFromConstructQueries', () => {
         PREFIX : <ex://>
         CONSTRUCT { ?s ?p ?o . ?s :alias ?o } WHERE { ?s ?p ?o }` ]);
 
-      // TODO: this expect confuses me? It does not stay the same? Since we check the value is `mi_s` instead of `s`?
-      expect(oneTemplateTriple.head.subject.value).toBe('mi_s');
+      // Every mapping variable is prefixed, merged or not, so "its own head" is `?s` under that prefix
+      // rather than the `?m_s` the merge coins.
+      expect(oneTemplateTriple.head.subject.value).toBe(`${VAR_PREFIX_MAPPING}s`);
       expect(twoTemplateTriples.head.subject.value).toBe(`${VAR_PREFIX_MERGED_HEAD}s`);
       expect(twoTemplateTriples.head.predicate.value).toBe(`${VAR_PREFIX_MERGED_HEAD}p`);
       expect(twoTemplateTriples.head.object.value).toBe(`${VAR_PREFIX_MERGED_HEAD}o`);
@@ -82,17 +83,34 @@ describe('mappingFromConstructQueries', () => {
     });
 
     it('rejects a term a position does not admit', ({ expect }) => {
-      // TODO: nice test! this reminds me, should we add these termType rangeTests to our assertion pushdown?
-      //  In case we do for example a mapping `CONSTRUCT { ?o ?p ?s } where { ?s ?p ?o },
-      //  then only those bindings where ?o is a literal or blankNode should actually be accepted.
-      //   We thus get: `CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?o FILTER( isLiteral(?o) || isBlank(?o) ) }`
-      //  Note that we only need to add assertions there where the range of ?o
-      //  is is larger then the accepted range of the template position it is used in.
-      //  There might be value in putting this correctness check behind a context option,
-      //  just like we have for preserveCardinality.
       expect(() => mappingFromConstructQueries([
         'PREFIX : <ex://>\nCONSTRUCT { "literalSubject" :p ?o } WHERE { ?s :p ?o }',
       ])).toThrow('cannot use Literal in this position');
+    });
+  });
+
+  /**
+   * A CONSTRUCT instantiates its template only for the solutions making a legal triple of it, so a head
+   * variable the body could bind to a term its position cannot hold has to be filtered out of the body.
+   */
+  describe('a head variable the body could bind outside its position', () => {
+    it('is filtered where the head permutes the positions the body read', ({ expect }) => {
+      // `?o` is read in object position, where a literal is fine, and written in subject position.
+      expect(mappingAsStrings(mappingFromConstructQueries([
+        'CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?o }',
+      ])).body).toContain('( ISBLANK( ?mi_o ) || ISIRI( ?mi_o ) )');
+    });
+
+    it('is filtered inside a triple term the head constructs', ({ expect }) => {
+      expect(mappingAsStrings(mappingFromConstructQueries([
+        'PREFIX : <ex://>\nCONSTRUCT { ?t :reifies <<( ?o :p ?s )>> } WHERE { ?t :src ?s . ?s :p ?o }',
+      ])).body).toContain('( ISBLANK( ?mi_o ) || ISIRI( ?mi_o ) )');
+    });
+
+    it('is left alone where the body already proves the position, filtering nothing at all', ({ expect }) => {
+      expect(mappingAsStrings(mappingFromConstructQueries([
+        'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }',
+      ])).body).not.toContain('FILTER');
     });
   });
 
