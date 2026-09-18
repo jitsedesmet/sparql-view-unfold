@@ -2,16 +2,24 @@
 
 [![CI](https://github.com/jitsedesmet/sparql-view-unfold/actions/workflows/ci.yml/badge.svg)](https://github.com/jitsedesmet/sparql-view-unfold/actions/workflows/ci.yml)
 
-Runs SPARQL 1.2 queries — triple terms and all — against RDF 1.1 data, by rewriting them.
+Answers SPARQL 1.2 queries posed over views, by rewriting them into queries over the data those views are
+defined on.
 
-You describe how your RDF 1.1 data represents RDF 1.2 with a SPARQL CONSTRUCT query. That CONSTRUCT is a
-**view** over your data — a GAV mapping — and the rewriter *unfolds* it into every triple pattern of a user
-query, handing you back a plain SPARQL 1.1 query any engine can answer. A pipeline of optimisations then
+A view is a SPARQL CONSTRUCT query — a GAV mapping: its template says which triples the view holds, its
+WHERE clause how they are found in your data. The rewriter *unfolds* that view into every triple pattern of
+a user query, handing you back a query any SPARQL engine can answer, and a pipeline of optimisations then
 cuts the result down to something worth executing.
+
+Running SPARQL 1.2 queries — triple terms and all — against RDF 1.1 data is one case it was built for, and
+the one the examples below use: a view says how your RDF 1.1 data represents RDF 1.2, and the rewrite hands
+you plain SPARQL 1.1.
 
 The idea is explained in our [under review, in works paper targeting AMW](https://2026-amw-rewriting.jitsedesmet.be/)
 and in an [under review demo paper targeting SEMANTiCS](https://2026-semantics-rewriting.jitsedesmet.be/),
 based on a previous version of this repository. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code.
+
+> **Alpha.** Published as `0.0.0-alpha.0`, to claim the name. The API is a rewriter holding a pipeline of
+> transformations; expect it to change.
 
 ## Installation
 
@@ -147,6 +155,9 @@ rewritten `WHERE`. Writing RDF 1.2 through the mapping is a different problem (t
 is not what this does.
 
 ## API
+
+The tables below are the short version; the generated
+[API documentation](https://jitsedesmet.github.io/sparql-view-unfold/) has the full signatures.
 
 | Function | Description |
 |---|---|

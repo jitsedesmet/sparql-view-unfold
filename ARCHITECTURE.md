@@ -1,14 +1,16 @@
 # Architecture
 
-A map of how a SPARQL 1.2 query becomes a SPARQL 1.1 one. For what the package *does*, read the
+How a SPARQL 1.2 query over views becomes a query over the data those views are defined on — in the case
+this was built for, how a SPARQL 1.2 query becomes a SPARQL 1.1 one. For what the package *does*, read the
 [README](README.md); this file is for someone about to change the code.
 
 ![Schematic overview of query rewriting](assets/schematic-plan.png)
 
 ## The mapping
 
-A mapping is a GAV expression written as a SPARQL CONSTRUCT: the template (**head**) is the RDF 1.2
-pattern, the WHERE clause (**body**) the RDF 1.1 representation of it. `mappingFromConstructQueries`
+A mapping is a GAV expression written as a SPARQL CONSTRUCT: the template (**head**) says which triples the
+view holds, the WHERE clause (**body**) how they are found in the data — for the interoperability case, an
+RDF 1.2 pattern and its RDF 1.1 representation. `mappingFromConstructQueries`
 (`lib/mapping.ts`) turns a set of them into a single `Mapping`:
 
 - a template of N triples is split into N mappings over one body — a CONSTRUCT instantiates every template
@@ -50,9 +52,10 @@ Given a query Q without recursive paths and a mapping with head H and body B:
    bound twice.
 4. **Substitute variables assigned to static terms** by those terms, with care where they are read by an
    operation rather than by a pattern.
-5. **Group the constraints** with `pushDownAssertions`, which pushes restrictions down and distributes JOIN
-   over UNION. It moves both the `FILTER(sameTerm(?x, term))` constraints of 2.3, which substitute their
-   term into the patterns they reach and empty the branches that cannot bind the variable, and the
+5. **Group the constraints** with `pushDownAssertions` (`lib/transformations/pushDownAssertions.ts`, over
+   `lib/utils/assertionConjunction.ts`), which pushes restrictions down and distributes JOIN over UNION. It
+   moves both the `FILTER(sameTerm(?x, term))` constraints of 2.3, which substitute their term into the
+   patterns they reach and empty the branches that cannot bind the variable, and the
    `FILTER(sameTerm(?x, ?y))` unifications of 2.2 that step 3 left behind, which substitute one variable
    for the other. A chain of unifications is a *clique* of variables that all have to be equal; it is
    substituted to the lexicographically first member, with a BIND per member replacing the ones it

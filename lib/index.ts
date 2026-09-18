@@ -1,13 +1,16 @@
 /**
- * @fileoverview SPARQL Query Rewriting for RDF 1.2 over RDF 1.1.
+ * @fileoverview View unfolding and query optimisation for SPARQL 1.2.
  *
- * Rewrites SPARQL 1.2 queries - which may contain triple terms and other RDF 1.2 features - into equivalent
- * SPARQL 1.1 queries that can be executed against RDF 1.1 data sources.
+ * Rewrites a SPARQL 1.2 query posed over views into an equivalent query over the data those views are
+ * defined on.
  *
- * A **mapping** is one or more SPARQL CONSTRUCT queries: the template (head) shows the RDF 1.2 pattern, the
- * WHERE clause (body) the equivalent RDF 1.1 representation. A **pipeline** of transformations is then run
- * over the user query, the first of which unfolds that mapping into every triple pattern and the rest of
- * which optimise what comes out.
+ * A **mapping** is one or more SPARQL CONSTRUCT queries defining a view: the template (head) says which
+ * triples the view holds, the WHERE clause (body) how they are found in the data. A **pipeline** of
+ * transformations is then run over the user query, the first of which unfolds that mapping into every
+ * triple pattern and the rest of which optimise what comes out.
+ *
+ * Running SPARQL 1.2 queries - triple terms and all - against RDF 1.1 data is the case this was built for:
+ * a view then says how RDF 1.1 data represents RDF 1.2, and the rewrite hands back plain SPARQL 1.1.
  * @module sparql-view-unfold
  * @see {@link https://w3c.github.io/rdf-interop/spec/} RDF 1.2 Interoperability Spec
  * @example

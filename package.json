@@ -1,10 +1,9 @@
 {
   "name": "sparql-view-unfold",
   "type": "module",
-  "version": "0.0.0",
-  "private": "true",
+  "version": "0.0.0-alpha.0",
   "packageManager": "yarn@1.22.22",
-  "description": "Query rewriting for a SPARQL 1.2 query on RDF 1.1 data ",
+  "description": "View unfolding and query optimisation for SPARQL 1.2, with views defined as CONSTRUCT queries",
   "lsd:module": true,
   "license": "MIT",
   "repository": {
@@ -28,9 +27,11 @@
     "access": "public"
   },
   "files": [
+    "ARCHITECTURE.md",
     "dist/*/lib/**/*.d.ts",
     "dist/*/lib/**/*.js",
-    "dist/*/lib/**/*.js.map"
+    "dist/*/lib/**/*.js.map",
+    "dist/cjs/package.json"
   ],
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
@@ -45,7 +46,7 @@
     "doc": "typedoc",
     "doc:check": "typedoc --emit none",
     "lint": "eslint . --cache",
-    "postinstall": "yarn husky && yarn run build",
+    "prepare": "yarn husky && yarn run build",
     "test": "vitest test --run",
     "bench": "vitest bench --run --coverage.enabled=false",
     "bench:ab": "node test/bench-ab.mjs"
