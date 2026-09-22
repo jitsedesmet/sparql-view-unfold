@@ -35,6 +35,13 @@ describe('simplifyStaticExpressions', () => {
     expect(out.toLowerCase()).not.toContain('strlen');
   });
 
+  it('folds the condition of an OPTIONAL', async({ expect }) => {
+    // A FILTER directly in an OPTIONAL is the LEFT JOIN's condition rather than an operation of its own.
+    const out = await simplify('SELECT * WHERE { ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(1 > 2) } }');
+    expect(out).toContain('FILTER ( FALSE )');
+    expect(out).not.toContain('>');
+  });
+
   it('leaves a non-static expression untouched', async({ expect }) => {
     const out = await simplify('SELECT * WHERE { ?s ?p ?o . FILTER(STRLEN(?s) > 1) }');
     expect(out.toLowerCase()).toContain('strlen');

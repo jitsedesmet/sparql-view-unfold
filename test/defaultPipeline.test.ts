@@ -28,3 +28,29 @@ describe('the default pipeline', () => {
       .not.toContain('FILTER ( FALSE )');
   });
 });
+
+describe('the default pipeline over an OPTIONAL', () => {
+  // The first mapping pins the object to "1", the second maps a predicate straight through.
+  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+    'CONSTRUCT { ?s <ex://p> "1" } WHERE { ?s <ex://q> ?y }',
+    'CONSTRUCT { ?s <ex://r> ?x } WHERE { ?s <ex://t> ?x }',
+  ])));
+
+  it('drops an OPTIONAL whose condition the pushdown folds to FALSE', async({ expect }) => {
+    // The outer filter pins `?o` to "1", which substituted into the OPTIONAL's condition asks "1" to be "2".
+    expect((await rewriter.rewriteQuery(
+      'SELECT * { ?s <ex://p> ?o FILTER(SAMETERM(?o, "1")) OPTIONAL { ?s <ex://r> ?x FILTER(SAMETERM(?o, "2")) } }',
+    )).trim()).toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) ( ?uq_x AS ?x ) WHERE {
+  ?v_1 <ex://q> ?v_2 .
+  BIND( ?v_1 AS ?uq_s )
+  BIND( "1" AS ?uq_o )
+}`);
+  });
+
+  it('keeps an OPTIONAL whose condition the pushdown folds to TRUE', async({ expect }) => {
+    // Sanity: the drop above is about the condition, not about the shape of the query.
+    expect(await rewriter.rewriteQuery(
+      'SELECT * { ?s <ex://p> ?o FILTER(SAMETERM(?o, "1")) OPTIONAL { ?s <ex://r> ?x FILTER(SAMETERM(?o, "1")) } }',
+    )).toContain('OPTIONAL');
+  });
+});

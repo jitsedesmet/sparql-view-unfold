@@ -18,6 +18,12 @@ export function isFilterFalse(c: TransformationContext, op: Algebra.Operation): 
   return op.type === Algebra.Types.FILTER && isExpressionFalse(c, op.expression);
 }
 
+/**
+ * Whether an expression is the `FALSE` term, the condition of `FILTER(FALSE)` or of a LEFT JOIN that never matches.
+ * @param c - The transformation context
+ * @param op - The expression to check
+ * @returns whether it is the `FALSE` term
+ */
 export function isExpressionFalse(c: TransformationContext, op: Algebra.Expression): boolean {
   return op.subType === Algebra.ExpressionTypes.TERM && op.term.equals(termFalse);
 }
