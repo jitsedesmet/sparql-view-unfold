@@ -15,8 +15,11 @@ export const termTrue = DF.literal('true', datatypeBoolean);
  * @returns whether it is that sentinel
  */
 export function isFilterFalse(c: TransformationContext, op: Algebra.Operation): boolean {
-  return op.type === Algebra.Types.FILTER && op.expression.subType === Algebra.ExpressionTypes.TERM &&
-        op.expression.term.equals(termFalse);
+  return op.type === Algebra.Types.FILTER && isExpressionFalse(c, op.expression);
+}
+
+export function isExpressionFalse(c: TransformationContext, op: Algebra.Expression): boolean {
+  return op.subType === Algebra.ExpressionTypes.TERM && op.term.equals(termFalse);
 }
 
 /**

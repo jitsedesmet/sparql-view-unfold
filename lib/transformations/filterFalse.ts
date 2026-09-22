@@ -1,7 +1,7 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import { createFilterFalse, isFilterFalse } from '../utils/operationhelpers.js';
+import { createFilterFalse, isExpressionFalse, isFilterFalse } from '../utils/operationhelpers.js';
 import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
 
 /**
@@ -69,7 +69,8 @@ export function transformFilterFalse(c: TransformationContext, op: Algebra.Opera
         // https://www.w3.org/TR/sparql12-query/#defn_algLeftJoin
         const [ left, right ] = leftJoin.input;
         // If left FF → FF, if right FF → just left
-        if (isFilterFalse(c, left) || isFilterFalse(c, right)) {
+        if (isFilterFalse(c, left) || isFilterFalse(c, right) ||
+          (leftJoin.expression && isExpressionFalse(c, leftJoin.expression))) {
           return left;
         }
         return leftJoin;
