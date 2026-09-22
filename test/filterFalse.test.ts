@@ -116,6 +116,91 @@ describe('transformFilterFalse', () => {
     }
   });
 
+  describe('an OPTIONAL whose condition is FALSE', () => {
+    // A FILTER directly in an OPTIONAL becomes the LEFT JOIN's condition: nothing on the right can satisfy it,
+    // so every left solution survives through the anti-join half, exactly once.
+    it('reduces to what it is optional to, keeping its variables in the projection', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o OPTIONAL { ?s :q ?x FILTER(false) } }',
+        `SELECT ?o ?p ?s ?x WHERE {
+  ?s ?p ?o .
+}`,
+      );
+    });
+
+    it('reduces an OPTIONAL holding nothing but the condition', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o OPTIONAL { FILTER(false) } }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+}`,
+      );
+    });
+
+    it('reduces it below a GROUP, which stays', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT (COUNT(?x) AS ?c) WHERE { ?s ?p ?o OPTIONAL { ?s :q ?x FILTER(false) } }',
+        `SELECT ( COUNT( ?x ) AS ?c ) WHERE {
+  ?s ?p ?o .
+}`,
+      );
+    });
+
+    it('reduces a nested group, whose FILTER(FALSE) empties the right operand instead', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o OPTIONAL { { ?s :q ?x FILTER(false) } } }',
+        `SELECT ?o ?p ?s ?x WHERE {
+  ?s ?p ?o .
+}`,
+      );
+    });
+
+    // The string "false" has effective boolean value true.
+    it('keeps an OPTIONAL whose condition is the string "false"', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o OPTIONAL { ?s :q ?x FILTER("false") } }',
+        `SELECT ?o ?p ?s ?x WHERE {
+  ?s ?p ?o .
+  OPTIONAL {
+    ?s <ex://q> ?x .
+    FILTER ( "false" )
+  }
+}`,
+      );
+    });
+
+    it('keeps an OPTIONAL whose condition is not static', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o OPTIONAL { ?s :q ?x FILTER(false && ?x) } }',
+        `SELECT ?o ?p ?s ?x WHERE {
+  ?s ?p ?o .
+  OPTIONAL {
+    ?s <ex://q> ?x .
+    FILTER ( ( FALSE && ?x ) )
+  }
+}`,
+      );
+    });
+  });
+
+  describe('a MINUS', () => {
+    it('reduces to its left when its right is FILTER(FALSE)', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o MINUS { FILTER(false) } }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+}`,
+      );
+    });
+  });
+
   describe('a FILTER(FALSE)', () => {
     it('drops what it stands over, even where nothing above absorbs it', ({ expect }) => {
       expectTransform(
@@ -219,6 +304,17 @@ OFFSET 5`,
       expect(await exposedVariablesOf(rewritten, source)).toContain('a');
       const originalBindings = await sortedBindingsOf(query, source);
       // Sanity: the query actually returns something, so the comparison is not two empty lists.
+      expect(originalBindings.length).toBeGreaterThan(0);
+      expect(await sortedBindingsOf(rewritten, source)).toEqual(originalBindings);
+    });
+
+    it('exposes the same variables and rows when an OPTIONAL with a FALSE condition is dropped', async({ expect }) => {
+      // `?x` is only in scope through the dropped OPTIONAL, and every left solution survives it unmatched.
+      const query = `${prefixes}SELECT * WHERE { ?s :knows ?o OPTIONAL { ?o :knows ?x FILTER(false) } }`;
+      const rewritten = await rewriteWithFilterFalse(query);
+      expect(rewritten).not.toContain('OPTIONAL');
+      expect(await exposedVariablesOf(rewritten, source)).toEqual(await exposedVariablesOf(query, source));
+      const originalBindings = await sortedBindingsOf(query, source);
       expect(originalBindings.length).toBeGreaterThan(0);
       expect(await sortedBindingsOf(rewritten, source)).toEqual(originalBindings);
     });

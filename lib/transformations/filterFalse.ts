@@ -30,6 +30,7 @@ import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
  * - FILTER(FALSE) over anything becomes FILTER(FALSE) over the empty BGP, so no engine evaluates its input
  * - PROJECT/EXTEND/DISTINCT/etc. over FILTER(FALSE) becomes FILTER(FALSE), sub-SELECTs included
  * - MINUS/LEFT JOIN whose right operand is FILTER(FALSE) becomes its left operand
+ * - LEFT JOIN whose condition is `FALSE` becomes its left operand: no right solution can satisfy it
  * - GROUP and the query's own solution modifiers are left in place
  * @param c - The transformation context
  * @param op - The operation to transform
