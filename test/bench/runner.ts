@@ -262,9 +262,9 @@ export function sameSolutions(a: SelectResult, b: SelectResult): boolean {
  * reference engine, and only falls back to the reference engine's own `rewriting`
  * result when a case has no baseline. Using `rewriting` as the reference would make
  * the pipeline under test its own oracle — which silently inverts the verdict whenever
- * that pipeline is the broken one (exactly what the Fuseki/ARQ triple-term bug does on
- * Jena: `rewriting` returns 0 rows there, so every variant that agrees with the
- * baseline gets marked incorrect). The baseline is plain SPARQL 1.1 over plain RDF 1.1
+ * that pipeline is the broken one (exactly what an ARQ triple-term bug did on Jena until
+ * 6.2.0: `rewriting` returned 0 rows there, so every variant that agreed with the
+ * baseline got marked incorrect). The baseline is plain SPARQL 1.1 over plain RDF 1.1
  * with no triple terms anywhere, so it is the one query in the set that no engine's
  * RDF 1.2 support can get wrong.
  */

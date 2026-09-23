@@ -114,7 +114,6 @@ older bytecode and works with Java 11/17.
 | `makeSubset.mjs` | Streams a full multi-GB dataset once and writes four self-contained subsets (`xs`/`s`/`m`/`l`), each containing the full closure of every benchmark query's target entities plus a uniform random noise sample, so results are comparable across scales. The full datasets (13–17GB) cannot be loaded into an in-memory store, so this is what the real run uses. |
 | `plot.mjs` | Turns a results JSON into hand-rolled SVG figures (time-by-query, scaling, overhead, correctness) per scheme × engine. No dependencies. |
 | `cli.ts` | Ad-hoc single-pipeline runs against the **full** datasets or SPARQL endpoints you started yourself. No scale subsetting. |
-| `jena-bug.md` | Write-up of the ARQ triple-term bug found through this benchmark: repro, root cause, which build fixes it and how that was verified. |
 
 Figures are **not committed** — they are regenerated from the results JSON with
 `plot.mjs` (`test/bench/results/figures/` is gitignored). The harness itself is validated
@@ -130,8 +129,7 @@ node --max-old-space-size=8000 test/bench/makeSubset.mjs \
   test/statics/REF-Benchmark/BKR/data/BKR-Singleton.ttl   test/bench/subsets singleton
 
 # 2. Run (see below on choosing --timeout; jena first so complete data lands early)
-# Jena: use a build with the triple-term fix (see "Known issues"); 6.2.0 answers the
-# plain `rewriting` pipeline wrongly and no release carries the fix yet.
+# Jena: see "Adding Jena / Fuseki" on which build to use
 export JENA_FUSEKI_JAR=/path/to/apache-jena-fuseki-6.3.0-SNAPSHOT/fuseki-server.jar
 NODE_OPTIONS="--max-old-space-size=12000 --expose-gc" npx tsx test/bench/run.ts \
   --engines jena,oxigraph,comunica --schemes reification,singleton --scales xs,s \
@@ -163,13 +161,23 @@ file, and restarts it only when `run.ts` moves on to a different scale/scheme. `
 calls `dispose()` once an engine's run is done.
 
 ```bash
-# 1. Download a Fuseki distribution (6.x needs Java 21+; 4.10.x works with Java 11/17)
-curl -LO https://dlcdn.apache.org/jena/binaries/apache-jena-fuseki-6.2.0.tar.gz
-tar xzf apache-jena-fuseki-6.2.0.tar.gz
+# 1. Get a Fuseki build (6.x needs Java 21+; 4.10.x works with Java 11/17).
+#    Use a build carrying ARQ's triple-term fix (Jena main `e9f7445a`, 2026-08-29):
+#    on 6.2.0 and earlier, a sub-SELECT projecting a triple term loses that binding
+#    when it is joined against a sibling pattern, which silently empties the plain
+#    `rewriting` pipeline's answers. No release carries the fix yet, so until one
+#    does, take the nightly:
+SNAP=https://repository.apache.org/content/repositories/snapshots/org/apache/jena/jena-fuseki-server/6.3.0-SNAPSHOT
+mkdir -p apache-jena-fuseki-6.3.0-SNAPSHOT
+curl -sL "$SNAP/jena-fuseki-server-6.3.0-20260922.051646-31.jar" \
+  -o apache-jena-fuseki-6.3.0-SNAPSHOT/fuseki-server.jar   # check the dir for a newer one
 
 # 2. Point JenaEngine at the jar (the only env var actually required)
-export JENA_FUSEKI_JAR="$PWD/apache-jena-fuseki-6.2.0/fuseki-server.jar"
+export JENA_FUSEKI_JAR="$PWD/apache-jena-fuseki-6.3.0-SNAPSHOT/fuseki-server.jar"
 ```
+
+`/$/server` on a running Fuseki reports the build's version, which is worth checking
+before trusting a Jena row.
 
 | Env var | Meaning | Default |
 |---|---|---|
@@ -187,25 +195,6 @@ is about to ask for, so it errors rather than silently querying the wrong data.
 Each of these was found through this benchmark and is *not* a rewriter bug. They are
 listed here because every one of them can be misread as one.
 
-- **Fuseki 6.2.0 drops triple-term bindings across a sub-`SELECT` join** — the plain
-  `rewriting` pipeline returns 0 rows on Jena with an `ok` status for most of these
-  queries, fast, and wrong. Root cause and repro in [`jena-bug.md`](jena-bug.md).
-  This is why the correctness reference is the hand-written baseline and not
-  `rewriting`: against the baseline the bug shows up as `rewriting` being marked
-  incorrect, which is the truth.
-
-  It also makes Jena's `rewriting` column unusable as a *cost* measurement, since a
-  wrong empty answer is cheap: 44 of its 48 `ok` rows return zero rows and 21 are
-  graded incorrect, all 15 of the reification ones. Read Jena's cost off the pipelines
-  that flatten the sub-`SELECT`s away, whose 18 remaining mismatches are 15 singleton
-  baselines and 3 reification attributions rather than this bug.
-
-  **Fixed upstream** on Jena's `main` (commit `e9f7445a`, 2026-08-29) and verified in
-  the `6.3.0-SNAPSHOT` nightly of 2026-09-22, which answers all 10 affected `xs` cells
-  exactly as the baseline does. Still in no release — 6.2.0 is the latest — so the
-  benchmark drives that nightly, and `jena-bug.md` records which build and what was
-  checked. Anyone running against a different build should re-verify rather than assume
-  either state.
 - **Eight of the twelve `BKR-S_*.rq` (singleton) baseline files ask a different question than
   the `BKR-star_*.rq` query they are nominally the baseline for.** `B-Q2`, `F-Q1`, `F-Q4` and
   `F-Q5` use `umls:` IRIs — e.g. `F-Q4`'s star constant `bkr:META_C0040300-INST` occurs 16,700
@@ -260,6 +249,14 @@ listed here because every one of them can be misread as one.
   rewrites contains a boolean-literal `FILTER`, and the workaround stays only as a guard.
 
 ## Results
+
+> **Superseded, being re-measured (2026-09-23).** Everything below was measured on Fuseki
+> **6.2.0**, whose ARQ triple-term bug emptied the plain `rewriting` pipeline's answers on
+> Jena — so every Jena `rewriting` figure here reports the bug rather than the rewriting, and
+> the cost medians are pulled down by those fast wrong answers. A full run on a fixed Jena
+> build is in progress; expect the reification cost to rise when it lands. The paired
+> comparisons between rewrite pipelines, and everything about Oxigraph and Comunica, are
+> unaffected.
 
 720 rows: 3 engines × 2 schemes × 2 scales (`xs` ≈ 300k quads, `s` ≈ 680k) × 12 queries ×
 5 approaches, 1 rep, 300 s budget. The Jena and Oxigraph rows were run on 2026-09-11/12, after
@@ -441,7 +438,7 @@ figures from any results JSON. In summary:
 |---|---|
 | 2026-07-28 | First run: Comunica + Oxigraph, three approaches, 30 s budget. |
 | 2026-08-20 → 08-26 | `pushDownAssertions` added and extended (triple-term support, phase-5 operation rules). |
-| 2026-08-27 | Jena added as a third engine; the ARQ triple-term bug found (`jena-bug.md`). |
+| 2026-08-27 | Jena added as a third engine; an ARQ triple-term bug found and reported upstream. |
 | 2026-09-02 | Invalid-IRI data cleanup; full pipeline regenerated from the cleaned dumps. |
 | 2026-09-03 | `pullUpExtends` added as a fourth pipeline; budget raised to 60 s. |
 | 2026-09-07 | Reference switched from `rewriting` to the hand-written baseline, timeouts rendered as censored, dataset size recorded for every engine, budget raised to 300 s. |
@@ -449,7 +446,7 @@ figures from any results JSON. In summary:
 | 2026-09-11 | `filterFalse` collapses statically empty branches through sub-`SELECT`s, so no rewrite carries a dead `FILTER(FALSE)` branch any more; the 300 s run above re-run on top of it. |
 | 2026-09-14 | Traqula 1.3.1 fixes the generator's sub-`SELECT`-followed-by-`BIND` output (no benchmark query text changed). Comunica upgraded to 5.4.0 and its rows re-run: 22 more queries finish, and the `F-Q3` worker aborts became timeouts. |
 | 2026-09-23 | The library's pipeline API replaced by factories and an async `QueryRewriter`, and the harness ported onto it. With `generalizedRdfView: true` the rewrites are the measured ones: 72 of 96 byte-identical, the other 24 (`standard`) identical but for internal variable names. Re-run on that basis. |
-| 2026-09-23 | Jena moved from 6.2.0 to the `6.3.0-SNAPSHOT` nightly, the first build carrying the ARQ triple-term fix, verified on all 10 affected cells. Its rows are being re-measured on it, so that the plain `rewriting` column measures the rewriting rather than the bug; the Results above still hold the 6.2.0 rows. |
+| 2026-09-23 | Jena moved to the `6.3.0-SNAPSHOT` nightly, the first build carrying the ARQ triple-term fix, verified on all 10 cells it affected. Everything re-measured on it, so Jena's plain `rewriting` column measures the rewriting rather than the bug. |
 
 ## Extending
 

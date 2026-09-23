@@ -24,11 +24,13 @@
  * when a case has no baseline, or the baseline itself fails, does it fall back to the
  * `rewriting` result; `referenceApproach` on every row records which was used, and the
  * row that *is* the reference carries `correct: null` rather than a self-comparison.
- * This matters concretely on Jena: a known Fuseki 6.2.0 ARQ bug drops triple-term-valued
- * bindings across certain sub-`SELECT` joins, so `rewriting` there returns 0 rows with an
- * `ok` status (see README.md, "Adding Jena as a third engine"). Against the baseline that
- * shows up as `rewriting` being marked incorrect, which is the truth; against `rewriting`
- * as its own oracle it used to show up as every *working* variant being marked incorrect.
+ * This is not hypothetical: an ARQ bug in Fuseki 6.2.0 and earlier dropped triple-term
+ * bindings across certain sub-`SELECT` joins, so `rewriting` answered 0 rows there with an
+ * `ok` status. Against the baseline that showed up as `rewriting` being marked incorrect,
+ * which was the truth; against `rewriting` as its own oracle it showed up as every
+ * *working* variant being marked incorrect. Fixed in the build the benchmark now runs
+ * (see README.md, "Adding Jena / Fuseki"), and the reference stays the baseline because
+ * the next such bug will not announce itself either.
  *
  * Engines:
  *   - `comunica`: a long-lived worker process per dataset (loaded and indexed once) —

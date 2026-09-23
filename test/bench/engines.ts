@@ -545,10 +545,10 @@ export class OxigraphEngine implements BenchEngine {
 /**
  * In-process-managed engine backed by **Apache Jena / Fuseki** (Java, HTTP SPARQL
  * endpoint). Jena 5.x/6.x has full SPARQL 1.2 / RDF 1.2 support (new `<<( )>>`
- * triple-term syntax, `rdf:reifies`) — see the survey in `README.md`. Verified in
- * this session against Fuseki 6.2.0, which requires a **Java 21+** runtime (Fuseki
- * 6.x class files are too new for Java 17; earlier Fuseki releases, e.g. 4.10.x,
- * work with Java 11/17 — see `README.md` for details).
+ * triple-term syntax, `rdf:reifies`) — see the survey in `README.md`. Driven here against
+ * a Fuseki 6.3.0 build, which requires a **Java 21+** runtime (Fuseki 6.x class files are
+ * too new for Java 17; earlier Fuseki releases, e.g. 4.10.x, work with Java 11/17). See
+ * `README.md`, "Adding Jena / Fuseki", for which build to use and why it matters.
  *
  * Unlike {@link OxigraphEngine} (one-shot child process per query, since Oxigraph's
  * `Store.query` is synchronous), Fuseki is a long-lived HTTP server, so this engine
