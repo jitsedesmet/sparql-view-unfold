@@ -26,6 +26,23 @@ import type { Mapping, QueryTransformation } from '../../lib/index.js';
 import type { BenchEngine, EngineSource, SelectResult } from './engines.js';
 
 /**
+ * How the mappers of every benchmark case are read.
+ *
+ * `generalizedRdfView` keeps the solutions whose head terms a standard RDF graph would not admit - a
+ * literal subject, a blank node predicate - instead of filtering them out. A mapping denoting a standard
+ * graph is the honest reading of this corpus, and is the library's default; it costs a type test per head
+ * variable whose body range is wider than its position, which here is 352 `isIRI`/`isBlank` filters across
+ * the 96 rewrites this benchmark measures.
+ *
+ * It is on here because the guarded rewrites are not the ones these results were built from, and what those
+ * guards cost is a question of its own rather than a change to fold silently into every other number. With
+ * it on, 72 of the 96 rewrites are byte-identical to the ones measured before the pipeline API landed, and
+ * the remaining 24 - the `standard` variant, the only one keeping the sub-`SELECT`s the unfolding produces -
+ * differ from them by nothing but the name of each internal variable.
+ */
+const MAPPING_OPTIONS = <const> { generalizedRdfView: true };
+
+/**
  * The standard rewriting pipeline used across the integration tests: the unfolding itself, plus the
  * clean-up passes that only ever remove work.
  *
@@ -191,7 +208,7 @@ export async function rewriteToSparql11(
   userQuery12: string,
   variant: RewriteVariant = 'standard',
 ): Promise<string> {
-  const rewriter = createQueryRewriter(pipelineFor(variant, mappingFromConstructQueries(mappers)));
+  const rewriter = createQueryRewriter(pipelineFor(variant, mappingFromConstructQueries(mappers, MAPPING_OPTIONS)));
   return lowercaseBooleanLiterals(await rewriter.rewriteQuery(userQuery12));
 }
 

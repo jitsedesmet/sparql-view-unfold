@@ -20,13 +20,33 @@ difference between two adjacent bars is the contribution of one transformation:
 
 | Approach | Pipeline |
 |---|---|
-| `rewriting` | `operationTransform` → `transformFilterFalse` → `nullifyJoinOverIncompatibleBounds` → `transformFilterFalse` |
+| `rewriting` | `unfolding` → `filterFalse` → `nullifyJoinOverIncompatibleBounds` → `filterFalse` |
 | `rewriting+removeProjections` | the above, then `removeProjections` (flattens the nested sub-`SELECT`s each mapper branch is wrapped in) |
 | `rewriting+pushDownAssertions` | the above, then `pushDownAssertions` (pushes `FILTER(sameTerm(?x, c))` into the triple patterns that use `?x`, turning a free position into an indexed lookup) |
 | `rewriting+pullUpExtends` | the above, then `pullUpExtends` twice (floats the `BIND`s the pushdown leaves at every leaf back up, or drops them) |
 
-See `runner.ts` for the exact composition, and for why `removeProjections` stays a step of the
-pushdown pipelines even though Traqula 1.3.1 no longer needs it to keep their output parseable.
+Each name above is the `<stem>Transformation()` factory of that stem; see `runner.ts` for the exact
+composition, and for why `removeProjections` stays a step of the pushdown pipelines even though
+Traqula 1.3.1 no longer needs it to keep their output parseable.
+
+None of the four is the pipeline `createDefaultTransformationPipeline` builds, which is what a user of
+the library gets by default: that one expands property paths first, runs `pullUpExtends` once and
+`nullifyJoinOverIncompatibleBounds` last. The ladder here is built to isolate one pass at a time, not
+to be the recommended configuration.
+
+### How the mappers are read
+
+The mappings are built with `generalizedRdfView: true`, so a solution binding a head variable to a
+term the position of a *standard* RDF graph could not hold - a literal subject, a blank node predicate
+- keeps its triple instead of being filtered out. This is not the library's default, and it is not the
+honest reading of this corpus either: BKR data is standard RDF.
+
+It is set because the guards are worth measuring on their own rather than folding into every other
+number here. Turning them on costs 352 `isIRI`/`isBlank` filters across the 96 rewrites this
+benchmark measures, and with the flag as it stands 72 of those 96 are byte-identical to the queries
+every result below was measured on. The remaining 24 are the `standard` variant, the only one that
+keeps the sub-`SELECT`s the unfolding produces, and they differ by nothing but the name each internal
+variable carries. Quantifying the guards is the next experiment, not a footnote to this one.
 
 ## Reading the output
 
@@ -86,7 +106,7 @@ older bytecode and works with Java 11/17.
 | File | Purpose |
 |---|---|
 | `run.ts` | The orchestrator: for every engine × scheme × scale it runs the four pipelines and the baseline over the *same* subset, grades them against the reference answer, and writes the results JSON. Flushes after every row, so an interrupted run still leaves usable JSON. |
-| `runner.ts` | `rewriteToSparql11(mappers, query, variant)` — the core rewrite call, where `variant` selects one of the four pipelines — plus `sameSolutions()` and a simpler single-engine `runBenchmark()`/`formatRecords()` used by `cli.ts`. |
+| `runner.ts` | `rewriteToSparql11(mappers, query, variant)` — the core rewrite call, async as `QueryRewriter.rewriteQuery` is, where `variant` selects one of the four pipelines — plus `sameSolutions()` and a simpler single-engine `runBenchmark()`/`formatRecords()` used by `cli.ts`. |
 | `config.ts` | Maps each reification pattern (`reification` → `BKR-Reification.ttl`/`BKR-R_*.rq`, `singleton` → `BKR-Singleton.ttl`/`BKR-S_*.rq`) to its CONSTRUCT mappers, materialized dataset and hand-written baseline query, and builds cases from `queries/BKR-star_*.rq`. |
 | `engines.ts` | `BenchEngine` interface + `ComunicaEngine` (a long-lived worker process per dataset, so the store is loaded and indexed once and the engine stays warm, while a query whose join state outgrows the heap costs one `error` row instead of the whole sweep; in-process for the in-memory stores the unit tests use), `OxigraphEngine` (one-shot child process, killed on timeout — Oxigraph's `Store.query` is synchronous), `JenaEngine` (manages its own long-lived `fuseki-server.jar` child process, restarted only when the dataset file changes) and `SparqlHttpEngine` (any *externally managed* SPARQL HTTP endpoint, used by `cli.ts`). |
 | `oxiOneShot.mjs` | Loads one Turtle file, runs one query with Oxigraph, prints canonicalized JSON. Run as a child process by `OxigraphEngine` so a hard wall-clock timeout can be enforced by killing it. |
@@ -216,21 +236,21 @@ listed here because every one of them can be misread as one.
   groups first — 589,249,104 pairs — and it cannot bind-join into them instead, because its
   bind-join actor refuses any input containing a `BIND` or `GROUP`. Comunica 5.4.0 caps
   join estimates by the shared variables (#1792) and estimates that group at 2,133; together
-  with the `transformFilterFalse` change above it streams the rewrite in under 1.5GB and runs out
+  with the `filterFalse` change above it streams the rewrite in under 1.5GB and runs out
   of budget like the baseline, so these cells are now timeouts rather than errors.
 - **Oxigraph 0.5.9 rejects the spec-compliant uppercase `FILTER(FALSE)`** our generator
   emits, accepting only lowercase `false`. Worked around by lowercasing that exact shape in
   the query text sent to engines (`runner.ts`'s `lowercaseBooleanLiterals`); the generator
   is left alone, since its output is correct. It mattered while `pushDownAssertions` left
   the `UNION` branches it proved statically empty behind as `FILTER(FALSE)`; now that
-  `transformFilterFalse` collapses those through sub-`SELECT`s, none of the benchmark
+  `filterFalse` collapses those through sub-`SELECT`s, none of the benchmark
   rewrites contains a boolean-literal `FILTER`, and the workaround stays only as a guard.
 
 ## Results
 
 720 rows: 3 engines × 2 schemes × 2 scales (`xs` ≈ 300k quads, `s` ≈ 680k) × 12 queries ×
 5 approaches, 1 rep, 300 s budget. The Jena and Oxigraph rows were run on 2026-09-11/12, after
-`transformFilterFalse` learned to collapse statically empty branches through sub-`SELECT`s; the
+`filterFalse` learned to collapse statically empty branches through sub-`SELECT`s; the
 Comunica rows were re-run on 2026-09-14 on Comunica 5.4.0 (see the History table). The 96
 rewritten queries are byte-for-byte identical between the two runs, and correctness is graded per
 engine, so the two sets of rows sit together safely. `results.json` holds them; `plot.mjs`
@@ -301,10 +321,10 @@ sped up the rewritten queries as well as the hand-written ones. Rewriting buys y
 interface over RDF 1.1 data without touching the data; it does not buy you the performance of
 a query written against the storage layout. An order of magnitude is the price at these scales.
 
-### What the `transformFilterFalse` change did
+### What the `filterFalse` change did
 
 `pushDownAssertions` proves some `UNION` branches statically empty — in 20 of the 24 cases the
-"already a native triple term" branch. Until `transformFilterFalse` could see past a
+"already a native triple term" branch. Until `filterFalse` could see past a
 sub-`SELECT`, such a branch survived into the query text as a `FILTER(FALSE)` over a full
 `?s ?p ?o` pattern. None does now, and the change reaches further than those 20 cases: all 48
 pushdown and pull-up rewrites got shorter (`singleton/B-Q2` under `pullUpExtends` went from 82
@@ -357,7 +377,7 @@ run-to-run variation. The largest single gains are `singleton/B-Q3` at `xs` unde
 slowdown is 1.28× (`reification/F-Q4` at `xs` under `pushDownAssertions`, 110 s → 141 s).
 
 Because the baselines themselves changed this much, the baseline-normalized comparison used for
-the `transformFilterFalse` change above does not carry across versions; the ratios here compare raw
+the `filterFalse` change above does not carry across versions; the ratios here compare raw
 times per cell.
 
 ### Correctness: 138 mismatches, none of them the rewriter
@@ -413,8 +433,9 @@ figures from any results JSON. In summary:
 | 2026-09-03 | `pullUpExtends` added as a fourth pipeline; budget raised to 60 s. |
 | 2026-09-07 | Reference switched from `rewriting` to the hand-written baseline, timeouts rendered as censored, dataset size recorded for every engine, budget raised to 300 s. |
 | 2026-09-09 | Comunica moved into a worker process after `reification/F-Q3` OOM-killed two sweeps; the first complete 300 s run. |
-| 2026-09-11 | `transformFilterFalse` collapses statically empty branches through sub-`SELECT`s, so no rewrite carries a dead `FILTER(FALSE)` branch any more; the 300 s run above re-run on top of it. |
+| 2026-09-11 | `filterFalse` collapses statically empty branches through sub-`SELECT`s, so no rewrite carries a dead `FILTER(FALSE)` branch any more; the 300 s run above re-run on top of it. |
 | 2026-09-14 | Traqula 1.3.1 fixes the generator's sub-`SELECT`-followed-by-`BIND` output (no benchmark query text changed). Comunica upgraded to 5.4.0 and its rows re-run: 22 more queries finish, and the `F-Q3` worker aborts became timeouts. |
+| 2026-09-23 | The library's pipeline API replaced by factories and an async `QueryRewriter`, and the harness ported onto it. With `generalizedRdfView: true` the rewrites are the measured ones: 72 of 96 byte-identical, the other 24 (`standard`) identical but for internal variable names. Re-run on that basis. |
 
 ## Extending
 
