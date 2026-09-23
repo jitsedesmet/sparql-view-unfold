@@ -3,7 +3,8 @@ import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { DataFactory } from 'rdf-data-factory';
 import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE, IRI_PREFIX_BNODE } from '../consts.js';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
+import type { QueryTransformation } from '../types.js';
 
 /**
  * @fileoverview Blank node transformation utilities.
@@ -36,7 +37,7 @@ import type { TransformContext } from '../transformContext.js';
  * @returns The transformed expression
  */
 function expressionForConsistentConstruction(
-  c: TransformContext,
+  c: TransformationContext,
   expression: Algebra.NamedExpression,
   hashFunc?: 'md5' | 'sha1' | 'sha256' | 'sha384' | 'sha512',
 ): Algebra.Expression {
@@ -147,7 +148,7 @@ function expressionForConsistentConstruction(
  * // Internal blank node expression becomes:
  * // STRDT(CONCAT(...encoded vars...), <https://sparql-extension.knows.idlab.ugent.be/bnode>)
  */
-export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: TransformContext, op: T): T {
+export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   const { AF, DF } = c;
   return algebraUtils.mapOperationSub<'unsafe', typeof op>(
     op,
@@ -195,7 +196,7 @@ export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: Tr
  * // Internal blank node expression becomes:
  * // IRI(CONCAT("https://myInternalBnode.example.org/", SHA1(...encoded vars...)))
  */
-export function internalBnodeAsSpecialIri<T extends Algebra.Operation>(c: TransformContext, op: T): T {
+export function internalBnodeAsSpecialIri<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   const { AF, DF } = c;
   return algebraUtils.mapOperationSub<'unsafe', typeof op>(
     op,
@@ -230,4 +231,20 @@ export function internalBnodeAsSpecialIri<T extends Algebra.Operation>(c: Transf
       },
     }}},
   );
+}
+
+/**
+ * The pipeline step materialising every internal blank node as a typed literal.
+ * @returns the transformation
+ */
+export function internalBnodeAsSpecialLiteralTransformation(): QueryTransformation {
+  return internalBnodeAsSpecialLiteral;
+}
+
+/**
+ * The pipeline step materialising every internal blank node as a prefixed IRI.
+ * @returns the transformation
+ */
+export function internalBnodeAsSpecialIriTransformation(): QueryTransformation {
+  return internalBnodeAsSpecialIri;
 }

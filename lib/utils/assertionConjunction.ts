@@ -4,7 +4,7 @@ import { AssertionClusterSet } from '../datastructures/AssertionClusterSet.js';
 import type { PinChildren, TriplePosition } from '../datastructures/TermClusterSet.js';
 import { childGroupsOf, triplePositions } from '../datastructures/TermClusterSet.js';
 import type { RangeSet } from '../RangeSet.js';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
 import type { DerivedVarNamer } from '../utils.js';
 import type {
   Access,
@@ -767,7 +767,7 @@ export class AssertionConjunction {
    * @param c - The transformation context
    * @returns the condition
    */
-  public toExpression(c: TransformContext): Algebra.Expression {
+  public toExpression(c: TransformationContext): Algebra.Expression {
     return conjunctionOf(c, this.conjuncts().map(conjunct => conjunctAsExpression(c, conjunct)));
   }
 
@@ -1403,7 +1403,7 @@ export type AssertionFilter = Algebra.Filter & {
  * @param filter - The filter to analyse
  * @returns the same filter, with its conjunction cached on it
  */
-function withAssertionConjunction(c: TransformContext, filter: Algebra.Filter): AssertionFilter {
+function withAssertionConjunction(c: TransformationContext, filter: Algebra.Filter): AssertionFilter {
   const casted = <Algebra.Filter & { metadata?: Partial<AssertionFilter['metadata']> }> filter;
   const known = casted.metadata?.assertions;
   if (known === undefined) {
@@ -1428,7 +1428,7 @@ function withAssertionConjunction(c: TransformContext, filter: Algebra.Filter): 
  * @returns whether it is such a filter; anything else is left where it is, and the traversal keeps
  * descending into it looking for the filters deeper down
  */
-export function isAssertionFilter(c: TransformContext, op: Algebra.Operation): op is AssertionFilter {
+export function isAssertionFilter(c: TransformationContext, op: Algebra.Operation): op is AssertionFilter {
   if (op.type !== Algebra.Types.FILTER) {
     return false;
   }
@@ -1454,7 +1454,7 @@ export function isAssertionFilter(c: TransformContext, op: Algebra.Operation): o
  * makes the filter empty
  */
 export function collectAssertions(
-  c: TransformContext,
+  c: TransformationContext,
   expression: Algebra.Expression,
   known: AssertionConjunction = new AssertionConjunction(),
   cVars: ReadonlySet<string> = new Set(),

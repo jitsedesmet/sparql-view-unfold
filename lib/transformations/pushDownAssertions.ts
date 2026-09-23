@@ -1,7 +1,8 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
+import type { QueryTransformation } from '../types.js';
 import type { AssertionFilter } from '../utils/assertionConjunction.js';
 import {
   AssertionConjunction,
@@ -110,7 +111,7 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // Before: SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?s, ?o)) }
  * // After:  SELECT * WHERE { ?o ?p ?o . BIND(?o AS ?s) }
  */
-export function pushDownAssertions<T extends Algebra.Operation>(c: TransformContext, rootOp: T): T {
+export function pushDownAssertions<T extends Algebra.Operation>(c: TransformationContext, rootOp: T): T {
   const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
     Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]),
   );
@@ -136,7 +137,7 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: TransformCont
  * @param filter - The filter met by the traversal
  * @returns what the traversal should put in its place
  */
-function pushFilter(c: TransformContext, namer: DerivedVarNamer, filter: Algebra.Filter): PreOrderMappingReturn {
+function pushFilter(c: TransformationContext, namer: DerivedVarNamer, filter: Algebra.Filter): PreOrderMappingReturn {
   if (!isAssertionFilter(c, filter)) {
     return keep(filter);
   }
@@ -161,7 +162,7 @@ function pushFilter(c: TransformContext, namer: DerivedVarNamer, filter: Algebra
  * @returns what the traversal should put in its place
  */
 function pushAssertions(
-  c: TransformContext,
+  c: TransformationContext,
   namer: DerivedVarNamer,
   assertions: AssertionConjunction,
   op: Algebra.Operation,
@@ -191,7 +192,7 @@ function pushAssertions(
  * @returns what the traversal should put in its place
  */
 function swapWith(
-  c: TransformContext,
+  c: TransformationContext,
   namer: DerivedVarNamer,
   assertions: AssertionConjunction,
   op: Algebra.Operation,
@@ -317,7 +318,7 @@ function swapWith(
  * @returns the rewritten BGP, or the empty operation when a term can no longer occupy its position
  */
 function substituteIntoPatterns(
-  c: TransformContext,
+  c: TransformationContext,
   op: Algebra.Bgp,
   assertions: Assertions,
 ): Algebra.Operation {
@@ -344,7 +345,7 @@ function substituteIntoPatterns(
  * @param assertions - The substitution to write in
  * @returns the rewritten path, or the empty operation when a term can no longer occupy its position
  */
-function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions: Assertions): Algebra.Operation {
+function substituteIntoPath(c: TransformationContext, path: Algebra.Path, assertions: Assertions): Algebra.Operation {
   const subject = substituteInTerm(path.subject, assertions, 'object');
   const object = substituteInTerm(path.object, assertions, 'object');
   const graph = substituteInTerm(path.graph, assertions, 'graph');
@@ -371,7 +372,7 @@ function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions:
  * @returns the rewritten pattern, its condition and its re-bindings
  */
 function rewritePattern(
-  c: TransformContext,
+  c: TransformationContext,
   assertions: AssertionConjunction,
   namer: DerivedVarNamer,
   substituteInto: (substitution: Assertions) => Algebra.Operation,
@@ -408,7 +409,11 @@ function rewritePattern(
  * @returns the pruned VALUES with a re-binding per dropped column, or the empty operation when no row
  * survives
  */
-function pruneValues(c: TransformContext, values: Algebra.Values, assertions: AssertionConjunction): Algebra.Operation {
+function pruneValues(
+  c: TransformationContext,
+  values: Algebra.Values,
+  assertions: AssertionConjunction,
+): Algebra.Operation {
   const substitution = assertions.rebuildingSubstitution();
   // A column stays unless something else carries what it held: the re-binding rebuilds it, or U⟨?x⟩
   // says there is nothing left to hold.
@@ -545,7 +550,7 @@ function rowSatisfies(
  * @returns what the traversal should put in its place
  */
 function pushIntoExtend(
-  c: TransformContext,
+  c: TransformationContext,
   extend: Algebra.Extend,
   assertions: AssertionConjunction,
 ): PreOrderMappingReturn {
@@ -636,7 +641,7 @@ function pushIntoExtend(
  * @returns what the traversal should put in its place
  */
 function pushIntoGraph(
-  c: TransformContext,
+  c: TransformationContext,
   graph: Algebra.Graph,
   assertions: AssertionConjunction,
 ): PreOrderMappingReturn {
@@ -736,7 +741,7 @@ function pushIntoGraph(
  * @returns what the traversal should put in its place
  */
 function pushIntoJoin(
-  c: TransformContext,
+  c: TransformationContext,
   join: Algebra.Join,
   assertions: AssertionConjunction,
 ): PreOrderMappingReturn {
@@ -776,7 +781,7 @@ function pushIntoJoin(
  * @param join - The join to merge
  * @returns the merged join, or `undefined` when fewer than two operands are BGPs
  */
-function mergeBGPsOfJoin(c: TransformContext, join: Algebra.Join): Algebra.Operation | undefined {
+function mergeBGPsOfJoin(c: TransformationContext, join: Algebra.Join): Algebra.Operation | undefined {
   // An index into `notBgps`: how many non-BGP operands the first BGP was preceded by, so the merged BGP
   // goes back where the first of them stood and the operand order the join had is kept.
   let insertionPoint = -1;
@@ -818,7 +823,7 @@ function mergeBGPsOfJoin(c: TransformContext, join: Algebra.Join): Algebra.Opera
  * @returns what the traversal should put in its place
  */
 function pushIntoLeftJoin(
-  c: TransformContext,
+  c: TransformationContext,
   leftJoin: Algebra.LeftJoin,
   assertions: AssertionConjunction,
 ): PreOrderMappingReturn {
@@ -1095,7 +1100,7 @@ function keep(newValue: Algebra.Operation): PreOrderMappingReturn {
  * @param replaced - The operation being replaced
  * @returns the traversal's instruction
  */
-function empty(c: TransformContext, replaced: Algebra.Operation): PreOrderMappingReturn {
+function empty(c: TransformationContext, replaced: Algebra.Operation): PreOrderMappingReturn {
   return { ...keepMetadata, newValue: emptyOperation(c, replaced), continue: false };
 }
 
@@ -1107,7 +1112,7 @@ function empty(c: TransformContext, replaced: Algebra.Operation): PreOrderMappin
  * @returns the `FILTER(FALSE)` that is this codebase's empty operation, which
  * {@link transformFilterFalse} normalises structurally afterwards
  */
-function emptyOperation(c: TransformContext, replaced: Algebra.Operation): Algebra.Operation {
+function emptyOperation(c: TransformationContext, replaced: Algebra.Operation): Algebra.Operation {
   return createFilterFalse(c, replaced);
 }
 
@@ -1120,7 +1125,7 @@ function emptyOperation(c: TransformContext, replaced: Algebra.Operation): Algeb
  * @returns the operation with one EXTEND per substituted variable
  */
 function bindAssertedTerms(
-  c: TransformContext,
+  c: TransformationContext,
   op: Algebra.Operation,
   assertions: Assertions,
 ): Algebra.Operation {
@@ -1140,7 +1145,7 @@ function bindAssertedTerms(
  * @returns the filter, or `op` itself when the conjunction says nothing
  */
 function assertionFilter(
-  c: TransformContext,
+  c: TransformationContext,
   op: Algebra.Operation,
   assertions: AssertionConjunction,
 ): Algebra.Operation {
@@ -1150,4 +1155,12 @@ function assertionFilter(
   const filter = <AssertionFilter> c.AF.createFilter(op, assertions.toExpression(c));
   filter.metadata = { assertions: { assertions, residual: undefined, contradictory: false }};
   return filter;
+}
+
+/**
+ * The pipeline step pushing every assertion filter as deep into the plan as it goes.
+ * @returns the transformation
+ */
+export function pushDownAssertionsTransformation(): QueryTransformation {
+  return pushDownAssertions;
 }

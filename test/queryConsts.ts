@@ -133,329 +133,273 @@ SELECT * WHERE {
 
 export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
   {
-    SELECT ( OBJECT( ?p0_m_o ) AS ?uq_name ) WHERE {
+    SELECT ( OBJECT( ?m_o ) AS ?uq_name ) WHERE {
       {
         {
           {
             {
               {
                 {
-                  SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s ?p0_mi_t WHERE {
-                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p0_mi_s .
-                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p0_mi_p .
-                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p0_mi_o .
+                  SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
+                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+                    FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
                   }
                 }
-                BIND( ?p0_mi_t AS ?p0_m_s )
-                BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?p0_m_p )
-                BIND( <<( ?p0_mi_s ?p0_mi_p ?p0_mi_o )>> AS ?p0_m_o )
+                BIND( ?mi_t AS ?m_s )
+                BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
+                BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
               }
               UNION {
                 {
-                  SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s WHERE {
-                    ?p0_mi_s ?p0_mi_p ?p0_mi_o .
+                  SELECT ?mi_o ?mi_p ?mi_s WHERE {
+                    ?mi_s ?mi_p ?mi_o .
                   }
                 }
-                BIND( ?p0_mi_s AS ?p0_m_s )
-                BIND( ?p0_mi_p AS ?p0_m_p )
-                BIND( ?p0_mi_o AS ?p0_m_o )
+                BIND( ?mi_s AS ?m_s )
+                BIND( ?mi_p AS ?m_p )
+                BIND( ?mi_o AS ?m_o )
               }
-              FILTER ( SAMETERM( ?p0_m_s , <https://example.com/t> ) )
+              FILTER ( SAMETERM( ?m_s , <https://example.com/t> ) )
             }
-            FILTER ( SAMETERM( ?p0_m_p , <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ) )
+            FILTER ( SAMETERM( ?m_p , <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ) )
           }
-          FILTER ( SAMETERM( <https://example.com/me> , SUBJECT( ?p0_m_o ) ) )
+          FILTER ( SAMETERM( <https://example.com/me> , SUBJECT( ?m_o ) ) )
         }
-        FILTER ( SAMETERM( <https://example.com/name> , PREDICATE( ?p0_m_o ) ) )
+        FILTER ( SAMETERM( <https://example.com/name> , PREDICATE( ?m_o ) ) )
       }
-      FILTER ( ISTRIPLE( ?p0_m_o ) )
+      FILTER ( ISTRIPLE( ?m_o ) )
     }
   }
   {
-    SELECT ( "dummy" AS ?p1_mExists ) WHERE {
+    SELECT ( "dummy" AS ?mExists0 ) WHERE {
       {
         {
           {
             {
-              SELECT ?p1_mi_o ?p1_mi_p ?p1_mi_s ?p1_mi_t WHERE {
-                ?p1_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-                ?p1_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p1_mi_s .
-                ?p1_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p1_mi_p .
-                ?p1_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p1_mi_o .
+              SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
+                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+                FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
               }
             }
-            BIND( ?p1_mi_t AS ?p1_m_s )
-            BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?p1_m_p )
-            BIND( <<( ?p1_mi_s ?p1_mi_p ?p1_mi_o )>> AS ?p1_m_o )
+            BIND( ?mi_t AS ?m_s )
+            BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
+            BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
           }
           UNION {
             {
-              SELECT ?p1_mi_o ?p1_mi_p ?p1_mi_s WHERE {
-                ?p1_mi_s ?p1_mi_p ?p1_mi_o .
+              SELECT ?mi_o ?mi_p ?mi_s WHERE {
+                ?mi_s ?mi_p ?mi_o .
               }
             }
-            BIND( ?p1_mi_s AS ?p1_m_s )
-            BIND( ?p1_mi_p AS ?p1_m_p )
-            BIND( ?p1_mi_o AS ?p1_m_o )
+            BIND( ?mi_s AS ?m_s )
+            BIND( ?mi_p AS ?m_p )
+            BIND( ?mi_o AS ?m_o )
           }
-          FILTER ( SAMETERM( ?p1_m_s , <https://example.com/t> ) )
+          FILTER ( SAMETERM( ?m_s , <https://example.com/t> ) )
         }
-        FILTER ( SAMETERM( ?p1_m_p , <https://example.com/statedBy> ) )
+        FILTER ( SAMETERM( ?m_p , <https://example.com/statedBy> ) )
       }
-      FILTER ( SAMETERM( ?p1_m_o , <https://example.com/govBE> ) )
+      FILTER ( SAMETERM( ?m_o , <https://example.com/govBE> ) )
     }
   }
   {
-    SELECT ( ?p2_m_o AS ?uq_o ) ( ?p2_m_p AS ?uq_p ) ( ?p2_m_s AS ?uq_s ) WHERE {
+    SELECT ( ?m_o AS ?uq_o ) ( ?m_p AS ?uq_p ) ( ?m_s AS ?uq_s ) WHERE {
       {
         {
-          SELECT ?p2_mi_o ?p2_mi_p ?p2_mi_s ?p2_mi_t WHERE {
-            ?p2_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-            ?p2_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p2_mi_s .
-            ?p2_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p2_mi_p .
-            ?p2_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p2_mi_o .
+          SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+            FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
           }
         }
-        BIND( ?p2_mi_t AS ?p2_m_s )
-        BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?p2_m_p )
-        BIND( <<( ?p2_mi_s ?p2_mi_p ?p2_mi_o )>> AS ?p2_m_o )
+        BIND( ?mi_t AS ?m_s )
+        BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
+        BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
       }
       UNION {
         {
-          SELECT ?p2_mi_o ?p2_mi_p ?p2_mi_s WHERE {
-            ?p2_mi_s ?p2_mi_p ?p2_mi_o .
+          SELECT ?mi_o ?mi_p ?mi_s WHERE {
+            ?mi_s ?mi_p ?mi_o .
           }
         }
-        BIND( ?p2_mi_s AS ?p2_m_s )
-        BIND( ?p2_mi_p AS ?p2_m_p )
-        BIND( ?p2_mi_o AS ?p2_m_o )
+        BIND( ?mi_s AS ?m_s )
+        BIND( ?mi_p AS ?m_p )
+        BIND( ?mi_o AS ?m_o )
       }
     }
   }
   {
-    SELECT ( ?p3_m_o AS ?uq_o1 ) ( ?p3_m_p AS ?uq_s1 ) WHERE {
+    SELECT ( ?m_o AS ?uq_o1 ) ( ?m_p AS ?uq_s1 ) WHERE {
       {
         {
-          SELECT ?p3_mi_o ?p3_mi_p ?p3_mi_s ?p3_mi_t WHERE {
-            ?p3_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-            ?p3_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p3_mi_s .
-            ?p3_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p3_mi_p .
-            ?p3_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p3_mi_o .
+          SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+            FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
           }
         }
-        BIND( ?p3_mi_t AS ?p3_m_s )
-        BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?p3_m_p )
-        BIND( <<( ?p3_mi_s ?p3_mi_p ?p3_mi_o )>> AS ?p3_m_o )
+        BIND( ?mi_t AS ?m_s )
+        BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
+        BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
       }
       UNION {
         {
-          SELECT ?p3_mi_o ?p3_mi_p ?p3_mi_s WHERE {
-            ?p3_mi_s ?p3_mi_p ?p3_mi_o .
+          SELECT ?mi_o ?mi_p ?mi_s WHERE {
+            ?mi_s ?mi_p ?mi_o .
           }
         }
-        BIND( ?p3_mi_s AS ?p3_m_s )
-        BIND( ?p3_mi_p AS ?p3_m_p )
-        BIND( ?p3_mi_o AS ?p3_m_o )
+        BIND( ?mi_s AS ?m_s )
+        BIND( ?mi_p AS ?m_p )
+        BIND( ?mi_o AS ?m_o )
       }
-      FILTER ( SAMETERM( ?p3_m_p , ?p3_m_s ) )
+      FILTER ( SAMETERM( ?m_p , ?m_s ) )
     }
   }
 }`;
 
 export const expectedQueryToValues = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
   {
-    SELECT ( OBJECT( ?p0_m_o ) AS ?uq_name ) WHERE {
+    SELECT ( OBJECT( ?m_o ) AS ?uq_name ) WHERE {
       {
         {
           {
             {
               {
                 {
-                  SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s ?p0_mi_t WHERE {
-                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p0_mi_s .
-                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p0_mi_p .
-                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p0_mi_o .
+                  SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
+                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+                    FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
                   }
                 }
-                BIND( ?p0_mi_t AS ?p0_m_s )
-                BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?p0_m_p )
-                BIND( <<( ?p0_mi_s ?p0_mi_p ?p0_mi_o )>> AS ?p0_m_o )
+                BIND( ?mi_t AS ?m_s )
+                BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
+                BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
               }
               UNION {
                 {
-                  SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s WHERE {
-                    ?p0_mi_s ?p0_mi_p ?p0_mi_o .
+                  SELECT ?mi_o ?mi_p ?mi_s WHERE {
+                    ?mi_s ?mi_p ?mi_o .
                   }
                 }
-                BIND( ?p0_mi_s AS ?p0_m_s )
-                BIND( ?p0_mi_p AS ?p0_m_p )
-                BIND( ?p0_mi_o AS ?p0_m_o )
+                BIND( ?mi_s AS ?m_s )
+                BIND( ?mi_p AS ?m_p )
+                BIND( ?mi_o AS ?m_o )
               }
-              FILTER ( SAMETERM( ?p0_m_s , <https://example.com/t> ) )
+              FILTER ( SAMETERM( ?m_s , <https://example.com/t> ) )
             }
-            FILTER ( SAMETERM( ?p0_m_p , <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ) )
+            FILTER ( SAMETERM( ?m_p , <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ) )
           }
-          FILTER ( SAMETERM( <https://example.com/me> , SUBJECT( ?p0_m_o ) ) )
+          FILTER ( SAMETERM( <https://example.com/me> , SUBJECT( ?m_o ) ) )
         }
-        FILTER ( SAMETERM( <https://example.com/name> , PREDICATE( ?p0_m_o ) ) )
+        FILTER ( SAMETERM( <https://example.com/name> , PREDICATE( ?m_o ) ) )
       }
-      FILTER ( ISTRIPLE( ?p0_m_o ) )
+      FILTER ( ISTRIPLE( ?m_o ) )
     }
   }
   {
-    SELECT ( "dummy" AS ?p1_mExists ) WHERE {
+    SELECT ( "dummy" AS ?mExists0 ) WHERE {
       {
         {
           {
             {
-              SELECT ?p1_mi_o ?p1_mi_p ?p1_mi_s ?p1_mi_t WHERE {
-                ?p1_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-                ?p1_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p1_mi_s .
-                ?p1_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p1_mi_p .
-                ?p1_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p1_mi_o .
+              SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
+                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+                FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
               }
             }
-            BIND( ?p1_mi_t AS ?p1_m_s )
-            BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?p1_m_p )
-            BIND( <<( ?p1_mi_s ?p1_mi_p ?p1_mi_o )>> AS ?p1_m_o )
+            BIND( ?mi_t AS ?m_s )
+            BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
+            BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
           }
           UNION {
             {
-              SELECT ?p1_mi_o ?p1_mi_p ?p1_mi_s WHERE {
-                ?p1_mi_s ?p1_mi_p ?p1_mi_o .
+              SELECT ?mi_o ?mi_p ?mi_s WHERE {
+                ?mi_s ?mi_p ?mi_o .
               }
             }
-            BIND( ?p1_mi_s AS ?p1_m_s )
-            BIND( ?p1_mi_p AS ?p1_m_p )
-            BIND( ?p1_mi_o AS ?p1_m_o )
+            BIND( ?mi_s AS ?m_s )
+            BIND( ?mi_p AS ?m_p )
+            BIND( ?mi_o AS ?m_o )
           }
-          FILTER ( SAMETERM( ?p1_m_s , <https://example.com/t> ) )
+          FILTER ( SAMETERM( ?m_s , <https://example.com/t> ) )
         }
-        FILTER ( SAMETERM( ?p1_m_p , <https://example.com/statedBy> ) )
+        FILTER ( SAMETERM( ?m_p , <https://example.com/statedBy> ) )
       }
-      FILTER ( SAMETERM( ?p1_m_o , <https://example.com/govBE> ) )
+      FILTER ( SAMETERM( ?m_o , <https://example.com/govBE> ) )
     }
   }
   {
-    SELECT ( ?p2_m_o AS ?uq_o ) ( ?p2_m_p AS ?uq_p ) ( ?p2_m_s AS ?uq_s ) WHERE {
+    SELECT ( ?m_o AS ?uq_o ) ( ?m_p AS ?uq_p ) ( ?m_s AS ?uq_s ) WHERE {
       {
         {
-          SELECT ?p2_mi_o ?p2_mi_p ?p2_mi_s ?p2_mi_t WHERE {
-            ?p2_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-            ?p2_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p2_mi_s .
-            ?p2_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p2_mi_p .
-            ?p2_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p2_mi_o .
+          SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+            FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
           }
         }
-        BIND( ?p2_mi_t AS ?p2_m_s )
-        BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?p2_m_p )
-        BIND( <<( ?p2_mi_s ?p2_mi_p ?p2_mi_o )>> AS ?p2_m_o )
+        BIND( ?mi_t AS ?m_s )
+        BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
+        BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
       }
       UNION {
         {
-          SELECT ?p2_mi_o ?p2_mi_p ?p2_mi_s WHERE {
-            ?p2_mi_s ?p2_mi_p ?p2_mi_o .
+          SELECT ?mi_o ?mi_p ?mi_s WHERE {
+            ?mi_s ?mi_p ?mi_o .
           }
         }
-        BIND( ?p2_mi_s AS ?p2_m_s )
-        BIND( ?p2_mi_p AS ?p2_m_p )
-        BIND( ?p2_mi_o AS ?p2_m_o )
+        BIND( ?mi_s AS ?m_s )
+        BIND( ?mi_p AS ?m_p )
+        BIND( ?mi_o AS ?m_o )
       }
     }
   }
   {
-    SELECT ( ?p3_m_o AS ?uq_o1 ) ( ?p3_m_p AS ?uq_s1 ) WHERE {
+    SELECT ( ?m_o AS ?uq_o1 ) ( ?m_p AS ?uq_s1 ) WHERE {
       {
         {
-          SELECT ?p3_mi_o ?p3_mi_p ?p3_mi_s ?p3_mi_t WHERE {
-            ?p3_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-            ?p3_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p3_mi_s .
-            ?p3_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p3_mi_p .
-            ?p3_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p3_mi_o .
+          SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+            FILTER ( ( ( ISBLANK( ?mi_s ) || ISIRI( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
           }
         }
-        BIND( ?p3_mi_t AS ?p3_m_s )
-        BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?p3_m_p )
-        BIND( <<( ?p3_mi_s ?p3_mi_p ?p3_mi_o )>> AS ?p3_m_o )
+        BIND( ?mi_t AS ?m_s )
+        BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
+        BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
       }
       UNION {
         {
-          SELECT ?p3_mi_o ?p3_mi_p ?p3_mi_s WHERE {
-            ?p3_mi_s ?p3_mi_p ?p3_mi_o .
+          SELECT ?mi_o ?mi_p ?mi_s WHERE {
+            ?mi_s ?mi_p ?mi_o .
           }
         }
-        BIND( ?p3_mi_s AS ?p3_m_s )
-        BIND( ?p3_mi_p AS ?p3_m_p )
-        BIND( ?p3_mi_o AS ?p3_m_o )
+        BIND( ?mi_s AS ?m_s )
+        BIND( ?mi_p AS ?m_p )
+        BIND( ?mi_o AS ?m_o )
       }
-      FILTER ( SAMETERM( ?p3_m_p , ?p3_m_s ) )
+      FILTER ( SAMETERM( ?m_p , ?m_s ) )
     }
-  }
-}`;
-
-export const expectedQueryOptimizedBoundsAndEmptyRes = `
-SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
-  {
-    {
-      SELECT ?m0_o WHERE {
-        <https://example.com/t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-        <https://example.com/t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> <https://example.com/me> .
-        <https://example.com/t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> <https://example.com/name> .
-        <https://example.com/t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?m0_o .
-      }
-    }
-    BIND( ?m0_o AS ?uq_name )
-  }
-  {
-    SELECT ( "dummy" AS ?dummy ) WHERE {
-      <https://example.com/t> <https://example.com/statedBy> <https://example.com/govBE> .
-    }
-  }
-  {
-    {
-      SELECT ?m0_o ?m0_p ?m0_s ?m0_t WHERE {
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?m0_s .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?m0_p .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?m0_o .
-      }
-    }
-    BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o )
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_p )
-    BIND( ?m0_t AS ?uq_s )
-  }
-  UNION {
-    {
-      SELECT ?m1_o ?m1_p ?m1_s WHERE {
-        ?m1_s ?m1_p ?m1_o .
-      }
-    }
-    BIND( ?m1_o AS ?uq_o )
-    BIND( ?m1_p AS ?uq_p )
-    BIND( ?m1_s AS ?uq_s )
-  }
-  {
-    {
-      SELECT ?m0_o ?m0_p ?m0_s WHERE {
-        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?m0_s .
-        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?m0_p .
-        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?m0_o .
-      }
-    }
-    BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o1 )
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )
-  }
-  UNION {
-    {
-      SELECT ?m1_o ?rm1_s_AND_p WHERE {
-        ?rm1_s_AND_p ?rm1_s_AND_p ?m1_o .
-      }
-    }
-    BIND( ?m1_o AS ?uq_o1 )
-    BIND( ?rm1_s_AND_p AS ?uq_s1 )
   }
 }`;
 

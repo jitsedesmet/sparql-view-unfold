@@ -6,13 +6,16 @@ import { Store } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 import type { ExpectStatic } from 'vitest';
 import { describe, it } from 'vitest';
-import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
-import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
-import { nullifyUnbindableVars } from '../lib/transformations/nullifyUnbindableVars.js';
+import { mappingFromConstructQueries } from '../lib/mapping.js';
+import { createQueryRewriter } from '../lib/queryRewriter.js';
+import { filterFalseTransformation } from '../lib/transformations/filterFalse.js';
+import {
+  nullifyJoinOverIncompatibleBoundsTransformation,
+} from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
+import { nullifyUnbindableVarsTransformation } from '../lib/transformations/nullifyUnbindableVars.js';
 import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
-import { operationTransform, queryTransform } from '../lib/transformBgp.js';
-import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext, parseQuery, transformContextFromConstructs } from '../lib/transformContext.js';
+import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import { nonTripleTermConstruct, tripleTermConstruct } from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
 
@@ -76,14 +79,14 @@ describe('evaluation tests', () => {
       // Querying a normal query over store 1.2 should give same result as altered query over store 1.1
       const userQuery = 'CONSTRUCT WHERE { ?s ?p ?o }';
       const resOnMappedData = await sourceToStore([ store12 ], userQuery);
-      const transformerContext = transformContextFromConstructs([ tripleTermConstruct, nonTripleTermConstruct ]);
-      const resUsingMapper = await sourceToStore([ store11 ], queryTransform(transformerContext, userQuery, [
-        operationTransform,
-        transformFilterFalse,
-        nullifyJoinOverIncompatibleBounds,
-        nullifyUnbindableVars,
-        transformFilterFalse,
-      ]));
+      const rewriter = createQueryRewriter([
+        unfoldingTransformation(mappingFromConstructQueries([ tripleTermConstruct, nonTripleTermConstruct ])),
+        filterFalseTransformation(),
+        nullifyJoinOverIncompatibleBoundsTransformation(),
+        nullifyUnbindableVarsTransformation(),
+        filterFalseTransformation(),
+      ]);
+      const resUsingMapper = await sourceToStore([ store11 ], await rewriter.rewriteQuery(userQuery));
 
       expect(resOnMappedData.getQuads(null, null, null, null))
         .toBeRdfIsomorphic(resUsingMapper.getQuads(null, null, null, null));
@@ -97,7 +100,7 @@ describe('evaluation tests', () => {
      * leave a variable unbound, which is exactly where a lost `cVars` is observable.
      */
     const pullUpPrefixes = 'PREFIX : <ex://>\n';
-    const c = <TransformContext> createPartialContext();
+    const c = createTransformationContext();
 
     async function bindings(query: string): Promise<string[]> {
       const rows: RDF.Bindings[] = await arrayifyStream(

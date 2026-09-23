@@ -1,5 +1,5 @@
 {
-  "name": "Traqula",
+  "name": "sparql-view-unfold",
   "out": "documentation",
   "theme": "default",
   "entryPointStrategy": "expand",

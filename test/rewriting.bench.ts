@@ -1,19 +1,23 @@
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { bench, describe } from 'vitest';
-import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
-import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
-import { nullifyUnbindableVars } from '../lib/transformations/nullifyUnbindableVars.js';
-import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
-import { pushDownAssertions } from '../lib/transformations/pushDownAssertions.js';
-import { removeProjections } from '../lib/transformations/removeProjections.js';
-import { operationTransform, queryTransform } from '../lib/transformBgp.js';
-import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext, parseQuery, transformContextFromConstructs } from '../lib/transformContext.js';
+import { mappingFromConstructQueries } from '../lib/mapping.js';
+import { createQueryRewriter } from '../lib/queryRewriter.js';
+import { filterFalseTransformation } from '../lib/transformations/filterFalse.js';
+import {
+  nullifyJoinOverIncompatibleBoundsTransformation,
+} from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
+import { nullifyUnbindableVarsTransformation } from '../lib/transformations/nullifyUnbindableVars.js';
+import { pullUpExtendsTransformation } from '../lib/transformations/pullUpExtends.js';
+import { pushDownAssertions, pushDownAssertionsTransformation } from '../lib/transformations/pushDownAssertions.js';
+import { removeProjectionsTransformation } from '../lib/transformations/removeProjections.js';
+import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import type { QueryTransformation } from '../lib/types.js';
 import { nonTripleTermConstruct, testQuery, tripleTermConstruct } from './queryConsts.js';
 
 /**
  * @fileoverview How long the rewriting takes, at the three levels a change can move: the whole of
- * {@link transformBgp!queryTransform}, the pushdown on its own, and the parse the first of those
+ * {@link queryRewriter!createQueryRewriter}, the pushdown on its own, and the parse the first of those
  * includes.
  *
  * Run with `yarn bench` for a single set of numbers.
@@ -32,40 +36,42 @@ import { nonTripleTermConstruct, testQuery, tripleTermConstruct } from './queryC
  * benchmarks reports depends on the machine running it, so a ratio is only worth reading beside the parse
  * control measured in the same run.
  *
- * **What each level is for.** `queryTransform` is what a caller experiences, parse included, so it is
+ * **What each level is for.** `rewriteQuery` is what a caller experiences, parse included, so it is
  * the honest end-to-end figure and the least sensitive one - the memos need a bigger conjunction than a
  * hand-written filter builds before they reach it. The pushdown is where
  * {@link utils/assertionConjunction!AssertionConjunction} does its work, and so where a change to the
- * memos shows up: it is not part of the standard chain the integration tests run, being a transformation
- * a caller opts into, so it is measured both ways below.
+ * memos shows up, so it is measured both with and without below.
  */
 
-/** The chain the integration tests run, which does not include the pushdown. */
-const standardTransformations = <const>[
-  operationTransform,
-  transformFilterFalse,
-  nullifyJoinOverIncompatibleBounds,
-  nullifyUnbindableVars,
-  transformFilterFalse,
-  pullUpExtends,
-  removeProjections,
-];
-
-/** The same chain with the assertion pushdown in it, which is what drives Θ. */
-const withPushdown = <const>[
-  operationTransform,
-  pushDownAssertions,
-  transformFilterFalse,
-  nullifyJoinOverIncompatibleBounds,
-  nullifyUnbindableVars,
-  transformFilterFalse,
-  pullUpExtends,
-  removeProjections,
-];
-
 // Built once: parsing the mappers is not what any of this is measuring.
-const mapped = transformContextFromConstructs([ tripleTermConstruct, nonTripleTermConstruct ]);
-const bare = <TransformContext> createPartialContext();
+const mapping = mappingFromConstructQueries([ tripleTermConstruct, nonTripleTermConstruct ]);
+
+/** The default pipeline without the assertion pushdown, which is the baseline Θ is measured against. */
+const standardPipeline: QueryTransformation[] = [
+  unfoldingTransformation(mapping),
+  filterFalseTransformation(),
+  nullifyJoinOverIncompatibleBoundsTransformation(),
+  nullifyUnbindableVarsTransformation(),
+  filterFalseTransformation(),
+  pullUpExtendsTransformation(),
+  removeProjectionsTransformation(),
+];
+
+/** The same chain with the assertion pushdown in it - the default pipeline - which is what drives Θ. */
+const withPushdown: QueryTransformation[] = [
+  unfoldingTransformation(mapping),
+  pushDownAssertionsTransformation(),
+  filterFalseTransformation(),
+  nullifyJoinOverIncompatibleBoundsTransformation(),
+  nullifyUnbindableVarsTransformation(),
+  filterFalseTransformation(),
+  pullUpExtendsTransformation(),
+  removeProjectionsTransformation(),
+];
+
+const standardRewriter = createQueryRewriter(standardPipeline);
+const pushdownRewriter = createQueryRewriter(withPushdown);
+const bare = createTransformationContext();
 
 const prefixes = `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX : <https://example.com/>
@@ -139,26 +145,26 @@ const parsed: Record<string, Algebra.Operation> = {
 };
 
 describe('the whole rewriting', () => {
-  bench('a mapped query, standard chain', () => {
-    queryTransform(mapped, testQuery, [ ...standardTransformations ]);
+  bench('a mapped query, standard chain', async() => {
+    await standardRewriter.rewriteQuery(testQuery);
   }, settled);
 
-  bench('a filter-heavy mapped query, standard chain', () => {
-    queryTransform(mapped, filterHeavyQuery, [ ...standardTransformations ]);
+  bench('a filter-heavy mapped query, standard chain', async() => {
+    await standardRewriter.rewriteQuery(filterHeavyQuery);
   }, settled);
 
-  bench('a filter-heavy mapped query, with the assertion pushdown', () => {
-    queryTransform(mapped, filterHeavyQuery, [ ...withPushdown ]);
+  bench('a filter-heavy mapped query, with the assertion pushdown', async() => {
+    await pushdownRewriter.rewriteQuery(filterHeavyQuery);
   }, settled);
 });
 
 describe('the parse the above includes', () => {
   bench('a mapped query', () => {
-    parseQuery(mapped, testQuery);
+    parseQuery(bare, testQuery);
   }, settled);
 
   bench('a filter-heavy mapped query', () => {
-    parseQuery(mapped, filterHeavyQuery);
+    parseQuery(bare, filterHeavyQuery);
   }, settled);
 });
 

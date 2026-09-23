@@ -5,7 +5,7 @@
 export const DT_INTERNAL_BNODE = 'https://sparql-extension.knows.idlab.ugent.be/bnode';
 
 /**
- * Extension function IRI used internally to represent blank node construction.
+ * Extension function IRI representing blank node construction, the one a mapping body is written against.
  * This function takes variable arguments and produces a consistent blank node identity.
  */
 export const EXTENSION_FUNCTION_BNODE = 'internal://blank';
@@ -17,7 +17,7 @@ export const EXTENSION_FUNCTION_BNODE = 'internal://blank';
 export const IRI_PREFIX_BNODE = 'https://myInternalBnode.example.org/';
 
 /**
- * Prefix every variable of the user query is renamed with before rewriting, by `queryTransform`.
+ * Prefix every variable of the user query is renamed with before rewriting, by the pipeline runner.
  *
  * This is the *only* prefix the rewriting classifies on: a variable in a cluster carries it exactly when it
  * came from the user query, and every other variable in that cluster belongs to the mapping. Both

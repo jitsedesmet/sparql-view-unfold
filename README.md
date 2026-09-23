@@ -1,167 +1,231 @@
-# GAV unfolding and optimization
+# SPARQL view unfolding
 
-A library for defining a single GAV mapping as a construct query with one triple template in the head and a body.
-A user query targeting the global schema is rewritten to instead target the local schemata by unfolding each triple pattern.
+[![CI](https://github.com/jitsedesmet/sparql-view-unfold/actions/workflows/ci.yml/badge.svg)](https://github.com/jitsedesmet/sparql-view-unfold/actions/workflows/ci.yml)
 
-The idea is explained in our [under review, in works paper targeting AMW](https://2026-amw-rewriting.jitsedesmet.be/),
-and a [under review demo paper targeting SEMANTiCS](https://2026-semantics-rewriting.jitsedesmet.be/), based on a previous version of this repo.
+Answers SPARQL 1.2 queries posed over views, by rewriting them into queries over the data those views are
+defined on.
 
-A conceptual overview of rewriting, specifically targeting the RDF 1.1/1.2 interoperability case is given:
-![Schematic overview of query rewriting](assets/schematic-plan.png)
+A view is a SPARQL CONSTRUCT query — a GAV mapping: its template says which triples the view holds, its
+WHERE clause how they are found in your data. The rewriter *unfolds* that view into every triple pattern of
+a user query, handing you back a query any SPARQL engine can answer, and a pipeline of optimisations then
+cuts the result down to something worth executing.
 
-## Overview
+Running SPARQL 1.2 queries — triple terms and all — against RDF 1.1 data is one case it was built for, and
+the one the examples below use: a view says how your RDF 1.1 data represents RDF 1.2, and the rewrite hands
+you plain SPARQL 1.1.
 
-Given a query Q without recursive paths and mapping with head H and body B:
-1. Rewrite the paths to triple patterns without any paths: `./lib/transformations/pathTransformation.ts`
-2. For each triple pattern in the user query, unfold the mapping body within it
-  2.1 Unify the mapping head and the body so you get groups of equality between expressions, mapping head variables and triple term variables.
-  2.2 B' = FILTER(B) with the equality of mapping head vars that are equal (using rewriteToSingleVar we replace them later)
-  2.3 B' = FILTER(B') with the other constraints on the vars we found (equality with a static term)
-  2.4 B' = EXTEND(B') with how the triple term vars are constructed from the mapping head vars
-  2.5 B' = FILTER(B') assert the triple term vars are assigned.
-  2.6 B' = PROJECT(B') what remains accessible are only the triple terms vars
-3. rewrite B' to replace equality (sameTerm) between many variables with a single variable that represents this equality.
-In case one of the variables is normally constructed using an EXTEND, a FILTER is used instead of a second EXTEND
-(`collapseDuplicateExtends`), so the same variable is never bound twice.
-4. Replace variables that are assigned to static terms with those terms, again special care is needed when they are used in certain operations such as expressions.
-5. group constraints together using pushDownRestrictions, which pushes restrictions down and distributes JOIN over UNION
-  5.1 push the assertions down with `pushDownAssertions`: both the `FILTER(sameTerm(?x, term))` constraints of 2.3,
-  which substitute their term into the patterns they reach and empty the branches that cannot bind the variable,
-  and the `FILTER(sameTerm(?x, ?y))` unifications of 2.2 that 3 left behind, which substitute one variable for the other.
-  A chain of unifications is a *clique* of variables that all have to be equal, and it is substituted to the
-  lexicographically first member of the clique, with a `BIND` per member replacing the ones it substituted away
-  (`?s ?p ?o FILTER(sameTerm(?s, ?o))` becomes `?o ?p ?o . BIND(?o AS ?s)`, keeping `pVars` and `cVars` unchanged).
-  The two interact: a term meeting a clique fixes every variable in it at once.
-  Two invariants that are not guessable from the code, and are argued for in the `@fileoverview` of the pass:
-  a clique is split by *edges* rather than by variables, so that what is pushed down plus what is kept on top spans it
-  again; and the weak form (`!bound(?x) || sameTerm(?x, term)`) only exists for a clique pinned to a term,
-  a clique without one travelling as the `bound(?x)` it entails of each of its members instead.
-6. Prune invalid constraint groups, replacing them with filter false.
-  This involves statically evaluating the expression equalities, using both the ClusterSolver (I think), as range and domain of known operations,
-  but also using comunica's expression evaluator to evaluate static expressions and optimize the query.
-  Certain operations might be fruitful to implement specific prune algorithms for,
-  like word equations testing literal concatenations are possible given a variable.
-7. optimize filter False expressions by letting them walk up.
+The idea is explained in our [under review, in works paper targeting AMW](https://2026-amw-rewriting.jitsedesmet.be/)
+and in an [under review demo paper targeting SEMANTiCS](https://2026-semantics-rewriting.jitsedesmet.be/),
+based on a previous version of this repository. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code.
 
-To check:
-1. projections may cause some engines to behave weird. In that case we should remove projections.
-2. Merge service calls. Services can handle a variable amound of computation, given that, we can compose them in various ways.
+## Installation
 
-## How It Works
+```bash
+npm install sparql-view-unfold
+```
 
-The rewriter transforms each triple pattern in your BGP (Basic Graph Pattern) into a UNION of subselects, one for each mapping:
+or
 
-![Query rewriting visualization](assets/query-rewritten.jpg)
+```bash
+yarn add sparql-view-unfold
+```
 
-### Key Architecture Points
+## Import
 
-1. **Mapping Structure**: Each mapping is a SPARQL CONSTRUCT with:
-   - **Head** (template): The RDF 1.2 pattern (can contain triple terms)
-   - **Body** (WHERE): The equivalent RDF 1.1 pattern (must be SPARQL 1.1 compatible)
+Either through ESM import:
 
-2. **Variable Clustering**: When a user query matches a mapping, variables are unified using a ClusterSolver that determines which variables must be equal and what values they're bound to.
+```typescript
+import { createQueryRewriter } from 'sparql-view-unfold';
+```
 
-3. **Transformation Pipeline**: Multiple optimization passes can be applied:
-   - `operationTransform`: Core BGP-to-UNION rewriting
-   - `pushDownAssertions`: Push `sameTerm`/unification assertions down into patterns
-   - `transformFilterFalse`: Remove impossible branches (FILTER FALSE)
-   - `nullifyJoinOverIncompatibleBounds`: Detect incompatible join conditions
-   - `pullUpExtends`: Float `BIND`s up the plan and drop the ones nothing reads
+_or_ CJS require:
 
-## Mapping Constraints
+```typescript
+const createQueryRewriter = require('sparql-view-unfold').createQueryRewriter;
+```
 
-- **Single triple in head**: Each mapping must have exactly one triple in the CONSTRUCT template
-- **No blank nodes in head**: Use variables instead; blank node templates are supported for skolemization
-- **No BNODE() function in body**: Blank node creation in the mapping body is not allowed
+## Usage
 
-## Blank Node Handling (Skolem Functions)
+A mapping is one or more CONSTRUCT queries. Hand them to `mappingFromConstructQueries`, hand the mapping to
+`createDefaultTransformationPipeline`, and rewrite:
 
-Since underlying RDF 1.1 datasets cannot consistently reference blank nodes across queries, this library supports four skolem types in mapping heads:
+```typescript
+import {
+  createDefaultTransformationPipeline,
+  createQueryRewriter,
+  mappingFromConstructQueries,
+} from 'sparql-view-unfold';
 
-1. **TemplateIri**: Construct IRIs from variable values
-2. **TemplateLiteral**: Construct typed literals from variable values
-3. **TemplateBlank**: Construct consistent blank node identities
-4. **TemplateQuad**: Construct triple terms
+const mapping = mappingFromConstructQueries([
+  // Every RDF 1.1 reification is a triple term reified by its statement node.
+  `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+   CONSTRUCT { ?t rdf:reifies <<( ?s ?p ?o )>> } WHERE {
+     ?t rdf:type rdf:Statement ; rdf:subject ?s ; rdf:predicate ?p ; rdf:object ?o .
+   }`,
+  // Every other triple is itself.
+  `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o . FILTER(!isTriple(?o)) }`,
+]);
 
-For TemplateBlank, since actual blank nodes cannot be consistently referenced, the library provides transformations to represent them as:
+const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mapping));
 
-- [sparql extension function](https://www.w3.org/TR/sparql12-query/#extensionFunctions) `https://sparql-extension.knows.idlab.ugent.be/bnodeConsistent` that can create blank nodes matching the implementation described above.
-- **Typed literals**: `internalBnodeAsSpecialLiteral()` - Uses a special datatype
-- **Prefixed IRIs**: `internalBnodeAsSpecialIri()` - Uses SHA1 hashing for manageable length
+const sparql11Query = await rewriter.rewriteQuery(`
+  PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+  SELECT ?s ?p ?o WHERE { ?t rdf:reifies <<( ?s ?p ?o )>> }`);
+```
 
-Both approaches ensure "same inputs = same identity" semantics.
+A rewriter is reusable and holds no per-query state, so build it once and rewrite many queries with it.
 
-## SPARQL Quirks
+### Building your own pipeline
 
-There is also a [working draft for RDF 1.2 interoperability](https://w3c.github.io/rdf-interop/spec/) describing standard mappings between RDF 1.1 and RDF 1.2.
+The default pipeline is a list of transformations, and nothing stops you writing your own. Each step is a
+`<stem>Transformation()` factory, so the pipeline reads as a uniform list; only the unfolding takes
+arguments, because only it needs the mapping:
 
-**Empty groups produce one binding**: An empty group `{}` emits a single binding with no variables bound ([spec reference](https://www.w3.org/TR/sparql11-query/#emptyGroupPattern)).
+```typescript
+import {
+  createQueryRewriter,
+  filterFalseTransformation,
+  mappingFromConstructQueries,
+  pullUpExtendsTransformation,
+  pushDownAssertionsTransformation,
+  rewriteNonRecursivePathsTransformation,
+  unfoldingTransformation,
+} from 'sparql-view-unfold';
 
-- `SELECT * {}` → 1 binding
-- `SELECT * { {} UNION {} }` → 2 bindings
-- `SELECT * { FILTER(FALSE) }` → 0 bindings
+const rewriter = createQueryRewriter([
+  rewriteNonRecursivePathsTransformation(),
+  unfoldingTransformation(mappingFromConstructQueries([ myConstructQuery ]), { preserveCardinality: false }),
+  filterFalseTransformation(),
+  pushDownAssertionsTransformation(),
+  filterFalseTransformation(),
+  pullUpExtendsTransformation(),
+  filterFalseTransformation(),
+]);
+```
 
-This means a mapping that doesn't match uses `FILTER(FALSE)` (zero results), not an empty group.
+Order matters and is not a preference: paths are expanded before the unfolding, which only knows triple
+patterns, and `nullifyJoinOverIncompatibleBoundsTransformation` sees nothing until `removeProjections` and
+`pullUpExtends` have run. [ARCHITECTURE.md](ARCHITECTURE.md) says why for each step.
+
+### Cardinality
+
+By default the unfolded query treats the virtual RDF 1.2 graph as a **bag**: where two solutions of the
+mapping body produce the same triple, it is counted twice, and a `COUNT(*)` disagrees with the mapped graph.
+`unfoldingTransformation(mapping, { preserveCardinality: true })` deduplicates the mapping body so each
+triple is produced once. It is **hugely costly** — every unfolded pattern materialises and sorts its whole
+body, where it otherwise streams — so turn it on only when the multiplicity of a solution is part of the
+answer you need.
+
+### Generalized RDF
+
+By default the mapping denotes a standard RDF graph: a solution binding a head variable to a term its
+position cannot hold — a literal subject, a blank node predicate — instantiates no triple, exactly as the
+CONSTRUCT the mapping is written as would not. `mappingFromConstructQueries(constructs, {
+generalizedRdfView: true })` keeps those triples instead, for a view that means to present generalized RDF.
+
+### Blank nodes
+
+An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to
+construct a blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: the same inputs
+always give the same identity. Add `internalBnodeAsSpecialLiteralTransformation()` or
+`internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed
+literal or as a prefixed IRI respectively.
+
+## Restrictions
+
+| Restriction | What happens when you break it |
+|---|---|
+| No `+` or `*` property path in the user query | The rewrite throws. A recursive path cannot be expanded into triple patterns, so the mapping could not be unfolded into it. `?`, `|`, `/`, `^` and `!(…)` are all fine. |
+| No `GRAPH` in the user query | The rewrite throws. What unfolding a mapping inside a named graph means is not settled. |
+| No unstable function (`BNODE`, `RAND`, `UUID`, `STRUUID`) in a mapping body | Building the mapping throws, naming the function. A mapping has to denote one fixed graph, and those answer differently on every evaluation. `NOW` is allowed: SPARQL 1.1 §17.4.5.1 fixes it per query execution. |
+| A mapping head holds exactly one triple | Nothing — `mappingFromConstructQueries` splits a larger CONSTRUCT template into one mapping per triple for you, which denotes the same graph. |
+| No blank nodes in the RDF 1.1 dataset, unless skolemised | **Wrong answers, silently.** A blank node cannot be referenced across the sub-queries the unfolding produces, so triples reached through one are lost. Skolemise them into IRIs before querying. |
+
+`DESCRIBE` is supported, with the caveat inherent to it: a `DESCRIBE` answers with a description of the
+data it is run against, so a rewritten one describes its resources in RDF 1.1. It selects the same
+resources the query over the mapped data would.
+
+Updates are supported, with the caveat inherent to *them*: only the `WHERE` reads the RDF 1.2 graph, and
+only the `WHERE` is rewritten. That graph is virtual, so nothing can be written to it — an `INSERT` or
+`DELETE` template goes to the RDF 1.1 source exactly as you wrote it, with its variables bound by the
+rewritten `WHERE`. Writing RDF 1.2 through the mapping is a different problem (the view update problem) and
+is not what this does.
 
 ## Benchmarking across SPARQL engines
 
-The [`test/bench`](test/bench) directory contains a system that benchmarks the
-rewriting approach against **native SPARQL 1.2 evaluation** on multiple engines,
-using the BKR reification benchmark datasets.
+The [`test/bench`](test/bench) directory benchmarks this rewriting against **native SPARQL 1.2
+evaluation** on several engines, over the BKR reification benchmark datasets.
 
-Only three well-known engines currently implement SPARQL 1.2 with the new RDF 1.2
-triple-term syntax (`<<( s p o )>>` / `rdf:reifies`): **Comunica** (≥ 5.0),
-**Apache Jena/Fuseki** (≥ 4.10, default syntax) and **Oxigraph** (≥ 0.5). RDF4J and
-GraphDB only support the older RDF-star `<< >>` syntax, while QLever, Blazegraph,
-Stardog and Virtuoso are SPARQL 1.1 only. SPARQL 1.2 / RDF 1.2 remain W3C Working
-Drafts as of mid-2026.
+Only three well-known engines implement SPARQL 1.2 with the RDF 1.2 triple-term syntax
+(`<<( s p o )>>` / `rdf:reifies`): **Comunica** (≥ 5.0), **Apache Jena/Fuseki** (≥ 4.10) and
+**Oxigraph** (≥ 0.5). RDF4J and GraphDB support only the older RDF-star `<< >>` syntax, while
+QLever, Blazegraph, Stardog and Virtuoso are SPARQL 1.1 only. SPARQL 1.2 and RDF 1.2 are still
+W3C Working Drafts as of mid-2026.
 
-The experiment itself is `test/bench/run.ts`: for every engine × reification scheme ×
-dataset scale it runs the four rewrite pipelines and the hand-written baseline query
-over the *same* materialized RDF 1.1 data, then `plot.mjs` turns the results JSON into
-figures.
+The experiment is `test/bench/run.ts`: for every engine × reification scheme × dataset scale it
+runs the rewrite pipelines and the hand-written baseline query over the *same* materialised
+RDF 1.1 data, then `plot.mjs` turns the results JSON into figures.
 
 ```bash
-# The real run (needs the subsets generated first — see test/bench/README.md):
+# The real run (generate the subsets first — see test/bench/README.md):
 npx tsx test/bench/run.ts --engines comunica,oxigraph,jena \
   --schemes reification,singleton --scales xs,s --timeout 300000 \
   --out test/bench/results/results.json
 node test/bench/plot.mjs test/bench/results/results.json test/bench/results/figures
 
-# Ad-hoc single-pipeline run against the full datasets or endpoints you started yourself:
+# Ad-hoc single-pipeline run against the full datasets, or endpoints you started yourself:
 npx tsx test/bench/cli.ts --pattern reification --limit 5
 ```
 
-See [`test/bench/README.md`](test/bench/README.md) for the full engine survey, the
-one-time Fuseki setup and the results. The harness is validated by `test/bench.test.ts`.
+See [`test/bench/README.md`](test/bench/README.md) for the engine survey, the one-time Fuseki
+setup and the results. `test/bench.test.ts` validates the harness.
 
-## API Reference
+## API
 
-### Core Functions
+The tables below are the short version; the generated
+[API documentation](https://jitsedesmet.github.io/sparql-view-unfold/) has the full signatures.
 
-| Function                                          | Description                                    |
-|---------------------------------------------------|------------------------------------------------|
-| `transformContextFromConstructs(mappings)`        | Create a context from CONSTRUCT query strings  |
-| `queryTransform(context, query, transformations)` | Rewrite a query with the given transformations |
-| `operationTransform(context, operation)`          | Core BGP rewriting transformation              |
-
-### Optimization Transformations
+| Function | Description |
+|---|---|
+| `mappingFromConstructQueries(constructQueries, options?)` | Builds the `Mapping` a set of CONSTRUCT query strings denotes. The only way to build one. |
+| `createQueryRewriter(transformations)` | Builds a `QueryRewriter` running those transformations, in order. |
+| `createDefaultTransformationPipeline(mapping, options?)` | The pipeline to use when you have no reason to build your own. |
+| `rewriter.rewriteQuery(query)` | Rewrites a SPARQL query string, asynchronously. |
+| `rewriter.rewriteOperation(operation)` | The same over SPARQL algebra, for callers already holding some. |
 
 | Transformation | Description |
-|----------------|-------------|
-| `substituteVarsThatArePreBoundToTerms` | Inline known variable values into patterns |
-| `transformFilterFalse` | Remove FILTER(FALSE) branches and simplify, seeing an empty sub-SELECT through its `PROJECT` |
-| `nullifyJoinOverIncompatibleBounds` | Replace incompatible join branches with FILTER(FALSE) |
-| `pushDownAssertions` | Push assertion filters (`FILTER(sameTerm(?x, c))`) as deep as possible: substitute the term into BGPs and paths, prune VALUES rows, empty UNION branches that cannot bind the variable, and turn an OPTIONAL over an asserted variable into a plain join |
-| `pullUpExtends` | Float every `BIND` as high as the plan allows: past joins, optionals, unions (when every branch carries it) and modifiers, merging the copies several operands carry into one, and deleting a bind a `PROJECT` or a `GROUP` discards |
-| `rewriteNonRecursivePaths` | Expand property paths into BGPs |
+|---|---|
+| `unfoldingTransformation(mapping, options?)` | The rewriting proper: every triple pattern replaced by the mapping body producing the triples it could match. |
+| `rewriteNonRecursivePathsTransformation()` | Expands non-recursive property paths into BGPs and UNIONs. Belongs before the unfolding. |
+| `filterFalseTransformation()` | Lets every `FILTER(FALSE)` absorb what stands over it, sub-SELECTs included. |
+| `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))` as deep as it goes: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
+| `pullUpExtendsTransformation()` | Floats every `BIND` as high as the plan allows and drops the ones nothing reads. |
+| `removeProjectionsTransformation()` | Removes inner projections, renaming what they hid to keep the scoping. |
+| `nullifyJoinOverIncompatibleBoundsTransformation()` | Replaces a join whose branches bind one variable to incompatible terms by `FILTER(FALSE)`. |
+| `nullifyUnbindableVarsTransformation()` | The same one level up, for incompatible term *types* rather than terms. Not in the default pipeline. |
+| `extendsToValuesTransformation()` | Rewrites a `BIND` of a ground term over the empty BGP, or over a VALUES, into a VALUES. |
+| `joinValuesToFilterTransformation()` | Rewrites a JOIN with a VALUES into an equality FILTER, enabling further push-down. |
+| `serviceCallPushUpTransformation()` | Merges and hoists SERVICE calls so the endpoint evaluates as much as it can. |
+| `internalBnodeAsSpecialLiteralTransformation()` | Materialises constructed blank node identities as typed literals. |
+| `internalBnodeAsSpecialIriTransformation()` | Materialises them as prefixed IRIs, SHA-1 keeping the length manageable. |
 
-### Blank Node Transformations
+### `sparql-view-unfold/comunica` — Node only
 
-| Transformation                  | Description                             |
-|---------------------------------|-----------------------------------------|
-| `internalBnodeAsSpecialLiteral` | Represent blank nodes as typed literals |
-| `internalBnodeAsSpecialIri`     | Represent blank nodes as prefixed IRIs  |
+One transformation needs a Comunica runtime, and lives behind its own subpath:
+
+```typescript
+import { simplifyStaticExpressionsTransformation } from 'sparql-view-unfold/comunica';
+```
+
+| Transformation | Description |
+|---|---|
+| `simplifyStaticExpressionsTransformation()` | Folds every fully static expression to the term Comunica's evaluator says it is. |
+
+It builds its evaluator through Components.js, which resolves Comunica's actors through Node's own module
+resolution and so imports `node:module` and `node:path`. Bundlers resolve every import in a module graph
+before they tree-shake it, so re-exporting this step from the main entry point would make the whole package
+unresolvable for the browser — even in a build that never calls the step. The main entry point stays
+platform-neutral; reach for this subpath from Node.
 
 ## License
 

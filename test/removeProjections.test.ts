@@ -2,10 +2,8 @@ import { QueryEngine } from '@comunica/query-sparql-file';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
-import { removeProjections } from '../lib/transformations/removeProjections.js';
-import { queryTransform } from '../lib/transformBgp.js';
-import { transformContextFromConstructs } from '../lib/transformContext.js';
-import { nonTripleTermConstruct } from './queryConsts.js';
+import { createQueryRewriter } from '../lib/queryRewriter.js';
+import { removeProjectionsTransformation } from '../lib/transformations/removeProjections.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -14,8 +12,8 @@ const arrayifyStream =
 describe('removeProjections', () => {
   // The pass through mapping leaves every pattern as it was, so the output only shows what
   // removeProjections itself did.
-  function transform(query: string): string {
-    return queryTransform(transformContextFromConstructs([ nonTripleTermConstruct ]), query, [ removeProjections ]);
+  async function transform(query: string): Promise<string> {
+    return createQueryRewriter([ removeProjectionsTransformation() ]).rewriteQuery(query);
   }
 
   const engine = new QueryEngine();
@@ -31,26 +29,26 @@ describe('removeProjections', () => {
 
   async function assertEquivalent(expect: typeof Expect, query: string): Promise<void> {
     const original = await bindings(query);
-    expect(await bindings(transform(query))).toEqual(original);
+    expect(await bindings(await transform(query))).toEqual(original);
     // Sanity: the query actually returns something so the test is meaningful.
     expect(original.length).toBeGreaterThan(0);
   }
 
-  it('anonymizes the variables a subselect hides', ({ expect }) => {
+  it('anonymizes the variables a subselect hides', async({ expect }) => {
     // ?p and ?o are not projected by the subselect, so they may not join with the outer ?p / ?o.
-    expect(transform('SELECT ?s WHERE { ?s <ex://p> ?o { SELECT ?s WHERE { ?s ?p ?o } } }')).toContain('?v_0');
+    expect(await transform('SELECT ?s WHERE { ?s <ex://p> ?o { SELECT ?s WHERE { ?s ?p ?o } } }')).toContain('?v_0');
   });
 
   describe('deduplication with DISTINCT / REDUCED', () => {
     // Deduplication happens over the variables the projection exposes: dropping it would make
     // DISTINCT consider the anonymized variables as well, turning duplicates into distinct rows.
-    it('keeps the projection of a sub-SELECT DISTINCT', ({ expect }) => {
-      expect(transform('SELECT * WHERE { { SELECT DISTINCT ?s WHERE { ?s ?p ?o } } }'))
+    it('keeps the projection of a sub-SELECT DISTINCT', async({ expect }) => {
+      expect(await transform('SELECT * WHERE { { SELECT DISTINCT ?s WHERE { ?s ?p ?o } } }'))
         .toContain('SELECT DISTINCT ?uq_s WHERE');
     });
 
-    it('keeps the projection of a sub-SELECT REDUCED', ({ expect }) => {
-      expect(transform('SELECT * WHERE { { SELECT REDUCED ?s WHERE { ?s ?p ?o } } }'))
+    it('keeps the projection of a sub-SELECT REDUCED', async({ expect }) => {
+      expect(await transform('SELECT * WHERE { { SELECT REDUCED ?s WHERE { ?s ?p ?o } } }'))
         .toContain('SELECT REDUCED ?uq_s WHERE');
     });
 
@@ -73,8 +71,8 @@ describe('removeProjections', () => {
   describe('a SLICE (LIMIT / OFFSET) below a projection', () => {
     // Dropping the projection is sound - it preserves multiplicity - but SPARQL cannot write a LIMIT
     // that is not on a SELECT, and `toAst` throws on the bare Slice it would be left holding.
-    it('keeps the projection of a sub-SELECT with LIMIT', ({ expect }) => {
-      expect(transform('SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } LIMIT 1 } }'))
+    it('keeps the projection of a sub-SELECT with LIMIT', async({ expect }) => {
+      expect(await transform('SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } LIMIT 1 } }'))
         .toContain('LIMIT 1');
     });
 

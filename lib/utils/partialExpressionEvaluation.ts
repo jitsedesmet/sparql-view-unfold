@@ -3,7 +3,7 @@ import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { RangeSet } from '../RangeSet.js';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
 import type { Access } from './assertions.js';
 import { asAccess, componentOf, isAssertableTerm, rangeOfTermType, asAssertableTermType } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
@@ -47,7 +47,7 @@ export interface AssertionView {
  * @returns the substituted, folded expression
  */
 export function substituteInExpression(
-  c: TransformContext,
+  c: TransformationContext,
   expression: Algebra.Expression,
   assertions: AssertionView,
   cVars: ReadonlySet<string>,
@@ -64,14 +64,14 @@ export function substituteInExpression(
  * @returns the substituted, folded expression
  */
 function substitute(
-  c: TransformContext,
+  c: TransformationContext,
   expression: Algebra.Expression,
   assertions: AssertionView,
   boundVariables: ReadonlySet<string>,
 ): Algebra.Expression {
   // Only the folds the pushdown depends on are done here, synchronously. Evaluating arbitrary static
   // operators (`1 + 2`, `CONCAT(...)`, ...) is handled separately by the asynchronous
-  // {@link utils/staticExpressionEvaluation!simplifyStaticExpressions} pass, which hands them to the
+  // {@link transformations/staticExpressionEvaluation!simplifyStaticExpressions} pass, which hands them to the
   // Comunica Expression Evaluator.
   const { AF } = c;
   switch (expression.subType) {
@@ -162,7 +162,7 @@ function substitutedTerm(term: RDF.Term, assertions: AssertionView): RDF.Term | 
  * @returns what it folds to, or `undefined` when the conjunction decides it not at all
  */
 function decidedByAccess(
-  c: TransformContext,
+  c: TransformationContext,
   expression: Algebra.OperatorExpression,
   assertions: AssertionView,
 ): Algebra.Expression | undefined {
@@ -211,7 +211,7 @@ function exprAsGroundedTerm(expression: Algebra.Expression): RDF.Term | undefine
  * @returns the folded expression, or the operator rebuilt over its arguments
  */
 export function constantFoldOperator(
-  c: TransformContext,
+  c: TransformationContext,
   operator: string,
   args: Algebra.Expression[],
   boundVariables: ReadonlySet<string> = new Set(),
@@ -331,7 +331,7 @@ export function constantFoldOperator(
  * @returns the operator over what is left, or that single argument, or the neutral element itself
  */
 function neutralFold(
-  c: TransformContext,
+  c: TransformationContext,
   args: Algebra.Expression[],
   constants: (boolean | undefined)[],
   neutral: boolean,

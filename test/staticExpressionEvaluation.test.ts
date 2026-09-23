@@ -1,11 +1,10 @@
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { beforeAll, describe, it } from 'vitest';
-import { transformContextFromConstructs, parseQuery } from '../lib/transformContext.js';
-import { simplifyStaticExpressions } from '../lib/utils/staticExpressionEvaluation.js';
-import { nonTripleTermConstruct } from './queryConsts.js';
+import { simplifyStaticExpressions } from '../lib/transformations/staticExpressionEvaluation.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 
 describe('simplifyStaticExpressions', () => {
-  const c = transformContextFromConstructs([ nonTripleTermConstruct ]);
+  const c = createTransformationContext();
 
   async function simplify(query: string): Promise<string> {
     const operation = parseQuery(c, query);
@@ -34,6 +33,13 @@ describe('simplifyStaticExpressions', () => {
   it('folds a fully static FILTER to a boolean', async({ expect }) => {
     const out = await simplify('SELECT * WHERE { ?s ?p ?o . FILTER(STRLEN("abc") > 1) }');
     expect(out.toLowerCase()).not.toContain('strlen');
+  });
+
+  it('folds the condition of an OPTIONAL', async({ expect }) => {
+    // A FILTER directly in an OPTIONAL is the LEFT JOIN's condition rather than an operation of its own.
+    const out = await simplify('SELECT * WHERE { ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(1 > 2) } }');
+    expect(out).toContain('FILTER ( FALSE )');
+    expect(out).not.toContain('>');
   });
 
   it('leaves a non-static expression untouched', async({ expect }) => {

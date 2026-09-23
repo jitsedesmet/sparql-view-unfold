@@ -1,18 +1,17 @@
 {
-  "name": "traqula-sparql-1-2-rewriter",
+  "name": "sparql-view-unfold",
   "type": "module",
   "version": "0.0.0",
-  "private": "true",
   "packageManager": "yarn@1.22.22",
-  "description": "Query rewriting for a SPARQL 1.2 query on RDF 1.1 data ",
+  "description": "View unfolding and query optimisation for SPARQL 1.2, with views defined as CONSTRUCT queries",
   "lsd:module": true,
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jitsedesmet/2025-query-rewriting-1-2"
+    "url": "https://github.com/jitsedesmet/sparql-view-unfold"
   },
   "bugs": {
-    "url": "https://github.com/jitsedesmet/2025-query-rewriting-1-2/issues"
+    "url": "https://github.com/jitsedesmet/sparql-view-unfold/issues"
   },
   "sideEffects": false,
   "exports": {
@@ -21,6 +20,11 @@
       "types": "./dist/esm/lib/index.d.ts",
       "import": "./dist/esm/lib/index.js",
       "require": "./dist/cjs/lib/index.js"
+    },
+    "./comunica": {
+      "types": "./dist/esm/lib/comunica.d.ts",
+      "import": "./dist/esm/lib/comunica.js",
+      "require": "./dist/cjs/lib/comunica.js"
     }
   },
   "main": "dist/esm/lib/index.js",
@@ -28,9 +32,11 @@
     "access": "public"
   },
   "files": [
+    "ARCHITECTURE.md",
     "dist/*/lib/**/*.d.ts",
     "dist/*/lib/**/*.js",
-    "dist/*/lib/**/*.js.map"
+    "dist/*/lib/**/*.js.map",
+    "dist/cjs/package.json"
   ],
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
@@ -45,7 +51,7 @@
     "doc": "typedoc",
     "doc:check": "typedoc --emit none",
     "lint": "eslint . --cache",
-    "postinstall": "yarn husky && yarn run build",
+    "prepare": "yarn husky && yarn run build",
     "test": "vitest test --run",
     "bench": "vitest bench --run --coverage.enabled=false",
     "bench:ab": "node test/bench-ab.mjs"

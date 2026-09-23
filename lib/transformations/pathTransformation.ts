@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
+import type { QueryTransformation } from '../types.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 
 import { isRdfVar } from '../utils/typeGuards.js';
@@ -42,7 +43,7 @@ let counter = 0;
  * // ex:knows|ex:worksWith becomes:
  * // { ?s ex:knows ?o } UNION { ?s ex:worksWith ?o }
  */
-export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: TransformContext, op: T): T {
+export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   const { AF, DF } = c;
 
   function resolvePathOp(pathOp: Algebra.PropertyPathSymbol, path: Algebra.Path): Algebra.Operation {
@@ -144,4 +145,12 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
     op,
     { path: { transform: pathOp => resolvePathOp(pathOp.predicate, pathOp) }},
   );
+}
+
+/**
+ * The pipeline step expanding every non-recursive property path into the BGPs and UNIONs the unfolding can read.
+ * @returns the transformation
+ */
+export function rewriteNonRecursivePathsTransformation(): QueryTransformation {
+  return rewriteNonRecursivePaths;
 }

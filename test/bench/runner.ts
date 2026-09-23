@@ -12,53 +12,62 @@
  * can be checked against it. See {@link runBenchmark} for why the baseline, and not the
  * rewriting being measured, is what the answers are judged against.
  */
-import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { transformFilterFalse } from '../../lib/transformations/filterFalse.js';
-import { nullifyJoinOverIncompatibleBounds } from '../../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
-import { pullUpExtends } from '../../lib/transformations/pullUpExtends.js';
-import { pushDownAssertions } from '../../lib/transformations/pushDownAssertions.js';
-import { removeProjections } from '../../lib/transformations/removeProjections.js';
-import { operationTransform, queryTransform } from '../../lib/transformBgp.js';
-import { transformContextFromConstructs } from '../../lib/transformContext.js';
-import type { TransformContext } from '../../lib/transformContext.js';
+import {
+  createQueryRewriter,
+  filterFalseTransformation,
+  mappingFromConstructQueries,
+  nullifyJoinOverIncompatibleBoundsTransformation,
+  pullUpExtendsTransformation,
+  pushDownAssertionsTransformation,
+  removeProjectionsTransformation,
+  unfoldingTransformation,
+} from '../../lib/index.js';
+import type { Mapping, QueryTransformation } from '../../lib/index.js';
 import type { BenchEngine, EngineSource, SelectResult } from './engines.js';
 
-/** The shape every transformation pass in a pipeline conforms to. */
-type Transformation = (c: TransformContext, op: Algebra.Operation) => Algebra.Operation;
-
-/** The standard rewriting pipeline used across the integration tests. */
-const STANDARD_TRANSFORMATIONS = <const>[
-  operationTransform,
-  transformFilterFalse,
-  nullifyJoinOverIncompatibleBounds,
-  transformFilterFalse,
-];
+/**
+ * The standard rewriting pipeline used across the integration tests: the unfolding itself, plus the
+ * clean-up passes that only ever remove work.
+ *
+ * Every pass is a factory, so a pipeline is a plain list; only {@link unfoldingTransformation} takes an
+ * argument, being the one pass that needs the mapping. The pipelines below are therefore built per case
+ * rather than declared once.
+ */
+function standardTransformations(mapping: Mapping): QueryTransformation[] {
+  return [
+    unfoldingTransformation(mapping),
+    filterFalseTransformation(),
+    nullifyJoinOverIncompatibleBoundsTransformation(),
+    filterFalseTransformation(),
+  ];
+}
 
 /**
- * The standard pipeline plus {@link removeProjections}: flattens the nested
- * sub-`SELECT`s that `operationTransform` wraps each mapper branch in (anonymizing
- * the variables they hide, so semantics are preserved) into a single flat tree of
+ * The standard pipeline plus {@link removeProjectionsTransformation}: flattens the nested
+ * sub-`SELECT`s that the unfolding wraps each mapper branch in (anonymizing the variables
+ * they hide, so semantics are preserved) into a single flat tree of
  * `UNION`/`JOIN`/`FILTER`/`BIND`. Some SPARQL engines' query planners handle deeply
  * nested sub-`SELECT`s poorly; this variant tests whether that structural
  * simplification changes engine performance on the benchmark queries.
  */
-const WITH_PROJECTION_REMOVAL_TRANSFORMATIONS = <const>[
-  ...STANDARD_TRANSFORMATIONS,
-  removeProjections,
-];
+function withProjectionRemovalTransformations(mapping: Mapping): QueryTransformation[] {
+  return [
+    ...standardTransformations(mapping),
+    removeProjectionsTransformation(),
+  ];
+}
 
 /**
- * The standard pipeline plus {@link pushDownAssertions}: `FILTER(sameTerm(?x, c))`
+ * The standard pipeline plus {@link pushDownAssertionsTransformation}: `FILTER(sameTerm(?x, c))`
  * assertion filters (both the mapping-head unification constraints and the outer
  * query's own equality constraints) are pushed as deep as possible instead of being
  * left as a post-hoc filter over the fully reconstructed pattern — substituting the
  * term into BGPs and paths (turning a free variable position into an indexed lookup),
  * pruning `VALUES` rows, emptying `UNION` branches that cannot bind the variable, and
- * turning an `OPTIONAL` over an asserted variable into a plain join. Unlike the earlier
- * `substituteVarsThatArePreBoundToTerms` prototype (see git history), this pass sees
- * through `UNION` and reaches constants that only arrive via a `FILTER`, which is how
- * every constant in this benchmark's rewritten queries actually appears.
- * `transformFilterFalse` runs once more afterwards to clean up any `FILTER(FALSE)`
+ * turning an `OPTIONAL` over an asserted variable into a plain join. It sees through
+ * `UNION` and reaches constants that only arrive via a `FILTER`, which is how every
+ * constant in this benchmark's rewritten queries actually appears.
+ * `filterFalseTransformation` runs once more afterwards to clean up any `FILTER(FALSE)`
  * branches the pushdown introduces (contradictory bindings). It collapses them through
  * sub-`SELECT`s too, so a `UNION` branch the pushdown proves empty disappears entirely.
  * Before that pass could see past a `PROJECT`, such a branch survived as a dead
@@ -66,45 +75,49 @@ const WITH_PROJECTION_REMOVAL_TRANSFORMATIONS = <const>[
  * answer, but it inflated Comunica's cardinality estimate enough to invert its join order
  * on `F-Q3`.
  *
- * `removeProjections` is appended last. It used to be a required workaround: the pushdown
- * leaves `BIND`s directly over the sub-`SELECT`s that mapper branches are wrapped in, and
- * Traqula's generator before 1.3.1 serialized that as a sub-`SELECT` followed by sibling
+ * `removeProjectionsTransformation` is appended last. It used to be a required workaround: the
+ * pushdown leaves `BIND`s directly over the sub-`SELECT`s that mapper branches are wrapped in,
+ * and Traqula's generator before 1.3.1 serialized that as a sub-`SELECT` followed by sibling
  * `BIND`s in one group — invalid SPARQL (`Parse error: Expecting --> } <-- but found -->
  * 'BIND' <--`) for every pushdown and pull-up rewrite of the 24 benchmark cases. Traqula
- * 1.3.1 fixes that serialization, and all 48 of those rewrites now parse without
- * `removeProjections`. It stays in this pipeline because the pipelines are cumulative — each
- * approach is the one before it plus one pass — and the recorded results were measured with
- * it; it runs last to also pick up any new sub-`SELECT`s the pushdown itself introduces.
+ * 1.3.1 fixes that serialization, and those rewrites parse without it. It stays in this
+ * pipeline because the pipelines are cumulative — each approach is the one before it plus one
+ * pass — and the recorded results were measured with it; it runs last to also pick up any new
+ * sub-`SELECT`s the pushdown itself introduces.
  */
-const WITH_PUSH_DOWN_ASSERTIONS_TRANSFORMATIONS = <const>[
-  ...STANDARD_TRANSFORMATIONS,
-  pushDownAssertions,
-  transformFilterFalse,
-  removeProjections,
-];
+function withPushDownAssertionsTransformations(mapping: Mapping): QueryTransformation[] {
+  return [
+    ...standardTransformations(mapping),
+    pushDownAssertionsTransformation(),
+    filterFalseTransformation(),
+    removeProjectionsTransformation(),
+  ];
+}
 
 /**
- * The pushdown pipeline plus {@link pullUpExtends}, applied twice: `pushDownAssertions`
- * leaves an `EXTEND` at every leaf it substitutes into (see its own `@fileoverview`), and
- * `pullUpExtends` is the pass built to be its other half — floating those back up past
- * joins/optionals/unions to where they cost less, or dropping them outright when nothing
- * above ends up reading them. It runs once right after the pushdown to clean that up, and
- * once more after `removeProjections`: flattening away the nested sub-`SELECT`s changes the
- * join topology `pullUpExtends`'s soundness checks read (fewer, flatter operands to reason
- * about), so a second pass can float — or drop — binds the first pass could not have,
- * without the sub-`SELECT` boundaries in the way. `removeProjections` itself still runs
- * where the plain `pushDownAssertions` pipeline has it (see that pipeline's own comment for why
- * it is kept now that Traqula 1.3.1 no longer needs it as a workaround).
+ * The pushdown pipeline plus {@link pullUpExtendsTransformation}, applied twice:
+ * `pushDownAssertionsTransformation` leaves an `EXTEND` at every leaf it substitutes into (see
+ * its own `@fileoverview`), and `pullUpExtendsTransformation` is the pass built to be its other
+ * half — floating those back up past joins/optionals/unions to where they cost less, or dropping
+ * them outright when nothing above ends up reading them. It runs once right after the pushdown to
+ * clean that up, and once more after `removeProjectionsTransformation`: flattening away the nested
+ * sub-`SELECT`s changes the join topology its soundness checks read (fewer, flatter operands to
+ * reason about), so a second pass can float — or drop — binds the first pass could not have,
+ * without the sub-`SELECT` boundaries in the way. `removeProjectionsTransformation` itself still
+ * runs where the plain pushdown pipeline has it (see that pipeline's own comment for why it is
+ * kept now that Traqula 1.3.1 no longer needs it as a workaround).
  */
-const WITH_PULL_UP_EXTENDS_TRANSFORMATIONS = <const>[
-  ...STANDARD_TRANSFORMATIONS,
-  pushDownAssertions,
-  transformFilterFalse,
-  pullUpExtends,
-  transformFilterFalse,
-  removeProjections,
-  pullUpExtends,
-];
+function withPullUpExtendsTransformations(mapping: Mapping): QueryTransformation[] {
+  return [
+    ...standardTransformations(mapping),
+    pushDownAssertionsTransformation(),
+    filterFalseTransformation(),
+    pullUpExtendsTransformation(),
+    filterFalseTransformation(),
+    removeProjectionsTransformation(),
+    pullUpExtendsTransformation(),
+  ];
+}
 
 /** A single benchmark case: one SPARQL 1.2 query against one reification pattern. */
 export interface BenchCase {
@@ -155,12 +168,12 @@ export interface BenchRecord {
 /** Which optimization pipeline {@link rewriteToSparql11} should apply. */
 export type RewriteVariant = 'standard' | 'removeProjections' | 'pushDownAssertions' | 'pullUpExtends';
 
-function pipelineFor(variant: RewriteVariant): readonly Transformation[] {
+function pipelineFor(variant: RewriteVariant, mapping: Mapping): QueryTransformation[] {
   switch (variant) {
-    case 'removeProjections': return WITH_PROJECTION_REMOVAL_TRANSFORMATIONS;
-    case 'pushDownAssertions': return WITH_PUSH_DOWN_ASSERTIONS_TRANSFORMATIONS;
-    case 'pullUpExtends': return WITH_PULL_UP_EXTENDS_TRANSFORMATIONS;
-    default: return STANDARD_TRANSFORMATIONS;
+    case 'removeProjections': return withProjectionRemovalTransformations(mapping);
+    case 'pushDownAssertions': return withPushDownAssertionsTransformations(mapping);
+    case 'pullUpExtends': return withPullUpExtendsTransformations(mapping);
+    default: return standardTransformations(mapping);
   }
 }
 
@@ -168,15 +181,18 @@ function pipelineFor(variant: RewriteVariant): readonly Transformation[] {
  * Rewrites a SPARQL 1.2 query into an equivalent SPARQL 1.1 query using the given
  * CONSTRUCT mappers and the requested optimization pipeline (defaults to the standard
  * pipeline used across the integration tests).
+ *
+ * A rewriter holds no per-query state, but each benchmark case brings its own mapping, so one is
+ * built per call rather than shared. The rewriting is not what this benchmark measures — the
+ * engines' evaluation of its output is — so building it per query costs nothing that is counted.
  */
-export function rewriteToSparql11(
+export async function rewriteToSparql11(
   mappers: string[],
   userQuery12: string,
   variant: RewriteVariant = 'standard',
-): string {
-  const context = transformContextFromConstructs(mappers);
-  const generated = queryTransform(context, userQuery12, [ ...pipelineFor(variant) ]);
-  return lowercaseBooleanLiterals(generated);
+): Promise<string> {
+  const rewriter = createQueryRewriter(pipelineFor(variant, mappingFromConstructQueries(mappers)));
+  return lowercaseBooleanLiterals(await rewriter.rewriteQuery(userQuery12));
 }
 
 /**
@@ -243,7 +259,7 @@ export async function runBenchmark(
   const records: BenchRecord[] = [];
 
   for (const benchCase of cases) {
-    const rewritten = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12);
+    const rewritten = await rewriteToSparql11(benchCase.mappers, benchCase.userQuery12);
     const reference = await referenceAnswer(benchCase, rewritten, referenceEngine);
 
     for (const engine of engines) {

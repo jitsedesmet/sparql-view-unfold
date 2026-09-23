@@ -1,27 +1,44 @@
 /**
- * @fileoverview SPARQL Query Rewriting for RDF 1.2 over RDF 1.1.
+ * @fileoverview View unfolding and query optimisation for SPARQL 1.2.
  *
- * Rewrites SPARQL 1.2 queries - which may contain triple terms and other RDF 1.2 features - into equivalent
- * SPARQL 1.1 queries that can be executed against RDF 1.1 data sources.
+ * Rewrites a SPARQL 1.2 query posed over views into an equivalent query over the data those views are
+ * defined on.
  *
- * **Mappings** are SPARQL CONSTRUCT queries defining how RDF 1.2 data is represented in RDF 1.1: the
- * template (head) shows the RDF 1.2 pattern, the WHERE clause (body) the equivalent RDF 1.1
- * representation. Each triple pattern of the user query is then rewritten to a UNION of subselects, one per
- * mapping that could produce matching data.
- * @module query-rewriting-1-2
+ * A **mapping** is one or more SPARQL CONSTRUCT queries defining a view: the template (head) says which
+ * triples the view holds, the WHERE clause (body) how they are found in the data. A **pipeline** of
+ * transformations is then run over the user query, the first of which unfolds that mapping into every
+ * triple pattern and the rest of which optimise what comes out.
+ *
+ * Running SPARQL 1.2 queries - triple terms and all - against RDF 1.1 data is the case this was built for:
+ * a view then says how RDF 1.1 data represents RDF 1.2, and the rewrite hands back plain SPARQL 1.1.
+ *
+ * **This entry point is platform-neutral**, and is kept that way deliberately: the one transformation
+ * needing a Comunica runtime is reached through the `sparql-view-unfold/comunica` subpath instead, because
+ * re-exporting it here would put `node:module` and `node:path` in every consumer's module graph. See
+ * {@link comunica | the Comunica entry point} for why a bundler cannot shake that back out.
+ * @module sparql-view-unfold
  * @see {@link https://w3c.github.io/rdf-interop/spec/} RDF 1.2 Interoperability Spec
  * @example
- * import { operationTransform, queryTransform, transformContextFromConstructs } from 'query-rewriting-1-2';
+ * import {
+ *   createQueryRewriter,
+ *   filterFalseTransformation,
+ *   mappingFromConstructQueries,
+ *   unfoldingTransformation,
+ * } from 'sparql-view-unfold';
  *
- * const context = transformContextFromConstructs([
- *   'CONSTRUCT { ?t rdf:reifies <<( ?s ?p ?o )>> } WHERE { ... RDF 1.1 pattern ... }'
+ * const rewriter = createQueryRewriter([
+ *   unfoldingTransformation(mappingFromConstructQueries([
+ *     'CONSTRUCT { ?t rdf:reifies <<( ?s ?p ?o )>> } WHERE { ... RDF 1.1 pattern ... }',
+ *   ])),
+ *   filterFalseTransformation(),
  * ]);
- * const rewrittenQuery =
- *   queryTransform(context, 'SELECT * WHERE { ?x rdf:reifies <<( ?s ?p ?o )>> }', [ operationTransform ]);
+ * const sparql11Query = await rewriter.rewriteQuery('SELECT * WHERE { ?x rdf:reifies <<( ?s ?p ?o )>> }');
  */
-export { operationTransform, queryTransform } from './transformBgp.js';
-export { createPartialContext, transformContextFromConstructs } from './transformContext.js';
-export type { TransformContext } from './transformContext.js';
-export type { Mapping, MappingHead } from './types.js';
-export { simplifyStaticExpressions } from './utils/staticExpressionEvaluation.js';
+export * from './consts.js';
+export { mappingFromConstructQueries } from './mapping.js';
+export type { MappingOptions } from './mapping.js';
+export { createDefaultTransformationPipeline, createQueryRewriter } from './queryRewriter.js';
+export type { QueryRewriter } from './queryRewriter.js';
+export type { TransformationContext } from './transformContext.js';
+export type { Mapping, MappingHead, QueryTransformation } from './types.js';
 export * from './transformations/index.js';

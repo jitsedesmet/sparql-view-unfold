@@ -47,8 +47,8 @@ describe('benchmark harness', () => {
   }
 
   describe('rewriteToSparql11', () => {
-    it('turns a reifier-syntax SPARQL 1.2 query into SPARQL 1.1', ({ expect }) => {
-      const rewritten = rewriteToSparql11(mappers, starQuery);
+    it('turns a reifier-syntax SPARQL 1.2 query into SPARQL 1.1', async({ expect }) => {
+      const rewritten = await rewriteToSparql11(mappers, starQuery);
       expect(rewritten).toContain('SELECT');
       // The rewriter replaces triple *patterns* matching against RDF 1.2 triple
       // terms with plain RDF 1.1 triple patterns over the materialized data; it may
@@ -79,13 +79,13 @@ describe('benchmark harness', () => {
       expect(files.every(f => f.startsWith('BKR-star_') && f.endsWith('.rq'))).toBe(true);
     });
 
-    it('builds runnable cases whose queries the rewriter accepts', ({ expect }) => {
+    it('builds runnable cases whose queries the rewriter accepts', async({ expect }) => {
       const cases = buildCases('reification');
       expect(cases.length).toBeGreaterThan(0);
       for (const benchCase of cases) {
         expect(benchCase.mappers).toBe(PATTERNS.reification.mappers);
         // Every case query must survive rewriting to SPARQL 1.1.
-        expect(() => rewriteToSparql11(benchCase.mappers, benchCase.userQuery12)).not.toThrow();
+        await expect(rewriteToSparql11(benchCase.mappers, benchCase.userQuery12)).resolves.toBeTypeOf('string');
       }
     });
   });

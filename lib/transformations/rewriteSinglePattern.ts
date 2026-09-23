@@ -4,8 +4,10 @@ import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { ClusterSolver } from '../ClusterSolver.js';
 import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import { rangeOfPosition } from '../RangeSet.js';
-import type { TransformContext } from '../transformContext.js';
+import { RewriteNoMatchError } from '../RewriteNoMatchError.js';
+import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
+import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
 import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
 
 /**
@@ -29,7 +31,7 @@ import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
  * @param expression - The expression reading the value that triple term has to match
  */
 function registerPatternQuadAgainstExpression(
-  c: TransformContext,
+  c: TransformationContext,
   tPVars: Record<string, RDF.Variable>,
   quad: RDF.BaseQuad,
   expression: Alg.Expression,
@@ -60,7 +62,7 @@ function registerPatternQuadAgainstExpression(
  * @param pattern - The triple pattern to iterate
  */
 function iterateMappingHead(
-  c: TransformContext,
+  c: TransformationContext,
   mHVars: Record<string, RDF.Variable>,
   tPVars: Record<string, RDF.Variable>,
   head: MappingHead,
@@ -110,7 +112,7 @@ function collectTriplePatternBinds({
   clusterSolver: ClusterSolver;
   triplePatternVars: Record<string, RDF.Variable>;
   expressionFilters: Alg.Expression[];
-} & Pick<TransformContext, 'AF' | 'DF'>): Record<string, Alg.Expression> {
+} & Pick<TransformationContext, 'AF' | 'DF'>): Record<string, Alg.Expression> {
   const triplePatternBinds: Record<string, Alg.Expression> = {};
   for (const tpVariable of Object.values(triplePatternVars)) {
     const cluster = clusterSolver.getCluster(tpVariable);
@@ -152,7 +154,7 @@ function collectTriplePatternBinds({
 function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF }: {
   clusterSolver: ClusterSolver;
   mappingHeadVars: Record<string, RDF.Variable>;
-} & Pick<TransformContext, 'AF'>): Alg.Expression[] {
+} & Pick<TransformationContext, 'AF'>): Alg.Expression[] {
   const termEqualityFilter: Alg.Expression[] = [];
   const headUnificationFilter: Alg.Expression[] = [];
   const remainderFilter: Alg.Expression[] = [];
@@ -213,30 +215,19 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF 
  * @returns the subselect; where the pattern binds nothing, a dummy variable is projected instead, SPARQL
  * having no sub-ASK and no empty projection
  */
-function wrapOperationInProject({ triplePatternBinds, operation, DF, AF }: {
+function wrapOperationInProject({ triplePatternBinds, operation, coinExistenceVariable, DF, AF }: {
   triplePatternBinds: Record<string, Alg.Expression>;
   operation: Alg.Operation;
-} & Pick<TransformContext, 'DF' | 'AF'>): Alg.Project {
-  let buildOperation = operation;
+} & Pick<TransformationContext, 'DF' | 'AF' | 'coinExistenceVariable'>): Alg.Project {
   // All variables required from subselect -- recursive search needed for triple terms
   const variablesToSelect = Object.keys(triplePatternBinds).map(x => DF.variable(x));
   if (variablesToSelect.length === 0) {
-    // You cannot select nothing, but actually we just want this subquery to validate if data exists.
-    // You cannot have a subAsk, but you can do a select over a dummy var: SELECT (1 as ?dummy)
-    // [proof this works](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%20%20%3Fs%20%3Fp%20%3Fo%20.%0A%20%20%7B%20SELECT%20%281%20as%20%3Fdummy%29%20WHERE%20%7B%0A%20%20%20%20%20%20%3Chttp%3A%2F%2F0-access.newspaperarchive.com.lib.utep.edu%2Fus%2Fmississippi%2Fbiloxi%2Fbiloxi-daily-herald%2F1899%2F05-06%2Fpage-6%3Ftag%3Dtierce%2Bwine%26rtserp%3Dtags%2Ftierce-wine%3Fpage%3D2%3E%0A%20%20%20%20%20%20%3Chttp%3A%2F%2Fdbpedia.org%2Fproperty%2Fdate%3E%0A%20%20%20%20%20%20%221899-05-05%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%20%20%20%23%20%221899-05-06%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%7D%20%7D%0A%7D)
-    // The name is deterministic: callers namespace each pattern's variables uniquely, so no
-    // global counter is needed to keep existence vars of distinct patterns apart.
-    const existenceVar = DF.variable('mExists');
-    buildOperation = AF.createExtend(
-      buildOperation,
-      existenceVar,
-      AF.createTermExpression(DF.literal('dummy')),
-    );
-    variablesToSelect.push(existenceVar);
+    // Nothing to select, so all this subquery has to say is whether the data is there.
+    return projectSolutionExistence({ AF, DF, coinExistenceVariable }, operation);
   }
   // Sort allows for stable tests but does not practically change anything.
   variablesToSelect.sort((a, b) => a.value.localeCompare(b.value));
-  return AF.createProject(buildOperation, variablesToSelect);
+  return AF.createProject(operation, variablesToSelect);
 }
 
 /**
@@ -246,7 +237,7 @@ function wrapOperationInProject({ triplePatternBinds, operation, DF, AF }: {
 function bindPatternTerms({ operation, AF, DF, triplePatternBinds }: {
   operation: Alg.Operation;
   triplePatternBinds: Record<string, Alg.Expression>;
-} & Pick<TransformContext, 'DF' | 'AF'>): Alg.Operation {
+} & Pick<TransformationContext, 'DF' | 'AF'>): Alg.Operation {
   let buildOperation: Alg.Operation = operation;
   // Finally add the binds after the subselect - Sort to create stable tests
   for (const [ variable, expression ] of Object.entries(triplePatternBinds).sort((a, b) => a[0].localeCompare(b[0]))) {
@@ -271,7 +262,7 @@ function bindPatternTerms({ operation, AF, DF, triplePatternBinds }: {
  * @param expression - The expression a pattern variable gets bound to
  * @returns the conditions to assert, innermost argument first
  */
-function bindEvaluationGuards(c: TransformContext, expression: Alg.Expression): Alg.Expression[] {
+function bindEvaluationGuards(c: TransformationContext, expression: Alg.Expression): Alg.Expression[] {
   if (expression.subType !== Algebra.ExpressionTypes.OPERATOR || !isTriplePosition(expression.operator)) {
     return [];
   }
@@ -284,18 +275,19 @@ function bindEvaluationGuards(c: TransformContext, expression: Alg.Expression): 
 }
 
 /**
- * Rewrites a single triple pattern using a mapping definition.
+ * Unfolds a mapping within a single triple pattern, the two unified.
  * @param c - The transformation context
  * @param pattern - The triple pattern to rewrite
  * @param mapping - The mapping to unfold within it
  * @returns the subselect over the mapping body, with the pattern's variables bound on top of it
+ * @throws RewriteNoMatchError if the pattern and the mapping head cannot be unified
  */
-export function rewriteSinglePattern(
-  c: TransformContext,
+function unfoldMappingWithinPattern(
+  c: TransformationContext,
   pattern: Alg.Pattern,
   mapping: Mapping,
 ): Alg.Project | Alg.Extend {
-  const { clusterSolver, AF, DF } = c;
+  const { clusterSolver, coinExistenceVariable, AF, DF } = c;
   clusterSolver.clear();
   // Set of variables in the mapping head
   const mappingHeadVars: Record<string, RDF.Variable> = {};
@@ -335,5 +327,30 @@ export function rewriteSinglePattern(
     inProject = AF.createFilter(inProject, expression);
   }
   inProject = bindPatternTerms({ operation: inProject, triplePatternBinds, DF, AF });
-  return wrapOperationInProject({ operation: inProject, triplePatternBinds, AF, DF });
+  return wrapOperationInProject({ operation: inProject, triplePatternBinds, coinExistenceVariable, AF, DF });
+}
+
+/**
+ * Rewrites a single triple pattern using a mapping definition.
+ * @param c - The transformation context
+ * @param pattern - The triple pattern to rewrite
+ * @param mapping - The mapping to unfold within it
+ * @returns the subselect over the mapping body, or `FILTER(FALSE)` where the pattern cannot match the
+ * mapping at all
+ */
+export function rewriteSinglePattern(
+  c: TransformationContext,
+  pattern: Alg.Pattern,
+  mapping: Mapping,
+): Alg.Operation {
+  try {
+    return unfoldMappingWithinPattern(c, pattern, mapping);
+  } catch (error: unknown) {
+    // A pattern that cannot match the mapping is ordinary - it contributes the empty solution multiset -
+    // where any other error is a bug, and has to keep propagating rather than become an empty branch.
+    if (error instanceof RewriteNoMatchError) {
+      return createFilterFalse(c);
+    }
+    throw error;
+  }
 }

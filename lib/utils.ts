@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TriplePosition } from './datastructures/TermClusterSet.js';
-import type { TransformContext } from './transformContext.js';
+import type { TransformationContext } from './transformContext.js';
 import { DF } from './utils/rdfDatatypes.js';
 import { isRdfTerm, isRdfVar } from './utils/typeGuards.js';
 
@@ -15,7 +15,7 @@ import { isRdfTerm, isRdfVar } from './utils/typeGuards.js';
  * @returns The rewritten operation
  */
 export function renameVariables<T extends object>(
-  c: TransformContext,
+  c: TransformationContext,
   obj: T,
   renames: Record<string, RDF.Variable>,
 ): T {
@@ -112,7 +112,10 @@ export function derivedVarNamer(existing: Iterable<string>): DerivedVarNamer {
  * @param obj - The subtree to read
  * @returns the variable names
  */
-export function collectVariableNames(astTransformer: TransformContext['astTransformer'], obj: object): Set<string> {
+export function collectVariableNames(
+  astTransformer: TransformationContext['astTransformer'],
+  obj: object,
+): Set<string> {
   const names = new Set<string>();
   astTransformer.visitObject(obj, (object) => {
     if (isRdfTerm(object) && object.termType === 'Variable') {

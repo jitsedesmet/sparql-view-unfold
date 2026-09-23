@@ -8,8 +8,9 @@ import { BindingsFactory } from '@comunica/utils-bindings-factory';
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { ComponentsManager } from 'componentsjs';
-import type { TransformContext } from '../transformContext.js';
-import { foldsToConstantTerm } from './expressionHelpers.js';
+import type { TransformationContext } from '../transformContext.js';
+import type { QueryTransformation } from '../types.js';
+import { foldsToConstantTerm } from '../utils/expressionHelpers.js';
 
 /**
  * @fileoverview Folds fully static expressions through Comunica's Expression Evaluator.
@@ -66,7 +67,7 @@ async function getExpressionEvaluatorFactory(): Promise<ActorExpressionEvaluator
  * @returns an evaluator returning the resulting term, or `undefined` when evaluation raises
  */
 async function prepareStaticEvaluator(
-  c: TransformContext,
+  c: TransformationContext,
 ): Promise<(expression: Algebra.Expression) => Promise<RDF.Term | undefined>> {
   const factory = await getExpressionEvaluatorFactory();
   const emptyBindings = new BindingsFactory(c.DF).bindings();
@@ -97,7 +98,7 @@ async function prepareStaticEvaluator(
  * @returns a copy of the operation with its static expressions folded
  */
 export async function simplifyStaticExpressions<T extends Algebra.Operation>(
-  c: TransformContext,
+  c: TransformationContext,
   operation: T,
 ): Promise<T> {
   const evaluate = await prepareStaticEvaluator(c);
@@ -119,4 +120,12 @@ export async function simplifyStaticExpressions<T extends Algebra.Operation>(
       },
     },
   });
+}
+
+/**
+ * The pipeline step folding every fully static expression to the term it evaluates to.
+ * @returns the transformation
+ */
+export function simplifyStaticExpressionsTransformation(): QueryTransformation {
+  return simplifyStaticExpressions;
 }

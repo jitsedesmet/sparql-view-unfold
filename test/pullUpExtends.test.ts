@@ -6,8 +6,7 @@ import { describe, it } from 'vitest';
 import { EXTENSION_FUNCTION_BNODE } from '../lib/consts.js';
 import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
 import { pushDownAssertions } from '../lib/transformations/pushDownAssertions.js';
-import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext, parseQuery } from '../lib/transformContext.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import { withCpVars, withoutCpVars } from '../lib/utils/certainlyBoundVars.js';
 import { expressionsEqual, isStableExpression } from '../lib/utils/expressionHelpers.js';
 import { peelExtends } from '../lib/utils/extendChain.js';
@@ -19,7 +18,7 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 describe('pullUpExtends', () => {
   // The pass only uses AF / DF / astTransformer from the context, never the mapping, so a mapping-less
   // partial context is sufficient here - as it is for the pushdown this mirrors.
-  const c = <TransformContext> createPartialContext();
+  const c = createTransformationContext();
 
   function transform(query: string): string {
     return c.generator.generate(toAst(pullUpExtends(c, parseQuery(c, prefixes + query)))).trim();

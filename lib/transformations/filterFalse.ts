@@ -1,6 +1,7 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import type { TransformContext } from '../transformContext.js';
-import { createFilterFalse, isFilterFalse } from '../utils/operationhelpers.js';
+import type { TransformationContext } from '../transformContext.js';
+import type { QueryTransformation } from '../types.js';
+import { createFilterFalse, isExpressionFalse, isFilterFalse } from '../utils/operationhelpers.js';
 import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
 
 /**
@@ -29,12 +30,13 @@ import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
  * - FILTER(FALSE) over anything becomes FILTER(FALSE) over the empty BGP, so no engine evaluates its input
  * - PROJECT/EXTEND/DISTINCT/etc. over FILTER(FALSE) becomes FILTER(FALSE), sub-SELECTs included
  * - MINUS/LEFT JOIN whose right operand is FILTER(FALSE) becomes its left operand
+ * - LEFT JOIN whose condition is `FALSE` becomes its left operand: no right solution can satisfy it
  * - GROUP and the query's own solution modifiers are left in place
  * @param c - The transformation context
  * @param op - The operation to transform
  * @returns the simplified operation
  */
-export function transformFilterFalse(c: TransformContext, op: Algebra.Operation): Algebra.Operation {
+export function transformFilterFalse(c: TransformationContext, op: Algebra.Operation): Algebra.Operation {
   const sealed = solutionModifierChainOf(op);
   const absorbSingle = { transform: (x: Algebra.Single, original: Algebra.Operation): Algebra.Single =>
     absorbingSingle(c, x, sealed.has(original)) };
@@ -68,7 +70,8 @@ export function transformFilterFalse(c: TransformContext, op: Algebra.Operation)
         // https://www.w3.org/TR/sparql12-query/#defn_algLeftJoin
         const [ left, right ] = leftJoin.input;
         // If left FF → FF, if right FF → just left
-        if (isFilterFalse(c, left) || isFilterFalse(c, right)) {
+        if (isFilterFalse(c, left) || isFilterFalse(c, right) ||
+          (leftJoin.expression && isExpressionFalse(c, leftJoin.expression))) {
           return left;
         }
         return leftJoin;
@@ -92,7 +95,7 @@ export function transformFilterFalse(c: TransformContext, op: Algebra.Operation)
  * @returns FILTER(FALSE) if the input is empty and the operation is unsealed, otherwise the operation
  */
 function absorbingSingle(
-  c: TransformContext,
+  c: TransformationContext,
   single: Algebra.Single,
   isSealed: boolean,
 ): Algebra.Single {
@@ -110,7 +113,7 @@ function absorbingSingle(
  * @param isSealed - Whether it is part of the query's own solution-modifier chain
  * @returns FILTER(FALSE) over the empty BGP if the filter is empty, otherwise the original filter
  */
-function absorbFilter(c: TransformContext, filter: Algebra.Filter, isSealed: boolean): Algebra.Single {
+function absorbFilter(c: TransformationContext, filter: Algebra.Filter, isSealed: boolean): Algebra.Single {
   // Its input can go even where nothing above absorbs the filter: an engine may still evaluate it.
   if (isFilterFalse(c, filter)) {
     return createFilterFalse(c);
@@ -124,7 +127,7 @@ function absorbFilter(c: TransformContext, filter: Algebra.Filter, isSealed: boo
  * @param join - The JOIN operation
  * @returns FILTER(FALSE) if any input is empty, otherwise the original JOIN
  */
-function absorbJoinOnEmptyBindings(c: TransformContext, join: Algebra.Join): Algebra.Join | Algebra.Filter {
+function absorbJoinOnEmptyBindings(c: TransformationContext, join: Algebra.Join): Algebra.Join | Algebra.Filter {
   for (const op of join.input) {
     if (isFilterFalse(c, op)) {
       return createFilterFalse(c);
@@ -140,7 +143,7 @@ function absorbJoinOnEmptyBindings(c: TransformContext, join: Algebra.Join): Alg
  * @returns FILTER(FALSE) when every branch was empty, the single remaining branch when one is left, and the
  * UNION without its empty branches otherwise
  */
-function pruneUnionOfEmptyBindings(c: TransformContext, union: Algebra.Union): Algebra.Operation {
+function pruneUnionOfEmptyBindings(c: TransformationContext, union: Algebra.Union): Algebra.Operation {
   union.input = union.input.filter(branch => !isFilterFalse(c, branch));
   if (union.input.length > 1) {
     return union;
@@ -150,4 +153,12 @@ function pruneUnionOfEmptyBindings(c: TransformContext, union: Algebra.Union): A
   }
   // If emptyUnion, return filterFalse
   return createFilterFalse(c);
+}
+
+/**
+ * The pipeline step letting every `FILTER(FALSE)` absorb what stands over it, up to the query's own solution modifiers.
+ * @returns the transformation
+ */
+export function filterFalseTransformation(): QueryTransformation {
+  return transformFilterFalse;
 }

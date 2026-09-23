@@ -289,10 +289,22 @@ async function runEngine(
       const source: EngineSource = { name: `${scheme}-${scale}`, file };
 
       for (const benchCase of cases) {
-        const rewritten = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12);
-        const rewrittenAnon = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12, 'removeProjections');
-        const rewrittenPushDown = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12, 'pushDownAssertions');
-        const rewrittenPullUp = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12, 'pullUpExtends');
+        const rewritten = await rewriteToSparql11(benchCase.mappers, benchCase.userQuery12);
+        const rewrittenAnon = await rewriteToSparql11(
+          benchCase.mappers,
+          benchCase.userQuery12,
+          'removeProjections',
+        );
+        const rewrittenPushDown = await rewriteToSparql11(
+          benchCase.mappers,
+          benchCase.userQuery12,
+          'pushDownAssertions',
+        );
+        const rewrittenPullUp = await rewriteToSparql11(
+          benchCase.mappers,
+          benchCase.userQuery12,
+          'pullUpExtends',
+        );
         const approaches: { approach: ResultRow['approach']; query: string }[] = [
           { approach: 'rewriting', query: rewritten },
           { approach: 'rewriting+removeProjections', query: rewrittenAnon },
