@@ -1,13 +1,31 @@
 # Apache Jena / ARQ: triple-term binding lost across a sub-`SELECT` join boundary
 
-## Status: fixed upstream (2026-09-02)
+## Status: fixed upstream (2026-09-02), verified in a nightly (2026-09-23)
 
 Fixed on Jena's `main` branch by commit
 [`e9f7445a`](https://github.com/apache/jena/commit/e9f7445a9585cc7877d0941a384fe30ef0dca2d2)
 ("GH-4174: Add `ExprTransform.transform(ExprTripleTerm)`; use in
 `ApplyTransformVisitor`"), landed 2026-08-29 — two days after this file was
-written. **Not yet in a release**; 6.2.0 (the version this file's repro was
-run against) still has the bug.
+written. **Still not in a release**: 6.2.0 remains the latest, and has the bug.
+
+Verified fixed in the `6.3.0-SNAPSHOT` nightly
+(`jena-fuseki-server-6.3.0-20260922.051646-31.jar`, from the ASF snapshot
+repository) against this benchmark's own queries rather than only the repro
+below: every one of the 10 `xs` cells where the plain `rewriting` pipeline
+returned a wrong answer on 6.2.0 returns the baseline's answer on the
+nightly — `reification` `A-Q1` 0→3, `A-Q2` 0→1, `B-Q1` 0→5, `B-Q2` 0→1,
+`F-Q1` 0→2, `F-Q4` 0→20004, `F-Q5` 0→3386, `singleton` `A-Q1` 0→3, `B-Q1`
+0→5, and `A-Q4` unchanged at 1 (its mismatch is the singleton baseline's,
+not ARQ's).
+
+One wrinkle worth knowing when re-running the repro below: its triple term
+has a **literal subject** (`?x` binds `"x1"`), which RDF 1.2 does not admit.
+On 6.2.0, Query A binds `?tt` to that illegal term and Query B drops it; on
+the nightly, both leave `?tt` unbound, which is the defensible reading — a
+`BIND` of a term no triple can hold binds nothing. Re-point the repro at an
+IRI subject (`<<( ?g :p :o )>>`) and 6.2.0 answers both queries correctly,
+so the shape below is not on its own enough to see the bug. What does expose
+it on 6.2.0 is this benchmark's rewrites, whose sub-`SELECT`s nest deeper.
 
 Root cause, per that commit: `TransformScopeRename` — the algebra optimizer
 pass that renames variables to avoid scope collisions when a sub-`SELECT` is
