@@ -250,183 +250,135 @@ listed here because every one of them can be misread as one.
 
 ## Results
 
-> **Superseded, being re-measured (2026-09-23).** Everything below was measured on Fuseki
-> **6.2.0**, whose ARQ triple-term bug emptied the plain `rewriting` pipeline's answers on
-> Jena — so every Jena `rewriting` figure here reports the bug rather than the rewriting, and
-> the cost medians are pulled down by those fast wrong answers. A full run on a fixed Jena
-> build is in progress; expect the reification cost to rise when it lands. The paired
-> comparisons between rewrite pipelines, and everything about Oxigraph and Comunica, are
-> unaffected.
-
 720 rows: 3 engines × 2 schemes × 2 scales (`xs` ≈ 300k quads, `s` ≈ 680k) × 12 queries ×
-5 approaches, 1 rep, 300 s budget. The Jena and Oxigraph rows were run on 2026-09-11/12, after
-`filterFalse` learned to collapse statically empty branches through sub-`SELECT`s; the
-Comunica rows were re-run on 2026-09-14 on Comunica 5.4.0 (see the History table). The 96
-rewritten queries are byte-for-byte identical between the two runs, and correctness is graded per
-engine, so the two sets of rows sit together safely. `results.json` holds them; `plot.mjs`
-regenerates the figures. 470 `ok`, 236 censored at the budget, 14 `error` — all Jena `F-Q3`
-responses over the 268MB cap. Comunica's four worker aborts on `reification/F-Q3` are gone.
+5 approaches, 1 rep, 300 s budget, all measured in one run on 2026-09-23/24 against
+**Jena `6.3.0-SNAPSHOT`** (the first build with ARQ's triple-term fix), **Oxigraph 0.5.9** and
+**Comunica 5.4.0**. `results.json` holds them; `plot.mjs` regenerates the figures.
+478 `ok`, 224 censored at the budget, 18 `error` — all Jena `F-Q3`, whose answer is 8,490,234
+rows and overruns the harness's 268MB response cap. The censoring is not spread evenly: 149 of
+the timeouts are Oxigraph's and 75 Comunica's, and Jena times out on nothing.
 
 Because so much is censored, **comparisons below are paired**: two approaches are compared
 only on the (engine, scheme, scale, query) cells where both produced a real measurement,
-and "rescued" counts the cells one finished and the other did not. Comparing raw medians
-across approaches would reward failure, since the slowest queries are the ones that drop out.
+and a "rescue" counts a cell where one finished and the other did not. A censored row is a
+lower bound, so averaging one in would flatter whichever approach fails more often.
 
-### The pipelines rank in order, and `pullUpExtends` strictly dominates
+### The pipelines rank in order, and every comparison is now unanimous
 
-| Comparison | paired cells | A faster | median A/B | A rescues | B rescues |
+| Comparison | cells | faster | median ratio | rescues | reverse rescues |
 |---|---|---|---|---|---|
-| `pullUpExtends` vs `pushDownAssertions` | 102 | **100** | **0.72** | **2** | 1 |
-| `pullUpExtends` vs `rewriting` | 60 | 51 | **0.29** | 44 | 4 |
-| `pushDownAssertions` vs `rewriting` | 60 | 46 | 0.42 | 43 | 4 |
-| `removeProjections` vs `rewriting` | 60 | 22 | **1.78** | 2 | 4 |
+| `pullUpExtends` vs `pushDownAssertions` | 105 | 98 | 0.70 | 6 | 0 |
+| `pullUpExtends` vs `rewriting` | 61 | **61** | 0.15 | 50 | 0 |
+| `pushDownAssertions` vs `rewriting` | 61 | **61** | 0.24 | 44 | 0 |
+| `removeProjections` vs `rewriting` | 61 | 49 | 0.92 | 2 | 0 |
 
-`pullUpExtends` wins 100 of 102 head-to-head cells against `pushDownAssertions`, is ~28%
-faster at the median, and finishes 2 queries the pushdown pipeline cannot (`reification/A-Q2`
-and `A-Q4` at `s` on Oxigraph). The one query only the pushdown pipeline finishes is
-`singleton/F-Q2` at `xs` on Oxigraph, in 277 s — noise at the edge of the budget, since an
-earlier run had it the other way round. It is the pipeline to use.
+Not one cell in the table goes the other way: no pipeline is ever rescued by the one below
+it. The pushdown is worth roughly a 4× speed-up over the plain rewriting and the pull-up
+another 1.4× on top, and between them they turn 50 queries that never finish into queries
+that do.
 
-**`removeProjections` on its own is a net regression** — about 1.8× *slower* than plain
-`rewriting` at the median, and faster on only 22 of 60 cells. It does finish 2 queries plain
-`rewriting` cannot (`reification/B-Q3` and `F-Q5` at `xs` on Comunica, both above 250 s); the 4
-queries plain `rewriting` finishes and it does not are Jena's `F-Q3` cells, where `rewriting`
-returns an empty and wrong answer quickly because of the ARQ bug. It earns its place only as the enabler that lets
-`pushDownAssertions` see through the nested sub-`SELECT`s; judged as a standalone
-optimization it is a pessimization. (Until Traqula 1.3.1 it was also the workaround that kept
-the pushdown's output parseable; see `runner.ts`.)
+`removeProjections` on its own is close to neutral — 0.92, helping in 49 of 61 cells. It is
+worth keeping as a rung because it is what the pushdown needs (a `FILTER` cannot be driven
+into a pattern hidden behind a sub-`SELECT`), not for what it does alone.
 
 ### What the rewriting can answer at all
 
-Queries answered within the budget, out of 48 per engine:
+Queries answered within the budget, of 48 per cell (12 queries × 2 schemes × 2 scales):
 
-| Engine | `materialized` | `rewriting` | `+removeProjections` | `+pushDownAssertions` | `+pullUpExtends` |
+| Engine | baseline | `rewriting` | `+removeProjections` | `+pushDownAssertions` | `+pullUpExtends` |
 |---|---|---|---|---|---|
-| Jena | 45 | 48* | 44 | 44 | 44 |
-| Oxigraph | 46 | **0** | **0** | 19 | **20** |
-| Comunica | 46 | 16 | 18 | 40 | **40** |
+| Jena | 46 | 44 | 44 | 44 | 44 |
+| Oxigraph | 46 | **0** | **0** | 20 | 25 |
+| Comunica | 46 | 17 | 19 | 41 | 42 |
 
-On Oxigraph the unoptimized rewriting answers *nothing* in 300 s; the pushdown pipelines
-take it to 20/48. On Comunica it goes 16 → 40. This is the practical case for the
-optimizations: without them the rewriting approach is not merely slow on two of the three
-engines, it is unusable. (*Jena's 48 is not a success — see the correctness section.)
+On Oxigraph the optimisation passes are not a speed-up, they are the difference between a
+usable approach and an unusable one: without them it answers **nothing at all** inside 300 s.
+Comunica goes from 17 to 42. Jena answers everything either way — its four `error` rows per
+pipeline are `F-Q3` overrunning the response cap, not the engine failing.
 
-### The honest cost: ~13× the hand-written query
+### The honest cost: ~20× the hand-written query, and it is a floor rather than a multiple
 
-Against the `materialized` baseline, `pullUpExtends` is **61× slower at the median** over the
-103 cells where both finish, and the baseline additionally answers 34 queries the rewriting
-cannot. That headline mixes two very different schemes, though:
+On the cells where the pull-up rewrite finished *and* returned the baseline's answer:
 
-| Scheme | paired cells | median `pullUpExtends` / `materialized` | baseline-only |
+| Scheme | cells | median cost |
+|---|---|---|
+| reification | 48 | **20.3×** |
+| singleton | 17 | 121.1× |
+
+Per engine on reification: Jena **5.8×** (20 cells), Comunica 39.4× (20), Oxigraph 619.9× (8).
+The singleton figure is inflated by baselines that answer a different, mostly empty question
+fast — see the correctness section.
+
+The more useful observation is that the multiple is not stable, because the *rewrite* is what
+is stable. Across the graded-correct cells:
+
+| Engine | baseline times | pull-up times | rank correlation |
 |---|---|---|---|
-| `reification` | 49 | **12.89×** | 16 |
-| `singleton` | 54 | 128.69× | 18 |
+| Jena | 0.01 – 287.4 s (×35,922) | 0.09 – 3.5 s (×40) | ρ = 0.32 |
+| Comunica | 0.03 – 8.3 s (×259) | 1.3 – 126.3 s (×98) | ρ = 0.41 |
+| Oxigraph | 0.02 – 0.5 s (×24) | 16.3 – 276.0 s (×17) | ρ = 0.37 |
 
-Most `singleton` baselines ask a different question than their star query — often one with no
-answer at all, which is cheap to establish (see the correctness section) — so the singleton
-ratio measures that, not the rewriting. `reification`, whose baselines are faithful, is the
-honest figure: about **13×** across the three engines (14× in the previous run). It varies a lot
-per engine: on Comunica 5.4.0 alone it is 33.5×, down from 37.8× on 5.3.0, because the upgrade
-sped up the rewritten queries as well as the hand-written ones. Rewriting buys you a SPARQL 1.2
-interface over RDF 1.1 data without touching the data; it does not buy you the performance of
-a query written against the storage layout. An order of magnitude is the price at these scales.
+The hand-written queries span four orders of magnitude; the rewrites of those same queries
+span one or two, and barely track them. A rewritten query costs what its own shape costs,
+close to independently of how hard the question was. So the approach is ruinous on a cheap
+query — Jena answers `reification/B-Q1` at `s` in 12 ms, where the pull-up rewrite of the
+same question takes 1.1 s (94×) and the plain rewriting 6.6 s (546×) — and competitive or
+better on an expensive one.
 
-### What the `filterFalse` change did
+It does win outright, on 6 cells, all Jena/reification, and not marginally:
 
-`pushDownAssertions` proves some `UNION` branches statically empty — in 20 of the 24 cases the
-"already a native triple term" branch. Until `filterFalse` could see past a
-sub-`SELECT`, such a branch survived into the query text as a `FILTER(FALSE)` over a full
-`?s ?p ?o` pattern. None does now, and the change reaches further than those 20 cases: all 48
-pushdown and pull-up rewrites got shorter (`singleton/B-Q2` under `pullUpExtends` went from 82
-lines to 43), while `rewriting` and `+removeProjections` are byte-for-byte unchanged. No answer
-changed on any cell that finished in both runs.
-
-- **Jena and Oxigraph:** no measurable effect. Statuses and answers are identical, and the
-  median time ratio per pipeline between the two runs is 0.90–1.03. The only status changes
-  are two Oxigraph pushdown queries trading places at the 300 s boundary.
-- **Comunica** (measured on 5.3.0, before the upgrade described next): that run was ~15% slower
-  across the board, hand-written baselines included, so its raw times are not comparable with the
-  run before it. Nothing in the harness changed,
-  and the only dependency change, traqula 1.2 → 1.3, was ruled out by an interleaved A/B on the
-  same queries. Normalized by each case's own baseline instead, `pushDownAssertions` and
-  `pullUpExtends` improved on `reification` (0.85 and 0.82 at `xs`, 0.97 and 0.87 at `s`),
-  against 1.05 and 1.10 for `rewriting` and `+removeProjections`, whose query text did not
-  change — which also bounds the noise of this measure. On `singleton` the same measure reads
-  1.14/0.94 at `xs` and 1.12/1.28 at `s`, but it divides by baselines that mostly answer a
-  different question, so it carries little weight. Coverage fell by two or three queries per
-  pipeline: seven of the nine queries that dropped out had finished within 35 s of the budget
-  before, and the other two run *faster* with the new rewrite when timed in isolation
-  (`reification/B-Q1` pushdown at `s`: 125 s → 120 s; `singleton/B-Q2` pull-up at `s`:
-  142 s → 121 s), so they are the slower run, not the rewrite.
-
-### Comunica 5.4.0
-
-Comunica 5.4.0 caps a join's cardinality estimate by the variables its inputs share, where 5.3.0
-multiplied the inputs' cardinalities (scaled only by a structural selectivity heuristic). The
-Comunica rows were re-run on it with nothing else changed, and no answer changed on any cell that
-finished on both versions.
-
-| Comunica, out of 240 cells | `ok` | censored | `error` |
+| | baseline | `+pullUpExtends` | rows |
 |---|---|---|---|
-| 5.3.0 | 138 | 98 | 4 |
-| 5.4.0 | **160** | 80 | **0** |
+| `F-Q4` xs | 287.4 s | 2.8 s (**104×**) | 20,004 |
+| `F-Q4` s | 243.7 s | 3.5 s (70×) | 20,004 |
+| `F-Q5` xs | 76.8 s | 1.4 s (55×) | 3,386 |
+| `F-Q5` s | 76.1 s | 2.4 s (32×) | 3,386 |
+| `A-Q4` xs | 0.3 s | 0.1 s (4×) | 1 |
+| `A-Q3` xs | 0.2 s | 0.1 s (2×) | 0 |
 
-22 queries now finish within the budget and none stopped finishing; the four `error`s were the
-`reification/F-Q3` worker aborts, which are now ordinary timeouts. Queries answered out of 48 per
-approach: `materialized` 44 → 46, `rewriting` 11 → 16, `+removeProjections` 11 → 18,
-`+pushDownAssertions` 35 → 40, `+pullUpExtends` 37 → 40.
+`F-Q4` and `F-Q5` are won by the *plain* rewriting too (26× and 12× at `xs`), so this is not
+the optimiser rescuing a bad rewrite — those two hand-written baselines are simply worse
+queries than what the unfolding produces.
 
-The hand-written baselines gained the most, because several of them had hit exactly the bad join
-order: `reification/F-Q2` at `s` went from 262 s to 8.1 s, and `A-Q4` and `A-Q3` at `xs` from 109 s
-and 81 s to 4.5 s and 3.8 s. The rewritten queries sped up too. On `reification` the median ratio
-(5.4.0 / 5.3.0, over cells finished on both) is 0.58 for `rewriting`, 0.52 for
-`+removeProjections`, 0.70 for `+pushDownAssertions` and 0.68 for `+pullUpExtends`, against 0.84
-for the baselines; on `singleton` all five sit at 0.83–0.96, largely within this host's ~15%
-run-to-run variation. The largest single gains are `singleton/B-Q3` at `xs` under `pullUpExtends`
-(149 s → 1.5 s) and `reification/B-Q1` at `s` under `pullUpExtends` (253 s → 13 s); the worst
-slowdown is 1.28× (`reification/F-Q4` at `xs` under `pushDownAssertions`, 110 s → 141 s).
+### Scaling
 
-Because the baselines themselves changed this much, the baseline-normalized comparison used for
-the `filterFalse` change above does not carry across versions; the ratios here compare raw
-times per cell.
+Median time multiplier from `xs` to `s`, which is ×2.6 the quads, on cells where both finished:
 
-### Correctness: 138 mismatches, none of them the rewriter
+| Approach | cells | × time |
+|---|---|---|
+| baseline | 69 | 1.11 |
+| `rewriting` | 25 | 2.13 |
+| `+removeProjections` | 26 | 2.26 |
+| `+pushDownAssertions` | 48 | 1.52 |
+| `+pullUpExtends` | 52 | 1.53 |
 
-Every `correct: false` row traces to a known defect in the corpus or an engine, with nothing
-left over. Some rows have two causes — a Jena ARQ row on a defective singleton baseline, say —
-and each is counted once, under the first cause in this order:
+The hand-written queries are nearly flat over this range, being index lookups against a
+constant. The plain rewriting grows faster than the data; the pushdown-based pipelines grow
+at about half that rate, so those passes improve the growth rate and not just the constant.
 
-| Cause | Rows |
+### Correctness: 134 mismatches, none of them the rewriter, and only two causes
+
+340 of the 720 rows carry a verdict (a row is ungraded when nothing finished to compare
+against, or when it *is* the reference). 134 disagree with the baseline, and they now reduce
+to two causes — the engine-defect category is gone, Jena's ARQ bug having been fixed:
+
+| Cause | rows |
 |---|---|
-| Graded against the fallback reference on Jena, where `rewriting` is the buggy one | 3 |
-| `F-Q1`/`F-Q2` baselines use `SELECT *`, so they also bind the structural node | 34 |
-| Jena's ARQ triple-term bug (affects `rewriting` and `+removeProjections`) | 33 |
-| Singleton baselines ask a different question than their star query | 68 |
+| Eight `singleton` baselines asking a different question | 116 |
+| `reification/F-Q1`: `SELECT *` over different variable sets | 18 |
 
-The last row was previously described as the singleton baselines using different sample
-constants. Checking every case by content shows that is only part of it: `B-Q2`, `F-Q1`,
-`F-Q4` and `F-Q5` use `umls:` IRIs (`meta:C0040300`, `sn:PART_OF`) that the data does not
-contain, so they match nothing; `A-Q2` and `A-Q3` ask about different concepts altogether;
-`A-Q4` omits the star query's `?source_inst rdf:type ?source_cl` pattern, counting 51,661
-where the answer is 0 at `xs` and 169 at `s`; and `A-Q1` projects
-`?st_s_inst ?st_p_inst ?st_o_inst`, binding the singleton property node where the star query
-binds the base predicate. Rewriting each of those eight baselines to ask what its star query
-asks, over the IRIs the data uses, makes it return exactly the `pullUpExtends` answer at both
-scales — 16 of 16, including `A-Q3`'s single row at `s`.
+`F-Q1` is not a wrong answer at all. Both sides return the same 2 rows, but the baseline is a
+`SELECT *` over the RDF 1.1 shape, so its `*` includes the reification node `?st` — a variable
+the RDF 1.2 query has no equivalent for, since the whole point of the view is that the
+statement node is not part of it. The solutions differ as *bindings* while agreeing as
+answers.
 
-The `SELECT *` row: `F-Q1`'s star query and its baseline both use `SELECT *`, but the
-reification baseline must name the statement node (`?st`) to walk the encoding, so it projects
-a variable the RDF 1.2 query has no counterpart for. Both return the same 2 solutions with
-identical `?o1`/`?source` bindings; the baseline rows just carry an extra `st=...`, and the
-multiset comparison — correctly — calls that a difference. Verified by diffing the actual
-rows. (Singleton `F-Q1` rows land here too by the counting order, though their baseline fails
-for the namespace reason above first.)
+The singleton cases are documented under "Known issues": corrected by hand, all 16 of them
+match the rewriting exactly.
 
-The fallback row is the reference biting on Jena: when the baseline itself fails (`F-Q4` at
-`s` times out), the reference falls back to `rewriting`, which on Jena returns 0 rows because
-of the ARQ bug, so the three pipelines that return the right 20,004 rows are marked wrong.
-Rare, but it is the one case where `correct` inverts, and it is why `referenceApproach` is
-recorded on every row.
+The strongest evidence that nothing here is the rewriter's: on Jena, all four pipelines now
+produce the **identical** set of 17 mismatching cells. A rewriting bug would show up in the
+pipelines that transform more, and it does not.
 
 ## History
 
@@ -446,7 +398,7 @@ figures from any results JSON. In summary:
 | 2026-09-11 | `filterFalse` collapses statically empty branches through sub-`SELECT`s, so no rewrite carries a dead `FILTER(FALSE)` branch any more; the 300 s run above re-run on top of it. |
 | 2026-09-14 | Traqula 1.3.1 fixes the generator's sub-`SELECT`-followed-by-`BIND` output (no benchmark query text changed). Comunica upgraded to 5.4.0 and its rows re-run: 22 more queries finish, and the `F-Q3` worker aborts became timeouts. |
 | 2026-09-23 | The library's pipeline API replaced by factories and an async `QueryRewriter`, and the harness ported onto it. With `generalizedRdfView: true` the rewrites are the measured ones: 72 of 96 byte-identical, the other 24 (`standard`) identical but for internal variable names. Re-run on that basis. |
-| 2026-09-23 | Jena moved to the `6.3.0-SNAPSHOT` nightly, the first build carrying the ARQ triple-term fix, verified on all 10 cells it affected. Everything re-measured on it, so Jena's plain `rewriting` column measures the rewriting rather than the bug. |
+| 2026-09-23 → 09-24 | Jena moved to the `6.3.0-SNAPSHOT` nightly, the first build carrying the ARQ triple-term fix, and all 720 rows re-measured in one run on it. 32 Jena answers went from a fast wrong empty result to the baseline's, which raised the reification cost from ~13× to 20.3× and steepened the whole ladder: `pullUpExtends` vs `rewriting` on Jena went 0.45 → 0.15, and `removeProjections`, which the bug had made look like a pessimisation at 2.36, came out at 0.90. Every remaining mismatch is a corpus defect, identical across all four pipelines. |
 
 ## Extending
 
