@@ -3,7 +3,7 @@ import type * as RDF from '@rdfjs/types';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import { Store } from 'n3';
 import { describe, it } from 'vitest';
-import { buildCases, listStarQueryFiles, PATTERNS } from './bench/config.js';
+import { buildCases, buildWorkloadCases, listStarQueryFiles, PATTERNS, WORKLOADS } from './bench/config.js';
 import { ComunicaEngine } from './bench/engines.js';
 import { rewriteToSparql11, runBenchmark } from './bench/runner.js';
 import type { BenchCase } from './bench/runner.js';
@@ -88,6 +88,24 @@ describe('benchmark harness', () => {
         await expect(rewriteToSparql11(benchCase.mappers, benchCase.userQuery12)).resolves.toBeTypeOf('string');
       }
     });
+  });
+
+  describe('workload config', () => {
+    // Only the cheapest pipeline: the plain one takes up to a minute per LUBM query, and what is checked
+    // here - that the views build a mapping and every query rewrites - does not depend on the pipeline.
+    for (const [ name, views, queries ] of <const>[[ 'lubm', 239, 13 ], [ 'oaei', 148, 65 ]]) {
+      it(`builds ${name} cases whose queries the rewriter accepts`, async({ expect }) => {
+        const cases = buildWorkloadCases(WORKLOADS[name]);
+        expect(cases).toHaveLength(queries);
+        expect(cases[0].mappers).toHaveLength(views);
+        for (const benchCase of cases) {
+          // The user query is the reference, run over the materialised views.
+          expect(benchCase.baselineQuery).toBe(benchCase.userQuery12);
+          await expect(rewriteToSparql11(benchCase.mappers, benchCase.userQuery12, 'pullUpExtends'))
+            .resolves.toBeTypeOf('string');
+        }
+      }, 120_000);
+    }
   });
 
   describe('end-to-end runner', () => {

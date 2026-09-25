@@ -1,9 +1,9 @@
 /**
- * @fileoverview Benchmark orchestration for the BKR reification benchmark.
+ * @fileoverview Benchmark orchestration for StarBench (the BKR reification benchmark) and the LUBM and
+ * OAEI Conference workloads.
  *
- * For every engine, reification scheme and dataset-size subset it measures five
- * ways of answering each SPARQL 1.2 benchmark query on the SAME materialized
- * RDF 1.1 data:
+ * For every engine, scheme and dataset scale it measures five ways of answering each
+ * benchmark query. On StarBench all five run on the SAME materialized RDF 1.1 data:
  *   - `rewriting`                  : the SPARQL 1.2 query rewritten to SPARQL 1.1
  *     with the standard pipeline (this library),
  *   - `rewriting+removeProjections`: the same, with the `removeProjections`
@@ -32,6 +32,14 @@
  * (see README.md, "Adding Jena / Fuseki"), and the reference stays the baseline because
  * the next such bug will not announce itself either.
  *
+ * The LUBM and OAEI workloads (`--schemes lubm,oaei`; see `config.ts`'s `WorkloadConfig`) have no
+ * hand-written query over their source data. There `materialized` is the original query run over the
+ * materialised views (`materializeViews.ts`), which is both the alternative a user has - compute the
+ * views ahead of time - and the reference every rewriting is graded against. Because that is a second
+ * dataset, a block runs all its references first and all its rewritings after, rather than switching
+ * datasets twice per case: Jena and Comunica reload on every switch. Rows also carry `correctAsSet`, since
+ * the rewriting runs without `preserveCardinality` and the materialised graph is a set.
+ *
  * Engines:
  *   - `comunica`: a long-lived worker process per dataset (loaded and indexed once) —
  *     Comunica's join state can outgrow any heap, and inline that takes the sweep with it.
@@ -44,16 +52,19 @@
  *
  * Usage:
  *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena]
- *     [--schemes reification,singleton] [--scales xs,s,m] [--reps 1]
+ *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,d100,eswc] [--reps 1]
  *     [--timeout 60000] [--out results.json]
+ * `--scales` keeps, of each scheme's own scales, those it lists; without it StarBench runs xs,s,m and
+ * the workloads run all of theirs.
  */
 import { createReadStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StreamParser } from 'n3';
-import { buildCases, PATTERNS } from './config.js';
+import { buildCases, buildWorkloadCases, PATTERNS, WORKLOADS, workloadSources } from './config.js';
 import { BenchTimeoutError, ComunicaEngine, JenaEngine, OxigraphEngine } from './engines.js';
 import type { BenchEngine, EngineSource, SelectResult } from './engines.js';
+import type { BenchCase, RewriteVariant } from './runner.js';
 import { rewriteToSparql11, sameSolutions } from './runner.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -62,8 +73,10 @@ const RESULTS_DIR = join(HERE, 'results');
 
 interface RunOptions {
   engines: string[];
-  schemes: (keyof typeof PATTERNS)[];
-  scales: string[];
+  /** StarBench reification schemes (`reification`, `singleton`) and workloads (`lubm`, `oaei`). */
+  schemes: string[];
+  /** Scales to run, of those each scheme has; `undefined` runs each scheme's defaults. */
+  scales: string[] | undefined;
   reps: number;
   timeoutMs: number;
   out: string;
@@ -89,6 +102,12 @@ interface ResultRow {
    * *is* the reference (see {@link ResultRow.referenceApproach}).
    */
   correct: boolean | null;
+  /**
+   * Whether the *distinct* rows match the reference's. Differs from {@link correct} only when an answer
+   * repeats a row the reference holds fewer times - which is expected while the rewriting runs without
+   * `preserveCardinality` and the reference is a set-valued graph (the materialised views of LUBM/OAEI).
+   */
+  correctAsSet: boolean | null;
   /** Which approach supplied the ground truth `correct` was judged against. */
   referenceApproach: ResultRow['approach'] | null;
   /** The per-query time budget this row was run under; a `timeout` row is censored at it. */
@@ -100,7 +119,7 @@ function parseArgs(argv: string[]): RunOptions {
   const opts: RunOptions = {
     engines: [ 'comunica', 'oxigraph' ],
     schemes: [ 'reification' ],
-    scales: [ 'xs', 's', 'm' ],
+    scales: undefined,
     reps: 1,
     timeoutMs: 60_000,
     out: join(RESULTS_DIR, 'results.json'),
@@ -253,10 +272,75 @@ function grade(caseRows: CaseRow[]): void {
   if (!reference) {
     return;
   }
+  const referenceSet = distinct(reference.result.rows);
   for (const { row, result } of caseRows) {
     row.referenceApproach = reference.row.approach;
-    row.correct = row === reference.row || !result ? null : sameSolutions(result, reference.result);
+    const judged = row !== reference.row && result !== undefined;
+    row.correct = judged ? sameSolutions(result, reference.result) : null;
+    row.correctAsSet = judged ? sameRowSet(distinct(result.rows), referenceSet) : null;
   }
+}
+
+function distinct(rows: string[]): Set<string> {
+  return new Set(rows);
+}
+
+function sameRowSet(a: Set<string>, b: Set<string>): boolean {
+  return a.size === b.size && [ ...a ].every(row => b.has(row));
+}
+
+/** StarBench's default scales, as before the other workloads were added. */
+const STARBENCH_SCALES = [ 'xs', 's', 'm' ];
+
+/** One dataset block of a scheme: the cases and the data they run over at one scale. */
+interface ScaleBlock {
+  scale: string;
+  /** The data the rewritings run over. */
+  source: EngineSource;
+  /** The data the `materialized` approach runs over: the source for StarBench, the materialised views otherwise. */
+  baselineSource: EngineSource;
+}
+
+/** The cases of a scheme, the dataset blocks to run them over, and whether its scales nest. */
+function schemePlan(scheme: string, scales: string[] | undefined): {
+  cases: BenchCase[];
+  blocks: ScaleBlock[];
+  nestedScales: boolean;
+} {
+  const workload = WORKLOADS[scheme];
+  if (workload) {
+    const blocks = Object.keys(workload.scales)
+      .filter(scale => !scales || scales.includes(scale))
+      .map((scale) => {
+        const { source, views } = workloadSources(workload, scale);
+        return { scale, source, baselineSource: views };
+      });
+    return { cases: buildWorkloadCases(workload), blocks, nestedScales: workload.nestedScales };
+  }
+  if (!(scheme in PATTERNS)) {
+    throw new Error(`Unknown scheme '${scheme}'`);
+  }
+  const blocks = (scales ?? STARBENCH_SCALES).map((scale) => {
+    const source = { name: `${scheme}-${scale}`, file: join(SUBSET_DIR, `${PATTERNS[scheme].name}-${scale}.ttl`) };
+    return { scale, source, baselineSource: source };
+  });
+  return { cases: buildCases(scheme), blocks, nestedScales: false };
+}
+
+/**
+ * The four rewrites of a case depend on neither engine nor scale, and on LUBM a single one takes up to a
+ * minute, so each is computed once per run.
+ */
+const rewrites = new Map<string, Promise<string>>();
+
+function rewrite(benchCase: BenchCase, variant: RewriteVariant): Promise<string> {
+  const key = `${benchCase.id}\n${variant}`;
+  let rewritten = rewrites.get(key);
+  if (!rewritten) {
+    rewritten = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12, variant);
+    rewrites.set(key, rewritten);
+  }
+  return rewritten;
 }
 
 async function runEngine(
@@ -267,10 +351,12 @@ async function runEngine(
   flush: () => void,
 ): Promise<void> {
   for (const scheme of opts.schemes) {
-    const cases = buildCases(scheme);
-    for (const scale of opts.scales) {
-      const file = join(SUBSET_DIR, `${PATTERNS[scheme].name}-${scale}.ttl`);
-      if (!existsSync(file)) {
+    const { cases, blocks, nestedScales } = schemePlan(scheme, opts.scales);
+    // Cells that timed out at an earlier scale of a nested workload: `caseId approach` -> that scale.
+    const timedOut = new Map<string, string>();
+    for (const { scale, source, baselineSource } of blocks) {
+      const file = source.file!;
+      if (!existsSync(file) || !existsSync(baselineSource.file!)) {
         process.stderr.write(`skip: ${file} (not generated)\n`);
         continue;
       }
@@ -288,72 +374,89 @@ async function runEngine(
         process.stderr.write(`  load failed: ${error instanceof Error ? error.message : String(error)}\n`);
         continue;
       }
-      const source: EngineSource = { name: `${scheme}-${scale}`, file };
 
+      interface Job {
+        benchCase: BenchCase;
+        approach: ResultRow['approach'];
+        query: string;
+        source: EngineSource;
+      }
+      const references: Job[] = [];
+      const rewritings: Job[] = [];
       for (const benchCase of cases) {
-        const rewritten = await rewriteToSparql11(benchCase.mappers, benchCase.userQuery12);
-        const rewrittenAnon = await rewriteToSparql11(
-          benchCase.mappers,
-          benchCase.userQuery12,
-          'removeProjections',
-        );
-        const rewrittenPushDown = await rewriteToSparql11(
-          benchCase.mappers,
-          benchCase.userQuery12,
-          'pushDownAssertions',
-        );
-        const rewrittenPullUp = await rewriteToSparql11(
-          benchCase.mappers,
-          benchCase.userQuery12,
-          'pullUpExtends',
-        );
-        const approaches: { approach: ResultRow['approach']; query: string }[] = [
-          { approach: 'rewriting', query: rewritten },
-          { approach: 'rewriting+removeProjections', query: rewrittenAnon },
-          { approach: 'rewriting+pushDownAssertions', query: rewrittenPushDown },
-          { approach: 'rewriting+pullUpExtends', query: rewrittenPullUp },
-        ];
         if (benchCase.baselineQuery !== undefined) {
-          // Run the baseline first so it is available as the reference for everything
-          // else, and so a case whose rewritings all time out still gets a ground truth.
-          approaches.unshift({ approach: 'materialized', query: benchCase.baselineQuery });
+          references.push({
+            benchCase,
+            approach: 'materialized',
+            query: benchCase.baselineQuery,
+            source: baselineSource,
+          });
         }
+        for (const [ approach, variant ] of <const>[
+          [ 'rewriting', 'standard' ],
+          [ 'rewriting+removeProjections', 'removeProjections' ],
+          [ 'rewriting+pushDownAssertions', 'pushDownAssertions' ],
+          [ 'rewriting+pullUpExtends', 'pullUpExtends' ],
+        ]) {
+          rewritings.push({ benchCase, approach, query: await rewrite(benchCase, variant), source });
+        }
+      }
+      // Where the reference runs on data of its own (the materialised views), every reference goes first
+      // and every rewriting after: alternating per case would switch datasets twice a case, and Jena and
+      // Comunica reload on every switch, so each query would run on a freshly started engine. Where it
+      // shares the rewritings' data (StarBench), each case's baseline still runs just before its rewritings.
+      const jobs = baselineSource.file === source.file ?
+        cases.flatMap(benchCase => [ ...references, ...rewritings ].filter(job => job.benchCase === benchCase)) :
+          [ ...references, ...rewritings ];
 
-        // Rows go in as they are measured (each one flushed, so a run killed halfway
-        // still leaves usable JSON) and are graded once the whole case is in — the
-        // reference is whichever of `materialized`/`rewriting` actually produced an
-        // answer, which is not known until both have run.
-        const caseRows: CaseRow[] = [];
-        for (const { approach, query } of approaches) {
-          const run = await timedRun(engine, query, source, opts.reps, opts.timeoutMs);
-          const row: ResultRow = {
-            engine: engineName,
-            scheme,
-            scale,
-            quads,
-            caseId: benchCase.id,
-            approach,
-            status: run.status,
-            medianMs: run.durations.length > 0 ? Math.round(median(run.durations)) : -1,
-            minMs: run.durations.length > 0 ? Math.round(Math.min(...run.durations)) : -1,
-            count: run.result?.count ?? -1,
-            correct: null,
-            referenceApproach: null,
-            timeoutMs: opts.timeoutMs,
-            error: run.error,
-          };
-          rows.push(row);
-          caseRows.push({ row, result: run.result });
-          process.stderr.write(
-              `  ${benchCase.id.padEnd(22)} ${approach.padEnd(30)} ${run.status.padEnd(7)} ` +
-              `${run.durations.length > 0 ? `${Math.round(median(run.durations))}ms` : '-'} ` +
-              `rows=${run.result?.count ?? '-'}\n`,
-          );
-          flush();
+      // Rows go in as they are measured (each one flushed, so a run killed halfway still leaves usable
+      // JSON) and are graded once the whole block is in — the reference is whichever of
+      // `materialized`/`rewriting` actually produced an answer, which is not known until both have run.
+      const caseRows = new Map<string, CaseRow[]>();
+      for (const { benchCase, approach, query, source: jobSource } of jobs) {
+        const cell = `${benchCase.id} ${approach}`;
+        // A nested scale's data contains the earlier one's, so a query that timed out there would here too.
+        const earlierTimeout = nestedScales ? timedOut.get(cell) : undefined;
+        const run = earlierTimeout === undefined ?
+          await timedRun(engine, query, jobSource, opts.reps, opts.timeoutMs) :
+            { status: <const> 'timeout', durations: [], error: `skipped: timed out at ${earlierTimeout}` };
+        if (run.status === 'timeout' && !timedOut.has(cell)) {
+          timedOut.set(cell, scale);
         }
-        grade(caseRows);
+        const result = 'result' in run ? run.result : undefined;
+        const row: ResultRow = {
+          engine: engineName,
+          scheme,
+          scale,
+          quads,
+          caseId: benchCase.id,
+          approach,
+          status: run.status,
+          medianMs: run.durations.length > 0 ? Math.round(median(run.durations)) : -1,
+          minMs: run.durations.length > 0 ? Math.round(Math.min(...run.durations)) : -1,
+          count: result?.count ?? -1,
+          correct: null,
+          correctAsSet: null,
+          referenceApproach: null,
+          timeoutMs: opts.timeoutMs,
+          error: run.error,
+        };
+        rows.push(row);
+        if (!caseRows.has(benchCase.id)) {
+          caseRows.set(benchCase.id, []);
+        }
+        caseRows.get(benchCase.id)!.push({ row, result });
+        process.stderr.write(
+            `  ${benchCase.id.padEnd(22)} ${approach.padEnd(30)} ${run.status.padEnd(7)} ` +
+            `${run.durations.length > 0 ? `${Math.round(median(run.durations))}ms` : '-'} ` +
+            `rows=${result?.count ?? '-'}\n`,
+        );
         flush();
       }
+      for (const graded of caseRows.values()) {
+        grade(graded);
+      }
+      flush();
     }
   }
 }

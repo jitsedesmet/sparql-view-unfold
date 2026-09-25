@@ -73,6 +73,7 @@
     "rdf-data-factory": "^2.0.2"
   },
   "devDependencies": {
+    "@comunica/query-sparql-hdt": "5.0.1",
     "@rdfjs/types": "^2.0.0",
     "@rubensworks/eslint-config": "^3.1.0",
     "@vitest/coverage-v8": "4.0.18",

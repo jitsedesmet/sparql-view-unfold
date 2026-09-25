@@ -3,6 +3,11 @@
 This directory benchmarks the query-rewriting approach of this library against the two
 alternatives a user actually has, across three SPARQL engines.
 
+It runs three workloads. **StarBench** (the BKR reification benchmark) is what most of this file is
+about: SPARQL 1.2 queries over RDF 1.1 data. **LUBM** and **OAEI Conference** are plain SPARQL 1.1
+workloads added next to it, one doing reasoning by rewriting and one translating between
+vocabularies. They are described in [LUBM and OAEI Conference](#lubm-and-oaei-conference).
+
 ## What it measures
 
 A SPARQL 1.2 user query (RDF 1.2 triple terms / `rdf:reifies`) against data that is
@@ -65,7 +70,10 @@ measurement. Three fields decide how to read it:
   the baseline itself failed. The baseline is plain SPARQL 1.1 over plain RDF 1.1 with no
   triple terms anywhere, which makes it the one query in the set that an engine's RDF 1.2
   support cannot get wrong. `null` means unknown — no reference could be computed, or the
-  row *is* the reference.
+  row *is* the reference. On LUBM and OAEI the reference is the original query over the
+  materialised views instead (see [How the reference is built](#how-the-reference-is-built)).
+- **`correctAsSet`** (LUBM and OAEI rows only) compares the *distinct* rows. It differs from
+  `correct` only when an answer repeats a row more often than the reference does.
 - **`quads`** is the size of the subset the row ran against, measured per file and shared
   by every engine; it is the x-axis of the scaling plot.
 
@@ -107,13 +115,15 @@ older bytecode and works with Java 11/17.
 |---|---|
 | `run.ts` | The orchestrator: for every engine × scheme × scale it runs the four pipelines and the baseline over the *same* subset, grades them against the reference answer, and writes the results JSON. Flushes after every row, so an interrupted run still leaves usable JSON. |
 | `runner.ts` | `rewriteToSparql11(mappers, query, variant)` — the core rewrite call, async as `QueryRewriter.rewriteQuery` is, where `variant` selects one of the four pipelines — plus `sameSolutions()` and a simpler single-engine `runBenchmark()`/`formatRecords()` used by `cli.ts`. |
-| `config.ts` | Maps each reification pattern (`reification` → `BKR-Reification.ttl`/`BKR-R_*.rq`, `singleton` → `BKR-Singleton.ttl`/`BKR-S_*.rq`) to its CONSTRUCT mappers, materialized dataset and hand-written baseline query, and builds cases from `queries/BKR-star_*.rq`. |
+| `config.ts` | Maps each reification pattern (`reification` → `BKR-Reification.ttl`/`BKR-R_*.rq`, `singleton` → `BKR-Singleton.ttl`/`BKR-S_*.rq`) to its CONSTRUCT mappers, materialized dataset and hand-written baseline query, and builds cases from `queries/BKR-star_*.rq`. Also lists the LUBM and OAEI workloads (`WORKLOADS`): their views, queries, and each scale's source and materialised-views files. |
 | `engines.ts` | `BenchEngine` interface + `ComunicaEngine` (a long-lived worker process per dataset, so the store is loaded and indexed once and the engine stays warm, while a query whose join state outgrows the heap costs one `error` row instead of the whole sweep; in-process for the in-memory stores the unit tests use), `OxigraphEngine` (one-shot child process, killed on timeout — Oxigraph's `Store.query` is synchronous), `JenaEngine` (manages its own long-lived `fuseki-server.jar` child process, restarted only when the dataset file changes) and `SparqlHttpEngine` (any *externally managed* SPARQL HTTP endpoint, used by `cli.ts`). |
 | `oxiOneShot.mjs` | Loads one Turtle file, runs one query with Oxigraph, prints canonicalized JSON. Run as a child process by `OxigraphEngine` so a hard wall-clock timeout can be enforced by killing it. |
-| `comunicaWorker.mjs` | A long-lived Comunica worker driven by `ComunicaEngine` over newline-delimited JSON: it loads and indexes the dataset once, then answers every query against it. The separate process is about memory, not cancellation — Comunica buffers join state that no cap on the output stream can bound, and a `FATAL ERROR: Reached heap limit` is not catchable, so an unbounded query has to be able to die without taking the run with it. Timeouts are handled inside the worker, so they cost the budget but not the loaded store. |
+| `comunicaWorker.mjs` | A long-lived Comunica worker driven by `ComunicaEngine` over newline-delimited JSON: it loads and indexes the dataset once, then answers every query against it. The separate process is about memory, not cancellation — Comunica buffers join state that no cap on the output stream can bound, and a `FATAL ERROR: Reached heap limit` is not catchable, so an unbounded query has to be able to die without taking the run with it. Timeouts are handled inside the worker, so they cost the budget but not the loaded store. Given an `.hdt` file (the LUBM and OAEI data), it queries through Comunica's HDT engine instead of loading a store. |
 | `makeSubset.mjs` | Streams a full multi-GB dataset once and writes four self-contained subsets (`xs`/`s`/`m`/`l`), each containing the full closure of every benchmark query's target entities plus a uniform random noise sample, so results are comparable across scales. The full datasets (13–17GB) cannot be loaded into an in-memory store, so this is what the real run uses. |
 | `plot.mjs` | Turns a results JSON into hand-rolled SVG figures (time-by-query, scaling, overhead, correctness) per scheme × engine. No dependencies. |
 | `cli.ts` | Ad-hoc single-pipeline runs against the **full** datasets or SPARQL endpoints you started yourself. No scale subsetting. |
+| `workloads/<name>/` | The LUBM and OAEI workloads: `prepare.sh` downloads or generates the data into a gitignored `data/`, and the committed `views.rq` and `queries/*.rq` are what the benchmark runs. `workloads/toNTriples.mjs` merges and skolemises the source files; `workloads/common.sh` holds the steps both scripts share. |
+| `materializeViews.ts` | Runs every view of a workload over its source data with Jena and writes the union, the graph the reference answers come from. Each view's result is cross-checked against Oxigraph's, and nothing is written unless the two agree. |
 
 Figures are **not committed** — they are regenerated from the results JSON with
 `plot.mjs` (`test/bench/results/figures/` is gitignored). The harness itself is validated
@@ -380,6 +390,217 @@ The strongest evidence that nothing here is the rewriter's: on Jena, all four pi
 produce the **identical** set of 17 mismatching cells. A rewriting bug would show up in the
 pipelines that transform more, and it does not.
 
+## LUBM and OAEI Conference
+
+Two workloads with no triple terms in them, run through the same harness, the same four
+pipelines and the same mapping options as StarBench (`generalizedRdfView: true`, and
+`preserveCardinality` off). They exercise what StarBench does not: many views for one target, and
+answers that only exist through the views.
+
+### LUBM: reasoning by rewriting
+
+The virtual graph is the LUBM data **plus everything the ontology entails from it**, so a query
+over the views answers as a query over the saturated graph would. `compileOntology.mjs` compiles
+the ontology into 239 non-recursive CONSTRUCT views over the asserted data. None reads another's
+output, so no recursion arises.
+
+- **One identity view**, `CONSTRUCT WHERE { ?s ?p ?o }`, carries the asserted data itself.
+- **Hierarchies, inverses, domains and ranges** come from `univ-benchQL.owl`, the OWL 2 QL version
+  of the ontology in [ontop/iswc2014-benchmark](https://github.com/ontop/iswc2014-benchmark). The
+  subsumptions between classes and properties are closed transitively once, and each class or
+  property gets one view per asserted class or property that implies it. For instance `ub:headOf`
+  yields `worksFor` and `memberOf`, and `ub:memberOf` also comes from `member` read backwards.
+- **The defined classes** (`Chair`, `Dean`, `Director`, `Employee`, `Student`,
+  `TeachingAssistant`) come from the original `univ-bench.owl`. The QL version keeps only half of
+  each definition, `Chair ⊑ ∃headOf.Department`, which derives nothing. Without the other half no
+  `Chair` would exist at all, since the generator never asserts one. Each definition becomes views
+  with a conjunctive body (`?x ub:headOf ?y . ?y a ub:Department`) for the class and all its
+  superclasses.
+
+The data comes from the UBA 1.7 generator with seed 0, at 1 and 10 universities: `u1` has 100,543
+triples and `u10` has 1,272,575. The materialised views hold 137,722 and 1,735,299 triples. Every
+generated university depends only on the seed and its index, so `u10` contains `u1`. The harness
+uses this: a query that timed out on `u1` is recorded as a timeout on `u10` without being run (its
+`error` says so). **All 13 queries return exactly the published LUBM(1) answer counts on the
+materialised views**, which shows the compiled views are complete for this query set.
+
+The queries are the standard ones as written in `Ontop/OntopQueries.txt` of that repository
+(Apache-2.0; the file is missing Q9's closing brace, which `queries/Q09.rq` restores).
+
+### OAEI Conference: several sources for one target vocabulary
+
+The [populated conference dataset](https://framagit.org/IRIT_UT2J/conference-dataset-population)
+(Thiéblin et al., Semantic Web 12, 2021) holds five conference ontologies with instance data, and
+CONSTRUCT queries generated from their reference alignments. Here the target is **ekaw**, fed by
+**cmt, confOf, conference and edas** together. The four shipped `<source>-ekaw.sparql` files give
+148 views, so one ekaw class or property can have up to one view per source: that is the `UNION`
+fan-out this workload is about. The queries are the 65 competency questions in their ekaw version.
+`workloads/oaei/views.rq` and `workloads/oaei/queries/` are copied from that repository (LGPL-2.1)
+by `prepare.sh`.
+
+The scales are `data_100` (`d100`, 1,368,540 triples, every instance shared across the ontologies)
+and `eswc` (123,170 triples, the real ESWC 2018 data, anonymised). Their materialised views hold
+468,139 and 36,664 triples. Instance IRIs differ per ontology, so the reference is the materialised
+views and never ekaw's own data.
+
+### How the reference is built
+
+Neither workload has a query written against its source data, which is what StarBench grades
+against. Here the reference is the **original query over the materialised views**:
+`materializeViews.ts` runs every view over the source data with Jena, checks each view's triple
+count against Oxigraph's, and writes the union. This is also what the `materialized` approach
+measures, so for these workloads it means "compute the views ahead of time and query the result".
+That is a genuine alternative to rewriting, but a different comparison from StarBench's
+"hand-written query over the same data".
+
+A rewritten query can repeat a row that the materialised graph, being a set, holds once. This happens
+because the rewriting runs without `preserveCardinality`: a LUBM student who is a `GraduateStudent`
+and also takes a course is a `Student` twice. So rows carry `correctAsSet` next to `correct`. Where
+`correct` is false and `correctAsSet` is true, the mismatch is duplicates only, and that is expected
+in this configuration.
+
+All source data is skolemised before use (`toNTriples.mjs`), because the rewriter does not allow
+blank nodes in its source. Comunica reads HDT copies of the data rather than loading it into memory.
+StarBench's Turtle stays in-memory, since HDT cannot hold triple terms, so Comunica's times are
+comparable within a workload but not across workloads.
+
+### Left out, and why
+
+- **LUBM Q11.** It needs `subOrganizationOf` to be transitive, and a transitive closure is
+  recursive, which a non-recursive view cannot express.
+- **Eight "there is some" axioms of the LUBM ontology**, such as `Student ⊑ ∃takesCourse.Course`.
+  They assert that an unnamed individual exists, and a view cannot produce one without inventing a
+  node for it. None of the 13 queries needs one.
+- **One OAEI view** (`edas-ekaw` #30, `?s ekaw:paperInVolume _:o2`). A mapping head admits no blank
+  node, and with skolemised data there is nothing for one to stand for.
+- **Nothing else from OAEI had to go.** The dataset's alignments include transitive correspondences
+  (inexpressible without recursion) and EDOAL `not` (which becomes a `MINUS`), but none of them are
+  among the views into ekaw. The one `MINUS` here is in a query (`external_reviewer`).
+- **Not yet run:** WD-AMC (Wikidata in three metadata encodings), the BKR n-ary and qualifier
+  encodings that come with it, and the view setups of Le et al. (WWW 2011).
+
+### Running them
+
+```bash
+export JENA_FUSEKI_JAR=/path/to/fuseki-server.jar   # the 6.3.0 build, as above
+export RDF2HDT=/path/to/hdt-cpp/bin/rdf2hdt
+test/bench/workloads/lubm/prepare.sh                 # ~700 MB in workloads/lubm/data
+test/bench/workloads/oaei/prepare.sh                 # ~350 MB in workloads/oaei/data
+NODE_OPTIONS=--max-old-space-size=12000 npx tsx test/bench/run.ts \
+  --engines jena,oxigraph,comunica --schemes lubm,oaei --reps 1 --timeout 60000 \
+  --out test/bench/results/workloads.json
+```
+
+### Results
+
+2,340 rows (LUBM 390, OAEI 1,950), 1 rep, 60 s budget, measured in one run on 2026-09-25 against
+Jena `6.3.0-SNAPSHOT`, Oxigraph 0.5.9 and Comunica 5.4.0 (over HDT, through
+`@comunica/query-sparql-hdt` 5.0.1). They are appended to `results.json`, and StarBench's 720 rows
+are untouched.
+
+| | ok | timeout | error |
+|---|---|---|---|
+| LUBM | 281 | 96 (29 of them not run: they timed out on `u1`) | 13 |
+| OAEI | 1,773 | 177 | 0 |
+
+Eleven errors are Oxigraph's WebAssembly build panicking (`RuntimeError: unreachable`). Eight are on
+the huge `removeProjections` rewrites, and three are on LUBM Q07 and Q09 at `u10`, where evaluation
+rather than the query text is what grows. Two are Jena running out of heap, one while parsing the
+164 k-character `removeProjections` rewrite of Q03 and one while evaluating Q07's `pullUpExtends`
+rewrite. Fuseki ran with its default heap.
+
+Comparisons are paired and count rescues, as for StarBench above.
+
+#### No wrong answers
+
+Of 1,586 graded rows, **none differs from the reference as a set of rows**. All 153 LUBM rows
+that fail the multiset comparison are duplicates only (11 of the 13 queries, on every engine),
+which is what running without `preserveCardinality` against a set-valued reference predicts. The
+OAEI answers match exactly, since every competency question is `SELECT DISTINCT`.
+
+This proves less for OAEI than the count suggests. The reference is empty for 23 of the 65 queries on
+`d100` and 31 on `eswc`, because the sources either lack those facts or have no view producing them.
+There, the check shows only that the rewriting finds nothing too. That includes
+`early_registration`, whose rewrite deserves a caveat of its own (below).
+
+#### The ladder has StarBench's shape: the pushdown carries it
+
+| | LUBM: cells | faster | median | rescues | OAEI: cells | faster | median | rescues |
+|---|---|---|---|---|---|---|---|---|
+| `removeProjections` vs `rewriting` | 36 | 20 | 0.97 | 1–10 | 299 | 230 | 0.95 | 16–1 |
+| `pushDownAssertions` vs `removeProjections` | 37 | 37 | 0.06 | 22–0 | 315 | 315 | 0.02 | 68–0 |
+| `pullUpExtends` vs `pushDownAssertions` | 59 | 55 | 0.81 | 2–0 | 383 | 283 | 0.80 | 2–0 |
+| `pullUpExtends` vs `rewriting` | 46 | 45 | 0.06 | 15–0 | 300 | 297 | 0.01 | 85–0 |
+
+- **`pushDownAssertions` is where the gain is.** It is 16–50× faster than the step before, it is faster
+  in every one of the 352 paired cells, and it rescues 90 cells without losing one. It is also what
+  makes the query small: LUBM Q09 goes from 488,628 characters (1,428 `UNION`s, 1,758 triple
+  patterns) to 13,900, and `pullUpExtends` takes it to 7,610 (34 `UNION`s, 52 patterns).
+- **`removeProjections` alone does nothing for speed**, and on LUBM it loses 10 cells the plain
+  rewriting finishes. Flattening a query that size into a single group is behind most of those losses:
+  it crashes Oxigraph and exhausts Jena's parser.
+
+Queries answered, of 13 (LUBM) and 65 (OAEI):
+
+| engine / scale | materialised views | `rewriting` | `+removeProjections` | `+pushDownAssertions` | `+pullUpExtends` |
+|---|---|---|---|---|---|
+| Jena / LUBM `u1` · `u10` | 13 · 13 | 8 · 7 | 8 · 8 | 9 · 8 | 10 · 9 |
+| Oxigraph / LUBM `u1` · `u10` | 13 · 13 | 13 · 11 | 11 · 3 | 13 · 12 | 13 · 12 |
+| Comunica / LUBM `u1` · `u10` | 13 · 13 | 7 · 0 | 7 · 0 | 12 · 5 | 12 · 5 |
+| Jena / OAEI `eswc` · `d100` | 65 · 65 | 63 · 63 | 63 · 62 | 65 · 64 | 65 · 65 |
+| Oxigraph / OAEI `eswc` · `d100` | 65 · 65 | 64 · 33 | 64 · 33 | 65 · 61 | 65 · 61 |
+| Comunica / OAEI `eswc` · `d100` | 65 · 65 | 63 · 14 | 63 · 30 | 65 · 63 | 65 · 64 |
+
+#### Against the materialised views: vocabulary translation at parity, reasoning at a cost
+
+The `materialized` column answers the same question with the views already computed. Measured
+against it:
+
+- **OAEI: 18 of the 65 queries are rewritten into queries that are empty by construction.** No view
+  produces what they ask for (a conference's location, a paper's title), and `pushDownAssertions`
+  proves it without touching the data. `pullUpExtends` answers them in a median of 4 ms (at most
+  17), which is faster than the materialised views (9 ms). The plain rewriting needs a median of 1.9 s
+  and times out on 30 of the 108 cells. The reference agrees that all 18 are empty.
+- **OAEI, the other 47:** `pullUpExtends` takes a median of **1.37×** the materialised query and is
+  faster in 63 of 277 cells. By engine: Jena 1.06 (`d100`) and 0.75 (`eswc`), Oxigraph 1.18 and
+  1.29, Comunica 3.33 and 3.00. From `eswc` to `d100` (11× the data) both grow alike: the
+  materialised query ×1.9, `pullUpExtends` ×3.3, the plain rewriting ×9.6.
+- **LUBM:** `pullUpExtends` takes a median of **5.9×** the materialised query (n = 61, faster in 7), and
+  17 cells finish only on the materialised views. It also scales worse: from `u1` to `u10` (12.7×
+  the data) the materialised query grows ×2.4 and `pullUpExtends` ×8.9. On Jena the median goes from
+  4.9× at `u1` to 55× at `u10`.
+
+The difference is fan-out. An OAEI term has at most one view per source, so a pattern becomes a
+`UNION` of a handful of branches. A LUBM class like `Person` or `Student` has dozens of ways to be
+derived, and the entailed facts are exactly what the query asks for.
+
+#### Where the optimisations do not help, and why
+
+- **Joins on `BIND`-computed variables across `UNION` groups.** After every pass, each query pattern
+  is still a `UNION` with one branch per view, and each branch binds the shared variable through a
+  `BIND` (`?v_7 cmt:writePaper ?v_8 . BIND(?v_7 AS ?v_6)`). Joining such groups gives an engine no
+  index to look the other side up in, and none of the three engines distributes the join over the
+  branches. Examples:
+  - **LUBM Q09** (student, advisor, course: three typed variables joined in a triangle) fails at
+    `u10` on every pipeline on every engine, by timeout or an Oxigraph panic, while the materialised
+    query takes 0.7–44 s.
+  - **Jena answers none of LUBM Q02, Q07 and Q09** on any pipeline at either scale.
+  - **OAEI `is_author_of_paper`** on Jena `d100`: `pullUpExtends` takes 46 s, *slower* than the
+    plain rewriting's 29 s, against 0.5 s on the materialised views.
+- **Identical `UNION` branches are not merged.** Where one view reaches a source predicate through a
+  `UNION` and another reaches it directly, both branches survive. `is_author_of_paper`'s rewrite
+  reads `cmt:writePaper`, `confOf:writes` and `edas:hasRelatedPaper` twice each.
+- **The unoptimised rewrites are too big for the engines.** Without the pushdown, a LUBM rewrite
+  has up to 575 k characters and takes up to a minute just to rewrite (Q02 and Q09). That is behind
+  nine of this run's thirteen errors.
+- **`EXISTS` inside a `BIND` is rewritten into a correlated `BIND`** (OAEI `early_registration`). The
+  pattern inside the `EXISTS` ends in `BIND(?v_0 AS ?uq_s)` while `?uq_s` is already bound outside
+  it, which SPARQL's substitution semantics leave undefined. The engines accept it, but the
+  reference is empty at both scales, so this benchmark cannot say whether the answer would be
+  right. Treat it as unverified.
+- **Comunica stays at ~3× the materialised views on OAEI** even when the other two engines are at
+  parity: it pays more per `UNION` branch than they do.
+
 ## History
 
 Earlier runs and their write-ups live in git history rather than in this file; the
@@ -399,6 +620,7 @@ figures from any results JSON. In summary:
 | 2026-09-14 | Traqula 1.3.1 fixes the generator's sub-`SELECT`-followed-by-`BIND` output (no benchmark query text changed). Comunica upgraded to 5.4.0 and its rows re-run: 22 more queries finish, and the `F-Q3` worker aborts became timeouts. |
 | 2026-09-23 | The library's pipeline API replaced by factories and an async `QueryRewriter`, and the harness ported onto it. With `generalizedRdfView: true` the rewrites are the measured ones: 72 of 96 byte-identical, the other 24 (`standard`) identical but for internal variable names. Re-run on that basis. |
 | 2026-09-23 → 09-24 | Jena moved to the `6.3.0-SNAPSHOT` nightly, the first build carrying the ARQ triple-term fix, and all 720 rows re-measured in one run on it. 32 Jena answers went from a fast wrong empty result to the baseline's, which raised the reification cost from ~13× to 20.3× and steepened the whole ladder: `pullUpExtends` vs `rewriting` on Jena went 0.45 → 0.15, and `removeProjections`, which the bug had made look like a pessimisation at 2.36, came out at 0.90. Every remaining mismatch is a corpus defect, identical across all four pipelines. |
+| 2026-09-24 → 09-25 | LUBM (ontology compiled into 239 views, 1 and 10 universities) and OAEI Conference (148 views from four sources into ekaw, `data_100` and `eswc`) added as workloads, graded against the original query over the materialised views; Comunica reads their data as HDT. 60 s budget. |
 
 ## Extending
 

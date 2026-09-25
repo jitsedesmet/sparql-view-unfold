@@ -1,7 +1,8 @@
 /**
  * @fileoverview Turns the benchmark results JSON into a collection of SVG figures.
  *
- * Produces, per reification scheme × engine, comparing five approaches — the
+ * Produces, per scheme (a StarBench reification scheme, or the LUBM / OAEI workload) × engine,
+ * comparing five approaches — the
  * standard rewriting, the same rewriting with {@link removeProjections} applied
  * (anonymizing hidden sub-`SELECT` variables and flattening the nested projections
  * away), the same rewriting with {@link pushDownAssertions} applied ("assertion
@@ -9,12 +10,13 @@
  * patterns that use them instead of matching generically and filtering afterwards),
  * the pushdown pipeline plus {@link pullUpExtends} applied twice (floats the `BIND`s
  * the pushdown leaves at every leaf back up to where they cost less, or drops them),
- * and the hand-written materialized baseline query:
+ * and the `materialized` approach (StarBench: the hand-written baseline query over the same data;
+ * LUBM / OAEI: the original query over the materialised views):
  *   - time-by-query bar chart at the largest scale with data,
  *   - a scaling line chart (median time vs dataset size) per approach,
  *   - a rewriting-overhead bar chart (each rewriting variant / materialized ratio), and
  *   - a correctness heat-strip per checkable approach (does it agree with the case's
- *     reference answer — the hand-written `materialized` baseline?).
+ *     reference answer — the `materialized` approach's?).
  *
  * **Censoring.** A query that hits the time budget has no measurement, only a lower
  * bound: it took *at least* `timeoutMs`. Dropping those rows, as this script used to,
@@ -104,7 +106,7 @@ function legend(x, y, items) {
 
 const schemes = [ ...new Set(rows.map(r => r.scheme)) ];
 const engines = [ ...new Set(rows.map(r => r.engine)) ];
-const scaleOrder = [ 'xs', 's', 'm', 'l', 'xl' ];
+const scaleOrder = [ 'xs', 's', 'm', 'l', 'xl', 'u1', 'u10', 'eswc', 'd100' ];
 const sortScales = arr => arr.sort((a, b) => scaleOrder.indexOf(a) - scaleOrder.indexOf(b));
 
 /**
@@ -340,7 +342,8 @@ function overhead(scheme, engine) {
 
 /**
  * Correctness heat-strip: for every (query, scale), does `approach` agree with the
- * case's reference answer? The reference is the hand-written `materialized` baseline
+ * case's reference answer? An amber `≈` marks the same rows with different multiplicities (see
+ * `correctAsSet`). The reference is the hand-written `materialized` baseline
  * (`referenceApproach` on each row records which was actually used), so this reads as
  * "does this pipeline reproduce the answer a human wrote directly against the RDF 1.1
  * data?" — the row that *is* the reference has nothing to compare against and renders
@@ -382,6 +385,12 @@ function correctness(scheme, engine, approach) {
         } else if (rec.correct === null) {
           fill = '#7f7f7f';
           mark = '?';
+        } else if (!rec.correct && rec.correctAsSet) {
+          // The same rows as the reference, some repeated more often: expected where the rewriting runs
+          // without `preserveCardinality` against a set-valued reference (LUBM/OAEI), so kept apart from a
+          // wrong answer.
+          fill = '#e6a817';
+          mark = '≈';
         } else {
           fill = rec.correct ? '#2ca02c' : '#d62728';
           mark = rec.correct ? '✓' : '✗';
@@ -390,7 +399,7 @@ function correctness(scheme, engine, approach) {
       const x = padL + j * cell;
       const y = padT + i * cell;
       body += `<rect x="${x}" y="${y}" width="${cell - 2}" height="${cell - 2}" fill="${fill}">` +
-        `<title>${esc(caseId)} @ ${scale}: ${rec ? (rec.error ?? `correct=${rec.correct}, rows=${rec.count}`) : 'n/a'}</title></rect>` +
+        `<title>${esc(caseId)} @ ${scale}: ${rec ? (rec.error ?? `correct=${rec.correct}${rec.correctAsSet === undefined ? '' : `, correctAsSet=${rec.correctAsSet}`}, rows=${rec.count}`) : 'n/a'}</title></rect>` +
         `<text x="${x + cell / 2 - 1}" y="${y + cell / 2 + 3}" text-anchor="middle" fill="white">${mark}</text>`;
     }
   }

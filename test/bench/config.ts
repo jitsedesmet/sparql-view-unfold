@@ -1,9 +1,11 @@
 /**
- * @fileoverview Benchmark configuration for the BKR reification benchmark.
+ * @fileoverview Benchmark configuration: StarBench (the BKR reification benchmark) and the workloads added
+ * next to it, LUBM and OAEI Conference.
  *
- * This wires together, for each RDF reification pattern:
+ * For StarBench this wires together, for each RDF reification pattern:
  *  - the CONSTRUCT mappers that expose the RDF 1.1 data as an RDF 1.2 view, and
  *  - the materialized RDF 1.1 dataset produced by `data/run-conversion.sh`.
+ * For the other workloads, see {@link WorkloadConfig}.
  *
  * The SPARQL 1.2 user queries come from `queries/BKR-star_*.rq` and are fed to the
  * rewriter verbatim: the parser desugars their `<< s p o >>` reifier syntax into the
@@ -18,6 +20,7 @@ import {
   bkrReificationConstruct,
   singletonPropertyConstruct,
 } from '../queryConsts.js';
+import type { EngineSource } from './engines.js';
 import type { BenchCase } from './runner.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -117,6 +120,91 @@ export function buildCases(
       materialized: { name: pattern.dataFile, file },
     };
   });
+}
+
+/** How views files separate one CONSTRUCT from the next (see `workloads/*\/views.rq`). */
+const VIEW_SEPARATOR = /\n# ----\n/u;
+
+/** Reads a workload's views file into one CONSTRUCT string per view. */
+export function loadViews(file: string): string[] {
+  return readFileSync(file, 'utf8').split(VIEW_SEPARATOR).map(view => view.trim()).filter(Boolean);
+}
+
+const WORKLOADS_DIR = join(HERE, 'workloads');
+
+/**
+ * A workload with no hand-written query over its source data: LUBM and OAEI Conference. Its reference is
+ * the original query run over the **materialised views** (`materializeViews.ts`), and that is what its
+ * `materialized` approach measures - the query against a graph with every view already computed.
+ */
+export interface WorkloadConfig {
+  name: string;
+  /** Views, as written by the workload's generator script. */
+  viewsFile: string;
+  /** One SELECT per `.rq` file. */
+  queryDir: string;
+  /**
+   * Scale name -> file stem under the workload's `data/` directory, in the order to run them. Each stem
+   * has `<stem>.nt` (skolemised source), `<stem>.views.nt` (materialised views) and `.hdt` copies of both.
+   */
+  scales: Record<string, string>;
+  /**
+   * Whether every scale's data contains the previous one's, so that a query timing out at one scale
+   * would time out at the next as well and need not be run there. True for LUBM, whose generator makes
+   * the same University0 whatever the number of universities.
+   */
+  nestedScales: boolean;
+}
+
+export const WORKLOADS: Record<string, WorkloadConfig> = {
+  lubm: {
+    name: 'lubm',
+    viewsFile: join(WORKLOADS_DIR, 'lubm', 'views.rq'),
+    queryDir: join(WORKLOADS_DIR, 'lubm', 'queries'),
+    scales: { u1: 'lubm-u1', u10: 'lubm-u10' },
+    nestedScales: true,
+  },
+  oaei: {
+    name: 'oaei',
+    viewsFile: join(WORKLOADS_DIR, 'oaei', 'views.rq'),
+    queryDir: join(WORKLOADS_DIR, 'oaei', 'queries'),
+    scales: { d100: 'oaei-100', eswc: 'oaei-eswc' },
+    nestedScales: false,
+  },
+};
+
+/** The source and materialised-views datasets of one workload scale. */
+export function workloadSources(workload: WorkloadConfig, scale: string): {
+  source: EngineSource;
+  views: EngineSource;
+} {
+  const stem = join(WORKLOADS_DIR, workload.name, 'data', workload.scales[scale]);
+  return {
+    source: { name: `${workload.name}-${scale}`, file: `${stem}.nt`, hdtFile: `${stem}.hdt` },
+    views: { name: `${workload.name}-${scale}-views`, file: `${stem}.views.nt`, hdtFile: `${stem}.views.hdt` },
+  };
+}
+
+/**
+ * Builds a workload's cases. The user query doubles as the `baselineQuery`: run over the materialised
+ * views rather than the source, it is the reference every rewriting is graded against.
+ */
+export function buildWorkloadCases(workload: WorkloadConfig): BenchCase[] {
+  const mappers = loadViews(workload.viewsFile);
+  return readdirSync(workload.queryDir)
+    .filter(name => name.endsWith('.rq'))
+    .sort()
+    .map((fileName) => {
+      const query = readFileSync(join(workload.queryDir, fileName), 'utf8');
+      return {
+        id: `${workload.name}/${fileName.replace(/\.rq$/u, '')}`,
+        pattern: workload.name,
+        mappers,
+        userQuery12: query,
+        baselineQuery: query,
+        materialized: { name: workload.name },
+      };
+    });
 }
 
 export { DATA_DIR, QUERY_DIR };

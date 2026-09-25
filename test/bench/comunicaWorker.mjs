@@ -27,11 +27,18 @@
  * handled in here, by cancelling the stream, so a slow query costs the run its budget but
  * not its warm store.
  *
- * Usage:  node comunicaWorker.mjs <dataset.ttl>
+ * **HDT.** A `.hdt` dataset is queried through Comunica's HDT engine instead, without loading anything
+ * into memory. The LUBM and OAEI workloads use it: their data is plain RDF 1.1, which HDT can hold, and
+ * it keeps Comunica's footprint independent of the dataset. StarBench cannot - HDT has no triple terms -
+ * so its Turtle subsets stay in the in-memory store. Comunica's timings are therefore comparable within a
+ * workload, not across StarBench and the others.
+ *
+ * Usage:  node comunicaWorker.mjs <dataset.(ttl|nt|hdt)>
  */
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { QueryEngine } from '@comunica/query-sparql-file';
+import { QueryEngine as HdtQueryEngine } from '@comunica/query-sparql-hdt';
 import { StreamParser, Store } from 'n3';
 
 const file = process.argv[2];
@@ -67,9 +74,9 @@ function canonical(binding) {
 /** A sentinel distinguishing "we cancelled it" from a genuine evaluation error. */
 const TIMED_OUT = Symbol('timed out');
 
-async function runQuery(engine, store, query, timeoutMs) {
+async function runQuery(engine, source, query, timeoutMs) {
   const start = performance.now();
-  const bindingsStream = await engine.queryBindings(query, { sources: [ store ]});
+  const bindingsStream = await engine.queryBindings(query, { sources: [ source ]});
   let timer;
   try {
     const rows = await new Promise((resolve, reject) => {
@@ -98,9 +105,10 @@ async function runQuery(engine, store, query, timeoutMs) {
   }
 }
 
-const store = await loadStore();
-const engine = new QueryEngine();
-process.stdout.write(`${JSON.stringify({ status: 'ready', quads: store.size })}\n`);
+const hdt = file.endsWith('.hdt');
+const source = hdt ? { type: 'hdt', value: file } : await loadStore();
+const engine = hdt ? new HdtQueryEngine() : new QueryEngine();
+process.stdout.write(`${JSON.stringify({ status: 'ready', quads: hdt ? null : source.size })}\n`);
 
 // Queries are answered strictly in order: `readline` keeps emitting lines while an earlier
 // one is still being awaited, so without this chain two queries would evaluate at once and
@@ -113,7 +121,7 @@ input.on('line', (line) => {
   }
   queue = queue.then(async() => {
     const { query, timeoutMs } = JSON.parse(line);
-    const response = await runQuery(engine, store, query, timeoutMs ?? 0);
+    const response = await runQuery(engine, source, query, timeoutMs ?? 0);
     process.stdout.write(`${JSON.stringify(response)}\n`);
   });
 });

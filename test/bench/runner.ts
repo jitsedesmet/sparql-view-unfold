@@ -217,8 +217,8 @@ export async function rewriteToSparql11(
  * not a bug in this library: per the SPARQL grammar notes
  * (https://www.w3.org/TR/sparql12-query/#sparqlGrammar), "Keywords are matched in a
  * case-insensitive manner with the exception of the keyword `a`" — so the
- * `xsd:boolean` shorthand our generator emits (`FILTER(FALSE)`/`FILTER(TRUE)`,
- * uppercase) is spec-compliant. Oxigraph's parser nonetheless rejects it outright
+ * `xsd:boolean` shorthand our generator emits (`TRUE`/`FALSE`, uppercase) is
+ * spec-compliant. Oxigraph's parser nonetheless rejects it outright
  * (`error at N:M: expected ENCODE_FOR_URI` — a generic fallback message from deep in
  * its expression grammar) while accepting lowercase `false`/`true`; a direct repro
  * against the installed WASM build confirms it (`FILTER(TRUE)`/`FILTER(True)` both
@@ -227,19 +227,23 @@ export async function rewriteToSparql11(
  * helper — so the published build appears to disagree with its own grammar source,
  * not just with the spec. Comunica's parser is lenient and never surfaced this.
  *
- * This mattered for this benchmark while `pushDownAssertions` proved 10/12 queries'
- * "already a native quad" `UNION` branch statically empty and the `FILTER(FALSE)` it
- * materialized survived into the query text. Now that `transformFilterFalse` collapses
- * such branches through sub-`SELECT`s, none of the benchmark rewrites contains a
- * boolean-literal `FILTER`; this stays as a guard for queries that still would.
+ * On StarBench it mattered while `pushDownAssertions` left the `UNION` branches it proved
+ * statically empty behind as `FILTER(FALSE)`; `filterFalse` now collapses those, and no
+ * StarBench rewrite contains a boolean literal any more. The OAEI query
+ * `early_registration` does, as an argument of `IF` rather than a `FILTER`, which is why
+ * this covers every bare `TRUE`/`FALSE` and not just the `FILTER` shape it started with.
  *
- * A narrow text-level fix scoped to exactly the shape the generator produces
- * (`FILTER ( TRUE|FALSE )`), applied only to the query text sent to engines here —
- * the generator itself is left alone, since its output is correct.
+ * Applied only to the query text sent to engines here, and only outside string literals
+ * and IRIs, where the words are data — the generator itself is left alone, since its
+ * output is correct.
  */
 function lowercaseBooleanLiterals(query: string): string {
-  return query.replaceAll(/\bFILTER\s*\(\s*(TRUE|FALSE)\s*\)/gu, (_match, bool: string) =>
-    `FILTER ( ${bool.toLowerCase()} )`);
+  // Odd-indexed parts are the string literals and IRIs the split keeps.
+  return query.split(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|<[^<>"{}|^`\\\s]*>)/u)
+    .map((part, index) => index % 2 === 1 ?
+      part :
+      part.replaceAll(/(?<![\w:?$])(TRUE|FALSE)(?![\w:])/gu, (bool: string) => bool.toLowerCase()))
+    .join('');
 }
 
 /**

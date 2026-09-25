@@ -35,8 +35,13 @@ import type { Store } from 'n3';
 export interface EngineSource {
   /** Logical dataset name, e.g. `BKR-Reification`. Used by HTTP engines. */
   name: string;
-  /** Local Turtle file path (used by in-process engines). */
+  /** Local Turtle or N-Triples file path (used by in-process engines). */
   file?: string;
+  /**
+   * An HDT copy of {@link file}, which {@link ComunicaEngine} queries instead when it is set. Only for
+   * RDF 1.1 data: HDT cannot hold triple terms.
+   */
+  hdtFile?: string;
   /** In-memory quad store (used by in-process engines, e.g. for small tests). */
   store?: Store;
 }
@@ -193,7 +198,9 @@ class ComunicaWorker {
     });
     // A result line can be many megabytes; readline reassembles it across chunks.
     createInterface({ input: this.child.stdout }).on('line', (line) => {
-      if (line.trim() === '') {
+      // The HDT library prints its progress to stdout when it first indexes a file; only the worker's
+      // own replies are JSON objects.
+      if (!line.startsWith('{')) {
         return;
       }
       const reply = <WorkerReply & { status: string }> JSON.parse(line);
@@ -308,8 +315,9 @@ export class ComunicaEngine implements BenchEngine {
   }
 
   public async runSelect(query: string, source: EngineSource, timeoutMs?: number): Promise<SelectResult> {
-    if (source.file) {
-      return this.runInWorker(query, source.file, timeoutMs);
+    const file = source.hdtFile ?? source.file;
+    if (file) {
+      return this.runInWorker(query, file, timeoutMs);
     }
     return this.runInProcess(query, source, timeoutMs);
   }
@@ -642,6 +650,26 @@ export class JenaEngine implements BenchEngine {
       return `{${entries}}`;
     });
     return summarize(rows, durationMs);
+  }
+
+  /**
+   * Runs a CONSTRUCT over `source` and returns the graph it builds as N-Triples. Used to materialise a
+   * workload's views (see `materializeViews.ts`), not to measure anything, so it takes no time budget.
+   */
+  public async runConstruct(query: string, source: EngineSource): Promise<string> {
+    if (!source.file) {
+      throw new Error(`JenaEngine needs a 'file' for dataset '${source.name}'.`);
+    }
+    await this.ensureServer(source.file);
+    const response = await fetch(`${this.baseUrl}/ds/sparql`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sparql-query', Accept: 'application/n-triples' },
+      body: query,
+    });
+    if (!response.ok) {
+      throw new Error(`Engine '${this.name}' returned HTTP ${response.status}: ${await response.text()}`);
+    }
+    return response.text();
   }
 
   /** Same canonicalization as {@link SparqlHttpEngine}, including RDF 1.2 triple terms. */

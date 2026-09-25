@@ -154,7 +154,10 @@ is not what this does.
 ## Benchmarking across SPARQL engines
 
 The [`test/bench`](test/bench) directory benchmarks this rewriting against **native SPARQL 1.2
-evaluation** on several engines, over the BKR reification benchmark datasets.
+evaluation** on several engines, over the BKR reification benchmark datasets. Two SPARQL 1.1
+workloads run next to it: LUBM, with its ontology compiled into views (reasoning by rewriting), and
+OAEI Conference, with four source ontologies mapped onto one target. Both are graded against the
+original query over the materialised views.
 
 Only three well-known engines implement SPARQL 1.2 with the RDF 1.2 triple-term syntax
 (`<<( s p o )>>` / `rdf:reifies`): **Comunica** (≥ 5.0), **Apache Jena/Fuseki** (≥ 4.10) and
