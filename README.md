@@ -14,9 +14,8 @@ Running SPARQL 1.2 queries — triple terms and all — against RDF 1.1 data is 
 the one the examples below use: a view says how your RDF 1.1 data represents RDF 1.2, and the rewrite hands
 you plain SPARQL 1.1.
 
-The idea is explained in our [under review, in works paper targeting AMW](https://2026-amw-rewriting.jitsedesmet.be/)
-and in an [under review demo paper targeting SEMANTiCS](https://2026-semantics-rewriting.jitsedesmet.be/),
-based on a previous version of this repository. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code.
+The idea is explained in our [demo paper accepted at SEMANTiCS](https://2026-semantics-rewriting.jitsedesmet.be/).
+[View that demo live](https://2026-query-rewriting.demo.jitsedesmet.be/). [ARCHITECTURE.md](ARCHITECTURE.md) maps the code.
 
 ## Installation
 
