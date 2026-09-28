@@ -1,3 +1,4 @@
+import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import { datatypeBoolean, DF } from './rdfDatatypes.js';
@@ -38,6 +39,39 @@ export function isExpressionFalse(c: TransformationContext, op: Algebra.Expressi
  */
 export function createFilterFalse(c: TransformationContext, op?: Algebra.Operation): Algebra.Filter {
   return c.AF.createFilter(op ?? c.AF.createBgp([]), c.AF.createTermExpression(termFalse));
+}
+
+/**
+ * The term one row of a VALUES holds for a column, read as an own property so that a column named after a
+ * member of `Object.prototype` (`?valueOf`) is not mistaken for one the row binds.
+ * @param row - The row to read
+ * @param variableName - The column to read it at
+ * @returns the term, or `undefined` for `UNDEF`
+ */
+export function termOfValuesRow(
+  row: Algebra.Values['bindings'][number],
+  variableName: string,
+): RDF.Literal | RDF.NamedNode | undefined {
+  return Object.hasOwn(row, variableName) ? row[variableName] : undefined;
+}
+
+/**
+ * The GROUP at the bottom of the EXTEND / FILTER / ORDER_BY chain at the top of an operation: the grouping
+ * that chain's select expressions, `HAVING` and `ORDER BY` are computed over, and which `toAst` prints
+ * together with the chain as one SELECT.
+ * @param op - The operation whose chain to read
+ * @returns the GROUP, or `undefined` when the chain stands on anything else
+ */
+export function groupBelowTopLevelChain(op: Algebra.Operation): Algebra.Group | undefined {
+  let current = op;
+  while (
+    current.type === Algebra.Types.EXTEND ||
+    current.type === Algebra.Types.FILTER ||
+    current.type === Algebra.Types.ORDER_BY
+  ) {
+    current = current.input;
+  }
+  return current.type === Algebra.Types.GROUP ? current : undefined;
 }
 
 /**

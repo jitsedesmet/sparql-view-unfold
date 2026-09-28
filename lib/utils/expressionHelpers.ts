@@ -231,6 +231,19 @@ export function asksBoundOfVariable(expression: Algebra.Expression, name: string
   return found;
 }
 
+/**
+ * The variable an expression is, when it is nothing but a variable: `?x` in `BIND(?x AS ?y)`, which copies
+ * one variable into another.
+ * @param expression - The expression to read
+ * @returns the variable, or `undefined` when the expression is anything else
+ */
+export function bareVariableOf(expression: Algebra.Expression): RDF.Variable | undefined {
+  if (expression.subType === Algebra.ExpressionTypes.TERM && expression.term.termType === 'Variable') {
+    return expression.term;
+  }
+  return undefined;
+}
+
 /** The term types each position of a triple term admits, in the order `TRIPLE()` takes its arguments. */
 const triplePositionRanges = [ subjectRange, predicateRange, objectRange ];
 

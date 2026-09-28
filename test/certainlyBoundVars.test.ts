@@ -60,6 +60,14 @@ describe('withCpVars', () => {
       expect(meta.vRanges.has('x')).toBe(true);
       expect(meta.vRanges.neverBinds('x')).toBe(true);
     });
+
+    it('is never bound when its variable is named after a member of Object.prototype', ({ expect }) => {
+      // `{}.valueOf` is inherited, so reading the row by index would find a "term" in every UNDEF cell.
+      const valueOf = c.DF.variable('valueOf');
+      const meta = withCpVars(c.AF.createValues([ valueOf ], [{}])).metadata;
+      expect(meta.cVars.has('valueOf')).toBe(false);
+      expect(meta.vRanges.neverBinds('valueOf')).toBe(true);
+    });
   });
 });
 

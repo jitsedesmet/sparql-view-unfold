@@ -12,6 +12,7 @@ import {
   tripleTermRange,
 } from '../RangeSet.js';
 import { constructedTermOf } from './expressionHelpers.js';
+import { termOfValuesRow } from './operationhelpers.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
 
@@ -365,14 +366,14 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
     } case Types.VALUES: {
       // A VALUES variable is certainly bound only if every row provides a value for it.
       resOp.metadata.cVars = new Set(resOp.variables
-        .filter(variable => resOp.bindings.every(binding => binding[variable.value] !== undefined))
+        .filter(variable => resOp.bindings.every(binding => termOfValuesRow(binding, variable.value) !== undefined))
         .map(variable => variable.value));
       // The column is spelled out, so its range is exactly the types it holds - the tightest this gets.
       // An all-UNDEF column lands on the bottom: declared by the VALUES, so in scope, yet never bound.
       const ranges = new VRanges();
       for (const variable of resOp.variables) {
         ranges.set(variable.value, new RangeSet(resOp.bindings
-          .map(binding => binding[variable.value])
+          .map(binding => termOfValuesRow(binding, variable.value))
           .filter(value => value !== undefined)
           .map(value => value.termType)));
       }

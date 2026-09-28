@@ -103,8 +103,14 @@ const rewriter = createQueryRewriter([
 ```
 
 Order matters and is not a preference: paths are expanded before the unfolding, which only knows triple
-patterns, and `nullifyJoinOverIncompatibleBoundsTransformation` sees nothing until `removeProjections` and
-`pullUpExtends` have run. [ARCHITECTURE.md](ARCHITECTURE.md) says why for each step.
+patterns, `nullifyJoinOverIncompatibleBoundsTransformation` sees nothing until `removeProjections` and
+`pullUpExtends` have run, and `projectionPushdownTransformation` goes last, once the binds it removes exist.
+[ARCHITECTURE.md](ARCHITECTURE.md) says why for each step.
+
+A transformation is a function `(context, operation, enclosingQuery?)`. The runner hands it the pattern below
+the query's solution modifiers, never the modifiers themselves, so the third argument says what the query
+reads of that pattern: the projection of a `SELECT`, the template of a `CONSTRUCT`, and so on. Only a step
+that prunes what nothing reads needs it.
 
 ### Cardinality
 
@@ -171,6 +177,7 @@ The tables below are the short version; the generated
 | `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))` as deep as it goes: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
 | `pullUpExtendsTransformation()` | Floats every `BIND` as high as the plan allows and drops the ones nothing reads. |
 | `removeProjectionsTransformation()` | Removes inner projections, renaming what they hid to keep the scoping. |
+| `projectionPushdownTransformation()` | Deletes the `BIND`s nothing reads, and renames away each `BIND(?x AS ?y)` whose `?x` nothing else reads, so joins are on variables of the triple patterns. Belongs last. |
 | `nullifyJoinOverIncompatibleBoundsTransformation()` | Replaces a join whose branches bind one variable to incompatible terms by `FILTER(FALSE)`. |
 | `nullifyUnbindableVarsTransformation()` | The same one level up, for incompatible term *types* rather than terms. Not in the default pipeline. |
 | `extendsToValuesTransformation()` | Rewrites a `BIND` of a ground term over the empty BGP, or over a VALUES, into a VALUES. |

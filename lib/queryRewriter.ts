@@ -1,11 +1,12 @@
-import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_USER_QUERY } from './consts.js';
+import { toAst } from './generator/toAst.js';
 import { filterFalseTransformation } from './transformations/filterFalse.js';
 import {
   nullifyJoinOverIncompatibleBoundsTransformation,
 } from './transformations/nullifyJoinOverIncompatibleBounds.js';
 import { rewriteNonRecursivePathsTransformation } from './transformations/pathTransformation.js';
+import { projectionPushdownTransformation } from './transformations/projectionPushdown.js';
 import { pullUpExtendsTransformation } from './transformations/pullUpExtends.js';
 import { pushDownAssertionsTransformation } from './transformations/pushDownAssertions.js';
 import { removeProjectionsTransformation } from './transformations/removeProjections.js';
@@ -13,8 +14,11 @@ import type { UnfoldingOptions } from './transformations/unfolding.js';
 import { unfoldingTransformation } from './transformations/unfolding.js';
 import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
 import type { TransformationContext } from './transformContext.js';
-import type { Mapping, QueryTransformation } from './types.js';
+import type { EnclosingQuery, Mapping, QueryTransformation } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
+import type { QueryPartReader } from './utils/demand.js';
+import { variablesReadOfQueryPart } from './utils/demand.js';
+import { groupBelowTopLevelChain } from './utils/operationhelpers.js';
 import { queryFormTypes, solutionModifierTypes } from './utils/solutionModifierChain.js';
 
 /**
@@ -29,7 +33,8 @@ import { queryFormTypes, solutionModifierTypes } from './utils/solutionModifierC
  * **Which form the query has matters only at the top.** A `SELECT` gets its projection rebuilt over an
  * `EXTEND` per projected variable, restoring the name the user wrote; an `ASK` has no names to restore; a
  * `CONSTRUCT` template and the terms of a `DESCRIBE` name variables the pattern below binds, so they are
- * renamed along with it rather than restored.
+ * renamed along with it rather than restored. What the form reads of the pattern is handed to every pass as
+ * its {@link EnclosingQuery}, since the pass itself only ever sees the pattern.
  *
  * **An update's templates are left as they stand**, renamed and no more. Its `WHERE` reads the RDF 1.2
  * graph the mapping denotes and so is rewritten, but that graph is virtual and nothing can be written to
@@ -54,30 +59,6 @@ export interface QueryRewriter {
    * @returns the rewritten operation
    */
   rewriteOperation: (operation: Algebra.Operation) => Promise<Algebra.Operation>;
-}
-
-/**
- * Whether a GROUP node sits at the top of the operation's Extend / Filter / OrderBy chain.
- *
- * This matters for the projection rebuilding below: the extra outer EXTEND nodes it adds for variable
- * renaming must not be visible to `toAst`'s `translateAlgProject`, which flattens all Extend nodes, replaces
- * intermediate aggregate variables by their aggregate expressions, and pushes any unused one into the WHERE
- * clause - producing invalid SPARQL such as `BIND(COUNT(?o) AS ?count)`.
- * @param op - The operation to inspect
- * @returns whether the query groups, in which case the grouped sub-tree is wrapped in a subSELECT first
- */
-function hasGroupInTopLevelChain(op: Algebra.Operation): boolean {
-  if (op.type === Algebra.Types.GROUP) {
-    return true;
-  }
-  if (
-    op.type === Algebra.Types.EXTEND ||
-    op.type === Algebra.Types.FILTER ||
-    op.type === Algebra.Types.ORDER_BY
-  ) {
-    return hasGroupInTopLevelChain((<{ input: Algebra.Operation }>op).input);
-  }
-  return false;
 }
 
 /** The updates that write without reading, so that the pipeline has nothing to run over. */
@@ -111,9 +92,10 @@ function rebuildProjection(
   rewritten: Algebra.Operation,
 ): Algebra.Operation {
   let rebuilt = rewritten;
-  // Because of the variable renaming, when we group,
-  // we need to group as part of a subquery and then rename afterwards.
-  if (hasGroupInTopLevelChain(rebuilt)) {
+  // Because of the variable renaming, when we group, we need to group as part of a subquery and then rename
+  // afterwards: `toAst` flattens every EXTEND of the chain into the projection, and would push the extra
+  // renaming ones into the WHERE clause as invalid SPARQL such as `BIND(COUNT(?o) AS ?count)`.
+  if (groupBelowTopLevelChain(rebuilt) !== undefined) {
     rebuilt = c.AF.createProject(rebuilt, project.variables
       .map(variable => c.DF.variable(`${VAR_PREFIX_USER_QUERY}${variable.value}`)));
   }
@@ -169,10 +151,26 @@ function rebuildSolutionModifier(
 }
 
 /**
+ * What a query form or an update reads of the query part below it, under the prefixed names the pipeline
+ * runs on.
+ * @param c - The transformation context of this rewrite
+ * @param reader - The query form or update the query part was peeled out from under, as the user wrote it
+ * @returns the enclosing query to hand every pass
+ */
+function enclosingQueryOf(c: TransformationContext, reader: QueryPartReader): EnclosingQuery {
+  const demandedVariables = new Set<string>();
+  for (const name of variablesReadOfQueryPart(c, reader)) {
+    demandedVariables.add(`${VAR_PREFIX_USER_QUERY}${name}`);
+  }
+  return { demandedVariables };
+}
+
+/**
  * Runs the pipeline over one query part, its variables renamed and the restrictions checked first.
  * @param c - The transformation context of this rewrite
  * @param transformations - The pipeline to run
  * @param queryPart - The pattern of a query, or the `WHERE` of an update
+ * @param enclosingQuery - What the query reads of the query part, handed to every pass
  * @returns the rewritten query part, binding the prefixed variables
  * @throws Error if the query part asks something the rewriting is not defined for
  */
@@ -180,11 +178,12 @@ async function rewriteQueryPart(
   c: TransformationContext,
   transformations: readonly QueryTransformation[],
   queryPart: Algebra.Operation,
+  enclosingQuery: EnclosingQuery,
 ): Promise<Algebra.Operation> {
   assertUserQueryIsSupported(queryPart);
   let rewritten = prefixVarsInOperation(c, queryPart, VAR_PREFIX_USER_QUERY);
   for (const transformation of transformations) {
-    rewritten = await transformation(c, rewritten);
+    rewritten = await transformation(c, rewritten, enclosingQuery);
   }
   return rewritten;
 }
@@ -205,7 +204,12 @@ async function rewriteUpdateWhere(
   if (deleteInsert.where === undefined) {
     return deleteInsert;
   }
-  const rewrittenWhere = await rewriteQueryPart(c, transformations, deleteInsert.where);
+  const rewrittenWhere = await rewriteQueryPart(
+    c,
+    transformations,
+    deleteInsert.where,
+    enclosingQueryOf(c, deleteInsert),
+  );
   // The templates name the variables the WHERE binds, which are now the prefixed ones. What they write is
   // untouched otherwise: it goes to the source, the RDF 1.2 graph the WHERE read being virtual.
   const prefixTemplate = (template?: Algebra.Pattern[]): Algebra.Pattern[] | undefined =>
@@ -243,11 +247,11 @@ async function rewriteParsedQuery(
   }
   // The query form ends the chain, so its input is the pattern itself rather than another modifier.
   if (queryFormTypes.has(operation.type)) {
-    const pattern = (<Algebra.Single> operation).input;
+    const queryForm = <Algebra.Project | Algebra.Ask | Algebra.Construct | Algebra.Describe> operation;
     return rebuildSolutionModifier(
       c,
-      <SolutionModifier> operation,
-      await rewriteQueryPart(c, transformations, pattern),
+      queryForm,
+      await rewriteQueryPart(c, transformations, queryForm.input, enclosingQueryOf(c, queryForm)),
     );
   }
   if (solutionModifierTypes.has(operation.type)) {
@@ -257,11 +261,12 @@ async function rewriteParsedQuery(
       await rewriteParsedQuery(c, transformations, (<Algebra.Single> operation).input),
     );
   }
-  // An update that writes without reading, or a bare pattern a caller handed to `rewriteOperation`.
+  // An update that writes without reading, or a bare pattern a caller handed to `rewriteOperation` - of
+  // which nothing is known about what reads it.
   if (updateTypesWithoutQueryPart.has(operation.type)) {
     return operation;
   }
-  return rewriteQueryPart(c, transformations, operation);
+  return rewriteQueryPart(c, transformations, operation, {});
 }
 
 /**
@@ -297,9 +302,10 @@ export function createQueryRewriter(transformations: readonly QueryTransformatio
  * unfolding, which only knows triple patterns. `FILTER(FALSE)` is collapsed after every step that can
  * produce one, so the next step has less to walk. The pushdown drives terms into the leaves and the
  * pull-up floats the binds it leaves behind back out, in that order, because the pushdown is what creates
- * them. `nullifyJoinOverIncompatibleBounds` comes last, after `removeProjections` and `pullUpExtends`: it
- * reads each join operand's top-level `EXTEND` chain and halts at a `PROJECT`, so anywhere earlier it sees
- * nothing at all.
+ * them. `nullifyJoinOverIncompatibleBounds` comes after `removeProjections` and `pullUpExtends`: it reads
+ * each join operand's top-level `EXTEND` chain and halts at a `PROJECT`, so anywhere earlier it sees nothing
+ * at all. `projectionPushdown` comes last, once the pushdown has created the binds it renames away and
+ * `removeProjections` has dissolved the sub-SELECTs they stood in into the joins they feed.
  *
  * {@link transformations/nullifyUnbindableVars!nullifyUnbindableVars} is deliberately absent - nothing the
  * unfolding generates gives it anything to decide - and so are the blank node materialisations, which are
@@ -327,5 +333,6 @@ export function createDefaultTransformationPipeline(
     removeProjectionsTransformation(),
     nullifyJoinOverIncompatibleBoundsTransformation(),
     filterFalseTransformation(),
+    projectionPushdownTransformation(),
   ];
 }

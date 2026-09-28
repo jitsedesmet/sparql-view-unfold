@@ -6,6 +6,7 @@ import type { Access } from '../utils/assertions.js';
 import { componentOf } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import { cpMetaOf, termVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { variablesReadByGrouping } from '../utils/demand.js';
 import {
   asksBoundOfVariable,
   constructedTermOf,
@@ -712,16 +713,12 @@ function floatThroughProject(c: TransformationContext, project: Algebra.Project,
 function floatThroughGroup(c: TransformationContext, group: Algebra.Group): Algebra.Operation {
   const peeled = peelInputs(c, [ group.input ]);
   // A grouping sees three things, and the third is the easy one to forget: its keys, the variables each
-  // aggregate *writes*, and the variables each aggregate *reads* - an `aggregates` entry is a
-  // `BoundAggregate`, an expression over the input beside the variable it writes, so
-  // `GROUP BY ?k (SUM(?x) AS ?s)` reads an `?x` that is neither key nor target. Anything it sees stays:
-  // hoisting past the aggregation would change the aggregate.
-  const visibleToGrouping = new Set(group.variables.map(variable => variable.value));
+  // aggregate *writes*, and the variables each aggregate *reads* - `GROUP BY ?k (SUM(?x) AS ?s)` reads an
+  // `?x` that is neither key nor target. Anything it sees stays: hoisting past the aggregation would change
+  // the aggregate.
+  const visibleToGrouping = variablesReadByGrouping(c, group);
   for (const aggregate of group.aggregates) {
     visibleToGrouping.add(aggregate.variable.value);
-    for (const readVariable of collectVariableNames(c.astTransformer, aggregate.expression)) {
-      visibleToGrouping.add(readVariable);
-    }
   }
   // TODO(phase 4): a bind of a ground term to a *grouping key* may rise as `Group(A, keys \ {?x}, aggs)`,
   //  which is phase 4's first item. Grouping by a variable with one value puts every row in the same
