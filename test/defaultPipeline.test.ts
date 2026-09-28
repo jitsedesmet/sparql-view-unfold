@@ -41,8 +41,7 @@ describe('the default pipeline over an OPTIONAL', () => {
     expect((await rewriter.rewriteQuery(
       'SELECT * { ?s <ex://p> ?o FILTER(SAMETERM(?o, "1")) OPTIONAL { ?s <ex://r> ?x FILTER(SAMETERM(?o, "2")) } }',
     )).trim()).toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) ( ?uq_x AS ?x ) WHERE {
-  ?v_1 <ex://q> ?v_2 .
-  BIND( ?v_1 AS ?uq_s )
+  ?uq_s <ex://q> ?v_2 .
   BIND( "1" AS ?uq_o )
 }`);
   });

@@ -77,6 +77,18 @@ Given a query Q without recursive paths and a mapping with head H and body B:
 `pullUpExtends` is the mirror of step 5: it floats the BINDs the pushdown left at the leaves back up the
 plan and deletes the ones nothing above reads.
 
+`projectionPushdown` finishes what the pull-up cannot. After it, a rewritten query is still a JOIN of UNION
+groups, each branch copying its value into the group's variable and each group copying that into the user
+variable the groups join on - and the pull-up cannot float those copies any higher, every sibling binding
+the same user variable. Carrying the **demand** top-down (the variables something above reads,
+`lib/utils/demand.ts`, required-variables analysis as a relational optimiser does it), the pass deletes
+every BIND whose variable is not demanded, and renames away every `BIND(?x AS ?y)` whose `?x` is not
+demanded by writing `?y` into the patterns that bind `?x`. The join key then is a variable of the triple
+patterns themselves, which is what an engine needs to look the other side of a join up in an index. The
+rename is sound when `?y` occurs nowhere below the bind, checked syntactically, so that nothing reading
+`?y` down there - a `!bound(?y)`, an `EXISTS` - is captured. The root demand is what the query reads of its
+pattern, which the pipeline runner hands every pass as the `EnclosingQuery`.
+
 ## Variable prefixes
 
 Three prefixes, in `lib/consts.ts`, and two of them are load-bearing:
@@ -116,6 +128,13 @@ standard mappings between RDF 1.1 and RDF 1.2.
 - `SELECT * { FILTER(FALSE) }` → 0 bindings
 
 So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
+
+**An OPTIONAL or a MINUS reads its whole group.** It is evaluated against everything before it in its group,
+so `Join(A, Minus(B, C))` has to be printed as `{ A { B MINUS { C } } }`: flattened into
+`{ A B MINUS { C } }`, it reads back as `Minus(Join(A, B), C)`. traqula's `toAst` flattens JOIN operands,
+and the output is only right while a `BIND` or a `FILTER` happens to give the operand braces of its own.
+The rewriter therefore prints through `lib/generator/toAst.ts`, which patches that one rule until the fix
+reaches traqula.
 
 ## Still to settle
 

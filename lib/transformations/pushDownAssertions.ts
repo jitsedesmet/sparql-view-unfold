@@ -30,7 +30,7 @@ import {
 } from '../utils/assertions.js';
 import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
-import { createFilterFalse } from '../utils/operationhelpers.js';
+import { createFilterFalse, termOfValuesRow } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import { unionSets } from '../utils/setUtils.js';
 import type { DerivedVarNamer } from '../utils.js';
@@ -496,7 +496,7 @@ function agreesWithPins(
   binding: Algebra.Values['bindings'][number],
 ): boolean {
   return pins.every(({ name, term }) => {
-    const value = binding[name];
+    const value = termOfValuesRow(binding, name);
     return value === undefined || term.equals(value);
   });
 }
@@ -519,7 +519,7 @@ function rowSatisfies(
 ): boolean {
   const attempt = assertions.clone();
   return variables.every((variable) => {
-    const value = binding[variable.value];
+    const value = termOfValuesRow(binding, variable.value);
     return value === undefined ?
       attempt.assertUnbound(variable.value) :
       attempt.assertTerm(variable.value, value, true);

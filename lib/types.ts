@@ -21,12 +21,28 @@ export interface Mapping {
 }
 
 /**
+ * What the pipeline runner knows about the query it peeled a query part out of, which no pass can see:
+ * the runner hands a pass the pattern below the solution modifiers, never the modifiers themselves.
+ */
+export interface EnclosingQuery {
+  /**
+   * The variables of the query part that the query reads, under the prefixed names the pipeline runs on:
+   * the projection of a `SELECT`, none for an `ASK`, the template of a `CONSTRUCT`, the described variables
+   * of a `DESCRIBE`, the templates of a `DELETE`/`INSERT`. Absent for a pattern handed over bare, whose
+   * reader is unknown.
+   */
+  demandedVariables?: ReadonlySet<string>;
+}
+
+/**
  * One step of a query rewriting pipeline: an operation in, the rewritten operation out.
  *
  * The runner awaits every step, so a synchronous pass is a `QueryTransformation` as it stands - only the
- * passes that call an engine (`simplifyStaticExpressions`) need the promise.
+ * passes that call an engine (`simplifyStaticExpressions`) need the promise. Most passes ignore the
+ * enclosing query; one that prunes what nothing reads needs it.
  */
 export type QueryTransformation = (
   context: TransformationContext,
   operation: Algebra.Operation,
+  enclosingQuery?: EnclosingQuery,
 ) => Algebra.Operation | Promise<Algebra.Operation>;

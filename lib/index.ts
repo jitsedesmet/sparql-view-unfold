@@ -40,5 +40,5 @@ export type { MappingOptions } from './mapping.js';
 export { createDefaultTransformationPipeline, createQueryRewriter } from './queryRewriter.js';
 export type { QueryRewriter } from './queryRewriter.js';
 export type { TransformationContext } from './transformContext.js';
-export type { Mapping, MappingHead, QueryTransformation } from './types.js';
+export type { EnclosingQuery, Mapping, MappingHead, QueryTransformation } from './types.js';
 export * from './transformations/index.js';

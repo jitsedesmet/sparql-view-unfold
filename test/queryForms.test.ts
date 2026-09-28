@@ -6,9 +6,11 @@ import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createQueryRewriter } from '../lib/queryRewriter.js';
 import { filterFalseTransformation } from '../lib/transformations/filterFalse.js';
+import { projectionPushdownTransformation } from '../lib/transformations/projectionPushdown.js';
 import { pullUpExtendsTransformation } from '../lib/transformations/pullUpExtends.js';
 import { removeProjectionsTransformation } from '../lib/transformations/removeProjections.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
+import type { QueryTransformation } from '../lib/types.js';
 import { nonTripleTermConstruct, tripleTermConstruct } from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
 
@@ -34,16 +36,28 @@ PREFIX : <ex://>
  * graph is virtual and the triples it writes go to the RDF 1.1 source as written. What it owes is that the
  * source ends up holding exactly the triples the template instantiates over the solutions the mapped data
  * gives its `WHERE`.
+ *
+ * Every form is run twice, the second time ending in the projection pushdown: what a form reads of its
+ * pattern is the demand that pass is seeded with, so a form whose reads the runner got wrong answers
+ * differently there.
  */
-describe('the query forms', () => {
+const mappers = [ tripleTermConstruct, nonTripleTermConstruct ];
+const pipelineWithoutPushdown: QueryTransformation[] = [
+  unfoldingTransformation(mappingFromConstructQueries(mappers)),
+  filterFalseTransformation(),
+  pullUpExtendsTransformation(),
+  removeProjectionsTransformation(),
+];
+
+describe.each([
+  { pipelineName: 'without the projection pushdown', pipeline: pipelineWithoutPushdown },
+  {
+    pipelineName: 'ending in the projection pushdown',
+    pipeline: [ ...pipelineWithoutPushdown, projectionPushdownTransformation() ],
+  },
+])('the query forms, $pipelineName', ({ pipeline }) => {
   const engine = new QueryEngine();
-  const mappers = [ tripleTermConstruct, nonTripleTermConstruct ];
-  const rewriter = createQueryRewriter([
-    unfoldingTransformation(mappingFromConstructQueries(mappers)),
-    filterFalseTransformation(),
-    pullUpExtendsTransformation(),
-    removeProjectionsTransformation(),
-  ]);
+  const rewriter = createQueryRewriter(pipeline);
 
   /** The RDF 1.1 data, and the RDF 1.2 graph the mapping turns it into. */
   async function stores(): Promise<{ store11: Store; store12: Store }> {

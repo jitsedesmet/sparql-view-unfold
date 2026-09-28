@@ -20,13 +20,16 @@ export function renameVariables<T extends object>(
   renames: Record<string, RDF.Variable>,
 ): T {
   return <T> c.astTransformer.transformObject(obj, (object) => {
-    if (isRdfVar(object) && object.value in renames) {
+    // `hasOwn` rather than `in`, so that a variable named after a member of `Object.prototype` (`?toString`)
+    // is not mistaken for one the map renames.
+    if (isRdfVar(object) && Object.hasOwn(renames, object.value)) {
       return renames[object.value];
     }
     if ('type' in object && object.type === 'values' && 'bindings' in object) {
       const valuesOp = <Algebra.Values> object;
       valuesOp.bindings = valuesOp.bindings.map(binding => Object.fromEntries(
-        Object.entries(binding).map(([ key, value ]) => [ key in renames ? renames[key].value : key, value ]),
+        Object.entries(binding).map(([ key, value ]) =>
+          [ Object.hasOwn(renames, key) ? renames[key].value : key, value ]),
       ));
     }
     return object;

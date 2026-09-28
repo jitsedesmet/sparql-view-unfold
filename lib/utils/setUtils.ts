@@ -21,7 +21,7 @@ export function unionSets(sets: readonly ReadonlySet<string>[]): SSet {
  * @param superset - The set that should contain it
  * @returns whether it does
  */
-export function isSubsetOf(subset: Set<string>, superset: Set<string>): boolean {
+export function isSubsetOf(subset: ReadonlySet<string>, superset: ReadonlySet<string>): boolean {
   for (const value of subset) {
     if (!superset.has(value)) {
       return false;
@@ -35,7 +35,7 @@ export function isSubsetOf(subset: Set<string>, superset: Set<string>): boolean 
  * @param sets - The sets to intersect
  * @returns a new set holding the elements every one of them has, empty for an empty list
  */
-export function intersectSets(sets: SSet[]): SSet {
+export function intersectSets(sets: readonly ReadonlySet<string>[]): SSet {
   if (sets.length === 0) {
     return new Set<string>();
   }
@@ -55,7 +55,7 @@ export function intersectSets(sets: SSet[]): SSet {
  * @param remove - The set to take away
  * @returns a new set holding the difference
  */
-export function differenceSets(set: SSet, remove: SSet): SSet {
+export function differenceSets(set: ReadonlySet<string>, remove: ReadonlySet<string>): SSet {
   const agg = new Set<string>();
   for (const value of set) {
     if (!remove.has(value)) {

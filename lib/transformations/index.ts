@@ -19,6 +19,10 @@
  * - **pullUpExtendsTransformation**: the mirror of the pushdown, floating the `BIND`s it left behind at the
  *   leaves back up the plan and deleting the ones nothing above reads - a UNION every branch of which
  *   carries the same bind included.
+ * - **projectionPushdownTransformation**: deletes every `BIND` nothing above reads, and renames away every
+ *   `BIND(?x AS ?y)` whose `?x` nothing else reads by writing `?y` into the patterns that bind `?x` - so a
+ *   join key becomes a variable of the triple patterns themselves. Seeded with what the query reads of its
+ *   pattern, which the runner hands it; it belongs last.
  * - **nullifyJoinOverIncompatibleBoundsTransformation**: detects joins whose branches bind a variable to
  *   incompatible terms and replaces them with FILTER(FALSE).
  * - **nullifyUnbindableVarsTransformation**: the same one level up, for incompatible term *types* rather
@@ -54,6 +58,7 @@ export { joinValuesToFilterTransformation } from './joinValuesToFilter.js';
 export { nullifyJoinOverIncompatibleBoundsTransformation } from './nullifyJoinOverIncompatibleBounds.js';
 export { nullifyUnbindableVarsTransformation } from './nullifyUnbindableVars.js';
 export { rewriteNonRecursivePathsTransformation } from './pathTransformation.js';
+export { projectionPushdownTransformation } from './projectionPushdown.js';
 export { pullUpExtendsTransformation } from './pullUpExtends.js';
 export { pushDownAssertionsTransformation } from './pushDownAssertions.js';
 export { removeProjectionsTransformation } from './removeProjections.js';
