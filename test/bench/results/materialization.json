@@ -1,0 +1,130 @@
+[
+  {
+    "workload": "lubm",
+    "scale": "u1",
+    "views": 239,
+    "sourceTriples": 100543,
+    "sourceBytes": 17122518,
+    "viewTriples": 137722,
+    "emittedTriples": 208940,
+    "viewBytes": 23236782,
+    "viewHdtBytes": 1218746,
+    "loadMs": 3877,
+    "buildMs": [
+      4077,
+      2550,
+      2598
+    ],
+    "writeMs": 430,
+    "breakEven": {
+      "jena": {
+        "queries": 1,
+        "upperBound": true
+      },
+      "oxigraph": {
+        "queries": 4,
+        "upperBound": false
+      },
+      "comunica": {
+        "queries": 1,
+        "upperBound": true
+      }
+    }
+  },
+  {
+    "workload": "lubm",
+    "scale": "u10",
+    "views": 239,
+    "sourceTriples": 1272575,
+    "sourceBytes": 217360636,
+    "viewTriples": 1735299,
+    "emittedTriples": 2605002,
+    "viewBytes": 293775120,
+    "viewHdtBytes": 16143032,
+    "loadMs": 14337,
+    "buildMs": [
+      16894,
+      16625,
+      14390
+    ],
+    "writeMs": 6044,
+    "breakEven": {
+      "jena": {
+        "queries": 1,
+        "upperBound": true
+      },
+      "oxigraph": {
+        "queries": 21,
+        "upperBound": false
+      },
+      "comunica": {
+        "queries": 1,
+        "upperBound": true
+      }
+    }
+  },
+  {
+    "workload": "oaei",
+    "scale": "d100",
+    "views": 148,
+    "sourceTriples": 1368540,
+    "sourceBytes": 174890703,
+    "viewTriples": 468139,
+    "emittedTriples": 608274,
+    "viewBytes": 57922699,
+    "viewHdtBytes": 3843046,
+    "loadMs": 14547,
+    "buildMs": [
+      4751,
+      3560,
+      3359
+    ],
+    "writeMs": 1150,
+    "breakEven": {
+      "jena": {
+        "queries": 6,
+        "upperBound": false
+      },
+      "oxigraph": {
+        "queries": 2,
+        "upperBound": true
+      },
+      "comunica": {
+        "queries": 2,
+        "upperBound": true
+      }
+    }
+  },
+  {
+    "workload": "oaei",
+    "scale": "eswc",
+    "views": 148,
+    "sourceTriples": 123170,
+    "sourceBytes": 15004320,
+    "viewTriples": 36664,
+    "emittedTriples": 47604,
+    "viewBytes": 4345463,
+    "viewHdtBytes": 299811,
+    "loadMs": 4337,
+    "buildMs": [
+      1685,
+      1061,
+      940
+    ],
+    "writeMs": 76,
+    "breakEven": {
+      "jena": {
+        "queries": 63,
+        "upperBound": false
+      },
+      "oxigraph": {
+        "queries": 38,
+        "upperBound": false
+      },
+      "comunica": {
+        "queries": 5,
+        "upperBound": false
+      }
+    }
+  }
+]

@@ -124,6 +124,7 @@ older bytecode and works with Java 11/17.
 | `cli.ts` | Ad-hoc single-pipeline runs against the **full** datasets or SPARQL endpoints you started yourself. No scale subsetting. |
 | `workloads/<name>/` | The LUBM and OAEI workloads: `prepare.sh` downloads or generates the data into a gitignored `data/`, and the committed `views.rq` and `queries/*.rq` are what the benchmark runs. `workloads/toNTriples.mjs` merges and skolemises the source files; `workloads/common.sh` holds the steps both scripts share. |
 | `materializeViews.ts` | Runs every view of a workload over its source data with Jena and writes the union, the graph the reference answers come from. Each view's result is cross-checked against Oxigraph's, and nothing is written unless the two agree. |
+| `timeMaterialization.ts` | Times Jena building every workload's views and reads the result's size on disk, the up-front cost the `materialized` approach pays and the rewriting does not. Writes `results/materialization.json`. |
 
 Figures are **not committed** — they are regenerated from the results JSON with
 `plot.mjs` (`test/bench/results/figures/` is gitignored). The harness itself is validated
@@ -489,6 +490,7 @@ test/bench/workloads/oaei/prepare.sh                 # ~350 MB in workloads/oaei
 NODE_OPTIONS=--max-old-space-size=12000 npx tsx test/bench/run.ts \
   --engines jena,oxigraph,comunica --schemes lubm,oaei --reps 1 --timeout 60000 \
   --out test/bench/results/workloads.json
+npx tsx test/bench/timeMaterialization.ts            # the cost of materialising, below
 ```
 
 ### Results
@@ -574,6 +576,38 @@ The difference is fan-out. An OAEI term has at most one view per source, so a pa
 `UNION` of a handful of branches. A LUBM class like `Person` or `Student` has dozens of ways to be
 derived, and the entailed facts are exactly what the query asks for.
 
+#### What materialising costs
+
+The comparison above assumes the views already exist. Views that change, or that live only briefly,
+have to be built again each time. `timeMaterialization.ts` measures that with Jena: every view's
+`CONSTRUCT`, in a row, three times, against a Fuseki server that already holds the source. Loading the
+source (3.9–14.5 s) is left out, because the rewriting loads the same source. Measured on 2026-09-28 on
+the machine and Jena build of the run above; `results/materialization.json` holds the numbers.
+
+| Scale | source triples | materialised triples | N-Triples | HDT + index | Jena build: first · warm | dedupe + write | pays off after (Jena · Oxigraph · Comunica) |
+|---|---|---|---|---|---|---|---|
+| LUBM `u1` | 100,543 | 137,722 (1.37×) | 23.2 MB | 1.2 MB | 4.1 s · 2.6 s | 0.4 s | ≤ 1 · 4 · ≤ 1 |
+| LUBM `u10` | 1,272,575 | 1,735,299 (1.36×) | 294 MB | 16.1 MB | 16.9 s · 16.6 s | 6.0 s | ≤ 1 · 21 · ≤ 1 |
+| OAEI `eswc` | 123,170 | 36,664 (0.30×) | 4.3 MB | 0.3 MB | 1.7 s · 1.1 s | 0.1 s | 63 · 38 · 5 |
+| OAEI `d100` | 1,368,540 | 468,139 (0.34×) | 57.9 MB | 3.8 MB | 4.8 s · 3.6 s | 1.2 s | 6 · ≤ 2 · ≤ 2 |
+
+- **Build** is the first pass, what a one-off materialisation pays; *warm* is the median of the three.
+  The times include receiving the output as N-Triples. The views emit overlapping triples (2.6 M for
+  1.7 M distinct at `u10`), so the harness deduplicates the union and writes it, the last time column.
+- **Space:** LUBM's views take 1.36× the source, because the reasoning adds entailed triples. OAEI's
+  take a third of it, because the views keep only what maps into ekaw.
+- **Pays off after** is the number of queries after which building the views and querying them costs
+  less than running `pullUpExtends` over the source: the first build over the average per-query
+  saving, per engine, over the queries neither approach errored on. A timed-out `pullUpExtends` row
+  counts at the 60 s budget, so where one is involved (`≤`) the saving is understated and the
+  count an upper bound. The materialised queries never timed out.
+
+Building is cheap next to a pass over all the queries, and pays for itself within a query or two
+wherever the rewriting struggles: LUBM on Jena and Comunica, whose `pullUpExtends` rows include the
+Q02/Q07/Q09 timeouts, and OAEI `d100` on Oxigraph and Comunica. Where the rewriting is close to the
+materialised views, OAEI `eswc` on Jena and Oxigraph, it takes 38–63 of the 65 queries, and short-lived
+views are better served by the rewriting.
+
 #### Where the optimisations do not help, and why
 
 - **Joins on `BIND`-computed variables across `UNION` groups.** After every pass, each query pattern
@@ -621,6 +655,7 @@ figures from any results JSON. In summary:
 | 2026-09-23 | The library's pipeline API replaced by factories and an async `QueryRewriter`, and the harness ported onto it. With `generalizedRdfView: true` the rewrites are the measured ones: 72 of 96 byte-identical, the other 24 (`standard`) identical but for internal variable names. Re-run on that basis. |
 | 2026-09-23 → 09-24 | Jena moved to the `6.3.0-SNAPSHOT` nightly, the first build carrying the ARQ triple-term fix, and all 720 rows re-measured in one run on it. 32 Jena answers went from a fast wrong empty result to the baseline's, which raised the reification cost from ~13× to 20.3× and steepened the whole ladder: `pullUpExtends` vs `rewriting` on Jena went 0.45 → 0.15, and `removeProjections`, which the bug had made look like a pessimisation at 2.36, came out at 0.90. Every remaining mismatch is a corpus defect, identical across all four pipelines. |
 | 2026-09-24 → 09-25 | LUBM (ontology compiled into 239 views, 1 and 10 universities) and OAEI Conference (148 views from four sources into ekaw, `data_100` and `eswc`) added as workloads, graded against the original query over the materialised views; Comunica reads their data as HDT. 60 s budget. |
+| 2026-09-28 | The cost of materialising the LUBM and OAEI views with Jena measured (`timeMaterialization.ts`): 1.7–17 s to build, and 0.3× (OAEI) to 1.36× (LUBM) the source's size. |
 
 ## Extending
 
