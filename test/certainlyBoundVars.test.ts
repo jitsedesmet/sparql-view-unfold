@@ -1,3 +1,5 @@
+import { QueryEngine } from '@comunica/query-sparql-file';
+import { DataFactory, Store } from 'n3';
 import { describe, it } from 'vitest';
 import type { TransformationContext } from '../lib/transformContext.js';
 import { createTransformationContext } from '../lib/transformContext.js';
@@ -10,6 +12,21 @@ const g = c.DF.variable('g');
 /** A one-row VALUES over `?x`, either UNDEF or holding a literal. */
 function column(bound: boolean): ReturnType<TransformationContext['AF']['createValues']> {
   return c.AF.createValues([ x ], [ bound ? { x: c.DF.literal('l') } : {} ]);
+}
+
+/**
+ * `GRAPH ?g { ?s ?p ?o OPTIONAL { VALUES (?s ?g) { (<ex://a> "l") } } }`: the pattern only ever binds `?g`
+ * to a literal, but not certainly - every triple whose subject is not `<ex://a>` leaves it unbound, and
+ * GRAPH then binds it to the name of the graph. One named graph holding one such triple gives a solution.
+ * The OPTIONAL must be able to miss: over an empty group it never does, every solution then binds `?g` to
+ * the literal, and the GRAPH has no solutions to witness anything.
+ */
+function graphOverOptionalBindingItsName(): ReturnType<TransformationContext['AF']['createGraph']> {
+  const s = c.DF.variable('s');
+  return c.AF.createGraph(c.AF.createLeftJoin(
+    c.AF.createBgp([ c.AF.createPattern(s, c.DF.variable('p'), c.DF.variable('o')) ]),
+    c.AF.createValues([ s, g ], [{ s: c.DF.namedNode('ex://a'), g: c.DF.literal('l') }]),
+  ), g);
 }
 
 /** The term types `?x` can take in `op`, sorted so the assertion does not depend on insertion order. */
@@ -129,16 +146,27 @@ describe('the target of a triple-term BIND', () => {
 
 describe('the range of a graph variable', () => {
   it('is the graph name where the pattern does not certainly bind it', ({ expect }) => {
-    // `GRAPH ?g { OPTIONAL { VALUES ?g { "l" } } }`: every solution where the OPTIONAL misses binds `?g`
-    // to the name of the graph, so what the pattern says about it never applies on its own.
-    const inner = c.AF.createLeftJoin(
-      c.AF.createBgp([]),
-      c.AF.createValues([ g ], [{ g: c.DF.literal('l') }]),
-    );
-    const meta = withCpVars(c.AF.createGraph(inner, g)).metadata;
+    // Every solution where the OPTIONAL misses binds `?g` to the name of the graph, so what the pattern
+    // says about it never applies on its own.
+    const meta = withCpVars(graphOverOptionalBindingItsName()).metadata;
     expect([ ...meta.vRanges.rangeOf('g') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
     // `?g ∈ cVars` and an empty range would be a contradiction the pruning would act on.
     expect(meta.cVars.has('g')).toBe(true);
+  });
+
+  it('witnesses this with a query that has a solution, binding `?g` to the graph name', async({ expect }) => {
+    // One named graph holding one triple whose subject is not `<ex://a>`: the OPTIONAL misses, and the
+    // single solution takes `?g` from the graph. An empty answer would make the test above vacuous. The
+    // query is the text of `graphOverOptionalBindingItsName`, since Comunica only runs a GRAPH it parsed.
+    const DF = DataFactory;
+    const store = new Store([
+      DF.quad(DF.namedNode('ex://b'), DF.namedNode('ex://p'), DF.namedNode('ex://o'), DF.namedNode('ex://g1')),
+    ]);
+    const bindings = await (await new QueryEngine().queryBindings(
+      'SELECT * { GRAPH ?g { ?s ?p ?o OPTIONAL { VALUES (?s ?g) { (<ex://a> "l") } } } }',
+      { sources: [ store ]},
+    )).toArray();
+    expect(bindings.map(binding => binding.get('g'))).toEqual([ DF.namedNode('ex://g1') ]);
   });
 
   it('narrows by what the pattern certainly binds it to', ({ expect }) => {
@@ -181,10 +209,7 @@ describe('the metadata of an operation', () => {
       [ 'a union of disagreeing branches', c.AF.createUnion([ iri, literal ], false) ],
       [ 'a minus of disagreeing sides', c.AF.createMinus(iri, literal) ],
       [ 'a graph over a pattern', c.AF.createGraph(pattern, g) ],
-      [ 'a graph over an optional binding its name', c.AF.createGraph(
-        c.AF.createLeftJoin(c.AF.createBgp([]), c.AF.createValues([ g ], [{ g: c.DF.literal('l') }])),
-        g,
-      ) ],
+      [ 'a graph over an optional binding its name', graphOverOptionalBindingItsName() ],
       [ 'a projection over a join', c.AF.createProject(c.AF.createJoin([ undefCol, literal ], false), [ x ]) ],
     ];
 
