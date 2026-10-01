@@ -118,7 +118,7 @@ export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq
     }
   }
   {
-    SELECT ( "dummy" AS ?mExists0 ) WHERE {
+    SELECT ?mExists0 WHERE {
       {
         {
           {
@@ -254,7 +254,7 @@ export const expectedQueryToValues = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o
     }
   }
   {
-    SELECT ( "dummy" AS ?mExists0 ) WHERE {
+    SELECT ?mExists0 WHERE {
       {
         {
           {

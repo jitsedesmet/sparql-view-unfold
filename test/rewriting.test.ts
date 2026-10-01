@@ -184,7 +184,7 @@ LIMIT 10`,
         expect,
         'SELECT * { <ex://a> !<ex://r> <ex://b> }',
         `SELECT * WHERE {
-  SELECT DISTINCT ( "dummy" AS ?mExists0 ) WHERE {
+  SELECT DISTINCT ?mExists0 WHERE {
     {
       SELECT ( ?mi_p AS ?uq_path_0 ) WHERE {
         {
@@ -282,10 +282,10 @@ LIMIT 10`,
         expect,
         'SELECT * { <ex://a> (<ex://q>|<ex://r>)? <ex://b> }',
         `SELECT * WHERE {
-  SELECT DISTINCT ( "dummy" AS ?mExists0 ) WHERE {
+  SELECT DISTINCT ?mExists0 WHERE {
     {
       {
-        SELECT ( "dummy" AS ?mExists1 ) WHERE {
+        SELECT ?mExists1 WHERE {
           {
             {
               ?mi_s ?mi_p ?mi_o .
@@ -299,7 +299,7 @@ LIMIT 10`,
     }
     UNION {
       {
-        SELECT ( "dummy" AS ?mExists2 ) WHERE {
+        SELECT ?mExists2 WHERE {
           {
             {
               ?mi_s ?mi_p ?mi_o .

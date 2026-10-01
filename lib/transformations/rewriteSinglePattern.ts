@@ -212,7 +212,7 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF 
 
 /**
  * Wraps an operation in a PROJECT (subselect) over the variables the pattern binds.
- * @returns the subselect; where the pattern binds nothing, a dummy variable is projected instead, SPARQL
+ * @returns the subselect; where the pattern binds nothing, an unbound variable is projected instead, SPARQL
  * having no sub-ASK and no empty projection
  */
 function wrapOperationInProject({ triplePatternBinds, operation, coinExistenceVariable, DF, AF }: {
@@ -223,7 +223,7 @@ function wrapOperationInProject({ triplePatternBinds, operation, coinExistenceVa
   const variablesToSelect = Object.keys(triplePatternBinds).map(x => DF.variable(x));
   if (variablesToSelect.length === 0) {
     // Nothing to select, so all this subquery has to say is whether the data is there.
-    return projectSolutionExistence({ AF, DF, coinExistenceVariable }, operation);
+    return projectSolutionExistence({ AF, coinExistenceVariable }, operation);
   }
   // Sort allows for stable tests but does not practically change anything.
   variablesToSelect.sort((a, b) => a.value.localeCompare(b.value));
