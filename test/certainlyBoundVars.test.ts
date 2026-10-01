@@ -2,6 +2,7 @@ import { describe, it } from 'vitest';
 import type { TransformationContext } from '../lib/transformContext.js';
 import { createTransformationContext } from '../lib/transformContext.js';
 import { withCpVars } from '../lib/utils/certainlyBoundVars.js';
+import { constructedTermOf } from '../lib/utils/expressionHelpers.js';
 
 const c = createTransformationContext();
 const x = c.DF.variable('x');
@@ -124,6 +125,103 @@ describe('the target of a triple-term BIND', () => {
       c.DF.namedNode('ex://g1'),
     );
     expect(bindsCertainly(c.AF.createBgp([]), quadPattern)).toBe(false);
+  });
+});
+
+/**
+ * `TRIPLE(s, p, o)` is the `<<( s p o )>>` it means, nested or not: the parser keeps every `TRIPLE()` an
+ * operator expression, so `TRIPLE(?s, :p, TRIPLE(?a, :q, ?b))` is the third spelling of the construction
+ * `<<( ?s :p <<( ?a :q ?b )>> )>>` and has to get the same answer as the other two.
+ */
+describe('the target of a nested TRIPLE() BIND', () => {
+  type Expression = Parameters<typeof c.AF.createExtend>[2];
+  const t = c.DF.variable('t');
+  const s = c.DF.variable('s');
+  const a = c.DF.variable('a');
+  const b = c.DF.variable('b');
+  const p = c.DF.namedNode('ex://p');
+  const q = c.DF.namedNode('ex://q');
+  const r = c.DF.namedNode('ex://r');
+
+  function term(value: Parameters<typeof c.AF.createTermExpression>[0]): Expression {
+    return c.AF.createTermExpression(value);
+  }
+  function triple(...args: Expression[]): Expression {
+    return c.AF.createOperatorExpression('triple', args);
+  }
+
+  /** The three spellings of `<<( ?s :p <<( ?a :q ?b )>> )>>`, all built fresh. */
+  function spellings(): [ string, Expression ][] {
+    return [
+      [ 'TRIPLE(?s, :p, TRIPLE(?a, :q, ?b))', triple(term(s), term(p), triple(term(a), term(q), term(b))) ],
+      [ 'TRIPLE(?s, :p, <<( ?a :q ?b )>>)', triple(term(s), term(p), term(c.DF.quad(a, q, b))) ],
+      [ '<<( ?s :p <<( ?a :q ?b )>> )>>', term(c.DF.quad(s, p, c.DF.quad(a, q, b))) ],
+    ];
+  }
+
+  /** The certainty and the range of `?t` after `BIND(expression AS ?t)` over `input`. */
+  type Target = { certain: boolean; range: string[] };
+  function target(input: Parameters<typeof withCpVars>[0], expression: Expression): Target {
+    const meta = withCpVars(c.AF.createExtend(input, t, expression)).metadata;
+    return { certain: meta.cVars.has('t'), range: [ ...meta.vRanges.rangeOf('t') ].sort() };
+  }
+
+  it('reads to the same construction for every spelling', ({ expect }) => {
+    const expected = c.DF.quad(s, p, c.DF.quad(a, q, b));
+    for (const [ , expression ] of spellings()) {
+      expect(constructedTermOf(expression)?.equals(expected)).toBe(true);
+    }
+  });
+
+  for (const [ name, expression ] of spellings()) {
+    it(`is certain with a triple-term range where the components fit their positions: ${name}`, ({ expect }) => {
+      // `?s` and `?a` are subjects, so IRIs or blank nodes; `?b` is an object, which the object of the inner
+      // construction admits whatever it is. Every component is certain, so neither construction can fail.
+      const input = c.AF.createBgp([
+        c.AF.createPattern(s, r, c.DF.variable('o')),
+        c.AF.createPattern(a, r, b),
+      ]);
+      expect(target(input, expression)).toEqual({ certain: true, range: [ 'Quad' ]});
+    });
+
+    it(`is uncertain where the inner subject may be a literal: ${name}`, ({ expect }) => {
+      // `?a` is an object here, so a literal it can be makes the inner construction raise, and the outer
+      // one with it.
+      const input = c.AF.createBgp([
+        c.AF.createPattern(s, r, a),
+        c.AF.createPattern(s, r, b),
+      ]);
+      expect(target(input, expression).certain).toBe(false);
+    });
+
+    it(`is uncertain where the inner subject is not certain: ${name}`, ({ expect }) => {
+      // The OPTIONAL may leave `?a` unbound, and the inner construction over an unbound `?a` raises.
+      const input = c.AF.createLeftJoin(
+        c.AF.createPattern(s, r, b),
+        c.AF.createPattern(a, r, c.DF.variable('o')),
+      );
+      expect(target(input, expression).certain).toBe(false);
+    });
+  }
+
+  it('reads no construction from a nested TRIPLE() in the subject or predicate position', ({ expect }) => {
+    // Neither position admits a triple term, so the construction always raises - and no `<<( … )>>`
+    // spells that.
+    const inner = (): Expression => triple(term(a), term(q), term(b));
+    expect(constructedTermOf(triple(inner(), term(p), term(b)))).toBeUndefined();
+    expect(constructedTermOf(triple(term(s), inner(), term(b)))).toBeUndefined();
+    const input = c.AF.createBgp([
+      c.AF.createPattern(s, r, c.DF.variable('o')),
+      c.AF.createPattern(a, r, b),
+    ]);
+    expect(target(input, triple(inner(), term(p), term(b))).certain).toBe(false);
+    expect(target(input, triple(term(s), inner(), term(b))).certain).toBe(false);
+  });
+
+  it('reads no construction from a nested TRIPLE() that is itself none', ({ expect }) => {
+    // A literal subject makes the inner `TRIPLE()` raise, so the outer one is not a construction either.
+    expect(constructedTermOf(triple(term(s), term(p), triple(term(c.DF.literal('l')), term(q), term(b)))))
+      .toBeUndefined();
   });
 });
 

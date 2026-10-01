@@ -236,8 +236,8 @@ const triplePositionRanges = [ subjectRange, predicateRange, objectRange ];
 
 /**
  * The term an expression *constructs*, which is one thing spelled two ways: a term expression is a
- * construction of itself, and so is `TRIPLE(s, p, o)` over three term arguments, which the parser keeps
- * distinct from the `<<( s p o )>>` it means.
+ * construction of itself, and so is `TRIPLE(s, p, o)` over three arguments that are constructions in turn,
+ * which the parser keeps distinct from the `<<( s p o )>>` it means.
  * @param expression - The expression to read
  * @returns the term it constructs, or `undefined` when it constructs none
  */
@@ -250,10 +250,12 @@ export function constructedTermOf(expression: Algebra.Expression): RDF.Term | un
   // rewrite that moves or writes in the construction rather than evaluating it.
   if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === 'triple' &&
     expression.args.length === 3) {
-    const components = expression.args.map(argument =>
-      argument.subType === Algebra.ExpressionTypes.TERM ? argument.term : undefined);
+    // A nested `TRIPLE()` is read the same way, so `TRIPLE(?s, :p, TRIPLE(?a, :q, ?b))` is the construction
+    // `<<( ?s :p <<( ?a :q ?b )>> )>>` like the mixed spelling `TRIPLE(?s, :p, <<( ?a :q ?b )>>)` is.
+    const components = expression.args.map(argument => constructedTermOf(argument));
     // A ground component the position cannot hold makes the construction *raise*, and no `<<( … )>>` spells
-    // that - so it stays a `TRIPLE()` rather than becoming a triple term no generator could print. A
+    // that - so it stays a `TRIPLE()` rather than becoming a triple term no generator could print. That
+    // includes a nested construction outside the object position, the only one admitting a triple term. A
     // variable is left to the ranges, which is where {@link certainlyBoundVars!withCpVars} decides it.
     if (components.some((component, index) => component === undefined ||
         (component.termType !== 'Variable' && !triplePositionRanges[index].has(component.termType)))) {
