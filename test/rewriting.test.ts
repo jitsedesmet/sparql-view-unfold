@@ -3,6 +3,7 @@ import type { expect as Expect } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createQueryRewriter } from '../lib/queryRewriter.js';
 import { extendsToValuesTransformation } from '../lib/transformations/extendsToValues.js';
+import { rewriteNonRecursivePathsTransformation } from '../lib/transformations/pathTransformation.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import type { QueryTransformation } from '../lib/types.js';
 import {
@@ -15,13 +16,15 @@ import {
 } from './queryConsts.js';
 
 describe('dummy', () => {
-  /** Rewrites a query with the unfolding of the given mappings, followed by the given pipeline. */
+  /** Rewrites a query with the unfolding of the given mappings, surrounded by the given pipelines. */
   async function transformQueryUsingConstructs(
     userQuery: string,
     mappers: string[],
     afterUnfolding: readonly QueryTransformation[] = [],
+    beforeUnfolding: readonly QueryTransformation[] = [],
   ): Promise<string> {
     const rewriter = createQueryRewriter([
+      ...beforeUnfolding,
       unfoldingTransformation(mappingFromConstructQueries(mappers)),
       ...afterUnfolding,
     ]);
@@ -34,8 +37,9 @@ describe('dummy', () => {
     expectedQuery: string,
     mappers: string[],
     afterUnfolding: readonly QueryTransformation[] = [],
+    beforeUnfolding: readonly QueryTransformation[] = [],
   ): Promise<void> {
-    expect((await transformQueryUsingConstructs(userQuery, mappers, afterUnfolding)).trim())
+    expect((await transformQueryUsingConstructs(userQuery, mappers, afterUnfolding, beforeUnfolding)).trim())
       .toEqual(expectedQuery.trim());
 
     // Const _expectedAst = parser.parse(expectedQuery);
@@ -144,6 +148,173 @@ LIMIT 10`,
     [ tripleTermConstruct, nonTripleTermConstruct ],
     [ extendsToValuesTransformation() ],
   ));
+
+  // The spec gives `!` and `?` paths set semantics over their subject and object.
+  describe('property paths with set semantics', () => {
+    /** Rewrites a query over the pass-through mapping, expanding its paths first. */
+    function testPath(expect: typeof Expect, userQuery: string, expectedQuery: string): Promise<void> {
+      return testConstructMappers(
+        expect,
+        userQuery,
+        expectedQuery,
+        [ 'CONSTRUCT WHERE { ?s ?p ?o }' ],
+        [],
+        [ rewriteNonRecursivePathsTransformation() ],
+      );
+    }
+
+    describe('a negated property set', () => {
+      it('only its subject and object leave it, each pair once', ({ expect }) => testPath(
+        expect,
+        'SELECT * { ?s !<ex://r> ?o }',
+        `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
+  SELECT DISTINCT ?uq_s ?uq_o WHERE {
+    {
+      SELECT ( ?mi_o AS ?uq_o ) ( ?mi_p AS ?uq_path_0 ) ( ?mi_s AS ?uq_s ) WHERE {
+        ?mi_s ?mi_p ?mi_o .
+      }
+    }
+    FILTER ( ( ?uq_path_0 NOT IN ( <ex://r> ) ) )
+  }
+}`,
+      ));
+
+      it('asks for existence when its subject and object are ground', ({ expect }) => testPath(
+        expect,
+        'SELECT * { <ex://a> !<ex://r> <ex://b> }',
+        `SELECT * WHERE {
+  SELECT DISTINCT ?mExists0 WHERE {
+    {
+      SELECT ( ?mi_p AS ?uq_path_0 ) WHERE {
+        {
+          ?mi_s ?mi_p ?mi_o .
+          FILTER ( SAMETERM( ?mi_s , <ex://a> ) )
+        }
+        FILTER ( SAMETERM( ?mi_o , <ex://b> ) )
+      }
+    }
+    FILTER ( ( ?uq_path_0 NOT IN ( <ex://r> ) ) )
+  }
+}`,
+      ));
+    });
+
+    describe('a zero or one path', () => {
+      it('only its subject and object leave it, each pair once', ({ expect }) => testPath(
+        expect,
+        'SELECT * { ?x <ex://p>? ?y }',
+        `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
+  SELECT DISTINCT ?uq_x ?uq_y WHERE {
+    {
+      {
+        SELECT ( ?mi_s AS ?uq_x ) ( ?mi_o AS ?uq_y ) WHERE {
+          ?mi_s ?mi_p ?mi_o .
+          FILTER ( SAMETERM( ?mi_p , <ex://p> ) )
+        }
+      }
+    }
+    UNION {
+      {
+        SELECT DISTINCT ?uq_x WHERE {
+          {
+            {
+              SELECT ( ?mi_p AS ?uq_path_0 ) ( ?mi_o AS ?uq_path_1 ) ( ?mi_s AS ?uq_x ) WHERE {
+                ?mi_s ?mi_p ?mi_o .
+              }
+            }
+          }
+          UNION {
+            {
+              SELECT ( ?mi_p AS ?uq_path_0 ) ( ?mi_s AS ?uq_path_1 ) ( ?mi_o AS ?uq_x ) WHERE {
+                ?mi_s ?mi_p ?mi_o .
+              }
+            }
+          }
+        }
+      }
+      BIND( ?uq_x AS ?uq_y )
+    }
+  }
+}`,
+      ));
+
+      // Binding the variable to itself, `BIND( ?x AS ?x )`, is not SPARQL.
+      it('takes every node as a zero length match when subject and object are one variable', ({ expect }) => testPath(
+        expect,
+        'SELECT * { ?x <ex://p>? ?x }',
+        `SELECT ( ?uq_x AS ?x ) WHERE {
+  SELECT DISTINCT ?uq_x WHERE {
+    {
+      {
+        SELECT ( ?mi_o AS ?uq_x ) WHERE {
+          {
+            ?mi_s ?mi_p ?mi_o .
+            FILTER ( SAMETERM( ?mi_p , <ex://p> ) )
+          }
+          FILTER ( SAMETERM( ?mi_o , ?mi_s ) )
+        }
+      }
+    }
+    UNION {
+      SELECT DISTINCT ?uq_x WHERE {
+        {
+          {
+            SELECT ( ?mi_p AS ?uq_path_0 ) ( ?mi_o AS ?uq_path_1 ) ( ?mi_s AS ?uq_x ) WHERE {
+              ?mi_s ?mi_p ?mi_o .
+            }
+          }
+        }
+        UNION {
+          {
+            SELECT ( ?mi_p AS ?uq_path_0 ) ( ?mi_s AS ?uq_path_1 ) ( ?mi_o AS ?uq_x ) WHERE {
+              ?mi_s ?mi_p ?mi_o .
+            }
+          }
+        }
+      }
+    }
+  }
+}`,
+      ));
+
+      it('yields one solution when a ground subject and object match over two alternatives', ({ expect }) => testPath(
+        expect,
+        'SELECT * { <ex://a> (<ex://q>|<ex://r>)? <ex://b> }',
+        `SELECT * WHERE {
+  SELECT DISTINCT ?mExists0 WHERE {
+    {
+      {
+        SELECT ?mExists1 WHERE {
+          {
+            {
+              ?mi_s ?mi_p ?mi_o .
+              FILTER ( SAMETERM( ?mi_s , <ex://a> ) )
+            }
+            FILTER ( SAMETERM( ?mi_p , <ex://q> ) )
+          }
+          FILTER ( SAMETERM( ?mi_o , <ex://b> ) )
+        }
+      }
+    }
+    UNION {
+      {
+        SELECT ?mExists2 WHERE {
+          {
+            {
+              ?mi_s ?mi_p ?mi_o .
+              FILTER ( SAMETERM( ?mi_s , <ex://a> ) )
+            }
+            FILTER ( SAMETERM( ?mi_p , <ex://r> ) )
+          }
+          FILTER ( SAMETERM( ?mi_o , <ex://b> ) )
+        }
+      }
+    }
+  }
+}`,
+      ));
+    });
+  });
 
   // It('spo with blank in mapping head', ({ expect }) => {
   //   expect(() => transformQueryUsingConstructs(
