@@ -2,7 +2,8 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import { createFilterFalse } from '../utils/operationhelpers.js';
+import { termVars } from '../utils/certainlyBoundVars.js';
+import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
 
 import { isRdfVar } from '../utils/typeGuards.js';
 
@@ -24,7 +25,7 @@ let counter = 0;
  * - **Alt** (`path1|path2`): UNION of alternatives
  * - **Seq** (`path1/path2`): JOIN with intermediate variables
  * - **Inv** (`^path`): Swaps subject and object
- * - **NPS** (`!(<p1>|<p2>)`): Negated property set (FILTER NOT IN)
+ * - **NPS** (`!(<p1>|<p2>)`): Negated property set (DISTINCT projection of a FILTER NOT IN)
  * - **ZeroOrOne** (`path?`): UNION with empty match case
  *
  * ## Not Fully Supported:
@@ -82,14 +83,23 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
     }
     if (pathOp.type === Algebra.Types.NPS) {
       // https://www.w3.org/TR/sparql12-query/#eval_negatedPropertySet
+      // The evaluation is a set of solutions over the end points only: the predicate is not part of the
+      // answer, and two triples differing only in their predicate yield the same solution once.
       const predicate = DF.variable(`rewrite_${counter++}`);
-      return AF.createFilter(
+      const matches = AF.createFilter(
         AF.createPattern(subject, predicate, object, path.graph),
         AF.createOperatorExpression('notin', [
           AF.createTermExpression(predicate),
           ...pathOp.iris.map(x => AF.createTermExpression(x)),
         ]),
       );
+      const visible = [ ...new Set([ subject, object, path.graph ].flatMap(term => [ ...termVars(term) ])) ]
+        .map(name => DF.variable(name));
+      if (visible.length === 0) {
+        // Both end points are ground: a SELECT over no variables is not SPARQL, so ask for existence instead.
+        return AF.createDistinct(projectSolutionExistence(c, matches));
+      }
+      return AF.createDistinct(AF.createProject(matches, visible));
     }
     // https://www.w3.org/TR/sparql12-query/#defn_evalPP_ZeroOrOnePath
     if (pathOp.type === Algebra.Types.ZERO_OR_ONE_PATH) {
