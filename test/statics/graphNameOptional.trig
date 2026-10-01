@@ -1,0 +1,10 @@
+PREFIX : <ex://>
+
+# One named graph holding one triple whose subject is not :a, so an OPTIONAL that binds ?g only next to
+# ?s = :a misses here, and a GRAPH ?g around it binds ?g to :g1.
+GRAPH :g1 {
+  :b :p :o .
+}
+
+# Something to describe the graph name by, in the default graph a DESCRIBE reads.
+:g1 :label "g1" .

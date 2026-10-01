@@ -12,7 +12,10 @@ import { filterFalseTransformation } from '../lib/transformations/filterFalse.js
 import {
   nullifyJoinOverIncompatibleBoundsTransformation,
 } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
-import { nullifyUnbindableVarsTransformation } from '../lib/transformations/nullifyUnbindableVars.js';
+import {
+  nullifyUnbindableVars,
+  nullifyUnbindableVarsTransformation,
+} from '../lib/transformations/nullifyUnbindableVars.js';
 import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
@@ -220,6 +223,48 @@ describe('evaluation tests', () => {
         ?x :p ?y
         BIND(:a AS ?b)
       }`, 1);
+    });
+  });
+
+  describe('nullifying unbindable variables under a GRAPH an OPTIONAL may leave its name unbound in', () => {
+    /**
+     * The pattern only ever binds `?g` to a literal, but not certainly: the triple in `:g1` has a subject
+     * other than `:a`, so the OPTIONAL misses and the GRAPH binds `?g` to `:g1`. Intersecting that with
+     * the literal would claim `?g` binds to nothing in every solution, and the pass would empty a query
+     * that has one - which every query form has to show, not only a SELECT.
+     *
+     * The rewriter refuses a GRAPH in the user query, so the pass runs on the parsed query directly.
+     */
+    const source = './test/statics/graphNameOptional.trig';
+    const where = 'WHERE { GRAPH ?g { ?s ?p ?o OPTIONAL { VALUES (?s ?g) { (<ex://a> "l") } } } }';
+    const c = createTransformationContext();
+    const nullified = (query: string): string =>
+      c.generator.generate(toAst(nullifyUnbindableVars(c, parseQuery(c, query))));
+
+    it('selects the graph name', async({ expect }) => {
+      const query = `SELECT ?g ${where}`;
+      const graphNames = async(text: string): Promise<string[]> => {
+        const rows: RDF.Bindings[] = await arrayifyStream(await engine.queryBindings(text, { sources: [ source ]}));
+        return rows.map(row => row.get('g')!.value);
+      };
+      expect(await graphNames(query)).toEqual([ 'ex://g1' ]);
+      expect(await graphNames(nullified(query))).toEqual([ 'ex://g1' ]);
+    });
+
+    it('asks true', async({ expect }) => {
+      const query = `ASK ${where}`;
+      expect(await engine.queryBoolean(query, { sources: [ source ]})).toBe(true);
+      expect(await engine.queryBoolean(nullified(query), { sources: [ source ]})).toBe(true);
+    });
+
+    it('describes the graph name', async({ expect }) => {
+      const query = `DESCRIBE ?g ${where}`;
+      const description = await sourceToStore([ source ], 'DESCRIBE <ex://g1>');
+      expect(description.size).toBeGreaterThan(0);
+      expect((await sourceToStore([ source ], query)).getQuads(null, null, null, null))
+        .toBeRdfIsomorphic(description.getQuads(null, null, null, null));
+      expect((await sourceToStore([ source ], nullified(query))).getQuads(null, null, null, null))
+        .toBeRdfIsomorphic(description.getQuads(null, null, null, null));
     });
   });
 });
