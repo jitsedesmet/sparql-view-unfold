@@ -150,7 +150,7 @@ LIMIT 10`,
   ));
 
   // The specification evaluates both a negated property set and a zero or one path to a *set* of solutions
-  // over the end points of the path.
+  // over the subject and object of the path.
   describe('property paths with set semantics', () => {
     /** Rewrites a query over the pass-through mapping, expanding its paths first. */
     function testPath(expect: typeof Expect, userQuery: string, expectedQuery: string): Promise<void> {
@@ -165,7 +165,7 @@ LIMIT 10`,
     }
 
     describe('a negated property set', () => {
-      it('only its end points leave it, each pair once', ({ expect }) => testPath(
+      it('only its subject and object leave it, each pair once', ({ expect }) => testPath(
         expect,
         'SELECT * { ?s !<ex://r> ?o }',
         `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
@@ -180,7 +180,7 @@ LIMIT 10`,
 }`,
       ));
 
-      it('asks for existence when both end points are ground', ({ expect }) => testPath(
+      it('asks for existence when its subject and object are ground', ({ expect }) => testPath(
         expect,
         'SELECT * { <ex://a> !<ex://r> <ex://b> }',
         `SELECT * WHERE {
@@ -201,7 +201,7 @@ LIMIT 10`,
     });
 
     describe('a zero or one path', () => {
-      it('only its end points leave it, each pair once', ({ expect }) => testPath(
+      it('only its subject and object leave it, each pair once', ({ expect }) => testPath(
         expect,
         'SELECT * { ?x <ex://p>? ?y }',
         `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
@@ -240,7 +240,7 @@ LIMIT 10`,
       ));
 
       // Binding the variable to itself, `BIND( ?x AS ?x )`, is not SPARQL.
-      it('takes every node as a zero length match when both end points are one variable', ({ expect }) => testPath(
+      it('takes every node as a zero length match when subject and object are one variable', ({ expect }) => testPath(
         expect,
         'SELECT * { ?x <ex://p>? ?x }',
         `SELECT ( ?uq_x AS ?x ) WHERE {
@@ -278,7 +278,7 @@ LIMIT 10`,
 }`,
       ));
 
-      it('yields one solution when both ground end points match over several alternatives', ({ expect }) => testPath(
+      it('yields one solution when a ground subject and object match over two alternatives', ({ expect }) => testPath(
         expect,
         'SELECT * { <ex://a> (<ex://q>|<ex://r>)? <ex://b> }',
         `SELECT * WHERE {

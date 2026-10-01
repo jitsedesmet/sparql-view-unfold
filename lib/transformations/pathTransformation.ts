@@ -25,8 +25,8 @@ import { collectVariableNames, freshVarGenerator } from '../utils.js';
  * - **NPS** (`!(<p1>|<p2>)`): Negated property set (FILTER NOT IN)
  * - **ZeroOrOne** (`path?`): UNION with empty match case
  *
- * The specification evaluates the last two to a *set* of solutions over the end points of the path, so
- * their expansion is a DISTINCT projection onto the variables of those end points.
+ * The specification evaluates the last two to a *set* of solutions over the subject and object of the path,
+ * so their expansion is a DISTINCT projection onto the variables of those two terms.
  *
  * The variables the expansion coins carry {@link VAR_PREFIX_USER_QUERY}: they are part of the user query,
  * and the unfolding counts every variable without it as one of the mapping.
@@ -52,10 +52,10 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
   const fresh = freshVarGenerator(collectVariableNames(c.astTransformer, op), `${VAR_PREFIX_USER_QUERY}path_`);
 
   /**
-   * The set semantics of a path: a DISTINCT projection onto the variables of its end points.
+   * The set semantics of a path: a DISTINCT projection onto the variables of its subject, object and graph.
    * Where those have no variable, a SELECT over no variables is not SPARQL, so it asks for existence instead.
    */
-  function overEndPoints(operation: Algebra.Operation, path: Algebra.Path): Algebra.Operation {
+  function overSubjectAndObject(operation: Algebra.Operation, path: Algebra.Path): Algebra.Operation {
     const visible = [ ...new Set([ path.subject, path.object, path.graph ].flatMap(term => [ ...termVars(term) ])) ]
       .map(name => DF.variable(name));
     if (visible.length === 0) {
@@ -117,7 +117,7 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
     if (pathOp.type === Algebra.Types.NPS) {
       // https://www.w3.org/TR/sparql12-query/#eval_negatedPropertySet
       const predicate = fresh();
-      return overEndPoints(AF.createFilter(
+      return overSubjectAndObject(AF.createFilter(
         AF.createBgp([ AF.createPattern(subject, predicate, object, path.graph) ]),
         AF.createOperatorExpression('notin', [
           AF.createTermExpression(predicate),
@@ -130,7 +130,7 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
       if (isRdfVar(subject) && isRdfVar(object)) {
         // Both are var: the zero length match binds both to the same node - and where they are one variable
         // already, binding it to itself is no binding at all.
-        return overEndPoints(AF.createUnion([
+        return overSubjectAndObject(AF.createUnion([
           resolvePathOp(pathOp.path, path),
           subject.equals(object) ?
             nodes(subject, path.graph) :
@@ -141,12 +141,12 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
         if (subject.equals(object)) {
           return AF.createBgp([]);
         }
-        return overEndPoints(resolvePathOp(pathOp.path, path), path);
+        return overSubjectAndObject(resolvePathOp(pathOp.path, path), path);
       }
       // Only one is a var, the other is term
       const [ variable, term ] =
         <[RDF.Variable, RDF.Term]> (isRdfVar(subject) ? [ subject, object ] : [ object, subject ]);
-      return overEndPoints(AF.createUnion([
+      return overSubjectAndObject(AF.createUnion([
         resolvePathOp(pathOp.path, path),
         AF.createExtend(AF.createBgp([]), variable, AF.createTermExpression(term)),
       ]), path);
