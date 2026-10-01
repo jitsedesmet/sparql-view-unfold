@@ -1,16 +1,13 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { VAR_PREFIX_USER_QUERY } from '../consts.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import { termVars } from '../utils/certainlyBoundVars.js';
 import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
 
 import { isRdfVar } from '../utils/typeGuards.js';
-
-/**
- * Counter for generating unique variable names during path rewriting.
- */
-let counter = 0;
+import { collectVariableNames, freshVarGenerator } from '../utils.js';
 
 /**
  * Transformation that rewrites non-recursive property paths into equivalent BGPs and UNIONs.
@@ -25,8 +22,14 @@ let counter = 0;
  * - **Alt** (`path1|path2`): UNION of alternatives
  * - **Seq** (`path1/path2`): JOIN with intermediate variables
  * - **Inv** (`^path`): Swaps subject and object
- * - **NPS** (`!(<p1>|<p2>)`): Negated property set (DISTINCT projection of a FILTER NOT IN)
+ * - **NPS** (`!(<p1>|<p2>)`): Negated property set (FILTER NOT IN)
  * - **ZeroOrOne** (`path?`): UNION with empty match case
+ *
+ * The specification evaluates the last two to a *set* of solutions over the end points of the path, so
+ * their expansion is a DISTINCT projection onto the variables of those end points.
+ *
+ * The variables the expansion coins carry {@link VAR_PREFIX_USER_QUERY}: they are part of the user query,
+ * and the unfolding counts every variable without it as one of the mapping.
  *
  * ## Not Fully Supported:
  * - **ZeroOrMore** (`path*`): Returns original (recursive, cannot be fully expanded)
@@ -38,7 +41,7 @@ let counter = 0;
  *
  * @example
  * // ex:knows/ex:name becomes:
- * // ?s ex:knows ?linkvar_0 . ?linkvar_0 ex:name ?o
+ * // ?s ex:knows ?uq_path_0 . ?uq_path_0 ex:name ?o
  *
  * @example
  * // ex:knows|ex:worksWith becomes:
@@ -46,6 +49,36 @@ let counter = 0;
  */
 export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   const { AF, DF } = c;
+  const fresh = freshVarGenerator(collectVariableNames(c.astTransformer, op), `${VAR_PREFIX_USER_QUERY}path_`);
+
+  /**
+   * The set semantics of a path: a DISTINCT projection onto the variables of its end points.
+   * Where those have no variable, a SELECT over no variables is not SPARQL, so it asks for existence instead.
+   */
+  function overEndPoints(operation: Algebra.Operation, path: Algebra.Path): Algebra.Operation {
+    const visible = [ ...new Set([ path.subject, path.object, path.graph ].flatMap(term => [ ...termVars(term) ])) ]
+      .map(name => DF.variable(name));
+    if (visible.length === 0) {
+      return AF.createDistinct(projectSolutionExistence(c, operation));
+    }
+    return AF.createDistinct(AF.createProject(operation, visible));
+  }
+
+  /**
+   * Every node of the graph, bound to the given variable.
+   * Nodes implementation: https://www.w3.org/TR/sparql12-query/#defn_nodeSet
+   */
+  function nodes(variable: RDF.Variable, graph: RDF.Term): Algebra.Operation {
+    const predicate = fresh();
+    const other = fresh();
+    return AF.createDistinct(AF.createProject(
+      AF.createUnion([
+        AF.createBgp([ AF.createPattern(variable, predicate, other, graph) ]),
+        AF.createBgp([ AF.createPattern(other, predicate, variable, graph) ]),
+      ]),
+      [ variable ],
+    ));
+  }
 
   function resolvePathOp(pathOp: Algebra.PropertyPathSymbol, path: Algebra.Path): Algebra.Operation {
     const { subject, object } = path;
@@ -70,10 +103,10 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
       if (pathOp.input.length === 1) {
         return resolvePathOp(pathOp.input[0], path);
       }
-      let linkVar = DF.variable(`linkvar_${counter++}`);
+      let linkVar = fresh();
       const operations = [ resolvePathOp(pathOp.input[0], { ...path, object: linkVar }) ];
       for (const subOp of pathOp.input.slice(1, -1)) {
-        const newLink = DF.variable(`linkvar_${counter++}`);
+        const newLink = fresh();
         operations.push(resolvePathOp(subOp, { ...path, subject: linkVar, object: newLink }));
         linkVar = newLink;
       }
@@ -83,67 +116,40 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
     }
     if (pathOp.type === Algebra.Types.NPS) {
       // https://www.w3.org/TR/sparql12-query/#eval_negatedPropertySet
-      // The evaluation is a set of solutions over the end points only: the predicate is not part of the
-      // answer, and two triples differing only in their predicate yield the same solution once.
-      const predicate = DF.variable(`rewrite_${counter++}`);
-      const matches = AF.createFilter(
-        AF.createPattern(subject, predicate, object, path.graph),
+      const predicate = fresh();
+      return overEndPoints(AF.createFilter(
+        AF.createBgp([ AF.createPattern(subject, predicate, object, path.graph) ]),
         AF.createOperatorExpression('notin', [
           AF.createTermExpression(predicate),
           ...pathOp.iris.map(x => AF.createTermExpression(x)),
         ]),
-      );
-      const visible = [ ...new Set([ subject, object, path.graph ].flatMap(term => [ ...termVars(term) ])) ]
-        .map(name => DF.variable(name));
-      if (visible.length === 0) {
-        // Both end points are ground: a SELECT over no variables is not SPARQL, so ask for existence instead.
-        return AF.createDistinct(projectSolutionExistence(c, matches));
-      }
-      return AF.createDistinct(AF.createProject(matches, visible));
+      ), path);
     }
     // https://www.w3.org/TR/sparql12-query/#defn_evalPP_ZeroOrOnePath
     if (pathOp.type === Algebra.Types.ZERO_OR_ONE_PATH) {
       if (isRdfVar(subject) && isRdfVar(object)) {
-        // Both are var
-        return AF.createUnion([
+        // Both are var: the zero length match binds both to the same node - and where they are one variable
+        // already, binding it to itself is no binding at all.
+        return overEndPoints(AF.createUnion([
           resolvePathOp(pathOp.path, path),
-          AF.createExtend(
-            // Nodes implementation: https://www.w3.org/TR/sparql12-query/#defn_nodeSet
-            AF.createDistinct(AF.createProject(
-              AF.createUnion([
-                AF.createBgp([ AF.createPattern(
-                  subject,
-                  DF.variable(`p_${subject.value}`),
-                  DF.variable(`o_${subject.value}`),
-                  path.graph,
-                ) ]),
-                AF.createBgp([ AF.createPattern(
-                  DF.variable(`o_${subject.value}`),
-                  DF.variable(`p_${subject.value}`),
-                  subject,
-                  path.graph,
-                ) ]),
-              ]),
-              [ subject ],
-            )),
-            object,
-            AF.createTermExpression(subject),
-          ),
-        ]);
+          subject.equals(object) ?
+            nodes(subject, path.graph) :
+            AF.createExtend(nodes(subject, path.graph), object, AF.createTermExpression(subject)),
+        ]), path);
       }
       if (!isRdfVar(subject) && !isRdfVar(object)) {
         if (subject.equals(object)) {
           return AF.createBgp([]);
         }
-        return resolvePathOp(pathOp.path, path);
+        return overEndPoints(resolvePathOp(pathOp.path, path), path);
       }
       // Only one is a var, the other is term
       const [ variable, term ] =
         <[RDF.Variable, RDF.Term]> (isRdfVar(subject) ? [ subject, object ] : [ object, subject ]);
-      return AF.createUnion([
+      return overEndPoints(AF.createUnion([
         resolvePathOp(pathOp.path, path),
         AF.createExtend(AF.createBgp([]), variable, AF.createTermExpression(term)),
-      ]);
+      ]), path);
     }
     // If (pathOp.type === 'ZeroOrMorePath' || pathOp.type === 'OneOrMorePath') {
     // Throw new Error('Cannot transform recursive paths');
