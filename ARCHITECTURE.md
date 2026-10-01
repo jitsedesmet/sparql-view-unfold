@@ -93,8 +93,7 @@ query) variables, so the mapping variables of two patterns are in two scopes alr
 variables are meant to be shared between patterns, being the natural join keys. The one exception is the
 existence variable a pattern binding nothing projects in place of an empty projection — that one leaves the
 sub-SELECT, so the context coins it (`mExists0`, `mExists1`, …), holding the count for the whole rewrite.
-It is never bound - the projection keeps one empty solution per solution of the pattern, which is all it
-has to say - but coining it keeps it from being a variable the pattern does bind.
+It is never bound; coining it keeps it apart from the variables the pattern does bind.
 
 ## Blank nodes
 

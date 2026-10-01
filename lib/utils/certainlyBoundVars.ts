@@ -279,8 +279,8 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
     } case Types.PATH: {
       const vars = unionSets([ resOp.subject, resOp.object, resOp.graph ].map(termVars));
       resOp.metadata.cVars = vars;
-      // A path says nothing about the type of its endpoints - `?lit ^:p ?s` legitimately starts at a
-      // literal, and a zero-length path returns whatever the other end held - so only the graph narrows.
+      // A path says nothing about the type of its subject and object - `?lit ^:p ?s` legitimately starts at
+      // a literal, and a zero-length path returns whatever the other side held - so only the graph narrows.
       const ranges = new VRanges();
       ranges.addAtTop(vars);
       for (const name of termVars(resOp.graph)) {

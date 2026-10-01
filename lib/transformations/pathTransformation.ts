@@ -22,14 +22,10 @@ import { collectVariableNames, freshVarGenerator } from '../utils.js';
  * - **Alt** (`path1|path2`): UNION of alternatives
  * - **Seq** (`path1/path2`): JOIN with intermediate variables
  * - **Inv** (`^path`): Swaps subject and object
- * - **NPS** (`!(<p1>|<p2>)`): Negated property set (FILTER NOT IN)
- * - **ZeroOrOne** (`path?`): UNION with empty match case
+ * - **NPS** (`!(<p1>|<p2>)`): Negated property set (FILTER NOT IN), DISTINCT over subject and object
+ * - **ZeroOrOne** (`path?`): UNION with empty match case, DISTINCT over subject and object
  *
- * The specification evaluates the last two to a *set* of solutions over the subject and object of the path,
- * so their expansion is a DISTINCT projection onto the variables of those two terms.
- *
- * The variables the expansion coins carry {@link VAR_PREFIX_USER_QUERY}: they are part of the user query,
- * and the unfolding counts every variable without it as one of the mapping.
+ * Coined variables carry {@link VAR_PREFIX_USER_QUERY}, so the unfolding treats them as user query variables.
  *
  * ## Not Fully Supported:
  * - **ZeroOrMore** (`path*`): Returns original (recursive, cannot be fully expanded)
@@ -52,8 +48,10 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
   const fresh = freshVarGenerator(collectVariableNames(c.astTransformer, op), `${VAR_PREFIX_USER_QUERY}path_`);
 
   /**
-   * The set semantics of a path: a DISTINCT projection onto the variables of its subject, object and graph.
-   * Where those have no variable, a SELECT over no variables is not SPARQL, so it asks for existence instead.
+   * Gives an expanded path set semantics: a DISTINCT projection onto the variables of its subject, object and graph.
+   * @param operation - The expanded path
+   * @param path - The path it expands
+   * @returns the projection, or an existence check when there are no variables
    */
   function overSubjectAndObject(operation: Algebra.Operation, path: Algebra.Path): Algebra.Operation {
     const visible = [ ...new Set([ path.subject, path.object, path.graph ].flatMap(term => [ ...termVars(term) ])) ]
@@ -65,8 +63,10 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
   }
 
   /**
-   * Every node of the graph, bound to the given variable.
-   * Nodes implementation: https://www.w3.org/TR/sparql12-query/#defn_nodeSet
+   * Binds a variable to every [node](https://www.w3.org/TR/sparql12-query/#defn_nodeSet) of the graph.
+   * @param variable - The variable to bind
+   * @param graph - The graph to read the nodes from
+   * @returns the distinct nodes
    */
   function nodes(variable: RDF.Variable, graph: RDF.Term): Algebra.Operation {
     const predicate = fresh();
@@ -128,8 +128,7 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
     // https://www.w3.org/TR/sparql12-query/#defn_evalPP_ZeroOrOnePath
     if (pathOp.type === Algebra.Types.ZERO_OR_ONE_PATH) {
       if (isRdfVar(subject) && isRdfVar(object)) {
-        // Both are var: the zero length match binds both to the same node - and where they are one variable
-        // already, binding it to itself is no binding at all.
+        // The zero length match binds both to one node; a single shared variable needs no BIND.
         return overSubjectAndObject(AF.createUnion([
           resolvePathOp(pathOp.path, path),
           subject.equals(object) ?

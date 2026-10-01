@@ -149,8 +149,7 @@ LIMIT 10`,
     [ extendsToValuesTransformation() ],
   ));
 
-  // The specification evaluates both a negated property set and a zero or one path to a *set* of solutions
-  // over the subject and object of the path.
+  // The spec gives `!` and `?` paths set semantics over their subject and object.
   describe('property paths with set semantics', () => {
     /** Rewrites a query over the pass-through mapping, expanding its paths first. */
     function testPath(expect: typeof Expect, userQuery: string, expectedQuery: string): Promise<void> {

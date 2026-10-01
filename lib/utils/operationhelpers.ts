@@ -41,17 +41,11 @@ export function createFilterFalse(c: TransformationContext, op?: Algebra.Operati
 }
 
 /**
- * Wraps an operation in the projection that asks whether it has any solution at all.
- *
- * SPARQL has neither a sub-ASK nor an empty projection, so the question is written as a projection onto a
- * single variable the operation does not bind: one solution comes out per solution of the operation, each
- * binding nothing. The grammar does not require a projected variable to be bound in the pattern, so no BIND
- * is needed - and with none, the variable is not a column a `SELECT *` above it shows a value for.
- *
- * The context still coins the variable, so that it cannot be one the operation binds after all.
+ * Projects an operation onto a coined variable it never binds, keeping one empty solution per solution.
+ * Stands in for the empty projection SPARQL lacks.
  * @param c - Object containing the factories and the existence variable generator
  * @param operation - The operation to ask about
- * @returns the projection, over the one variable it never binds
+ * @returns the projection
  */
 export function projectSolutionExistence(
   c: Pick<TransformationContext, 'AF' | 'coinExistenceVariable'>,
