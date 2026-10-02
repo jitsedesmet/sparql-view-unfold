@@ -434,8 +434,10 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       //
       // What the *pattern* says about it only holds on top of that where the pattern binds it certainly.
       // Where it does not, the solutions leaving it unbound down there take the graph name and nothing
-      // else, so `P`'s range does not narrow: `GRAPH ?g { OPTIONAL { VALUES ?g { "l" } } }` binds `?g` to
-      // a graph name whenever the OPTIONAL misses, where intersecting reports it as never bound at all.
+      // else, so `P`'s range does not narrow: in `GRAPH ?g { ?s ?p ?o OPTIONAL { VALUES (?s ?g) { (<ex://a>
+      // "l") } } }` the pattern gives `?g` the range {Literal}, yet every triple whose subject is not
+      // `<ex://a>` leaves it unbound and GRAPH binds it to the graph name - where intersecting reports it
+      // as never bound at all.
       const ranges = new VRanges(input.metadata.vRanges);
       for (const name of graphVars) {
         if (input.metadata.cVars.has(name)) {

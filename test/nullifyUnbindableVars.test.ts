@@ -54,9 +54,12 @@ describe('nullifyUnbindableVars', () => {
   });
 
   it('leaves a GRAPH whose name only an OPTIONAL disagrees with alone', ({ expect }) => {
+    // `GRAPH ?g { ?s ?p ?o OPTIONAL { VALUES (?s ?g) { (<ex://a> "l") } } }`: every triple whose subject is
+    // not `<ex://a>` misses the OPTIONAL and takes `?g` from the graph, so this has solutions to lose.
+    const s = c.DF.variable('s');
     const inner = c.AF.createLeftJoin(
-      c.AF.createBgp([]),
-      c.AF.createValues([ g ], [{ g: c.DF.literal('l') }]),
+      c.AF.createBgp([ c.AF.createPattern(s, c.DF.variable('p'), c.DF.variable('o')) ]),
+      c.AF.createValues([ s, g ], [{ s: c.DF.namedNode('ex://a'), g: c.DF.literal('l') }]),
     );
     expect(isFilterFalse(c, nullifyUnbindableVars(c, c.AF.createGraph(inner, g)))).toBe(false);
   });
