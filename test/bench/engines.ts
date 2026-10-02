@@ -22,7 +22,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import type { ChildProcessByStdio, ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Readable } from 'node:stream';
 import type { Writable } from 'node:stream';
@@ -932,8 +932,9 @@ export class QLeverEngine extends ManagedServerEngine {
   public loadStore(file: string, dir: string): void {
     mkdirSync(dir, { recursive: true });
     const format = file.endsWith('.ttl') ? 'ttl' : 'nt';
-    // The builder writes its temporary files to the working directory.
-    runTool(this.bin('qlever-index'), [ '-i', join(dir, 'index'), '-f', file, '-F', format, '-p', 'true' ], dir);
+    // The builder writes its temporary files to the working directory, so the paths must not be relative.
+    const args = [ '-i', resolve(dir, 'index'), '-f', resolve(file), '-F', format, '-p', 'true' ];
+    runTool(this.bin('qlever-index'), args, dir);
   }
 
   protected serverCommand(dir: string, timeoutMs: number | undefined, _writable: boolean): string[] {

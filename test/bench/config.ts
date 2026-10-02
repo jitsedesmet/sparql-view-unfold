@@ -145,9 +145,16 @@ export interface WorkloadConfig {
   queryDir: string;
   /**
    * Scale name -> file stem under the workload's `data/` directory, in the order to run them. Each stem
-   * has `<stem>.nt` (skolemised source), `<stem>.views.nt` (materialised views) and `.hdt` copies of both.
+   * has `<stem>.nt` (skolemised source), `<stem>.views.nt` (materialised views) and, where Comunica runs,
+   * `.hdt` copies of both.
    */
   scales: Record<string, string>;
+  /**
+   * Scales that only some engines run, by scale name; every other scale runs on every engine. A scale can be
+   * sized for the engines that take it: LUBM's `u250` is about where QLever needs five minutes to
+   * materialise the views, a point the other engines reach at `u100` or well below.
+   */
+  scaleEngines?: Record<string, string[]>;
   /**
    * Whether every scale's data contains the previous one's, so that a query timing out at one scale
    * would time out at the next as well and need not be run there. True for LUBM, whose generator makes
@@ -161,7 +168,8 @@ export const WORKLOADS: Record<string, WorkloadConfig> = {
     name: 'lubm',
     viewsFile: join(WORKLOADS_DIR, 'lubm', 'views.rq'),
     queryDir: join(WORKLOADS_DIR, 'lubm', 'queries'),
-    scales: { u1: 'lubm-u1', u10: 'lubm-u10', u50: 'lubm-u50', u100: 'lubm-u100' },
+    scales: { u1: 'lubm-u1', u10: 'lubm-u10', u50: 'lubm-u50', u100: 'lubm-u100', u250: 'lubm-u250' },
+    scaleEngines: { u250: [ 'qlever' ]},
     nestedScales: true,
   },
   oaei: {
@@ -172,6 +180,11 @@ export const WORKLOADS: Record<string, WorkloadConfig> = {
     nestedScales: false,
   },
 };
+
+/** Whether `engine` runs `workload` at `scale` (see {@link WorkloadConfig.scaleEngines}). */
+export function runsAt(workload: WorkloadConfig, scale: string, engine: string): boolean {
+  return workload.scaleEngines?.[scale]?.includes(engine) ?? true;
+}
 
 /** The source and materialised-views datasets of one workload scale. */
 export function workloadSources(workload: WorkloadConfig, scale: string): {

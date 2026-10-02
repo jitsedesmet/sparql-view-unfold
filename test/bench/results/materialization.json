@@ -286,5 +286,17 @@
     "totalMs": 4497.911862015724,
     "emittedTriples": 56379,
     "storeBytes": 299811
+  },
+  {
+    "engine": "qlever",
+    "workload": "lubm",
+    "scale": "u250",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 225548.246368,
+    "loadMs": 152279.683563,
+    "totalMs": 377827.929931,
+    "emittedTriples": 108184275,
+    "storeBytes": 610467840
   }
 ]

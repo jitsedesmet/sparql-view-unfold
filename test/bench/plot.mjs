@@ -106,7 +106,7 @@ function legend(x, y, items) {
 
 const schemes = [ ...new Set(rows.map(r => r.scheme)) ];
 const engines = [ ...new Set(rows.map(r => r.engine)) ];
-const scaleOrder = [ 'xs', 's', 'm', 'l', 'xl', 'u1', 'u10', 'u50', 'u100', 'eswc', 'd100' ];
+const scaleOrder = [ 'xs', 's', 'm', 'l', 'xl', 'u1', 'u10', 'u50', 'u100', 'u250', 'eswc', 'd100' ];
 const sortScales = arr => arr.sort((a, b) => scaleOrder.indexOf(a) - scaleOrder.indexOf(b));
 
 /**

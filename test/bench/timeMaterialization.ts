@@ -34,7 +34,7 @@ import { execFileSync } from 'node:child_process';
 import { createWriteStream, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadViews, WORKLOADS, workloadSources } from './config.js';
+import { loadViews, runsAt, WORKLOADS, workloadSources } from './config.js';
 import type { EngineSource, ManagedServerEngine } from './engines.js';
 import { ComunicaEngine, JenaEngine, OxigraphEngine, QLeverEngine, runTool } from './engines.js';
 
@@ -208,7 +208,7 @@ async function measure(): Promise<void> {
       const { source } = workloadSources(workload, scale);
       for (const engineName of engines) {
         for (const method of <Measurement['method'][]> methods) {
-          if (engineName === 'comunica' && method === 'insert') {
+          if ((engineName === 'comunica' && method === 'insert') || !runsAt(workload, scale, engineName)) {
             continue;
           }
           if (SLOW.has(`${engineName} ${workloadName} ${scale}`) && !process.argv.includes('--include-slow')) {

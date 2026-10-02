@@ -51,7 +51,7 @@
  *
  * Usage:
  *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena,qlever]
- *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,u50,u100,d100,eswc] [--reps 1]
+ *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,u50,u100,u250,d100,eswc] [--reps 1]
  *     [--approaches materialized,rewriting,...] [--timeout 60000] [--out results.json]
  * `--scales` keeps, of each scheme's own scales, those it lists; without it StarBench runs xs,s,m and
  * the workloads run all of theirs.
@@ -60,7 +60,7 @@ import { createReadStream, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StreamParser } from 'n3';
-import { buildCases, buildWorkloadCases, PATTERNS, WORKLOADS, workloadSources } from './config.js';
+import { buildCases, buildWorkloadCases, PATTERNS, runsAt, WORKLOADS, workloadSources } from './config.js';
 import { BenchTimeoutError, ComunicaEngine, JenaEngine, OxigraphEngine, QLeverEngine } from './engines.js';
 import type { BenchEngine, EngineSource, SelectResult } from './engines.js';
 import type { BenchCase, RewriteVariant } from './runner.js';
@@ -364,6 +364,9 @@ async function runEngine(
     // Cells that timed out at an earlier scale of a nested workload: `caseId approach` -> that scale.
     const timedOut = new Map<string, string>();
     for (const { scale, source, baselineSource } of blocks) {
+      if (WORKLOADS[scheme] && !runsAt(WORKLOADS[scheme], scale, engineName)) {
+        continue;
+      }
       const file = source.file!;
       if (!existsSync(file) || !existsSync(baselineSource.file!)) {
         process.stderr.write(`skip: ${file} (not generated)\n`);
