@@ -29,7 +29,7 @@
  * `ok` status. Against the baseline that showed up as `rewriting` being marked incorrect,
  * which was the truth; against `rewriting` as its own oracle it showed up as every
  * *working* variant being marked incorrect. Fixed in the build the benchmark now runs
- * (see README.md, "Adding Jena / Fuseki"), and the reference stays the baseline because
+ * (see README.md, "Setting up the engines"), and the reference stays the baseline because
  * the next such bug will not announce itself either.
  *
  * The LUBM and OAEI workloads (`--schemes lubm,oaei`; see `config.ts`'s `WorkloadConfig`) have no
@@ -37,23 +37,22 @@
  * materialised views (`materializeViews.ts`), which is both the alternative a user has - compute the
  * views ahead of time - and the reference every rewriting is graded against. Because that is a second
  * dataset, a block runs all its references first and all its rewritings after, rather than switching
- * datasets twice per case: Jena and Comunica reload on every switch. Rows also carry `correctAsSet`, since
+ * datasets twice per case: every engine restarts on a switch. Rows also carry `correctAsSet`, since
  * the rewriting runs without `preserveCardinality` and the materialised graph is a set.
  *
  * Engines:
  *   - `comunica`: a long-lived worker process per dataset (loaded and indexed once) —
  *     Comunica's join state can outgrow any heap, and inline that takes the sweep with it.
- *   - `oxigraph`: each query runs in a short-lived child process that is killed
- *     on timeout (Oxigraph's query call is synchronous).
- *   - `jena`: HTTP, via a long-lived `fuseki-server.jar` child process managed by
- *     `JenaEngine` (see engines.ts and README.md for setup — needs `JENA_FUSEKI_JAR`).
+ *   - `oxigraph`, `jena` and `qlever`: each engine's native server over an on-disk store it bulk-loads
+ *     once per data file (see `ManagedServerEngine` in engines.ts, and README.md for setup). QLever has no
+ *     RDF 1.2 support, so it runs the LUBM and OAEI workloads only.
  *
  * Results are written as JSON for the plotting script (`plot.mjs`).
  *
  * Usage:
- *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena]
- *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,d100,eswc] [--reps 1]
- *     [--timeout 60000] [--out results.json]
+ *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena,qlever]
+ *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,u50,u100,d100,eswc] [--reps 1]
+ *     [--approaches materialized,rewriting,...] [--timeout 60000] [--out results.json]
  * `--scales` keeps, of each scheme's own scales, those it lists; without it StarBench runs xs,s,m and
  * the workloads run all of theirs.
  */
@@ -62,7 +61,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StreamParser } from 'n3';
 import { buildCases, buildWorkloadCases, PATTERNS, WORKLOADS, workloadSources } from './config.js';
-import { BenchTimeoutError, ComunicaEngine, JenaEngine, OxigraphEngine } from './engines.js';
+import { BenchTimeoutError, ComunicaEngine, JenaEngine, OxigraphEngine, QLeverEngine } from './engines.js';
 import type { BenchEngine, EngineSource, SelectResult } from './engines.js';
 import type { BenchCase, RewriteVariant } from './runner.js';
 import { rewriteToSparql11, sameSolutions } from './runner.js';
@@ -77,6 +76,8 @@ interface RunOptions {
   schemes: string[];
   /** Scales to run, of those each scheme has; `undefined` runs each scheme's defaults. */
   scales: string[] | undefined;
+  /** Approaches to run; `undefined` runs all five. */
+  approaches: string[] | undefined;
   reps: number;
   timeoutMs: number;
   out: string;
@@ -120,6 +121,7 @@ function parseArgs(argv: string[]): RunOptions {
     engines: [ 'comunica', 'oxigraph' ],
     schemes: [ 'reification' ],
     scales: undefined,
+    approaches: undefined,
     reps: 1,
     timeoutMs: 60_000,
     out: join(RESULTS_DIR, 'results.json'),
@@ -141,6 +143,9 @@ function parseArgs(argv: string[]): RunOptions {
         break;
       case '--scales':
         opts.scales = next().split(',');
+        break;
+      case '--approaches':
+        opts.approaches = next().split(',');
         break;
       case '--reps':
         opts.reps = Number.parseInt(next(), 10);
@@ -194,9 +199,8 @@ function makeEngine(name: string): BenchEngine {
   switch (name) {
     case 'comunica': return new ComunicaEngine('comunica');
     case 'oxigraph': return new OxigraphEngine('oxigraph');
-    // Manages its own fuseki-server.jar child process — see JenaEngine's doc
-    // comment and README.md for setup (JENA_FUSEKI_JAR, a Java 21+ runtime).
     case 'jena': return new JenaEngine('jena');
+    case 'qlever': return new QLeverEngine('qlever');
     default: throw new Error(`Unknown engine '${name}'`);
   }
 }
@@ -351,6 +355,11 @@ async function runEngine(
   flush: () => void,
 ): Promise<void> {
   for (const scheme of opts.schemes) {
+    // StarBench's rewrites still build and compare triple terms; the workloads are plain RDF 1.1.
+    if (!engine.supportsSparql12 && !WORKLOADS[scheme]) {
+      process.stderr.write(`skip: ${engineName} / ${scheme} (needs SPARQL 1.2)\n`);
+      continue;
+    }
     const { cases, blocks, nestedScales } = schemePlan(scheme, opts.scales);
     // Cells that timed out at an earlier scale of a nested workload: `caseId approach` -> that scale.
     const timedOut = new Map<string, string>();
@@ -362,10 +371,9 @@ async function runEngine(
       }
       process.stderr.write(`\n== ${engineName} / ${scheme} / ${scale} ==\n`);
 
-      // Every engine now loads the subset inside its own worker (Comunica and Oxigraph
-      // per query, Fuseki once per dataset), so this process only needs the dataset
-      // *size*: it is the x-axis of the scaling plot, and a plot whose x-axis is 0 for
-      // every scale collapses to a single point.
+      // Every engine loads the data itself (Comunica in its worker, the servers into their stores), so this
+      // process only needs the dataset *size*: it is the x-axis of the scaling plot, and a plot whose x-axis
+      // is 0 for every scale collapses to a single point.
       let quads: number;
       try {
         quads = await countQuads(file);
@@ -402,12 +410,12 @@ async function runEngine(
         }
       }
       // Where the reference runs on data of its own (the materialised views), every reference goes first
-      // and every rewriting after: alternating per case would switch datasets twice a case, and Jena and
-      // Comunica reload on every switch, so each query would run on a freshly started engine. Where it
+      // and every rewriting after: alternating per case would switch datasets twice a case, and every engine
+      // restarts on a switch, so each query would run on a freshly started engine. Where it
       // shares the rewritings' data (StarBench), each case's baseline still runs just before its rewritings.
-      const jobs = baselineSource.file === source.file ?
+      const jobs = (baselineSource.file === source.file ?
         cases.flatMap(benchCase => [ ...references, ...rewritings ].filter(job => job.benchCase === benchCase)) :
-          [ ...references, ...rewritings ];
+          [ ...references, ...rewritings ]).filter(job => !opts.approaches || opts.approaches.includes(job.approach));
 
       // Rows go in as they are measured (each one flushed, so a run killed halfway still leaves usable
       // JSON) and are graded once the whole block is in — the reference is whichever of

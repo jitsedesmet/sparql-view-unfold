@@ -157,7 +157,8 @@ The [`test/bench`](test/bench) directory benchmarks this rewriting against **nat
 evaluation** on several engines, over the BKR reification benchmark datasets. Two SPARQL 1.1
 workloads run next to it: LUBM, with its ontology compiled into views (reasoning by rewriting), and
 OAEI Conference, with four source ontologies mapped onto one target. Both are graded against the
-original query over the materialised views.
+original query over the materialised views, also run on QLever, and measure what it costs each engine
+to materialise the views in the first place.
 
 Only three well-known engines implement SPARQL 1.2 with the RDF 1.2 triple-term syntax
 (`<<( s p o )>>` / `rdf:reifies`): **Comunica** (≥ 5.0), **Apache Jena/Fuseki** (≥ 4.10) and

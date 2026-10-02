@@ -1,130 +1,290 @@
 [
   {
+    "engine": "oxigraph",
     "workload": "lubm",
     "scale": "u1",
+    "method": "construct-load",
     "views": 239,
-    "sourceTriples": 100543,
-    "sourceBytes": 17122518,
-    "viewTriples": 137722,
+    "runMs": 9973.382638,
+    "loadMs": 659.2514780000001,
+    "totalMs": 10632.634116,
     "emittedTriples": 208940,
-    "viewBytes": 23236782,
-    "viewHdtBytes": 1218746,
-    "loadMs": 3877,
-    "buildMs": [
-      4077,
-      2550,
-      2598
-    ],
-    "writeMs": 430,
-    "breakEven": {
-      "jena": {
-        "queries": 1,
-        "upperBound": true
-      },
-      "oxigraph": {
-        "queries": 4,
-        "upperBound": false
-      },
-      "comunica": {
-        "queries": 1,
-        "upperBound": true
-      }
-    }
+    "storeBytes": 12222464
   },
   {
+    "engine": "jena",
+    "workload": "lubm",
+    "scale": "u1",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 4309.622472000001,
+    "loadMs": 3925.5236269999987,
+    "totalMs": 8235.146099,
+    "emittedTriples": 208940,
+    "storeBytes": 20037632
+  },
+  {
+    "engine": "qlever",
+    "workload": "lubm",
+    "scale": "u1",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 4784.157692000001,
+    "loadMs": 792.4865309999986,
+    "totalMs": 5576.644222999999,
+    "emittedTriples": 325109,
+    "storeBytes": 2097152
+  },
+  {
+    "engine": "comunica",
+    "workload": "lubm",
+    "scale": "u1",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 11361.101174000003,
+    "loadMs": 3729.974258000002,
+    "totalMs": 15091.075432000005,
+    "emittedTriples": 325109,
+    "storeBytes": 1218746
+  },
+  {
+    "engine": "oxigraph",
     "workload": "lubm",
     "scale": "u10",
+    "method": "construct-load",
     "views": 239,
-    "sourceTriples": 1272575,
-    "sourceBytes": 217360636,
-    "viewTriples": 1735299,
+    "runMs": 139919.328081,
+    "loadMs": 3823.858573000005,
+    "totalMs": 143743.18665400002,
     "emittedTriples": 2605002,
-    "viewBytes": 293775120,
-    "viewHdtBytes": 16143032,
-    "loadMs": 14337,
-    "buildMs": [
-      16894,
-      16625,
-      14390
-    ],
-    "writeMs": 6044,
-    "breakEven": {
-      "jena": {
-        "queries": 1,
-        "upperBound": true
-      },
-      "oxigraph": {
-        "queries": 21,
-        "upperBound": false
-      },
-      "comunica": {
-        "queries": 1,
-        "upperBound": true
-      }
-    }
+    "storeBytes": 136425472
   },
   {
+    "engine": "jena",
+    "workload": "lubm",
+    "scale": "u10",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 19135.01600599999,
+    "loadMs": 12744.381606999988,
+    "totalMs": 31879.39761299998,
+    "emittedTriples": 2605002,
+    "storeBytes": 251043840
+  },
+  {
+    "engine": "qlever",
+    "workload": "lubm",
+    "scale": "u10",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 12642.917301999987,
+    "loadMs": 3664.6823900000018,
+    "totalMs": 16307.599691999989,
+    "emittedTriples": 4129413,
+    "storeBytes": 23449600
+  },
+  {
+    "engine": "comunica",
+    "workload": "lubm",
+    "scale": "u10",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 621781.605769,
+    "loadMs": 27892.625695000053,
+    "totalMs": 649674.2314640001,
+    "emittedTriples": 4129413,
+    "storeBytes": 16143032
+  },
+  {
+    "engine": "oxigraph",
+    "workload": "lubm",
+    "scale": "u50",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 898027.8275019999,
+    "loadMs": 52670.862461000215,
+    "totalMs": 950698.6899630001,
+    "emittedTriples": 13600623,
+    "storeBytes": 708071424
+  },
+  {
+    "engine": "jena",
+    "workload": "lubm",
+    "scale": "u50",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 100918.82881999994,
+    "loadMs": 77314.4094570002,
+    "totalMs": 178233.23827700014,
+    "emittedTriples": 13600623,
+    "storeBytes": 1339408384
+  },
+  {
+    "engine": "qlever",
+    "workload": "lubm",
+    "scale": "u50",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 46459.37496199994,
+    "loadMs": 17589.34050499997,
+    "totalMs": 64048.715466999914,
+    "emittedTriples": 21587468,
+    "storeBytes": 121597952
+  },
+  {
+    "engine": "comunica",
+    "workload": "lubm",
+    "scale": "u50",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 14294891.230143001,
+    "loadMs": 143898.16163700074,
+    "totalMs": 14438789.391780002,
+    "emittedTriples": 21587468,
+    "storeBytes": 90724586
+  },
+  {
+    "engine": "oxigraph",
+    "workload": "lubm",
+    "scale": "u100",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 2358770.873725999,
+    "loadMs": 118554.58285300061,
+    "totalMs": 2477325.4565789998,
+    "emittedTriples": 27385850,
+    "storeBytes": 1430028288
+  },
+  {
+    "engine": "jena",
+    "workload": "lubm",
+    "scale": "u100",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 246119.76099300012,
+    "loadMs": 144062.54052200168,
+    "totalMs": 390182.3015150018,
+    "emittedTriples": 27385850,
+    "storeBytes": 2711982080
+  },
+  {
+    "engine": "qlever",
+    "workload": "lubm",
+    "scale": "u100",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 92502.90811799839,
+    "loadMs": 32895.426501996815,
+    "totalMs": 125398.3346199952,
+    "emittedTriples": 43499682,
+    "storeBytes": 244060160
+  },
+  {
+    "engine": "comunica",
+    "workload": "lubm",
+    "scale": "u100",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 50715945.26229699,
+    "loadMs": 232869.66275900602,
+    "totalMs": 50948814.925055996,
+    "emittedTriples": 43499682,
+    "storeBytes": 188508772
+  },
+  {
+    "engine": "oxigraph",
     "workload": "oaei",
     "scale": "d100",
+    "method": "construct-load",
     "views": 148,
-    "sourceTriples": 1368540,
-    "sourceBytes": 174890703,
-    "viewTriples": 468139,
+    "runMs": 22292.80868600309,
+    "loadMs": 1101.294935002923,
+    "totalMs": 23394.103621006012,
     "emittedTriples": 608274,
-    "viewBytes": 57922699,
-    "viewHdtBytes": 3843046,
-    "loadMs": 14547,
-    "buildMs": [
-      4751,
-      3560,
-      3359
-    ],
-    "writeMs": 1150,
-    "breakEven": {
-      "jena": {
-        "queries": 6,
-        "upperBound": false
-      },
-      "oxigraph": {
-        "queries": 2,
-        "upperBound": true
-      },
-      "comunica": {
-        "queries": 2,
-        "upperBound": true
-      }
-    }
+    "storeBytes": 40701952
   },
   {
+    "engine": "jena",
+    "workload": "oaei",
+    "scale": "d100",
+    "method": "construct-load",
+    "views": 148,
+    "runMs": 5949.020363986492,
+    "loadMs": 5107.506235003471,
+    "totalMs": 11056.526598989964,
+    "emittedTriples": 608274,
+    "storeBytes": 60444672
+  },
+  {
+    "engine": "qlever",
+    "workload": "oaei",
+    "scale": "d100",
+    "method": "construct-load",
+    "views": 148,
+    "runMs": 5117.445763006806,
+    "loadMs": 1233.8462519943714,
+    "totalMs": 6351.292015001178,
+    "emittedTriples": 766923,
+    "storeBytes": 7254016
+  },
+  {
+    "engine": "comunica",
+    "workload": "oaei",
+    "scale": "d100",
+    "method": "construct-load",
+    "views": 148,
+    "runMs": 25212.753935992718,
+    "loadMs": 4676.957110002637,
+    "totalMs": 29889.711045995355,
+    "emittedTriples": 766923,
+    "storeBytes": 3843046
+  },
+  {
+    "engine": "oxigraph",
     "workload": "oaei",
     "scale": "eswc",
+    "method": "construct-load",
     "views": 148,
-    "sourceTriples": 123170,
-    "sourceBytes": 15004320,
-    "viewTriples": 36664,
+    "runMs": 2774.735422000289,
+    "loadMs": 366.5192119926214,
+    "totalMs": 3141.2546339929104,
     "emittedTriples": 47604,
-    "viewBytes": 4345463,
-    "viewHdtBytes": 299811,
-    "loadMs": 4337,
-    "buildMs": [
-      1685,
-      1061,
-      940
-    ],
-    "writeMs": 76,
-    "breakEven": {
-      "jena": {
-        "queries": 63,
-        "upperBound": false
-      },
-      "oxigraph": {
-        "queries": 38,
-        "upperBound": false
-      },
-      "comunica": {
-        "queries": 5,
-        "upperBound": false
-      }
-    }
+    "storeBytes": 3739648
+  },
+  {
+    "engine": "jena",
+    "workload": "oaei",
+    "scale": "eswc",
+    "method": "construct-load",
+    "views": 148,
+    "runMs": 2442.7198269963264,
+    "loadMs": 2894.6410290002823,
+    "totalMs": 5337.360855996609,
+    "emittedTriples": 47604,
+    "storeBytes": 5218304
+  },
+  {
+    "engine": "qlever",
+    "workload": "oaei",
+    "scale": "eswc",
+    "method": "construct-load",
+    "views": 148,
+    "runMs": 2953.4143479913473,
+    "loadMs": 501.9906460046768,
+    "totalMs": 3455.404993996024,
+    "emittedTriples": 56379,
+    "storeBytes": 753664
+  },
+  {
+    "engine": "comunica",
+    "workload": "oaei",
+    "scale": "eswc",
+    "method": "construct-load",
+    "views": 148,
+    "runMs": 2438.1093820035458,
+    "loadMs": 2059.8024800121784,
+    "totalMs": 4497.911862015724,
+    "emittedTriples": 56379,
+    "storeBytes": 299811
   }
 ]

@@ -9,6 +9,9 @@
  *   <- {"status":"ok","durationMs":123,"count":3,"rows":["{...}"]}
  *      {"status":"timeout"}  |  {"status":"error","message":"..."}
  *
+ * A CONSTRUCT asked with `"constructTo": "<file>"` appends the triples it builds to that file as
+ * N-Triples and answers with their `count` and no `rows`: that is how Comunica materialises views.
+ *
  * `rows` are canonicalized exactly like {@link ./engines.ts} `bindingToString`, so results
  * stay comparable across engines. Only query evaluation is timed; loading is not.
  *
@@ -35,11 +38,11 @@
  *
  * Usage:  node comunicaWorker.mjs <dataset.(ttl|nt|hdt)>
  */
-import { createReadStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { QueryEngine } from '@comunica/query-sparql-file';
 import { QueryEngine as HdtQueryEngine } from '@comunica/query-sparql-hdt';
-import { StreamParser, Store } from 'n3';
+import { StreamParser, StreamWriter, Store } from 'n3';
 
 const file = process.argv[2];
 if (!file) {
@@ -105,6 +108,27 @@ async function runQuery(engine, source, query, timeoutMs) {
   }
 }
 
+/** Appends what a CONSTRUCT builds to `file` as N-Triples. No budget: it materialises, it is not a row. */
+async function runConstruct(engine, source, query, file) {
+  const start = performance.now();
+  try {
+    const quads = await engine.queryQuads(query, { sources: [ source ]});
+    const out = createWriteStream(file, { flags: 'a' });
+    const writer = new StreamWriter({ format: 'N-Triples' });
+    let count = 0;
+    quads.on('data', () => count++);
+    await new Promise((resolve, reject) => {
+      quads.on('error', reject);
+      out.on('error', reject);
+      out.on('finish', resolve);
+      writer.import(quads).pipe(out);
+    });
+    return { status: 'ok', durationMs: performance.now() - start, count, rows: []};
+  } catch (error) {
+    return { status: 'error', message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 const hdt = file.endsWith('.hdt');
 const source = hdt ? { type: 'hdt', value: file } : await loadStore();
 const engine = hdt ? new HdtQueryEngine() : new QueryEngine();
@@ -120,8 +144,10 @@ input.on('line', (line) => {
     return;
   }
   queue = queue.then(async() => {
-    const { query, timeoutMs } = JSON.parse(line);
-    const response = await runQuery(engine, source, query, timeoutMs ?? 0);
+    const { query, timeoutMs, constructTo } = JSON.parse(line);
+    const response = constructTo ?
+      await runConstruct(engine, source, query, constructTo) :
+      await runQuery(engine, source, query, timeoutMs ?? 0);
     process.stdout.write(`${JSON.stringify(response)}\n`);
   });
 });

@@ -161,7 +161,7 @@ export const WORKLOADS: Record<string, WorkloadConfig> = {
     name: 'lubm',
     viewsFile: join(WORKLOADS_DIR, 'lubm', 'views.rq'),
     queryDir: join(WORKLOADS_DIR, 'lubm', 'queries'),
-    scales: { u1: 'lubm-u1', u10: 'lubm-u10' },
+    scales: { u1: 'lubm-u1', u10: 'lubm-u10', u50: 'lubm-u50', u100: 'lubm-u100' },
     nestedScales: true,
   },
   oaei: {

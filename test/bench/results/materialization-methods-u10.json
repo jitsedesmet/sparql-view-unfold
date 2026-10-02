@@ -1,0 +1,89 @@
+[
+  {
+    "engine": "oxigraph",
+    "workload": "lubm",
+    "scale": "u10",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 142511.77283499998,
+    "loadMs": 10795.637470000016,
+    "totalMs": 153307.410305,
+    "emittedTriples": 2605002,
+    "storeBytes": 223691812
+  },
+  {
+    "engine": "oxigraph",
+    "workload": "lubm",
+    "scale": "u10",
+    "method": "insert",
+    "views": 239,
+    "runMs": 158524.47372299997,
+    "loadMs": 0,
+    "totalMs": 158524.47372299997,
+    "emittedTriples": null,
+    "storeBytes": 3477802768,
+    "insertedTriples": 1735299
+  },
+  {
+    "engine": "jena",
+    "workload": "lubm",
+    "scale": "u10",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 19016.770444999973,
+    "loadMs": 16283.15498599998,
+    "totalMs": 35299.92543099995,
+    "emittedTriples": 2605002,
+    "storeBytes": 414142669
+  },
+  {
+    "engine": "jena",
+    "workload": "lubm",
+    "scale": "u10",
+    "method": "insert",
+    "views": 239,
+    "runMs": 131280.59521400003,
+    "loadMs": 0,
+    "totalMs": 131280.59521400003,
+    "emittedTriples": null,
+    "storeBytes": 2181038817,
+    "insertedTriples": 1735299
+  },
+  {
+    "engine": "qlever",
+    "workload": "lubm",
+    "scale": "u10",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 12304.290234000015,
+    "loadMs": 4133.502755999973,
+    "totalMs": 16437.792989999987,
+    "emittedTriples": 4129413,
+    "storeBytes": 23324968
+  },
+  {
+    "engine": "qlever",
+    "workload": "lubm",
+    "scale": "u10",
+    "method": "insert",
+    "views": 239,
+    "runMs": 74083.68277399999,
+    "loadMs": 0,
+    "totalMs": 74083.68277399999,
+    "emittedTriples": null,
+    "storeBytes": 97638,
+    "insertedTriples": 1735299
+  },
+  {
+    "engine": "comunica",
+    "workload": "lubm",
+    "scale": "u10",
+    "method": "construct-load",
+    "views": 239,
+    "runMs": 622838.2519559999,
+    "loadMs": 28265.09889600007,
+    "totalMs": 651103.350852,
+    "emittedTriples": 4129413,
+    "storeBytes": 16142951
+  }
+]

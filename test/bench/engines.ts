@@ -20,9 +20,13 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import type { ChildProcessByStdio, ChildProcessWithoutNullStreams } from 'node:child_process';
+import { once } from 'node:events';
+import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
+import type { Writable } from 'node:stream';
+import type { ReadableStream } from 'node:stream/web';
 import { fileURLToPath } from 'node:url';
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
@@ -240,7 +244,8 @@ class ComunicaWorker {
     await exited;
   }
 
-  public async ask(query: string, timeoutMs: number): Promise<SelectResult> {
+  /** Answers `query`; with `constructTo`, a CONSTRUCT whose triples the worker appends to that file. */
+  public async ask(query: string, timeoutMs: number, constructTo?: string): Promise<SelectResult> {
     if (this.pending) {
       throw new Error(`Engine '${this.engineName}' worker is already answering a query.`);
     }
@@ -260,7 +265,7 @@ class ComunicaWorker {
         clearTimeout(backstop);
         done(settled);
       };
-      this.child.stdin.write(`${JSON.stringify({ query, timeoutMs })}\n`);
+      this.child.stdin.write(`${JSON.stringify({ query, timeoutMs, constructTo })}\n`);
     });
     if (reply instanceof Error) {
       throw reply;
@@ -322,6 +327,18 @@ export class ComunicaEngine implements BenchEngine {
     return this.runInProcess(query, source, timeoutMs);
   }
 
+  /**
+   * Runs a CONSTRUCT over `source` and appends the triples it builds to `file` as N-Triples, returning how
+   * many it wrote. How Comunica materialises views; no time budget, since that is not a measurement row.
+   */
+  public async constructToFile(query: string, source: EngineSource, file: string): Promise<number> {
+    const data = source.hdtFile ?? source.file;
+    if (!data) {
+      throw new Error(`ComunicaEngine needs a 'file' for dataset '${source.name}'.`);
+    }
+    return (await this.runInWorker(query, data, undefined, file)).count;
+  }
+
   /** Shuts the worker down; `run.ts` calls this once an engine's scheme/scale loops finish. */
   public async dispose(): Promise<void> {
     await this.worker?.stop();
@@ -334,14 +351,15 @@ export class ComunicaEngine implements BenchEngine {
    * the caller, never as a timeout, since calling a crash "too slow" fabricates a data
    * point). A worker outlives timeouts, so it is normally started once per dataset.
    */
-  private async runInWorker(query: string, file: string, timeoutMs?: number): Promise<SelectResult> {
+  private async runInWorker(query: string, file: string, timeoutMs?: number, constructTo?: string):
+  Promise<SelectResult> {
     if (this.worker && !this.worker.usable(file)) {
       this.worker.kill();
       this.worker = undefined;
     }
     this.worker ??= new ComunicaWorker(this.workerScript, file, this.name);
     try {
-      return await this.worker.ask(query, timeoutMs ?? 0);
+      return await this.worker.ask(query, timeoutMs ?? 0, constructTo);
     } catch (error: unknown) {
       // A dead worker cannot answer the next query either; drop it so the next call
       // starts a fresh one against the same dataset.
@@ -456,35 +474,34 @@ export class SparqlHttpEngine implements BenchEngine {
       throw error;
     }
     const durationMs = performance.now() - start;
-    return summarize(SparqlHttpEngine.canonicalizeJsonResults(json), durationMs);
+    return summarize(canonicalizeJsonResults(json), durationMs);
   }
+}
 
-  /** Turns SPARQL Results JSON into the same canonical form as {@link bindingToString}. */
-  private static canonicalizeJsonResults(json: SparqlJsonResults): string[] {
-    return json.results.bindings.map((row) => {
-      const entries = Object.entries(row)
-        .map(([ variable, value ]) => `${variable}=${SparqlHttpEngine.canonicalizeJsonTerm(value)}`)
-        .sort()
-        .join(',');
-      return `{${entries}}`;
-    });
-  }
+/** Turns SPARQL Results JSON into the same canonical form as {@link bindingToString}. */
+function canonicalizeJsonResults(json: SparqlJsonResults): string[] {
+  return json.results.bindings.map((row) => {
+    const entries = Object.entries(row)
+      .map(([ variable, value ]) => `${variable}=${canonicalizeJsonTerm(value)}`)
+      .sort()
+      .join(',');
+    return `{${entries}}`;
+  });
+}
 
-  /**
-   * Canonicalizes a single SPARQL Results JSON term, including the `"type": "triple"`
-   * extension engines use to represent RDF 1.2 triple terms (RDF-star) in results
-   * (e.g. Apache Jena/Fuseki) — recursing into `value.subject`/`predicate`/`object`.
-   */
-  private static canonicalizeJsonTerm(value: SparqlJsonTerm): string {
-    if (value.type === 'triple' && value.value && typeof value.value === 'object') {
-      const t = value.value;
-      return `Quad:<<${SparqlHttpEngine.canonicalizeJsonTerm(t.subject)}|` +
-        `${SparqlHttpEngine.canonicalizeJsonTerm(t.predicate)}|` +
-        `${SparqlHttpEngine.canonicalizeJsonTerm(t.object)}>>`;
-    }
-    const termType = value.type === 'uri' ? 'NamedNode' : (value.type === 'bnode' ? 'BlankNode' : 'Literal');
-    return `${termType}:${<string> value.value}`;
+/**
+ * Canonicalizes a single SPARQL Results JSON term, including the `"type": "triple"`
+ * extension engines use to represent RDF 1.2 triple terms (RDF-star) in results
+ * (e.g. Apache Jena/Fuseki) — recursing into `value.subject`/`predicate`/`object`.
+ */
+function canonicalizeJsonTerm(value: SparqlJsonTerm): string {
+  if (value.type === 'triple' && value.value && typeof value.value === 'object') {
+    const t = value.value;
+    return `Quad:<<${canonicalizeJsonTerm(t.subject)}|${canonicalizeJsonTerm(t.predicate)}|${
+      canonicalizeJsonTerm(t.object)}>>`;
   }
+  const termType = value.type === 'uri' ? 'NamedNode' : (value.type === 'bnode' ? 'BlankNode' : 'Literal');
+  return `${termType}:${<string> value.value}`;
 }
 
 interface SparqlJsonTripleValue {
@@ -503,227 +520,223 @@ interface SparqlJsonResults {
 }
 
 /**
- * In-process engine backed by Oxigraph (Rust, compiled to WASM). Oxigraph >= 0.4
- * supports SPARQL 1.2 / RDF 1.2 triple terms natively.
- *
- * Oxigraph's `Store.query` is *synchronous* and blocks the event loop, so it
- * cannot be cancelled with an in-process timer. To keep the benchmark bounded,
- * each query is executed in a short-lived child process (`oxiOneShot.mjs`) that
- * loads the dataset file and answers a single query; the parent enforces a hard
- * wall-clock timeout by killing that child. The dataset is taken from
- * {@link EngineSource.file}.
+ * Where an engine keeps the store it builds from a data file: beside the file, with the file's extension
+ * replaced by the kind of store (`lubm-u10.nt` -> `lubm-u10.tdb2`).
  */
-export class OxigraphEngine implements BenchEngine {
-  public readonly supportsSparql12 = true;
-  private readonly oneShot = join(dirname(fileURLToPath(import.meta.url)), 'oxiOneShot.mjs');
-
-  public constructor(public readonly name = 'oxigraph') {}
-
-  public async runSelect(query: string, source: EngineSource, timeoutMs?: number): Promise<SelectResult> {
-    if (!source.file) {
-      throw new Error(`OxigraphEngine needs a 'file' for dataset '${source.name}'.`);
-    }
-    const result = spawnSync(process.execPath, [ this.oneShot, source.file ], {
-      input: query,
-      timeout: timeoutMs,
-      maxBuffer: 512 * 1024 * 1024,
-      encoding: 'utf8',
-    });
-    // `spawnSync`'s own timeout reports both ways depending on platform and timing: an
-    // ETIMEDOUT error, or a plain SIGTERM signal with no error. Any *other* signal is the
-    // worker dying on its own (the OOM killer on a large subset, most often) and must
-    // stay an error — reporting it as a timeout would quietly turn a crash into a
-    // "too slow" data point.
-    const killedByUs = (<NodeJS.ErrnoException | undefined> result.error)?.code === 'ETIMEDOUT' ||
-      result.signal === 'SIGTERM';
-    if (killedByUs) {
-      throw new BenchTimeoutError(timeoutMs ?? 0);
-    }
-    if (result.signal !== null) {
-      throw new Error(`oxigraph one-shot killed by ${result.signal}: ${result.stderr.slice(0, 500)}`);
-    }
-    if (result.status !== 0) {
-      throw new Error(`oxigraph one-shot failed: ${result.stderr.slice(0, 500)}`);
-    }
-    const parsed = <{ durationMs: number; count: number; rows: string[] }> JSON.parse(result.stdout);
-    return { rows: parsed.rows, count: parsed.count, durationMs: parsed.durationMs };
-  }
+export function storeDir(file: string, kind: string): string {
+  return `${file.replace(/\.(?:nt|ttl)$/u, '')}.${kind}`;
 }
 
 /**
- * In-process-managed engine backed by **Apache Jena / Fuseki** (Java, HTTP SPARQL
- * endpoint). Jena 5.x/6.x has full SPARQL 1.2 / RDF 1.2 support (new `<<( )>>`
- * triple-term syntax, `rdf:reifies`) — see the survey in `README.md`. Driven here against
- * a Fuseki 6.3.0 build, which requires a **Java 21+** runtime (Fuseki 6.x class files are
- * too new for Java 17; earlier Fuseki releases, e.g. 4.10.x, work with Java 11/17). See
- * `README.md`, "Adding Jena / Fuseki", for which build to use and why it matters.
- *
- * Unlike {@link OxigraphEngine} (one-shot child process per query, since Oxigraph's
- * `Store.query` is synchronous), Fuseki is a long-lived HTTP server, so this engine
- * keeps one `fuseki-server.jar` child process running and reuses it across every
- * query against the same dataset {@link EngineSource.file}. It only pays the
- * (JVM startup + dataset load) cost again when the requested `file` changes — which
- * matches `run.ts`'s loop order (one dataset file per (engine, scheme, scale)
- * block, queried by every benchmark case in that block). Call {@link dispose} once
- * done to shut the child process down; `run.ts` does this for every engine after
- * its scheme/scale loops finish.
- *
- * Needs the `fuseki-server.jar` from an Apache Jena Fuseki distribution
- * (<https://jena.apache.org/download/>) and a Java runtime on `PATH` — see
- * `README.md` for the exact download/setup steps. Configurable via env vars
- * (or constructor options): `JENA_FUSEKI_JAR` (path to the jar, required),
- * `JENA_JAVA` (java binary, default `java`), `JENA_FUSEKI_PORT` (default 3131),
- * `JENA_JVM_OPTS` (extra JVM args, space-separated, e.g. `-Xmx4g` for the
- * larger `m`/`l` scale subsets).
+ * Runs a command to completion, throwing with the tail of its output if it fails. For the bulk loaders,
+ * whose output is progress chatter nobody reads unless they fail.
  */
-export class JenaEngine implements BenchEngine {
-  public readonly supportsSparql12 = true;
-  private readonly jarPath: string;
-  private readonly javaBin: string;
-  private readonly port: number;
-  private readonly extraJavaArgs: string[];
-  private readonly startupTimeoutMs: number;
+export function runTool(command: string, args: string[], cwd?: string): void {
+  const result = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, cwd });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`${command} ${args.join(' ')} failed (${result.status ?? result.signal}):\n${
+      `${result.stdout}${result.stderr}`.slice(-2000)}`);
+  }
+}
+
+/** Grace a server gets past a query's budget before stopping the query itself; the client gives up first. */
+const SERVER_TIMEOUT_GRACE_MS = 2_000;
+
+/** How long a server may take to open its store and answer, which is not charged to any query. */
+const STARTUP_TIMEOUT_MS = 600_000;
+
+/**
+ * A native SPARQL server the harness runs itself, over an on-disk store bulk-loaded once per data file:
+ * the setup the server is built for, rather than an in-memory dataset reloaded per run.
+ *
+ * The store sits beside the data file ({@link storeDir}) and is built on first use, into a temporary
+ * directory renamed into place once complete, so a load that is interrupted is redone rather than
+ * reused half-finished. Building it is not timed: the source store is needed by every approach alike, and
+ * what it costs to build the materialised views' store is `timeMaterialization.ts`'s business.
+ *
+ * One server runs at a time, restarted when the store or the time budget changes, and after every query
+ * that runs out of its budget: the server may still be working on that query, and Node's `fetch` would reuse
+ * the connection the server is tearing down, which on Oxigraph failed the next one or two queries with
+ * `fetch failed`. The budget is also given to the server, a little above the client's, as a second guard
+ * against a query the client gave up on using the CPU the next one is measured on.
+ */
+export abstract class ManagedServerEngine implements BenchEngine {
+  public abstract readonly supportsSparql12: boolean;
+  /** Suffix of this engine's store directory. */
+  public abstract readonly storeKind: string;
+  protected readonly port: number;
 
   private child: ChildProcessByStdio<null, Readable, Readable> | undefined;
-  private currentFile: string | undefined;
+  /** The store and budget the running server was started with. */
+  private current: string | undefined;
   private readonly recentOutput: string[] = [];
 
-  public constructor(public readonly name = 'jena', options: {
-    jarPath?: string;
-    javaBin?: string;
-    port?: number;
-    extraJavaArgs?: string[];
-    startupTimeoutMs?: number;
-  } = {}) {
-    this.jarPath = options.jarPath ?? process.env.JENA_FUSEKI_JAR ?? '';
-    this.javaBin = options.javaBin ?? process.env.JENA_JAVA ?? 'java';
-    this.port = options.port ?? Number.parseInt(process.env.JENA_FUSEKI_PORT ?? '3131', 10);
-    this.extraJavaArgs = options.extraJavaArgs ?? (process.env.JENA_JVM_OPTS ?? '').split(/\s+/u).filter(Boolean);
-    // Loading the `m`/`l` scale subsets (hundreds of MB of Turtle) can take well
-    // over a minute; this is independent of, and not charged against, the
-    // per-query `timeoutMs` passed to `runSelect`.
-    this.startupTimeoutMs = options.startupTimeoutMs ?? 180_000;
+  protected constructor(public readonly name: string, port: number) {
+    this.port = port;
   }
 
-  private get baseUrl(): string {
+  /** Bulk-loads `file` into a new store at `dir`. */
+  public abstract loadStore(file: string, dir: string): void;
+
+  /**
+   * The command line serving the store at `dir`, stopping a query after `timeoutMs` if given, and taking
+   * SPARQL updates if `writable`.
+   */
+  protected abstract serverCommand(dir: string, timeoutMs: number | undefined, writable: boolean): string[];
+
+  /** The endpoint queries are posted to. */
+  protected abstract get queryUrl(): string;
+
+  /** The endpoint updates are posted to. */
+  protected abstract get updateUrl(): string;
+
+  /** Headers an update needs besides its content type (QLever: an access token). */
+  protected updateHeaders(): Record<string, string> {
+    return {};
+  }
+
+  protected get baseUrl(): string {
     return `http://localhost:${this.port}`;
   }
 
-  public async runSelect(query: string, source: EngineSource, timeoutMs?: number): Promise<SelectResult> {
-    if (!source.file) {
-      throw new Error(`JenaEngine needs a 'file' for dataset '${source.name}'.`);
-    }
-    await this.ensureServer(source.file);
+  /** Extra URL parameters for a query run under a budget. */
+  protected queryParameters(_timeoutMs: number | undefined): string {
+    return '';
+  }
 
+  /** Runs, untimed, before every measured query. */
+  protected async beforeQuery(): Promise<void> {
+    // Nothing by default.
+  }
+
+  /** The store for `file`, built now if there is none yet. */
+  public storeFor(file: string): string {
+    const dir = storeDir(file, this.storeKind);
+    if (!existsSync(dir)) {
+      const building = `${dir}.building`;
+      rmSync(building, { recursive: true, force: true });
+      process.stderr.write(`  ${this.name}: loading ${file} into ${dir}\n`);
+      this.loadStore(file, building);
+      renameSync(building, dir);
+    }
+    return dir;
+  }
+
+  public async runSelect(query: string, source: EngineSource, timeoutMs?: number): Promise<SelectResult> {
+    await this.serve(source, timeoutMs);
+    return this.select(query, timeoutMs);
+  }
+
+  /** Runs a SELECT on the store at `dir`, served writable, as {@link runUpdate} left it. */
+  public async selectOnWritable(query: string, dir: string): Promise<SelectResult> {
+    await this.ensureServer(dir, undefined, true);
+    return this.select(query, undefined);
+  }
+
+  private async select(query: string, timeoutMs: number | undefined): Promise<SelectResult> {
+    await this.beforeQuery();
     const start = performance.now();
-    let json: { results: { bindings: Record<string, { type: string; value: unknown }>[] }};
     try {
-      const response = await fetch(`${this.baseUrl}/ds/sparql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/sparql-query',
-          Accept: 'application/sparql-results+json',
-        },
-        body: query,
-        signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
-      });
-      if (!response.ok) {
-        throw new Error(`Engine '${this.name}' returned HTTP ${response.status}: ${await response.text()}`);
-      }
-      // The abort can fire while still streaming the body (query already running server-side,
-      // headers sent, but the result set not yet fully written) — not just during connect/fetch()
-      // itself — so this call needs to be inside the same try as `fetch`, not after it.
-      json = <{ results: { bindings: Record<string, { type: string; value: unknown }>[] }}>
-        await readJsonResponse(response, this.name);
+      const response = await this.post(query, 'application/sparql-results+json', timeoutMs);
+      // The abort can fire while the body is still streaming, so reading it belongs in the same try.
+      const json = <SparqlJsonResults> await readJsonResponse(response, this.name);
+      return summarize(canonicalizeJsonResults(json), performance.now() - start);
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'TimeoutError') {
+        await this.stop();
         throw new BenchTimeoutError(timeoutMs ?? 0);
       }
       throw error;
     }
-    const durationMs = performance.now() - start;
-    const rows = json.results.bindings.map((row) => {
-      const entries = Object.entries(row)
-        .map(([ variable, value ]) => `${variable}=${JenaEngine.canonicalizeTerm(value)}`)
-        .sort()
-        .join(',');
-      return `{${entries}}`;
-    });
-    return summarize(rows, durationMs);
   }
 
   /**
-   * Runs a CONSTRUCT over `source` and returns the graph it builds as N-Triples. Used to materialise a
-   * workload's views (see `materializeViews.ts`), not to measure anything, so it takes no time budget.
+   * Runs a CONSTRUCT over `source` and streams the graph it builds, as N-Triples, into `out`, which stays
+   * open for the next view's. No time budget: it materialises views, it is not a measurement row.
    */
-  public async runConstruct(query: string, source: EngineSource): Promise<string> {
-    if (!source.file) {
-      throw new Error(`JenaEngine needs a 'file' for dataset '${source.name}'.`);
+  public async constructInto(query: string, source: EngineSource, out: Writable): Promise<void> {
+    await this.serve(source, undefined);
+    const response = await this.post(query, 'application/n-triples', undefined);
+    if (!response.body) {
+      return;
     }
-    await this.ensureServer(source.file);
-    const response = await fetch(`${this.baseUrl}/ds/sparql`, {
+    // Written chunk by chunk rather than piped: a pipe would end `out`, or, told not to, leave its listeners on it.
+    for await (const chunk of Readable.fromWeb(<ReadableStream> response.body)) {
+      if (!out.write(chunk)) {
+        await once(out, 'drain');
+      }
+    }
+  }
+
+  /**
+   * Runs a SPARQL update against the store at `dir`, served writable. How `timeMaterialization.ts` times
+   * materialising views inside the database, with `INSERT ... WHERE`.
+   */
+  public async runUpdate(update: string, dir: string): Promise<void> {
+    await this.ensureServer(dir, undefined, true);
+    const response = await fetch(this.updateUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/sparql-query', Accept: 'application/n-triples' },
-      body: query,
+      headers: { 'Content-Type': 'application/sparql-update', ...this.updateHeaders() },
+      body: update,
     });
     if (!response.ok) {
-      throw new Error(`Engine '${this.name}' returned HTTP ${response.status}: ${await response.text()}`);
+      throw new Error(`Engine '${this.name}' update returned HTTP ${response.status}: ${
+        (await response.text()).slice(0, 2000)}`);
     }
-    return response.text();
+    await response.body?.cancel();
   }
 
-  /** Same canonicalization as {@link SparqlHttpEngine}, including RDF 1.2 triple terms. */
-  private static canonicalizeTerm(value: { type: string; value: unknown }): string {
-    if (value.type === 'triple' && value.value && typeof value.value === 'object') {
-      const t = <{ subject: unknown; predicate: unknown; object: unknown }> value.value;
-      return `Quad:<<${JenaEngine.canonicalizeTerm(<{ type: string; value: unknown }> t.subject)}|` +
-        `${JenaEngine.canonicalizeTerm(<{ type: string; value: unknown }> t.predicate)}|` +
-        `${JenaEngine.canonicalizeTerm(<{ type: string; value: unknown }> t.object)}>>`;
-    }
-    const termType = value.type === 'uri' ? 'NamedNode' : (value.type === 'bnode' ? 'BlankNode' : 'Literal');
-    return `${termType}:${<string> value.value}`;
+  public async dispose(): Promise<void> {
+    await this.stop();
   }
 
-  /** Starts (or restarts, if `file` differs from what is currently loaded) the Fuseki child process. */
-  private async ensureServer(file: string): Promise<void> {
-    // `exitCode`/`signalCode` are the liveness check that matters: a server that died
-    // after startup (OOM on a large subset, say) leaves `this.child` set, and reusing it
-    // would turn every remaining query into a connection-refused `error` row instead of
-    // restarting the server once.
-    if (this.child && this.currentFile === file && this.child.exitCode === null && this.child.signalCode === null) {
+  /** Has a server running on `source`'s store under `timeoutMs`, building the store first if need be. */
+  private async serve(source: EngineSource, timeoutMs: number | undefined): Promise<void> {
+    if (!source.file) {
+      throw new Error(`Engine '${this.name}' needs a 'file' for dataset '${source.name}'.`);
+    }
+    await this.ensureServer(this.storeFor(source.file), timeoutMs, false);
+  }
+
+  private async post(query: string, accept: string, timeoutMs: number | undefined): Promise<Response> {
+    const response = await fetch(`${this.queryUrl}${this.queryParameters(timeoutMs)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sparql-query', Accept: accept },
+      body: query,
+      signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) {
+      throw new Error(`Engine '${this.name}' returned HTTP ${response.status}: ${
+        (await response.text()).slice(0, 2000)}`);
+    }
+    return response;
+  }
+
+  /** Starts the server on `dir`, unless it already serves it the same way. */
+  private async ensureServer(dir: string, timeoutMs: number | undefined, writable: boolean): Promise<void> {
+    const wanted = `${dir}\n${timeoutMs}\n${writable}`;
+    // A server that died after startup leaves `this.child` set; reusing it would turn every remaining
+    // query into a connection-refused error row instead of restarting the server once.
+    if (this.child && this.current === wanted && this.child.exitCode === null && this.child.signalCode === null) {
       return;
     }
     await this.stop();
-    if (!this.jarPath) {
-      throw new Error(
-        'JenaEngine: no fuseki-server.jar configured. Set JENA_FUSEKI_JAR to the path of a Jena Fuseki ' +
-        'distribution\'s fuseki-server.jar (see test/bench/README.md for download/setup instructions).',
-      );
+    // A stray server from an earlier, killed run may be squatting on the port, holding other data.
+    if (await this.ready()) {
+      throw new Error(`Engine '${this.name}': port ${this.port} is already in use by another process.`);
     }
-    // Guard against a stray process (from a previous crashed/killed run) already
-    // squatting on the port: if it answers /$/ping before we've spawned anything,
-    // it is *not* guaranteed to hold the dataset we're about to request.
-    if (await JenaEngine.ping(this.baseUrl)) {
-      throw new Error(
-        `JenaEngine: port ${this.port} is already in use by another process (not started by this ` +
-        'JenaEngine instance) — refusing to query it, since it may not have the expected dataset ' +
-        'loaded. Free the port or pass a different `port` option.',
-      );
-    }
-
     this.recentOutput.length = 0;
-    const args = [
-      ...this.extraJavaArgs,
-      '-jar',
-      this.jarPath,
-      `--file=${file}`,
-      '--port',
-      String(this.port),
-      '/ds',
-    ];
-    const child = spawn(this.javaBin, args, { stdio: [ 'ignore', 'pipe', 'pipe' ]});
+    const [ command, ...args ] = this.serverCommand(
+      dir,
+      timeoutMs === undefined ? undefined : timeoutMs + SERVER_TIMEOUT_GRACE_MS,
+      writable,
+    );
+    const child = spawn(command, args, { stdio: [ 'ignore', 'pipe', 'pipe' ]});
     this.child = child;
-    this.currentFile = file;
+    this.current = wanted;
     let exited = false;
     child.on('exit', () => {
       exited = true;
@@ -737,52 +750,53 @@ export class JenaEngine implements BenchEngine {
     child.stdout.on('data', capture);
     child.stderr.on('data', capture);
 
-    const deadline = Date.now() + this.startupTimeoutMs;
+    const deadline = Date.now() + STARTUP_TIMEOUT_MS;
     while (Date.now() < deadline) {
       if (exited) {
-        throw new Error(
-          `JenaEngine: fuseki-server exited during startup (dataset '${file}'). Recent output:\n${
-          this.recentOutput.join('')}`,
-        );
+        throw new Error(`Engine '${this.name}' exited during startup on ${dir}:\n${this.recentOutput.join('')}`);
       }
-      if (await JenaEngine.ping(this.baseUrl)) {
+      if (await this.ready()) {
         return;
       }
       await new Promise((resolve) => {
-        setTimeout(resolve, 500);
+        setTimeout(resolve, 200);
       });
     }
     await this.stop();
-    throw new Error(
-      `JenaEngine: fuseki-server did not become ready within ${this.startupTimeoutMs}ms (dataset '${file}').`,
-    );
+    throw new Error(`Engine '${this.name}' did not become ready within ${STARTUP_TIMEOUT_MS}ms on ${dir}.`);
   }
 
-  private static async ping(baseUrl: string): Promise<boolean> {
+  /** Whether something answers queries on the port. */
+  private async ready(): Promise<boolean> {
     try {
-      const response = await fetch(`${baseUrl}/$/ping`, { signal: AbortSignal.timeout(2_000) });
+      const response = await fetch(this.queryUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/sparql-query', Accept: 'application/sparql-results+json' },
+        body: 'SELECT ?s WHERE { ?s ?p ?o } LIMIT 1',
+        signal: AbortSignal.timeout(2_000),
+      });
+      await response.body?.cancel();
       return response.ok;
     } catch {
       return false;
     }
   }
 
-  /** Stops the current Fuseki child process, if any, and waits for it to exit. */
+  /** Stops the server, if any, and waits for it to exit. */
   private async stop(): Promise<void> {
     const child = this.child;
     this.child = undefined;
-    this.currentFile = undefined;
+    this.current = undefined;
     if (!child || child.exitCode !== null || child.signalCode !== null) {
       return;
     }
     await new Promise<void>((resolve) => {
-      // Cleared on exit: an uncleared 5s timer keeps the Node event loop alive, so a run
-      // that has written its last row would sit idle before the process could exit.
+      // Cleared on exit: an uncleared timer keeps the event loop, and so a finished run, alive.
       const escalate = setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) {
           child.kill('SIGKILL');
         }
-      }, 5_000);
+      }, 10_000);
       child.once('exit', () => {
         clearTimeout(escalate);
         resolve();
@@ -790,8 +804,173 @@ export class JenaEngine implements BenchEngine {
       child.kill('SIGTERM');
     });
   }
+}
 
-  public async dispose(): Promise<void> {
-    await this.stop();
+/**
+ * **Oxigraph**'s native server (`oxigraph serve-read-only`) over a RocksDB store filled by its bulk loader
+ * (`oxigraph load`). Oxigraph >= 0.5 supports SPARQL 1.2 / RDF 1.2 triple terms.
+ *
+ * Needs the `oxigraph` binary of a release (<https://github.com/oxigraph/oxigraph/releases>), on `PATH` or
+ * named by `OXIGRAPH_BIN`. `OXIGRAPH_PORT` sets the port (default 3132).
+ */
+export class OxigraphEngine extends ManagedServerEngine {
+  public readonly supportsSparql12 = true;
+  public readonly storeKind = 'oxigraph';
+  private readonly bin = process.env.OXIGRAPH_BIN ?? 'oxigraph';
+
+  public constructor(name = 'oxigraph') {
+    super(name, Number.parseInt(process.env.OXIGRAPH_PORT ?? '3132', 10));
+  }
+
+  public loadStore(file: string, dir: string): void {
+    runTool(this.bin, [ 'load', '--location', dir, '--file', file ]);
+  }
+
+  protected serverCommand(dir: string, timeoutMs: number | undefined, writable: boolean): string[] {
+    return [
+      this.bin,
+      writable ? 'serve' : 'serve-read-only',
+      '--location',
+      dir,
+      '--bind',
+      `localhost:${this.port}`,
+      ...timeoutMs === undefined ? [] : [ '--timeout-s', String(Math.ceil(timeoutMs / 1000)) ],
+    ];
+  }
+
+  protected get queryUrl(): string {
+    return `${this.baseUrl}/query`;
+  }
+
+  protected get updateUrl(): string {
+    return `${this.baseUrl}/update`;
+  }
+}
+
+/**
+ * **Apache Jena**'s Fuseki over a TDB2 database filled by `tdb2.tdbloader --loader=parallel`. Jena 5.x/6.x
+ * supports SPARQL 1.2 / RDF 1.2 triple terms. Driven against a Fuseki 6.3.0 build, which needs a Java 21+
+ * runtime; see `README.md`, "Setting up the engines", for which build to use and why it matters. TDB2 decides
+ * for itself what to keep in memory.
+ *
+ * Configured through `JENA_FUSEKI_JAR` (the path to `fuseki-server.jar`, required; the jar also holds the
+ * TDB2 loader), `JENA_JAVA` (default `java`), `JENA_FUSEKI_PORT` (default 3131) and `JENA_JVM_OPTS` (extra
+ * JVM arguments, space-separated).
+ */
+export class JenaEngine extends ManagedServerEngine {
+  public readonly supportsSparql12 = true;
+  public readonly storeKind = 'tdb2';
+  private readonly jarPath = process.env.JENA_FUSEKI_JAR ?? '';
+  private readonly javaBin = process.env.JENA_JAVA ?? 'java';
+  private readonly jvmArgs = (process.env.JENA_JVM_OPTS ?? '').split(/\s+/u).filter(Boolean);
+
+  public constructor(name = 'jena') {
+    super(name, Number.parseInt(process.env.JENA_FUSEKI_PORT ?? '3131', 10));
+  }
+
+  public loadStore(file: string, dir: string): void {
+    const args = [ '-cp', this.jar(), 'tdb2.tdbloader', '--loader=parallel', '--loc', dir, file ];
+    runTool(this.javaBin, [ ...this.jvmArgs, ...args ]);
+  }
+
+  protected serverCommand(dir: string, timeoutMs: number | undefined, writable: boolean): string[] {
+    return [
+      this.javaBin,
+      ...this.jvmArgs,
+      '-jar',
+      this.jar(),
+      '--tdb2',
+      `--loc=${dir}`,
+      ...writable ? [ '--update' ] : [],
+      ...timeoutMs === undefined ? [] : [ `--timeout=${timeoutMs}` ],
+      '--port',
+      String(this.port),
+      '/ds',
+    ];
+  }
+
+  protected get queryUrl(): string {
+    return `${this.baseUrl}/ds/sparql`;
+  }
+
+  protected get updateUrl(): string {
+    return `${this.baseUrl}/ds/update`;
+  }
+
+  private jar(): string {
+    if (!this.jarPath) {
+      throw new Error('JenaEngine: set JENA_FUSEKI_JAR to a Fuseki fuseki-server.jar (see test/bench/README.md).');
+    }
+    return this.jarPath;
+  }
+}
+
+/**
+ * **QLever**'s server over an index built by its index builder. QLever has no RDF 1.2 support, so it runs the
+ * LUBM and OAEI workloads only.
+ *
+ * QLever keeps the results of queries and their subqueries in a cache, and the benchmark's pipelines share
+ * subqueries, so the cache is cleared before every query: each one is measured cold, as on the other
+ * engines. Updates are held in memory, which is all `timeMaterialization.ts` needs of them.
+ *
+ * Needs `qlever-index` and `qlever-server`, built from <https://github.com/ad-freiburg/qlever>, in
+ * `QLEVER_BIN_DIR` or on `PATH`. `QLEVER_PORT` sets the port (default 3133) and `QLEVER_MEMORY` the memory
+ * queries may use (default `12GB`, about what Jena's JVM gets by default on this machine).
+ */
+export class QLeverEngine extends ManagedServerEngine {
+  public readonly supportsSparql12 = false;
+  public readonly storeKind = 'qlever';
+  private readonly binDir = process.env.QLEVER_BIN_DIR;
+  private readonly memory = process.env.QLEVER_MEMORY ?? '12GB';
+  /** Guards nothing - the server listens on localhost - but QLever takes no updates without one. */
+  private readonly accessToken = 'bench';
+
+  public constructor(name = 'qlever') {
+    super(name, Number.parseInt(process.env.QLEVER_PORT ?? '3133', 10));
+  }
+
+  public loadStore(file: string, dir: string): void {
+    mkdirSync(dir, { recursive: true });
+    const format = file.endsWith('.ttl') ? 'ttl' : 'nt';
+    // The builder writes its temporary files to the working directory.
+    runTool(this.bin('qlever-index'), [ '-i', join(dir, 'index'), '-f', file, '-F', format, '-p', 'true' ], dir);
+  }
+
+  protected serverCommand(dir: string, timeoutMs: number | undefined, _writable: boolean): string[] {
+    return [
+      this.bin('qlever-server'),
+      '-i',
+      join(dir, 'index'),
+      '-p',
+      String(this.port),
+      '-m',
+      this.memory,
+      '-a',
+      this.accessToken,
+      // Without a budget (materialising views) the server's own 30 s default must not apply either.
+      '-s',
+      `${timeoutMs === undefined ? 1_000_000 : Math.ceil(timeoutMs / 1000)}s`,
+    ];
+  }
+
+  protected get queryUrl(): string {
+    return `${this.baseUrl}/`;
+  }
+
+  protected get updateUrl(): string {
+    return `${this.baseUrl}/`;
+  }
+
+  protected override updateHeaders(): Record<string, string> {
+    return { Authorization: `Bearer ${this.accessToken}` };
+  }
+
+  protected override async beforeQuery(): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/?cmd=clear-cache`);
+    await response.body?.cancel();
+  }
+
+  private bin(name: string): string {
+    return this.binDir ? join(this.binDir, name) : name;
   }
 }

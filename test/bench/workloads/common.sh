@@ -2,7 +2,8 @@
 # Shared steps of the workloads' prepare.sh scripts. Sourced, not run.
 #
 # Needs: node, java 21+ (for Fuseki), JENA_FUSEKI_JAR (the 6.3.0 build the benchmark runs, see
-# test/bench/README.md) and rdf2hdt from hdt-cpp on PATH, or RDF2HDT pointing at it.
+# test/bench/README.md), the oxigraph binary on PATH or OXIGRAPH_BIN pointing at it, and rdf2hdt from
+# hdt-cpp on PATH, or RDF2HDT pointing at it.
 
 WORKLOADS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$WORKLOADS_DIR/../../.." && pwd)
@@ -21,11 +22,12 @@ require_disk() {
 
 # Deduplicates N-Triples into their final file: a graph is a set.
 dedupe() {
-  LC_ALL=C sort -u "$1" > "$2"
+  LC_ALL=C sort -u -S 4G "$1" > "$2"
   rm "$1"
 }
 
-# Runs every view of $1 over $2 with Jena, cross-checked against Oxigraph, into $3.
+# Runs every view of $1 over $2 with Jena, cross-checked against Oxigraph, into $3. Jena and Oxigraph each
+# keep a store of $2 beside it (see ManagedServerEngine in test/bench/engines.ts).
 materialize() {
   : "${JENA_FUSEKI_JAR:?set JENA_FUSEKI_JAR to fuseki-server.jar}"
   (cd "$REPO_ROOT" && npx tsx test/bench/materializeViews.ts "$1" "$2" "$3")

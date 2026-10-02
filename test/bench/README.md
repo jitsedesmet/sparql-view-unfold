@@ -91,11 +91,12 @@ parses, which is why the BKR-star query files can be fed to the rewriter verbati
 | Engine | SPARQL 1.2 native | New `<<( )>>` syntax | Min version | How to drive it |
 |---|---|---|---|---|
 | **Comunica** | ✅ full | ✅ | 5.0.0 (Jan 2026) | npm library (`@comunica/query-sparql*`) — long-lived worker process here |
-| **Apache Jena / Fuseki** | ✅ full (default) | ✅ | 4.10+ (rec. 5.x/6.x) | Java, Fuseki HTTP SPARQL endpoint |
-| **Oxigraph** | ✅ full | ✅ | 0.5.0 (2025) | Rust binary / WASM, one-shot child process here |
+| **Apache Jena / Fuseki** | ✅ full (default) | ✅ | 4.10+ (rec. 5.x/6.x) | Java, Fuseki HTTP SPARQL endpoint over TDB2 here |
+| **Oxigraph** | ✅ full | ✅ | 0.5.0 (2025) | Rust binary, its HTTP server over an on-disk store here |
 | Eclipse RDF4J | ⚠️ old `<< >>` only | ❌ | — | (cannot run the new syntax) |
 | Ontotext GraphDB | ⚠️ old `<< >>` only | ❌ | — | inherits RDF4J limitation |
-| QLever, Blazegraph, Stardog, Virtuoso, MillenniumDB | ❌ SPARQL 1.1 only | ❌ | — | not usable for native SPARQL 1.2 |
+| **QLever** | ❌ SPARQL 1.1 only | ❌ | — | C++ server over its own index here; runs the LUBM and OAEI workloads only |
+| Blazegraph, Stardog, Virtuoso, MillenniumDB | ❌ SPARQL 1.1 only | ❌ | — | not usable for native SPARQL 1.2 |
 
 Verified directly (2026-08-27): **Fuseki 6.2.0** parses and evaluates `<<( s p o )>>`
 natively and returns triple terms in SPARQL Results JSON via the `"type": "triple"`
@@ -116,15 +117,14 @@ older bytecode and works with Java 11/17.
 | `run.ts` | The orchestrator: for every engine × scheme × scale it runs the four pipelines and the baseline over the *same* subset, grades them against the reference answer, and writes the results JSON. Flushes after every row, so an interrupted run still leaves usable JSON. |
 | `runner.ts` | `rewriteToSparql11(mappers, query, variant)` — the core rewrite call, async as `QueryRewriter.rewriteQuery` is, where `variant` selects one of the four pipelines — plus `sameSolutions()` and a simpler single-engine `runBenchmark()`/`formatRecords()` used by `cli.ts`. |
 | `config.ts` | Maps each reification pattern (`reification` → `BKR-Reification.ttl`/`BKR-R_*.rq`, `singleton` → `BKR-Singleton.ttl`/`BKR-S_*.rq`) to its CONSTRUCT mappers, materialized dataset and hand-written baseline query, and builds cases from `queries/BKR-star_*.rq`. Also lists the LUBM and OAEI workloads (`WORKLOADS`): their views, queries, and each scale's source and materialised-views files. |
-| `engines.ts` | `BenchEngine` interface + `ComunicaEngine` (a long-lived worker process per dataset, so the store is loaded and indexed once and the engine stays warm, while a query whose join state outgrows the heap costs one `error` row instead of the whole sweep; in-process for the in-memory stores the unit tests use), `OxigraphEngine` (one-shot child process, killed on timeout — Oxigraph's `Store.query` is synchronous), `JenaEngine` (manages its own long-lived `fuseki-server.jar` child process, restarted only when the dataset file changes) and `SparqlHttpEngine` (any *externally managed* SPARQL HTTP endpoint, used by `cli.ts`). |
-| `oxiOneShot.mjs` | Loads one Turtle file, runs one query with Oxigraph, prints canonicalized JSON. Run as a child process by `OxigraphEngine` so a hard wall-clock timeout can be enforced by killing it. |
+| `engines.ts` | `BenchEngine` interface + `ComunicaEngine` (a long-lived worker process per dataset, so the store is loaded and indexed once and the engine stays warm, while a query whose join state outgrows the heap costs one `error` row instead of the whole sweep; in-process for the in-memory stores the unit tests use), the native servers `OxigraphEngine`, `JenaEngine` and `QLeverEngine` (see "Setting up the engines") and `SparqlHttpEngine` (any *externally managed* SPARQL HTTP endpoint, used by `cli.ts`). |
 | `comunicaWorker.mjs` | A long-lived Comunica worker driven by `ComunicaEngine` over newline-delimited JSON: it loads and indexes the dataset once, then answers every query against it. The separate process is about memory, not cancellation — Comunica buffers join state that no cap on the output stream can bound, and a `FATAL ERROR: Reached heap limit` is not catchable, so an unbounded query has to be able to die without taking the run with it. Timeouts are handled inside the worker, so they cost the budget but not the loaded store. Given an `.hdt` file (the LUBM and OAEI data), it queries through Comunica's HDT engine instead of loading a store. |
 | `makeSubset.mjs` | Streams a full multi-GB dataset once and writes four self-contained subsets (`xs`/`s`/`m`/`l`), each containing the full closure of every benchmark query's target entities plus a uniform random noise sample, so results are comparable across scales. The full datasets (13–17GB) cannot be loaded into an in-memory store, so this is what the real run uses. |
 | `plot.mjs` | Turns a results JSON into hand-rolled SVG figures (time-by-query, scaling, overhead, correctness) per scheme × engine. No dependencies. |
 | `cli.ts` | Ad-hoc single-pipeline runs against the **full** datasets or SPARQL endpoints you started yourself. No scale subsetting. |
 | `workloads/<name>/` | The LUBM and OAEI workloads: `prepare.sh` downloads or generates the data into a gitignored `data/`, and the committed `views.rq` and `queries/*.rq` are what the benchmark runs. `workloads/toNTriples.mjs` merges and skolemises the source files; `workloads/common.sh` holds the steps both scripts share. |
 | `materializeViews.ts` | Runs every view of a workload over its source data with Jena and writes the union, the graph the reference answers come from. Each view's result is cross-checked against Oxigraph's, and nothing is written unless the two agree. |
-| `timeMaterialization.ts` | Times Jena building every workload's views and reads the result's size on disk, the up-front cost the `materialized` approach pays and the rewriting does not. Writes `results/materialization.json`. |
+| `timeMaterialization.ts` | Times every engine materialising every workload's views itself and measures the result's size on disk, the up-front cost the `materialized` approach pays and the rewriting does not. Writes `results/materialization.json`; with `--break-even`, works out after how many queries that cost pays off. |
 
 Figures are **not committed** — they are regenerated from the results JSON with
 `plot.mjs` (`test/bench/results/figures/` is gitignored). The harness itself is validated
@@ -140,7 +140,7 @@ node --max-old-space-size=8000 test/bench/makeSubset.mjs \
   test/statics/REF-Benchmark/BKR/data/BKR-Singleton.ttl   test/bench/subsets singleton
 
 # 2. Run (see below on choosing --timeout; jena first so complete data lands early)
-# Jena: see "Adding Jena / Fuseki" on which build to use
+# Engines: see "Setting up the engines"
 export JENA_FUSEKI_JAR=/path/to/apache-jena-fuseki-6.3.0-SNAPSHOT/fuseki-server.jar
 NODE_OPTIONS="--max-old-space-size=12000 --expose-gc" npx tsx test/bench/run.ts \
   --engines jena,oxigraph,comunica --schemes reification,singleton --scales xs,s \
@@ -160,46 +160,73 @@ ended up with zero valid data points for the approach the whole comparison is ab
 the pushdown-based ones survive. Budget accordingly: a full 3-engine × 2-scheme × 2-scale
 sweep at 300 s is a many-hour run.
 
-`--engines` accepts `comunica`, `oxigraph` and/or `jena`.
+`--engines` accepts `comunica`, `oxigraph`, `jena` and `qlever`; QLever skips StarBench, which needs SPARQL 1.2.
 
-## Adding Jena / Fuseki
+## Setting up the engines
 
-Unlike `SparqlHttpEngine` (used by `cli.ts`, which talks to a server *you* started and
-loaded), `JenaEngine` manages its own `fuseki-server.jar` child process: it starts one
-lazily on the first query against a given dataset file (`--file=<path> --port=<port> /ds`,
-an in-memory dataset loaded at startup), keeps it running across every query against that
-file, and restarts it only when `run.ts` moves on to a different scale/scheme. `run.ts`
-calls `dispose()` once an engine's run is done.
+Every engine answers from data it has loaded and indexed once, the way it is built to be used, and is then
+queried warm:
+
+| Engine | Server | Store | Loaded with |
+|---|---|---|---|
+| Oxigraph | `oxigraph serve-read-only` | RocksDB on disk | `oxigraph load` (its bulk loader) |
+| Jena | `fuseki-server.jar --tdb2 --loc` | TDB2 on disk | `tdb2.tdbloader --loader=parallel` |
+| QLever | `qlever-server` | its index on disk | `qlever-index` |
+| Comunica | `comunicaWorker.mjs` | HDT (LUBM, OAEI), in-memory N3 store (StarBench) | `rdf2hdt`, or parsing the Turtle |
+
+The three servers share `ManagedServerEngine` (`engines.ts`). It bulk-loads a store beside each data file the
+first time that file is queried (`lubm-u10.nt` → `lubm-u10.oxigraph/`, `lubm-u10.tdb2/`, `lubm-u10.qlever/`),
+untimed, and reuses it on every later run. It starts one server at a time, restarts it when the store changes,
+and gives the server the query budget too (plus 2 s), so a query the harness gave up on stops using the CPU
+the next one is measured on. A server refuses to start on a port that already answers queries, since a
+leftover process there may hold other data. QLever caches query results, which the pipelines' shared
+subqueries would hit, so its cache is cleared before every query.
+
+**Oxigraph.** Take the `oxigraph` binary of a release (<https://github.com/oxigraph/oxigraph/releases>;
+0.5.11 is the one measured) and put it on `PATH` or point `OXIGRAPH_BIN` at it.
+
+**Jena.** Use a Fuseki build carrying ARQ's triple-term fix (Jena main `e9f7445a`, 2026-08-29). On 6.2.0 and
+earlier, a sub-SELECT projecting a triple term loses that binding when it is joined against a sibling
+pattern, which silently empties the plain `rewriting` pipeline's answers. No release carries the fix yet, so
+take the nightly. The jar also holds the TDB2 loader. Fuseki 6.x needs Java 21+.
 
 ```bash
-# 1. Get a Fuseki build (6.x needs Java 21+; 4.10.x works with Java 11/17).
-#    Use a build carrying ARQ's triple-term fix (Jena main `e9f7445a`, 2026-08-29):
-#    on 6.2.0 and earlier, a sub-SELECT projecting a triple term loses that binding
-#    when it is joined against a sibling pattern, which silently empties the plain
-#    `rewriting` pipeline's answers. No release carries the fix yet, so until one
-#    does, take the nightly:
 SNAP=https://repository.apache.org/content/repositories/snapshots/org/apache/jena/jena-fuseki-server/6.3.0-SNAPSHOT
 mkdir -p apache-jena-fuseki-6.3.0-SNAPSHOT
 curl -sL "$SNAP/jena-fuseki-server-6.3.0-20260922.051646-31.jar" \
   -o apache-jena-fuseki-6.3.0-SNAPSHOT/fuseki-server.jar   # check the dir for a newer one
-
-# 2. Point JenaEngine at the jar (the only env var actually required)
 export JENA_FUSEKI_JAR="$PWD/apache-jena-fuseki-6.3.0-SNAPSHOT/fuseki-server.jar"
 ```
 
-`/$/server` on a running Fuseki reports the build's version, which is worth checking
-before trusting a Jena row.
+`/$/server` on a running Fuseki reports the build's version, which is worth checking before trusting a Jena
+row.
+
+**QLever.** Its packages need Ubuntu 22.04 or later. On an older system, build it in a conda environment,
+which brings its own compiler (GCC 13; GCC 14 fails on QLever's concepts) and libraries, and needs no root:
+
+```bash
+micromamba create -p ~/opt/qlever-env -c conda-forge gxx_linux-64=13 gcc_linux-64=13 cmake ninja \
+  libboost-devel=1.86 icu jemalloc zstd openssl liburing libuuid mold pkg-config
+git clone https://github.com/ad-freiburg/qlever.git && mkdir qlever/build && cd qlever/build
+micromamba run -p ~/opt/qlever-env bash -c 'cmake -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO \
+  -DUSE_PARALLEL=true -D_NO_TIMING_TESTS=ON -DCOMPILER_SUPPORTS_MARCH_NATIVE=FALSE \
+  -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold -Wl,-rpath,$CONDA_PREFIX/lib" -DCMAKE_CXX_FLAGS=-Wno-psabi \
+  -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX -GNinja .. && cmake --build . --target qlever-index qlever-server'
+export QLEVER_BIN_DIR="$PWD"
+```
 
 | Env var | Meaning | Default |
 |---|---|---|
-| `JENA_FUSEKI_JAR` | Path to `fuseki-server.jar`. **Required** — `JenaEngine` throws a clear error if unset when it first needs a server. | — |
-| `JENA_JAVA` | Java binary to invoke. | `java` |
-| `JENA_FUSEKI_PORT` | Port the child Fuseki server listens on. | `3131` |
-| `JENA_JVM_OPTS` | Extra space-separated JVM args, e.g. `-Xmx8g` for the larger subsets (the default heap cannot load an 800MB Turtle file in-memory). | (none) |
-
-`JenaEngine` refuses to query a port that already answers `/$/ping` before it has started
-its own child: it cannot tell whether a leftover process on that port holds the dataset it
-is about to ask for, so it errors rather than silently querying the wrong data.
+| `OXIGRAPH_BIN` | The `oxigraph` binary. | `oxigraph` |
+| `OXIGRAPH_PORT` | Port of the Oxigraph server. | `3132` |
+| `JENA_FUSEKI_JAR` | Path to `fuseki-server.jar`. **Required** for Jena. | — |
+| `JENA_JAVA` | Java binary. | `java` |
+| `JENA_FUSEKI_PORT` | Port of the Fuseki server. | `3131` |
+| `JENA_JVM_OPTS` | Extra space-separated JVM arguments, for the server and the loader. | (none) |
+| `QLEVER_BIN_DIR` | Directory holding `qlever-index` and `qlever-server`. | on `PATH` |
+| `QLEVER_PORT` | Port of the QLever server. | `3133` |
+| `QLEVER_MEMORY` | Memory QLever's queries may use. | `12GB` |
+| `RDF2HDT` | hdt-cpp's `rdf2hdt`, for the workloads' HDT copies. | `rdf2hdt` |
 
 ## Known issues in the corpus and the engines
 
@@ -262,35 +289,35 @@ listed here because every one of them can be misread as one.
 ## Results
 
 720 rows: 3 engines × 2 schemes × 2 scales (`xs` ≈ 300k quads, `s` ≈ 680k) × 12 queries ×
-5 approaches, 1 rep, 300 s budget, all measured in one run on 2026-09-23/24 against
-**Jena `6.3.0-SNAPSHOT`** (the first build with ARQ's triple-term fix), **Oxigraph 0.5.9** and
-**Comunica 5.4.0**. `results.json` holds them; `plot.mjs` regenerates the figures.
-478 `ok`, 224 censored at the budget, 18 `error` — all Jena `F-Q3`, whose answer is 8,490,234
-rows and overruns the harness's 268MB response cap. The censoring is not spread evenly: 149 of
-the timeouts are Oxigraph's and 75 Comunica's, and Jena times out on nothing.
+5 approaches, 1 rep, 300 s budget. Jena (**`6.3.0-SNAPSHOT`**, the first build with ARQ's triple-term
+fix, then on an in-memory dataset) and **Comunica 5.4.0** were measured in one run on 2026-09-23/24;
+**Oxigraph 0.5.11** was re-measured on 2026-10-01 on its native server over an on-disk store, replacing
+the WebAssembly build the first run used. `results.json` holds them; `plot.mjs` regenerates the figures.
+608 `ok`, 76 censored at the budget, 36 `error`: `F-Q3` on Jena and on Oxigraph, whose answer is
+8,490,234 rows and overruns the harness's 268MB response cap. The censoring is not spread evenly: 75
+of the timeouts are Comunica's, one is Oxigraph's, and Jena times out on nothing.
 
 Because so much is censored, **comparisons below are paired**: two approaches are compared
 only on the (engine, scheme, scale, query) cells where both produced a real measurement,
 and a "rescue" counts a cell where one finished and the other did not. A censored row is a
 lower bound, so averaging one in would flatter whichever approach fails more often.
 
-### The pipelines rank in order, and every comparison is now unanimous
+### The pipelines rank in order
 
 | Comparison | cells | faster | median ratio | rescues | reverse rescues |
 |---|---|---|---|---|---|
-| `pullUpExtends` vs `pushDownAssertions` | 105 | 98 | 0.70 | 6 | 0 |
-| `pullUpExtends` vs `rewriting` | 61 | **61** | 0.15 | 50 | 0 |
-| `pushDownAssertions` vs `rewriting` | 61 | **61** | 0.24 | 44 | 0 |
-| `removeProjections` vs `rewriting` | 61 | 49 | 0.92 | 2 | 0 |
+| `pullUpExtends` vs `pushDownAssertions` | 129 | 120 | 0.77 | 1 | 0 |
+| `pullUpExtends` vs `rewriting` | 105 | 103 | 0.16 | 25 | 0 |
+| `pushDownAssertions` vs `rewriting` | 105 | 103 | 0.24 | 24 | 0 |
+| `removeProjections` vs `rewriting` | 104 | 58 | 0.98 | 2 | 1 |
 
-Not one cell in the table goes the other way: no pipeline is ever rescued by the one below
-it. The pushdown is worth roughly a 4× speed-up over the plain rewriting and the pull-up
-another 1.4× on top, and between them they turn 50 queries that never finish into queries
-that do.
+No optimising pipeline is ever rescued by the one below it. The pushdown is worth roughly a 4×
+speed-up over the plain rewriting and the pull-up another 1.3× on top, and between them they turn 25
+queries that never finish into queries that do.
 
-`removeProjections` on its own is close to neutral — 0.92, helping in 49 of 61 cells. It is
-worth keeping as a rung because it is what the pushdown needs (a `FILTER` cannot be driven
-into a pattern hidden behind a sub-`SELECT`), not for what it does alone.
+`removeProjections` on its own is neutral: 0.98, helping in 58 of 104 cells. It is worth keeping as a
+rung because it is what the pushdown needs (a `FILTER` cannot be driven into a pattern hidden behind a
+sub-`SELECT`), not for what it does alone.
 
 ### What the rewriting can answer at all
 
@@ -299,24 +326,25 @@ Queries answered within the budget, of 48 per cell (12 queries × 2 schemes × 2
 | Engine | baseline | `rewriting` | `+removeProjections` | `+pushDownAssertions` | `+pullUpExtends` |
 |---|---|---|---|---|---|
 | Jena | 46 | 44 | 44 | 44 | 44 |
-| Oxigraph | 46 | **0** | **0** | 20 | 25 |
+| Oxigraph | 46 | 44 | 43 | 44 | 44 |
 | Comunica | 46 | 17 | 19 | 41 | 42 |
 
-On Oxigraph the optimisation passes are not a speed-up, they are the difference between a
-usable approach and an unusable one: without them it answers **nothing at all** inside 300 s.
-Comunica goes from 17 to 42. Jena answers everything either way — its four `error` rows per
-pipeline are `F-Q3` overrunning the response cap, not the engine failing.
+On Comunica the optimisation passes are the difference between a usable approach and an unusable
+one: it goes from 17 to 42. Jena and native Oxigraph answer everything either way; their four `error`
+rows per pipeline are `F-Q3` overrunning the response cap, not the engine failing. Oxigraph's
+WebAssembly build, which the first run used, answered **nothing** inside 300 s without the pushdown,
+and 25 queries with it: the rewrites themselves did not change, the engine did.
 
-### The honest cost: ~20× the hand-written query, and it is a floor rather than a multiple
+### The honest cost: ~6× the hand-written query, and it is a floor rather than a multiple
 
 On the cells where the pull-up rewrite finished *and* returned the baseline's answer:
 
 | Scheme | cells | median cost |
 |---|---|---|
-| reification | 48 | **20.3×** |
-| singleton | 17 | 121.1× |
+| reification | 60 | **6.4×** |
+| singleton | 21 | 200.6× |
 
-Per engine on reification: Jena **5.8×** (20 cells), Comunica 39.4× (20), Oxigraph 619.9× (8).
+Per engine on reification: Oxigraph **3.4×** (20 cells), Jena 5.8× (20), Comunica 39.4× (20).
 The singleton figure is inflated by baselines that answer a different, mostly empty question
 fast — see the correctness section.
 
@@ -327,7 +355,7 @@ is stable. Across the graded-correct cells:
 |---|---|---|---|
 | Jena | 0.01 – 287.4 s (×35,922) | 0.09 – 3.5 s (×40) | ρ = 0.32 |
 | Comunica | 0.03 – 8.3 s (×259) | 1.3 – 126.3 s (×98) | ρ = 0.41 |
-| Oxigraph | 0.02 – 0.5 s (×24) | 16.3 – 276.0 s (×17) | ρ = 0.37 |
+| Oxigraph | 0.004 – 4.4 s (×1,106) | 1.3 – 7.5 s (×6) | ρ = 0.12 |
 
 The hand-written queries span four orders of magnitude; the rewrites of those same queries
 span one or two, and barely track them. A rewritten query costs what its own shape costs,
@@ -336,7 +364,8 @@ query — Jena answers `reification/B-Q1` at `s` in 12 ms, where the pull-up rew
 same question takes 1.1 s (94×) and the plain rewriting 6.6 s (546×) — and competitive or
 better on an expensive one.
 
-It does win outright, on 6 cells, all Jena/reification, and not marginally:
+It does win outright, on 6 cells, all Jena/reification, and not marginally. On Oxigraph the rewrite
+beats the baseline in no cell:
 
 | | baseline | `+pullUpExtends` | rows |
 |---|---|---|---|
@@ -357,26 +386,26 @@ Median time multiplier from `xs` to `s`, which is ×2.6 the quads, on cells wher
 
 | Approach | cells | × time |
 |---|---|---|
-| baseline | 69 | 1.11 |
-| `rewriting` | 25 | 2.13 |
-| `+removeProjections` | 26 | 2.26 |
-| `+pushDownAssertions` | 48 | 1.52 |
-| `+pullUpExtends` | 52 | 1.53 |
+| baseline | 69 | 1.19 |
+| `rewriting` | 47 | 2.37 |
+| `+removeProjections` | 47 | 2.44 |
+| `+pushDownAssertions` | 63 | 1.63 |
+| `+pullUpExtends` | 64 | 1.66 |
 
 The hand-written queries are nearly flat over this range, being index lookups against a
 constant. The plain rewriting grows faster than the data; the pushdown-based pipelines grow
 at about half that rate, so those passes improve the growth rate and not just the constant.
 
-### Correctness: 134 mismatches, none of them the rewriter, and only two causes
+### Correctness: 174 mismatches, none of them the rewriter, and only two causes
 
-340 of the 720 rows carry a verdict (a row is ungraded when nothing finished to compare
-against, or when it *is* the reference). 134 disagree with the baseline, and they now reduce
+470 of the 720 rows carry a verdict (a row is ungraded when nothing finished to compare
+against, or when it *is* the reference). 174 disagree with the baseline, and they reduce
 to two causes — the engine-defect category is gone, Jena's ARQ bug having been fixed:
 
 | Cause | rows |
 |---|---|
-| Eight `singleton` baselines asking a different question | 116 |
-| `reification/F-Q1`: `SELECT *` over different variable sets | 18 |
+| Eight `singleton` baselines asking a different question | 150 |
+| `reification/F-Q1`: `SELECT *` over different variable sets | 24 |
 
 `F-Q1` is not a wrong answer at all. Both sides return the same 2 rows, but the baseline is a
 `SELECT *` over the RDF 1.1 shape, so its `*` includes the reification node `?st` — a variable
@@ -387,16 +416,17 @@ answers.
 The singleton cases are documented under "Known issues": corrected by hand, all 16 of them
 match the rewriting exactly.
 
-The strongest evidence that nothing here is the rewriter's: on Jena, all four pipelines now
-produce the **identical** set of 17 mismatching cells. A rewriting bug would show up in the
-pipelines that transform more, and it does not.
+The strongest evidence that nothing here is the rewriter's: on Jena and on native Oxigraph, all
+four pipelines produce the **identical** set of 17 mismatching cells, the same 17 on both engines. A
+rewriting bug would show up in the pipelines that transform more, and it does not.
 
 ## LUBM and OAEI Conference
 
 Two workloads with no triple terms in them, run through the same harness, the same four
 pipelines and the same mapping options as StarBench (`generalizedRdfView: true`, and
 `preserveCardinality` off). They exercise what StarBench does not: many views for one target, and
-answers that only exist through the views.
+answers that only exist through the views. Being plain RDF 1.1, they also run on QLever, which has no
+RDF 1.2 support.
 
 ### LUBM: reasoning by rewriting
 
@@ -418,11 +448,18 @@ output, so no recursion arises.
   with a conjunctive body (`?x ub:headOf ?y . ?y a ub:Department`) for the class and all its
   superclasses.
 
-The data comes from the UBA 1.7 generator with seed 0, at 1 and 10 universities: `u1` has 100,543
-triples and `u10` has 1,272,575. The materialised views hold 137,722 and 1,735,299 triples. Every
-generated university depends only on the seed and its index, so `u10` contains `u1`. The harness
-uses this: a query that timed out on `u1` is recorded as a timeout on `u10` without being run (its
-`error` says so). **All 13 queries return exactly the published LUBM(1) answer counts on the
+The data comes from the UBA 1.7 generator with seed 0, at 1, 10, 50 and 100 universities:
+
+| Scale | Source triples | Materialised views |
+|---|---|---|
+| `u1` | 100,543 | 137,722 |
+| `u10` | 1,272,575 | 1,735,299 |
+| `u50` | 6,654,562 | 9,072,553 |
+| `u100` | 13,405,381 | 18,273,926 |
+
+Every generated university depends only on the seed and its index, so each scale contains the smaller
+ones. The harness uses this: a query that timed out at one scale is recorded as a timeout at the larger
+ones without being run (its `error` says so). **All 13 queries return exactly the published LUBM(1) answer counts on the
 materialised views**, which shows the compiled views are complete for this query set.
 
 The queries are the standard ones as written in `Ontop/OntopQueries.txt` of that repository
@@ -448,8 +485,9 @@ views and never ekaw's own data.
 
 Neither workload has a query written against its source data, which is what StarBench grades
 against. Here the reference is the **original query over the materialised views**:
-`materializeViews.ts` runs every view over the source data with Jena, checks each view's triple
-count against Oxigraph's, and writes the union. This is also what the `materialized` approach
+`materializeViews.ts` runs every view over the source data with Jena, checks each view's number of
+distinct triples against Oxigraph's, and writes the union. It streams every view's output to disk, so
+it handles LUBM's 18 million materialised triples at `u100`. This is also what the `materialized` approach
 measures, so for these workloads it means "compute the views ahead of time and query the result".
 That is a genuine alternative to rewriting, but a different comparison from StarBench's
 "hand-written query over the same data".
@@ -463,7 +501,9 @@ in this configuration.
 All source data is skolemised before use (`toNTriples.mjs`), because the rewriter does not allow
 blank nodes in its source. Comunica reads HDT copies of the data rather than loading it into memory.
 StarBench's Turtle stays in-memory, since HDT cannot hold triple terms, so Comunica's times are
-comparable within a workload but not across workloads.
+comparable within a workload but not across workloads. The three servers each query a store they
+bulk-loaded from the same N-Triples (see "Setting up the engines"), the materialised views in a store of
+their own.
 
 ### Left out, and why
 
@@ -483,42 +523,51 @@ comparable within a workload but not across workloads.
 ### Running them
 
 ```bash
-export JENA_FUSEKI_JAR=/path/to/fuseki-server.jar   # the 6.3.0 build, as above
-export RDF2HDT=/path/to/hdt-cpp/bin/rdf2hdt
-test/bench/workloads/lubm/prepare.sh                 # ~700 MB in workloads/lubm/data
+# The engines as in "Setting up the engines": JENA_FUSEKI_JAR, OXIGRAPH_BIN, QLEVER_BIN_DIR, RDF2HDT
+test/bench/workloads/lubm/prepare.sh                 # ~10 GB in workloads/lubm/data
 test/bench/workloads/oaei/prepare.sh                 # ~350 MB in workloads/oaei/data
+npx tsx test/bench/timeMaterialization.ts            # each engine materialising the views, below
 NODE_OPTIONS=--max-old-space-size=12000 npx tsx test/bench/run.ts \
-  --engines jena,oxigraph,comunica --schemes lubm,oaei --reps 1 --timeout 60000 \
+  --engines oxigraph,jena,qlever,comunica --schemes lubm,oaei --reps 1 --timeout 60000 \
   --out test/bench/results/workloads.json
-npx tsx test/bench/timeMaterialization.ts            # the cost of materialising, below
+npx tsx test/bench/timeMaterialization.ts --break-even test/bench/results/workloads.json
 ```
 
 ### Results
 
-2,340 rows (LUBM 390, OAEI 1,950), 1 rep, 60 s budget, measured in one run on 2026-09-25 against
-Jena `6.3.0-SNAPSHOT`, Oxigraph 0.5.9 and Comunica 5.4.0 (over HDT, through
-`@comunica/query-sparql-hdt` 5.0.1). They are appended to `results.json`, and StarBench's 720 rows
-are untouched.
+3,640 rows (LUBM 1,040, OAEI 2,600) on four engines, 1 rep, 60 s budget, measured on 2026-10-01/02:
+Oxigraph 0.5.11, Jena `6.3.0-SNAPSHOT` on TDB2 and QLever (master `8303d22`) on their native servers over
+on-disk stores, and Comunica 5.4.0 over HDT (through `@comunica/query-sparql-hdt` 5.0.1). Oxigraph's LUBM
+block and both of Jena's were re-run after the harness started restarting a server after every
+timed-out query (see "Setting up the engines"): before that, six Oxigraph rows failed with
+`fetch failed` right after a timeout. Jena's re-run matched its first run within 2% (median), with one
+row near the budget flipping to a timeout.
 
-| | ok | timeout | error |
-|---|---|---|---|
-| LUBM | 281 | 96 (29 of them not run: they timed out on `u1`) | 13 |
-| OAEI | 1,773 | 177 | 0 |
+| | LUBM ok / timeout / error | OAEI ok / timeout / error |
+|---|---|---|
+| Oxigraph | 187 / 73 (36 not run) / 0 | 646 / 4 / 0 |
+| Jena | 154 / 102 (62 not run) / 4 | 640 / 10 / 0 |
+| QLever | 146 / 0 / 114 | 390 / 0 / 260 |
+| Comunica | 108 / 152 (103 not run) / 0 | 559 / 91 / 0 |
 
-Eleven errors are Oxigraph's WebAssembly build panicking (`RuntimeError: unreachable`). Eight are on
-the huge `removeProjections` rewrites, and three are on LUBM Q07 and Q09 at `u10`, where evaluation
-rather than the query text is what grows. Two are Jena running out of heap, one while parsing the
-164 k-character `removeProjections` rewrite of Q03 and one while evaluating Q07's `pullUpExtends`
-rewrite. Fuseki ran with its default heap.
+"Not run" rows timed out at a smaller LUBM scale. The errors:
+
+- **QLever has no `sameTerm`** ("Built-in function "sameterm" not yet implemented"), which the plain
+  rewriting and `removeProjections` use for every constant: 364 rows, all of those two pipelines. The
+  pushdown removes the `sameTerm` filters, so its pipelines run.
+- **LUBM Q06 at `u50` and `u100`** (every student) overruns the harness's 268MB response cap with the
+  pushdown and pull-up rewrites on Jena and QLever (8 rows): without `preserveCardinality` they repeat
+  rows the materialised answer holds once.
+- **QLever runs out of its 12 GB query memory on LUBM Q09** from `u10` on (6 rows).
 
 Comparisons are paired and count rescues, as for StarBench above.
 
 #### No wrong answers
 
-Of 1,586 graded rows, **none differs from the reference as a set of rows**. All 153 LUBM rows
-that fail the multiset comparison are duplicates only (11 of the 13 queries, on every engine),
-which is what running without `preserveCardinality` against a set-valued reference predicts. The
-OAEI answers match exactly, since every competency question is `SELECT DISTINCT`.
+Of 2,101 graded rows, **none differs from the reference as a set of rows**. The 292 LUBM rows that fail
+the multiset comparison are duplicates only, which is what running without `preserveCardinality`
+against a set-valued reference predicts. The OAEI answers match exactly, since every competency question
+is `SELECT DISTINCT`.
 
 This proves less for OAEI than the count suggests. The reference is empty for 23 of the 65 queries on
 `d100` and 31 on `eswc`, because the sources either lack those facts or have no view producing them.
@@ -529,111 +578,148 @@ There, the check shows only that the rewriting finds nothing too. That includes
 
 | | LUBM: cells | faster | median | rescues | OAEI: cells | faster | median | rescues |
 |---|---|---|---|---|---|---|---|---|
-| `removeProjections` vs `rewriting` | 36 | 20 | 0.97 | 1–10 | 299 | 230 | 0.95 | 16–1 |
-| `pushDownAssertions` vs `removeProjections` | 37 | 37 | 0.06 | 22–0 | 315 | 315 | 0.02 | 68–0 |
-| `pullUpExtends` vs `pushDownAssertions` | 59 | 55 | 0.81 | 2–0 | 383 | 283 | 0.80 | 2–0 |
-| `pullUpExtends` vs `rewriting` | 46 | 45 | 0.06 | 15–0 | 300 | 297 | 0.01 | 85–0 |
+| `removeProjections` vs `rewriting` | 47 | 22 | 1.01 | 0–9 | 333 | 263 | 0.96 | 10–3 |
+| `pushDownAssertions` vs `removeProjections` | 47 | 47 | 0.10 | 101–0 | 343 | 343 | 0.01 | 174–0 |
+| `pullUpExtends` vs `pushDownAssertions` | 148 | 140 | 0.80 | 1–0 | 517 | 441 | 0.72 | 2–0 |
+| `pullUpExtends` vs `rewriting` | 56 | 56 | 0.06 | 93–0 | 336 | 333 | 0.01 | 183–0 |
 
-- **`pushDownAssertions` is where the gain is.** It is 16–50× faster than the step before, it is faster
-  in every one of the 352 paired cells, and it rescues 90 cells without losing one. It is also what
-  makes the query small: LUBM Q09 goes from 488,628 characters (1,428 `UNION`s, 1,758 triple
-  patterns) to 13,900, and `pullUpExtends` takes it to 7,610 (34 `UNION`s, 52 patterns).
-- **`removeProjections` alone does nothing for speed**, and on LUBM it loses 10 cells the plain
-  rewriting finishes. Flattening a query that size into a single group is behind most of those losses:
-  it crashes Oxigraph and exhausts Jena's parser.
+- **`pushDownAssertions` is where the gain is.** It is 10–100× faster than the step before, faster in
+  every one of the 390 paired cells, and it rescues 275 cells without losing one. It is also what makes
+  the query small: LUBM Q09 goes from 488,628 characters (1,428 `UNION`s, 1,758 triple patterns) to
+  13,900, and `pullUpExtends` takes it to 7,610 (34 `UNION`s, 52 patterns).
+- **`removeProjections` alone does nothing for speed**, and on LUBM it loses 9 cells the plain
+  rewriting finishes.
 
-Queries answered, of 13 (LUBM) and 65 (OAEI):
+Queries answered, of 13 (LUBM) and 65 (OAEI), materialised views · `rewriting` · `+removeProjections` ·
+`+pushDownAssertions` · `+pullUpExtends`:
 
-| engine / scale | materialised views | `rewriting` | `+removeProjections` | `+pushDownAssertions` | `+pullUpExtends` |
-|---|---|---|---|---|---|
-| Jena / LUBM `u1` · `u10` | 13 · 13 | 8 · 7 | 8 · 8 | 9 · 8 | 10 · 9 |
-| Oxigraph / LUBM `u1` · `u10` | 13 · 13 | 13 · 11 | 11 · 3 | 13 · 12 | 13 · 12 |
-| Comunica / LUBM `u1` · `u10` | 13 · 13 | 7 · 0 | 7 · 0 | 12 · 5 | 12 · 5 |
-| Jena / OAEI `eswc` · `d100` | 65 · 65 | 63 · 63 | 63 · 62 | 65 · 64 | 65 · 65 |
-| Oxigraph / OAEI `eswc` · `d100` | 65 · 65 | 64 · 33 | 64 · 33 | 65 · 61 | 65 · 61 |
-| Comunica / OAEI `eswc` · `d100` | 65 · 65 | 63 · 14 | 63 · 30 | 65 · 63 | 65 · 64 |
+| Scale | Oxigraph | Jena | QLever | Comunica |
+|---|---|---|---|---|
+| LUBM `u1` | 13 · 13 · 12 · 13 · 13 | 13 · 10 · 10 · 10 · 10 | 13 · 0 · 0 · 13 · 13 | 13 · 7 · 7 · 12 · 12 |
+| LUBM `u10` | 13 · 12 · 8 · 12 · 12 | 13 · 9 · 9 · 9 · 9 | 13 · 0 · 0 · 12 · 12 | 13 · 0 · 0 · 5 · 5 |
+| LUBM `u50` | 10 · 5 · 1 · 11 · 11 | 13 · 0 · 0 · 8 · 8 | 13 · 0 · 0 · 11 · 11 | 12 · 0 · 0 · 3 · 3 |
+| LUBM `u100` | 6 · 0 · 0 · 11 · 11 | 13 · 0 · 0 · 5 · 5 | 13 · 0 · 0 · 11 · 11 | 11 · 0 · 0 · 2 · 3 |
+| OAEI `eswc` | 65 · 64 · 64 · 65 · 65 | 65 · 63 · 63 · 65 · 65 | 65 · 0 · 0 · 65 · 65 | 65 · 63 · 62 · 65 · 65 |
+| OAEI `d100` | 65 · 64 · 64 · 65 · 65 | 65 · 63 · 62 · 64 · 65 | 65 · 0 · 0 · 65 · 65 | 65 · 19 · 28 · 63 · 64 |
 
-#### Against the materialised views: vocabulary translation at parity, reasoning at a cost
+#### Against the materialised views: it depends on the engine more than on the workload
 
-The `materialized` column answers the same question with the views already computed. Measured
-against it:
+The `materialized` column answers the same question with the views already computed, in a store of
+their own. Median of `pullUpExtends` over the source against it, on cells where both finished:
 
-- **OAEI: 18 of the 65 queries are rewritten into queries that are empty by construction.** No view
-  produces what they ask for (a conference's location, a paper's title), and `pushDownAssertions`
-  proves it without touching the data. `pullUpExtends` answers them in a median of 4 ms (at most
-  17), which is faster than the materialised views (9 ms). The plain rewriting needs a median of 1.9 s
-  and times out on 30 of the 108 cells. The reference agrees that all 18 are empty.
-- **OAEI, the other 47:** `pullUpExtends` takes a median of **1.37×** the materialised query and is
-  faster in 63 of 277 cells. By engine: Jena 1.06 (`d100`) and 0.75 (`eswc`), Oxigraph 1.18 and
-  1.29, Comunica 3.33 and 3.00. From `eswc` to `d100` (11× the data) both grow alike: the
-  materialised query ×1.9, `pullUpExtends` ×3.3, the plain rewriting ×9.6.
-- **LUBM:** `pullUpExtends` takes a median of **5.9×** the materialised query (n = 61, faster in 7), and
-  17 cells finish only on the materialised views. It also scales worse: from `u1` to `u10` (12.7×
-  the data) the materialised query grows ×2.4 and `pullUpExtends` ×8.9. On Jena the median goes from
-  4.9× at `u1` to 55× at `u10`.
+| Engine | LUBM `u1` | `u10` | `u50` | `u100` | OAEI `eswc` | `d100` |
+|---|---|---|---|---|---|---|
+| Oxigraph | 1.20× | 0.88× | 0.58× | 0.51× | 1.00× | 0.80× |
+| Jena | 4.2× | 53× | 449× | 606× | 0.86× | 0.86× |
+| QLever | 11.8× | 16.1× | 18.1× | 31.9× | 1.92× | 1.74× |
+| Comunica | 32× | 13.8× | 19.5× | 31.9× | 1.50× | 2.50× |
 
-The difference is fan-out. An OAEI term has at most one view per source, so a pattern becomes a
-`UNION` of a handful of branches. A LUBM class like `Person` or `Student` has dozens of ways to be
-derived, and the entailed facts are exactly what the query asks for.
+- **OAEI is vocabulary translation, and there the rewriting runs at parity:** 1.14× over all 519 cells,
+  faster than the materialised query on Jena and Oxigraph. 18 of the 65 queries are rewritten into
+  queries that are empty by construction (no view produces what they ask for), which every engine
+  answers in milliseconds.
+- **LUBM is reasoning, and there it costs, and the cost grows with the data** on Jena, QLever and
+  Comunica. Jena is the extreme: most of its materialised queries stay at milliseconds up to `u100`,
+  its rewrites grow with the data, and only 5 of 13 still finish at `u100`. The difference is fan-out. An
+  OAEI term has at most one view per source; a LUBM class like `Person` or `Student` has dozens of ways
+  to be derived, and the entailed facts are exactly what the queries ask for.
+- **Oxigraph is the exception: it answers the materialised views more slowly than the rewrite.** LUBM Q01
+  takes it 55 s on the views at `u100` and 0.3 s rewritten; at `u100` six of its 13 materialised queries
+  finish and eleven rewrites do. Q01 is "graduate students taking `GraduateCourse0`". Over the views
+  Oxigraph apparently starts from every graduate student; the pushed-down rewrite has the course as a
+  constant in each branch, and Oxigraph starts there. Its scans are also slow: reading the 274,699
+  `takesCourse` triples of `u10` takes it 7–9 s, through the server or its own command line, where Jena
+  needs 0.5 s.
 
-#### What materialising costs
+#### What materialising costs, per engine
 
 The comparison above assumes the views already exist. Views that change, or that live only briefly,
-have to be built again each time. `timeMaterialization.ts` measures that with Jena: every view's
-`CONSTRUCT`, in a row, three times, against a Fuseki server that already holds the source. Loading the
-source (3.9–14.5 s) is left out, because the rewriting loads the same source. Measured on 2026-09-28 on
-the machine and Jena build of the run above; `results/materialization.json` holds the numbers.
+have to be built again each time. `timeMaterialization.ts` measures that for every engine, doing all of
+it itself: running every view's `CONSTRUCT` against its own store of the source, then loading the output
+into a fresh store of its own, the way it loads data fastest. Starting the server on the source store is
+not counted, because the rewriting needs it too. Measured once, on 2026-09-30/10-01;
+`results/materialization.json` holds the numbers.
 
-| Scale | source triples | materialised triples | N-Triples | HDT + index | Jena build: first · warm | dedupe + write | pays off after (Jena · Oxigraph · Comunica) |
-|---|---|---|---|---|---|---|---|
-| LUBM `u1` | 100,543 | 137,722 (1.37×) | 23.2 MB | 1.2 MB | 4.1 s · 2.6 s | 0.4 s | ≤ 1 · 4 · ≤ 1 |
-| LUBM `u10` | 1,272,575 | 1,735,299 (1.36×) | 294 MB | 16.1 MB | 16.9 s · 16.6 s | 6.0 s | ≤ 1 · 21 · ≤ 1 |
-| OAEI `eswc` | 123,170 | 36,664 (0.30×) | 4.3 MB | 0.3 MB | 1.7 s · 1.1 s | 0.1 s | 63 · 38 · 5 |
-| OAEI `d100` | 1,368,540 | 468,139 (0.34×) | 57.9 MB | 3.8 MB | 4.8 s · 3.6 s | 1.2 s | 6 · ≤ 2 · ≤ 2 |
+Doing it inside the database with one `INSERT { GRAPH … } WHERE { … }` per view is slower on every engine
+that supports it, at LUBM `u10` (`results/materialization-methods-u10.json`): QLever 74 s against 16 s,
+Jena 131 s against 35 s, Oxigraph 159 s against 153 s. Comunica cannot write, so it builds an HDT file
+and its index from its own `CONSTRUCT` output.
 
-- **Build** is the first pass, what a one-off materialisation pays; *warm* is the median of the three.
-  The times include receiving the output as N-Triples. The views emit overlapping triples (2.6 M for
-  1.7 M distinct at `u10`), so the harness deduplicates the union and writes it, the last time column.
-- **Space:** LUBM's views take 1.36× the source, because the reasoning adds entailed triples. OAEI's
-  take a third of it, because the views keep only what maps into ekaw.
-- **Pays off after** is the number of queries after which building the views and querying them costs
-  less than running `pullUpExtends` over the source: the first build over the average per-query
-  saving, per engine, over the queries neither approach errored on. A timed-out `pullUpExtends` row
-  counts at the 60 s budget, so where one is involved (`≤`) the saving is understated and the
-  count an upper bound. The materialised queries never timed out.
+| Build time | LUBM `u1` | `u10` | `u50` | `u100` | OAEI `eswc` | `d100` |
+|---|---|---|---|---|---|---|
+| QLever | 5.6 s | 16 s | 64 s | 125 s | 3.5 s | 6.4 s |
+| Jena | 8.2 s | 32 s | 178 s | 390 s | 5.3 s | 11 s |
+| Oxigraph | 11 s | 144 s | 951 s | 41 min | 3.1 s | 23 s |
+| Comunica | 15 s | 650 s | 4.0 h | 14.2 h | 4.5 s | 30 s |
 
-Building is cheap next to a pass over all the queries, and pays for itself within a query or two
-wherever the rewriting struggles: LUBM on Jena and Comunica, whose `pullUpExtends` rows include the
-Q02/Q07/Q09 timeouts, and OAEI `d100` on Oxigraph and Comunica. Where the rewriting is close to the
-materialised views, OAEI `eswc` on Jena and Oxigraph, it takes 38–63 of the 65 queries, and short-lived
-views are better served by the rewriting.
+Running the views is most of it everywhere: at `u100` it is 92 s of QLever's 125 and 246 s of Jena's 390.
+Comunica's grows far faster than the data, 22× from `u10` to `u50` and another 3.5× to `u100`, so
+`timeMaterialization.ts` no longer runs it at those two scales unless asked to (`--include-slow`).
+
+The materialised views on disk, against 3.1 GB of N-Triples at LUBM `u100`, measured as the disk
+actually allocated to each engine's store of them (TDB2 preallocates sparse files several times larger):
+
+| Store | LUBM `u1` | `u10` | `u50` | `u100` | OAEI `eswc` | `d100` |
+|---|---|---|---|---|---|---|
+| N-Triples | 23 MB | 294 MB | 1.5 GB | 3.1 GB | 4.3 MB | 58 MB |
+| Jena (TDB2) | 20 MB | 251 MB | 1.3 GB | 2.7 GB | 5.2 MB | 60 MB |
+| Oxigraph | 12 MB | 136 MB | 708 MB | 1.4 GB | 3.7 MB | 41 MB |
+| QLever | 2.1 MB | 23 MB | 122 MB | 244 MB | 0.8 MB | 7.3 MB |
+| HDT + index (Comunica) | 1.2 MB | 16 MB | 91 MB | 189 MB | 0.3 MB | 3.8 MB |
+
+LUBM's views take 1.36× the source, because the reasoning adds entailed triples; OAEI's take a third
+of it, keeping only what maps into ekaw.
+
+**After how many queries does building the views pay off?** The build time over the average per-query
+saving against `pullUpExtends`, per engine, with that engine's own build time and query times
+(`timeMaterialization.ts --break-even`):
+
+| Engine | LUBM `u1` | `u10` | `u50` | `u100` | OAEI `eswc` | `d100` |
+|---|---|---|---|---|---|---|
+| Jena | ≤ 1 | ≤ 2 | ≤ 7 | ≤ 11 | 134 | 13 |
+| QLever | 6 | 14 | 48 | 44 | 110 | 38 |
+| Comunica | ≤ 2 | ≤ 17 | ~365 | ~1,302 | 13 | ≤ 10 |
+| Oxigraph | 11 | ≤ 259 | never | never | never | 298 |
+
+A timed-out rewrite counts at the 60 s budget, which understates the saving: those counts are upper
+bounds (≤). Where materialised queries timed out as well (~, and Oxigraph's "never" at `u50`/`u100`),
+the two errors pull in opposite directions. For Oxigraph, most of the materialised queries that time out
+are ones its rewrites answer in 2–16 s, so materialising does not pay there either way.
+
+So **the number of queries a view can serve before building it pays off rises with the data on every
+engine**, because building gets more expensive faster than the saving per query grows. How far it rises
+depends on the engine: Jena's rewrites slow down so much with LUBM's fan-out that it still pays off
+within a dozen queries at `u100`; QLever builds fast but its rewrites stay 16–32× its materialised
+queries, about 45 queries; Comunica's 14-hour build needs over a thousand; on Oxigraph the materialised
+views are no faster to query, so building never pays off at all. On OAEI, where the rewriting runs at
+parity, building takes 10 to 298 queries to pay off, and never on Oxigraph at `eswc`.
 
 #### Where the optimisations do not help, and why
 
 - **Joins on `BIND`-computed variables across `UNION` groups.** After every pass, each query pattern
   is still a `UNION` with one branch per view, and each branch binds the shared variable through a
   `BIND` (`?v_7 cmt:writePaper ?v_8 . BIND(?v_7 AS ?v_6)`). Joining such groups gives an engine no
-  index to look the other side up in, and none of the three engines distributes the join over the
+  index to look the other side up in, and none of the four engines distributes the join over the
   branches. Examples:
-  - **LUBM Q09** (student, advisor, course: three typed variables joined in a triangle) fails at
-    `u10` on every pipeline on every engine, by timeout or an Oxigraph panic, while the materialised
-    query takes 0.7–44 s.
-  - **Jena answers none of LUBM Q02, Q07 and Q09** on any pipeline at either scale.
-  - **OAEI `is_author_of_paper`** on Jena `d100`: `pullUpExtends` takes 46 s, *slower* than the
-    plain rewriting's 29 s, against 0.5 s on the materialised views.
+  - **LUBM Q09** (student, advisor, course: three typed variables joined in a triangle) fails from
+    `u10` on with every pipeline on every engine (timeouts, and QLever's memory limit), while the
+    materialised query takes 0.16 s (QLever) to 47 s (Comunica) at `u10`.
+  - **Jena answers none of LUBM Q02, Q07 and Q09** with any pipeline at any scale.
+  - **OAEI `is_author_of_paper`** on Jena `d100`: `pullUpExtends` takes 47 s, *slower* than the
+    plain rewriting's 28 s, against 1.0 s on the materialised views.
 - **Identical `UNION` branches are not merged.** Where one view reaches a source predicate through a
   `UNION` and another reaches it directly, both branches survive. `is_author_of_paper`'s rewrite
   reads `cmt:writePaper`, `confOf:writes` and `edas:hasRelatedPaper` twice each.
 - **The unoptimised rewrites are too big for the engines.** Without the pushdown, a LUBM rewrite
-  has up to 575 k characters and takes up to a minute just to rewrite (Q02 and Q09). That is behind
-  nine of this run's thirteen errors.
+  has up to 575 k characters and takes up to a minute just to rewrite (Q02 and Q09). At `u50` the plain
+  rewriting finishes 5 queries on Oxigraph and none elsewhere; at `u100`, none anywhere.
 - **`EXISTS` inside a `BIND` is rewritten into a correlated `BIND`** (OAEI `early_registration`). The
   pattern inside the `EXISTS` ends in `BIND(?v_0 AS ?uq_s)` while `?uq_s` is already bound outside
   it, which SPARQL's substitution semantics leave undefined. The engines accept it, but the
   reference is empty at both scales, so this benchmark cannot say whether the answer would be
   right. Treat it as unverified.
-- **Comunica stays at ~3× the materialised views on OAEI** even when the other two engines are at
-  parity: it pays more per `UNION` branch than they do.
+- **Comunica and QLever stay at 1.5–2.5× the materialised views on OAEI** where Jena and Oxigraph are
+  at parity: they pay more per `UNION` branch.
 
 ## History
 
@@ -656,6 +742,7 @@ figures from any results JSON. In summary:
 | 2026-09-23 → 09-24 | Jena moved to the `6.3.0-SNAPSHOT` nightly, the first build carrying the ARQ triple-term fix, and all 720 rows re-measured in one run on it. 32 Jena answers went from a fast wrong empty result to the baseline's, which raised the reification cost from ~13× to 20.3× and steepened the whole ladder: `pullUpExtends` vs `rewriting` on Jena went 0.45 → 0.15, and `removeProjections`, which the bug had made look like a pessimisation at 2.36, came out at 0.90. Every remaining mismatch is a corpus defect, identical across all four pipelines. |
 | 2026-09-24 → 09-25 | LUBM (ontology compiled into 239 views, 1 and 10 universities) and OAEI Conference (148 views from four sources into ekaw, `data_100` and `eswc`) added as workloads, graded against the original query over the materialised views; Comunica reads their data as HDT. 60 s budget. |
 | 2026-09-28 | The cost of materialising the LUBM and OAEI views with Jena measured (`timeMaterialization.ts`): 1.7–17 s to build, and 0.3× (OAEI) to 1.36× (LUBM) the source's size. |
+| 2026-09-29 → 10-02 | The engines moved to native servers over on-disk stores they bulk-load once: Oxigraph's 0.5.11 binary instead of its WebAssembly build, Jena on TDB2 instead of an in-memory dataset, and QLever added for LUBM and OAEI. A server also stops a query shortly after its budget and is restarted after every timeout. LUBM grew to 50 and 100 universities. Every engine now materialises the views itself, and the pay-off point is worked out with its own build time. LUBM and OAEI re-measured on all four engines, StarBench re-measured on Oxigraph, where the plain rewriting went from answering nothing to 44 of 48 queries. |
 
 ## Extending
 
