@@ -55,8 +55,7 @@ describe('nullifyUnbindableVars', () => {
 
   it('leaves a GRAPH whose name only an OPTIONAL disagrees with alone', ({ expect }) => {
     // `GRAPH ?g { ?s ?p ?o OPTIONAL { VALUES (?s ?g) { (<ex://a> "l") } } }`: every triple whose subject is
-    // not `<ex://a>` misses the OPTIONAL and takes `?g` from the graph, so this has solutions - see the
-    // evaluation tests. Over an empty group the OPTIONAL never misses, and nullifying would be right.
+    // not `<ex://a>` misses the OPTIONAL and takes `?g` from the graph, so this has solutions to lose.
     const s = c.DF.variable('s');
     const inner = c.AF.createLeftJoin(
       c.AF.createBgp([ c.AF.createPattern(s, c.DF.variable('p'), c.DF.variable('o')) ]),
