@@ -152,7 +152,8 @@ export interface WorkloadConfig {
   /**
    * Scales that only some engines run, by scale name; every other scale runs on every engine. A scale can be
    * sized for the engines that take it: LUBM's `u250` is about where QLever needs five minutes to
-   * materialise the views, a point the other engines reach at `u100` or well below.
+   * materialise the views, a point the other engines reach at `u100` or well below, and `u500` takes QLever
+   * further still. `prepare.sh` stops at `u250`; see the README for how `u500` was made.
    */
   scaleEngines?: Record<string, string[]>;
   /**
@@ -168,8 +169,15 @@ export const WORKLOADS: Record<string, WorkloadConfig> = {
     name: 'lubm',
     viewsFile: join(WORKLOADS_DIR, 'lubm', 'views.rq'),
     queryDir: join(WORKLOADS_DIR, 'lubm', 'queries'),
-    scales: { u1: 'lubm-u1', u10: 'lubm-u10', u50: 'lubm-u50', u100: 'lubm-u100', u250: 'lubm-u250' },
-    scaleEngines: { u250: [ 'qlever' ]},
+    scales: {
+      u1: 'lubm-u1',
+      u10: 'lubm-u10',
+      u50: 'lubm-u50',
+      u100: 'lubm-u100',
+      u250: 'lubm-u250',
+      u500: 'lubm-u500',
+    },
+    scaleEngines: { u250: [ 'qlever' ], u500: [ 'qlever' ]},
     nestedScales: true,
   },
   oaei: {

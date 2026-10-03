@@ -22,11 +22,11 @@ import { spawn, spawnSync } from 'node:child_process';
 import type { ChildProcessByStdio, ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
+import type { IncomingMessage } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { Readable } from 'node:stream';
-import type { Writable } from 'node:stream';
-import type { ReadableStream } from 'node:stream/web';
+import type { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
@@ -659,12 +659,25 @@ export abstract class ManagedServerEngine implements BenchEngine {
    */
   public async constructInto(query: string, source: EngineSource, out: Writable): Promise<void> {
     await this.serve(source, undefined);
-    const response = await this.post(query, 'application/n-triples', undefined);
-    if (!response.body) {
-      return;
+    // Through `node:http` rather than `fetch`, which gives up when the headers take over five minutes: Jena
+    // sends none until it has built the whole graph, which for LUBM u500's identity view takes longer.
+    const response = await new Promise<IncomingMessage>((resolve, reject) => {
+      const req = httpRequest(`${this.queryUrl}${this.queryParameters(undefined)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/sparql-query', Accept: 'application/n-triples' },
+      }, resolve);
+      req.on('error', reject);
+      req.end(query);
+    });
+    if (response.statusCode !== 200) {
+      let body = '';
+      for await (const chunk of response) {
+        body += String(chunk);
+      }
+      throw new Error(`Engine '${this.name}' returned HTTP ${response.statusCode}: ${body.slice(0, 2000)}`);
     }
     // Written chunk by chunk rather than piped: a pipe would end `out`, or, told not to, leave its listeners on it.
-    for await (const chunk of Readable.fromWeb(<ReadableStream> response.body)) {
+    for await (const chunk of response) {
       if (!out.write(chunk)) {
         await once(out, 'drain');
       }

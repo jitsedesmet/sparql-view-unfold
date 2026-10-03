@@ -51,7 +51,7 @@
  *
  * Usage:
  *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena,qlever]
- *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,u50,u100,u250,d100,eswc] [--reps 1]
+ *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,u50,u100,u250,u500,d100,eswc] [--reps 1]
  *     [--approaches materialized,rewriting,...] [--timeout 60000] [--out results.json]
  * `--scales` keeps, of each scheme's own scales, those it lists; without it StarBench runs xs,s,m and
  * the workloads run all of theirs.
