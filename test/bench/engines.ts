@@ -118,6 +118,116 @@ const MAX_BINDINGS = 2_000_000;
  */
 const WORKER_HEAP_MB = 8000;
 
+/**
+ * Hard cap on how many solutions a server engine's answer may have. {@link readBindings} holds one string per
+ * solution, which the heap can take by the million (`F-Q3`'s 8.5 million is the largest real answer); the cap
+ * only stops a runaway query before it exhausts the heap, as an ordinary `error` row.
+ */
+const MAX_SERVER_ROWS = 50_000_000;
+
+/**
+ * Reads SPARQL Results JSON from a response a chunk at a time, canonicalising each binding (as
+ * {@link canonicalizeJsonResults} does). Parsing the whole body at once would first decode it into a single
+ * string, and Node cannot hold one much past half a gigabyte: a larger one aborts the process instead of
+ * throwing, which is why answers used to be cut off at {@link MAX_RESPONSE_BYTES}. Read like this, an answer
+ * is bounded by the heap only.
+ *
+ * It finds the `bindings` array, then scans the bytes of each chunk for the binding objects that end in it,
+ * tracking nesting and strings, and parses those objects with one `JSON.parse` per chunk; an object cut off
+ * by the chunk's end is carried over to the next. Scanning bytes rather than characters, and parsing per
+ * chunk rather than per object, keeps the scan's own cost to about 6 ms per MB, on top of the parsing and
+ * canonicalising every answer always needed (`F-Q3`'s 2 GB answer takes about a minute in all).
+ */
+export async function readBindings(response: Response, engineName: string): Promise<string[]> {
+  const rows: string[] = [];
+  if (!response.body) {
+    return rows;
+  }
+  const QUOTE = 0x22;
+  const BACKSLASH = 0x5C;
+  const OPEN = 0x7B;
+  const CLOSE = 0x7D;
+  const END_ARRAY = 0x5D;
+  const decoder = new TextDecoder();
+  let pending: Uint8Array = new Uint8Array(0);
+  let inArray = false;
+  let done = false;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for await (const chunk of <AsyncIterable<Uint8Array>> <unknown> response.body) {
+    let data: Uint8Array = pending.length === 0 ? chunk : Buffer.concat([ pending, chunk ]);
+    // Bytes already scanned: an object carried over is rescanned from its start, with state reset to there.
+    let position = 0;
+    if (!inArray) {
+      const head = decoder.decode(data);
+      const start = /"bindings"\s*:\s*\[/u.exec(head);
+      if (!start) {
+        pending = data;
+        continue;
+      }
+      data = data.subarray(Buffer.byteLength(head.slice(0, start.index + start[0].length)));
+      inArray = true;
+    }
+    let objectStart = -1;
+    let firstStart = -1;
+    let lastEnd = -1;
+    for (; position < data.length && !done; position++) {
+      const byte = data[position];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (byte === BACKSLASH) {
+          escaped = true;
+        } else if (byte === QUOTE) {
+          inString = false;
+        }
+      } else if (byte === QUOTE) {
+        inString = true;
+      } else if (byte === OPEN) {
+        if (depth === 0) {
+          objectStart = position;
+          if (firstStart < 0) {
+            firstStart = position;
+          }
+        }
+        depth++;
+      } else if (byte === CLOSE) {
+        depth--;
+        if (depth === 0) {
+          lastEnd = position + 1;
+          objectStart = -1;
+        }
+      } else if (byte === END_ARRAY && depth === 0) {
+        done = true;
+      }
+    }
+    if (lastEnd > 0) {
+      const objects = <Record<string, SparqlJsonTerm>[]> JSON.parse(`[${decoder.decode(data.subarray(firstStart, lastEnd))}]`);
+      for (const binding of objects) {
+        rows.push(canonicalizeJsonBinding(binding));
+      }
+      if (rows.length > MAX_SERVER_ROWS) {
+        await response.body.cancel();
+        throw new Error(`Engine '${engineName}' returned over ${MAX_SERVER_ROWS} solutions; abandoning the query.`);
+      }
+    }
+    // An unfinished object is carried over and rescanned from its start next time.
+    if (objectStart >= 0) {
+      pending = data.slice(objectStart);
+      depth = 0;
+      inString = false;
+      escaped = false;
+    } else {
+      pending = new Uint8Array(0);
+    }
+    if (done) {
+      break;
+    }
+  }
+  return rows;
+}
+
 /** Reads a fetch `Response` as JSON, refusing (with a catchable error) past {@link MAX_RESPONSE_BYTES}. */
 async function readJsonResponse(response: Response, engineName: string): Promise<unknown> {
   const tooLarge = (bytes: number): Error => new Error(
@@ -480,13 +590,16 @@ export class SparqlHttpEngine implements BenchEngine {
 
 /** Turns SPARQL Results JSON into the same canonical form as {@link bindingToString}. */
 function canonicalizeJsonResults(json: SparqlJsonResults): string[] {
-  return json.results.bindings.map((row) => {
-    const entries = Object.entries(row)
-      .map(([ variable, value ]) => `${variable}=${canonicalizeJsonTerm(value)}`)
-      .sort()
-      .join(',');
-    return `{${entries}}`;
-  });
+  return json.results.bindings.map(canonicalizeJsonBinding);
+}
+
+/** One SPARQL Results JSON binding in the canonical form of {@link bindingToString}. */
+function canonicalizeJsonBinding(row: Record<string, SparqlJsonTerm>): string {
+  const entries = Object.entries(row)
+    .map(([ variable, value ]) => `${variable}=${canonicalizeJsonTerm(value)}`)
+    .sort()
+    .join(',');
+  return `{${entries}}`;
 }
 
 /**
@@ -642,8 +755,7 @@ export abstract class ManagedServerEngine implements BenchEngine {
     try {
       const response = await this.post(query, 'application/sparql-results+json', timeoutMs);
       // The abort can fire while the body is still streaming, so reading it belongs in the same try.
-      const json = <SparqlJsonResults> await readJsonResponse(response, this.name);
-      return summarize(canonicalizeJsonResults(json), performance.now() - start);
+      return summarize(await readBindings(response, this.name), performance.now() - start);
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'TimeoutError') {
         await this.stop();

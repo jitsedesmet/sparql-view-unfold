@@ -52,7 +52,7 @@
  * Usage:
  *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena,qlever]
  *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,u50,u100,u250,u500,d100,eswc] [--reps 1]
- *     [--approaches materialized,rewriting,...] [--timeout 60000] [--out results.json]
+ *     [--approaches materialized,rewriting,...] [--cases lubm/Q06,...] [--timeout 60000] [--out results.json]
  * `--scales` keeps, of each scheme's own scales, those it lists; without it StarBench runs xs,s,m and
  * the workloads run all of theirs.
  */
@@ -78,6 +78,8 @@ interface RunOptions {
   scales: string[] | undefined;
   /** Approaches to run; `undefined` runs all five. */
   approaches: string[] | undefined;
+  /** Cases to run, by id (`lubm/Q06`); `undefined` runs them all. */
+  cases: string[] | undefined;
   reps: number;
   timeoutMs: number;
   out: string;
@@ -122,6 +124,7 @@ function parseArgs(argv: string[]): RunOptions {
     schemes: [ 'reification' ],
     scales: undefined,
     approaches: undefined,
+    cases: undefined,
     reps: 1,
     timeoutMs: 60_000,
     out: join(RESULTS_DIR, 'results.json'),
@@ -146,6 +149,9 @@ function parseArgs(argv: string[]): RunOptions {
         break;
       case '--approaches':
         opts.approaches = next().split(',');
+        break;
+      case '--cases':
+        opts.cases = next().split(',');
         break;
       case '--reps':
         opts.reps = Number.parseInt(next(), 10);
@@ -360,7 +366,9 @@ async function runEngine(
       process.stderr.write(`skip: ${engineName} / ${scheme} (needs SPARQL 1.2)\n`);
       continue;
     }
-    const { cases, blocks, nestedScales } = schemePlan(scheme, opts.scales);
+    const plan = schemePlan(scheme, opts.scales);
+    const { blocks, nestedScales } = plan;
+    const cases = plan.cases.filter(benchCase => !opts.cases || opts.cases.includes(benchCase.id));
     // Cells that timed out at an earlier scale of a nested workload: `caseId approach` -> that scale.
     const timedOut = new Map<string, string>();
     for (const { scale, source, baselineSource } of blocks) {

@@ -233,14 +233,14 @@ export QLEVER_BIN_DIR="$PWD"
 Each of these was found through this benchmark and is *not* a rewriter bug. They are
 listed here because every one of them can be misread as one.
 
-- **Eight of the twelve `BKR-S_*.rq` (singleton) baseline files ask a different question than
-  the `BKR-star_*.rq` query they are nominally the baseline for.** `B-Q2`, `F-Q1`, `F-Q4` and
+- **Nine of the twelve `BKR-S_*.rq` (singleton) baseline files ask a different question than
+  the `BKR-star_*.rq` query they are nominally the baseline for.** `B-Q2`, `F-Q1`, `F-Q3`, `F-Q4` and
   `F-Q5` use `umls:` IRIs — e.g. `F-Q4`'s star constant `bkr:META_C0040300-INST` occurs 16,700
   times as a subject in `singleton-xs.ttl`, while `BKR-S_F-Q4.rq`'s `umls:META_C0040300` occurs
   once — so they match nothing; `A-Q2` and `A-Q3` ask about different concepts altogether;
   `A-Q4` omits the `?source_inst rdf:type ?source_cl` pattern; and `A-Q1` projects
   `?st_s_inst ?st_p_inst ?st_o_inst`, binding the singleton property node where the star query
-  binds the base predicate. Pre-existing in the shipped corpus. Rewriting each of the eight to
+  binds the base predicate. Pre-existing in the shipped corpus. Rewriting each of the first eight to
   ask what its star query asks makes it return exactly the rewriting's answer at `xs` and `s`,
   so a singleton `correct: false` on one of those cases is this, not a rewriting error. The
   reification baselines (`BKR-R_*.rq`) use the same constants and structure as the star queries
@@ -267,9 +267,9 @@ listed here because every one of them can be misread as one.
   once the heap is exhausted the event loop no longer gets to run it. This is why
   `ComunicaEngine` evaluates through a worker process: the abort now costs one `error` row per
   rewrite. `F-Q3` is genuinely heavy — its answer is 8,490,234 rows at both `xs` and `s` (2,131
-  matching statements, one with 1,767 sources, paired with themselves) — so no engine here
-  finishes it within the budget: Oxigraph times out on all five approaches, Jena's answer is
-  over the 268MB response cap, and Comunica's own hand-written baseline times out. But the
+  matching statements, one with 1,767 sources, paired with themselves) — so it sits at the
+  budget on every engine: Jena and Oxigraph deliver the rewrites' answers in 190–300 s when they
+  finish at all, their hand-written baselines time out, and so does Comunica's. But the
   *crash* is Comunica's join plan, found with its physical query plan logger. Version 5.3.0
   estimates a join as the product of its inputs, so the four-pattern statement group comes out
   at ~10¹⁵ rows (really 2,131); that makes it hash-join the two unrestricted `derives_from`
@@ -289,13 +289,14 @@ listed here because every one of them can be misread as one.
 ## Results
 
 720 rows: 3 engines × 2 schemes × 2 scales (`xs` ≈ 300k quads, `s` ≈ 680k) × 12 queries ×
-5 approaches, 1 rep, 300 s budget. Jena (**`6.3.0-SNAPSHOT`**, the first build with ARQ's triple-term
-fix, then on an in-memory dataset) and **Comunica 5.4.0** were measured in one run on 2026-09-23/24;
-**Oxigraph 0.5.11** was re-measured on 2026-10-01 on its native server over an on-disk store, replacing
-the WebAssembly build the first run used. `results.json` holds them; `plot.mjs` regenerates the figures.
-608 `ok`, 76 censored at the budget, 36 `error`: `F-Q3` on Jena and on Oxigraph, whose answer is
-8,490,234 rows and overruns the harness's 268MB response cap. The censoring is not spread evenly: 75
-of the timeouts are Comunica's, one is Oxigraph's, and Jena times out on nothing.
+5 approaches, 1 rep, 300 s budget. **Comunica 5.4.0** was measured on 2026-09-23/24; **Oxigraph 0.5.11**
+on its native server over an on-disk store on 2026-10-01, replacing the WebAssembly build the first run
+used; and **Jena `6.3.0-SNAPSHOT`** (the first build with ARQ's triple-term fix) on TDB2 on 2026-10-03,
+replacing its in-memory run. `results.json` holds them; `plot.mjs` regenerates the figures.
+624 `ok` and 96 censored at the budget: 75 of the timeouts are Comunica's, 11 Oxigraph's (all but one on
+`F-Q3`, whose answer is 8,490,234 rows: Oxigraph takes 301 s just to send it, measured with curl) and 10
+Jena's (`F-Q3`, and the `F-Q4` baseline). No row errors: answers are streamed, so the 8.5-million-row
+`F-Q3` answers that once overran the harness's response cap are read in full.
 
 Because so much is censored, **comparisons below are paired**: two approaches are compared
 only on the (engine, scheme, scale, query) cells where both produced a real measurement,
@@ -306,16 +307,18 @@ lower bound, so averaging one in would flatter whichever approach fails more oft
 
 | Comparison | cells | faster | median ratio | rescues | reverse rescues |
 |---|---|---|---|---|---|
-| `pullUpExtends` vs `pushDownAssertions` | 129 | 120 | 0.77 | 1 | 0 |
-| `pullUpExtends` vs `rewriting` | 105 | 103 | 0.16 | 25 | 0 |
-| `pushDownAssertions` vs `rewriting` | 105 | 103 | 0.24 | 24 | 0 |
-| `removeProjections` vs `rewriting` | 104 | 58 | 0.98 | 2 | 1 |
+| `pullUpExtends` vs `pushDownAssertions` | 133 | 122 | 0.80 | 2 | 1 |
+| `pullUpExtends` vs `rewriting` | 110 | 103 | 0.17 | 25 | 1 |
+| `pushDownAssertions` vs `rewriting` | 110 | 103 | 0.23 | 24 | 1 |
+| `removeProjections` vs `rewriting` | 106 | 64 | 0.97 | 2 | 5 |
 
-No optimising pipeline is ever rescued by the one below it. The pushdown is worth roughly a 4×
-speed-up over the plain rewriting and the pull-up another 1.3× on top, and between them they turn 25
-queries that never finish into queries that do.
+The pushdown is worth roughly a 4× speed-up over the plain rewriting and the pull-up another 1.25× on
+top, and between them they turn 25 queries that never finish into queries that do. The reverse
+rescues all sit at the budget's edge: `F-Q3` on Jena, whose 8.5-million-row answer takes every
+pipeline 190–300 s, so whether a run lands inside the budget is close to chance, and for
+`removeProjections` also one Oxigraph `singleton/A-Q3`.
 
-`removeProjections` on its own is neutral: 0.98, helping in 58 of 104 cells. It is worth keeping as a
+`removeProjections` on its own is neutral: 0.97, helping in 64 of 106 cells. It is worth keeping as a
 rung because it is what the pushdown needs (a `FILTER` cannot be driven into a pattern hidden behind a
 sub-`SELECT`), not for what it does alone.
 
@@ -325,26 +328,26 @@ Queries answered within the budget, of 48 per cell (12 queries × 2 schemes × 2
 
 | Engine | baseline | `rewriting` | `+removeProjections` | `+pushDownAssertions` | `+pullUpExtends` |
 |---|---|---|---|---|---|
-| Jena | 46 | 44 | 44 | 44 | 44 |
-| Oxigraph | 46 | 44 | 43 | 44 | 44 |
+| Jena | 44 | 48 | 44 | 47 | 47 |
+| Oxigraph | 46 | 46 | 45 | 46 | 46 |
 | Comunica | 46 | 17 | 19 | 41 | 42 |
 
 On Comunica the optimisation passes are the difference between a usable approach and an unusable
-one: it goes from 17 to 42. Jena and native Oxigraph answer everything either way; their four `error`
-rows per pipeline are `F-Q3` overrunning the response cap, not the engine failing. Oxigraph's
-WebAssembly build, which the first run used, answered **nothing** inside 300 s without the pushdown,
-and 25 queries with it: the rewrites themselves did not change, the engine did.
+one: it goes from 17 to 42. Jena and native Oxigraph answer nearly everything either way; what they
+miss is `F-Q3`, which sits at the budget (and Jena's `F-Q4` baseline, which on TDB2 takes over 300 s).
+Oxigraph's WebAssembly build, which the first run used, answered **nothing** inside 300 s without the
+pushdown, and 25 queries with it: the rewrites themselves did not change, the engine did.
 
-### The honest cost: ~6× the hand-written query, and it is a floor rather than a multiple
+### The honest cost: ~7× the hand-written query, and it is a floor rather than a multiple
 
 On the cells where the pull-up rewrite finished *and* returned the baseline's answer:
 
 | Scheme | cells | median cost |
 |---|---|---|
-| reification | 60 | **6.4×** |
-| singleton | 21 | 200.6× |
+| reification | 58 | **7.3×** |
+| singleton | 21 | 218.6× |
 
-Per engine on reification: Oxigraph **3.4×** (20 cells), Jena 5.8× (20), Comunica 39.4× (20).
+Per engine on reification: Oxigraph **3.4×** (20 cells), Jena 7.9× (18), Comunica 39.4× (20).
 The singleton figure is inflated by baselines that answer a different, mostly empty question
 fast — see the correctness section.
 
@@ -353,30 +356,31 @@ is stable. Across the graded-correct cells:
 
 | Engine | baseline times | pull-up times | rank correlation |
 |---|---|---|---|
-| Jena | 0.01 – 287.4 s (×35,922) | 0.09 – 3.5 s (×40) | ρ = 0.32 |
+| Jena | 0.006 – 152.2 s (×25,361) | 0.06 – 5.5 s (×94) | ρ = −0.07 |
 | Comunica | 0.03 – 8.3 s (×259) | 1.3 – 126.3 s (×98) | ρ = 0.41 |
 | Oxigraph | 0.004 – 4.4 s (×1,106) | 1.3 – 7.5 s (×6) | ρ = 0.12 |
 
 The hand-written queries span four orders of magnitude; the rewrites of those same queries
 span one or two, and barely track them. A rewritten query costs what its own shape costs,
 close to independently of how hard the question was. So the approach is ruinous on a cheap
-query — Jena answers `reification/B-Q1` at `s` in 12 ms, where the pull-up rewrite of the
-same question takes 1.1 s (94×) and the plain rewriting 6.6 s (546×) — and competitive or
+query — Jena answers `reification/B-Q1` at `s` in 7 ms, where the pull-up rewrite of the
+same question takes 2.5 s (355×) and the plain rewriting 10.1 s (1,439×) — and competitive or
 better on an expensive one.
 
-It does win outright, on 6 cells, all Jena/reification, and not marginally. On Oxigraph the rewrite
-beats the baseline in no cell:
+It does win outright, all on Jena/reification, and not marginally. On Oxigraph the rewrite beats the
+baseline in no cell:
 
 | | baseline | `+pullUpExtends` | rows |
 |---|---|---|---|
-| `F-Q4` xs | 287.4 s | 2.8 s (**104×**) | 20,004 |
-| `F-Q4` s | 243.7 s | 3.5 s (70×) | 20,004 |
-| `F-Q5` xs | 76.8 s | 1.4 s (55×) | 3,386 |
-| `F-Q5` s | 76.1 s | 2.4 s (32×) | 3,386 |
-| `A-Q4` xs | 0.3 s | 0.1 s (4×) | 1 |
-| `A-Q3` xs | 0.2 s | 0.1 s (2×) | 0 |
+| `F-Q4` xs | > 300 s | 4.2 s (**> 72×**) | 20,004 |
+| `F-Q4` s | > 300 s | 3.9 s (> 77×) | 20,004 |
+| `F-Q5` xs | 152.2 s | 2.1 s (71×) | 3,386 |
+| `F-Q5` s | 151.8 s | 2.7 s (56×) | 3,386 |
+| `A-Q4` xs | 0.5 s | 0.1 s (4×) | 1 |
+| `A-Q3` xs | 0.3 s | 0.1 s (2×) | 0 |
+| `F-Q2` xs | 0.1 s | 0.09 s (1.5×) | 0 |
 
-`F-Q4` and `F-Q5` are won by the *plain* rewriting too (26× and 12× at `xs`), so this is not
+`F-Q4` and `F-Q5` are won by the *plain* rewriting too (over 14× and 14× at `xs`), so this is not
 the optimiser rescuing a bad rewrite — those two hand-written baselines are simply worse
 queries than what the unfolding produces.
 
@@ -386,25 +390,25 @@ Median time multiplier from `xs` to `s`, which is ×2.6 the quads, on cells wher
 
 | Approach | cells | × time |
 |---|---|---|
-| baseline | 69 | 1.19 |
-| `rewriting` | 47 | 2.37 |
-| `+removeProjections` | 47 | 2.44 |
-| `+pushDownAssertions` | 63 | 1.63 |
-| `+pullUpExtends` | 64 | 1.66 |
+| baseline | 68 | 1.17 |
+| `rewriting` | 49 | 2.28 |
+| `+removeProjections` | 47 | 2.31 |
+| `+pushDownAssertions` | 64 | 1.63 |
+| `+pullUpExtends` | 65 | 1.65 |
 
 The hand-written queries are nearly flat over this range, being index lookups against a
 constant. The plain rewriting grows faster than the data; the pushdown-based pipelines grow
 at about half that rate, so those passes improve the growth rate and not just the constant.
 
-### Correctness: 174 mismatches, none of them the rewriter, and only two causes
+### Correctness: 182 mismatches, none of them the rewriter, and only two causes
 
-470 of the 720 rows carry a verdict (a row is ungraded when nothing finished to compare
-against, or when it *is* the reference). 174 disagree with the baseline, and they reduce
+483 of the 720 rows carry a verdict (a row is ungraded when nothing finished to compare
+against, or when it *is* the reference). 182 disagree with the baseline, and they reduce
 to two causes — the engine-defect category is gone, Jena's ARQ bug having been fixed:
 
 | Cause | rows |
 |---|---|
-| Eight `singleton` baselines asking a different question | 150 |
+| Nine `singleton` baselines asking a different question | 158 |
 | `reification/F-Q1`: `SELECT *` over different variable sets | 24 |
 
 `F-Q1` is not a wrong answer at all. Both sides return the same 2 rows, but the baseline is a
@@ -413,12 +417,14 @@ the RDF 1.2 query has no equivalent for, since the whole point of the view is th
 statement node is not part of it. The solutions differ as *bindings* while agreeing as
 answers.
 
-The singleton cases are documented under "Known issues": corrected by hand, all 16 of them
-match the rewriting exactly.
+The singleton cases are documented under "Known issues": corrected by hand, the 16 cells of the
+first eight match the rewriting exactly. The ninth, `F-Q3`, could only be graded once answers were
+streamed: its baseline returns nothing, while every rewrite returns the 8,490,234 rows the reification
+baseline returns.
 
-The strongest evidence that nothing here is the rewriter's: on Jena and on native Oxigraph, all
-four pipelines produce the **identical** set of 17 mismatching cells, the same 17 on both engines. A
-rewriting bug would show up in the pipelines that transform more, and it does not.
+The strongest evidence that nothing here is the rewriter's: on Jena and on native Oxigraph, every
+pipeline that finishes produces the **identical** set of mismatching cells, the same 19 on both
+engines. A rewriting bug would show up in the pipelines that transform more, and it does not.
 
 ## LUBM and OAEI Conference
 
@@ -551,13 +557,15 @@ on-disk stores, and Comunica 5.4.0 over HDT (through `@comunica/query-sparql-hdt
 block and both of Jena's were re-run after the harness started restarting a server after every
 timed-out query (see "Setting up the engines"): before that, six Oxigraph rows failed with
 `fetch failed` right after a timeout. Jena's re-run matched its first run within 2% (median), with one
-row near the budget flipping to a timeout. QLever's `u250` and `u500` blocks were measured last, on 2026-10-02.
+row near the budget flipping to a timeout. QLever's `u250` and `u500` blocks were measured on 2026-10-02.
+The rows whose answers used to overrun the harness's response cap (Jena's LUBM Q06 at `u50` and `u100`,
+QLever's Q02, Q06 and Q14 from `u50` on) were re-measured on 2026-10-03, once answers were streamed.
 
 | | LUBM ok / timeout / error | OAEI ok / timeout / error |
 |---|---|---|
 | Oxigraph | 187 / 73 (36 not run) / 0 | 646 / 4 / 0 |
-| Jena | 154 / 102 (62 not run) / 4 | 640 / 10 / 0 |
-| QLever | 210 / 0 / 180 | 390 / 0 / 260 |
+| Jena | 156 / 104 (62 not run) / 0 | 640 / 10 / 0 |
+| QLever | 220 / 4 (2 not run) / 166 | 390 / 0 / 260 |
 | Comunica | 108 / 152 (103 not run) / 0 | 559 / 91 / 0 |
 
 "Not run" rows timed out at a smaller LUBM scale. The errors:
@@ -565,17 +573,13 @@ row near the budget flipping to a timeout. QLever's `u250` and `u500` blocks wer
 - **QLever has no `sameTerm`** ("Built-in function "sameterm" not yet implemented"), which the plain
   rewriting and `removeProjections` use for every constant: 416 rows, all of those two pipelines. The
   pushdown removes the `sameTerm` filters, so its pipelines run.
-- **Answers outgrow the harness's 268MB response cap from `u50` on** (18 rows). LUBM Q06 (every student)
-  does with the pushdown and pull-up rewrites on Jena and QLever: without `preserveCardinality` they repeat
-  rows the materialised answer holds once. At QLever's `u500`, Q02 and Q14 do too, and Q06 and Q14 even on
-  the materialised views.
 - **QLever runs out of its 12 GB query memory on LUBM Q09** from `u10` on (10 rows).
 
 Comparisons are paired and count rescues, as for StarBench above.
 
 #### No wrong answers
 
-Of 2,141 graded rows, **none differs from the reference as a set of rows**. The 326 LUBM rows that fail
+Of 2,151 graded rows, **none differs from the reference as a set of rows**. The 334 LUBM rows that fail
 the multiset comparison are duplicates only, which is what running without `preserveCardinality`
 against a set-valued reference predicts. The OAEI answers match exactly, since every competency question
 is `SELECT DISTINCT`.
@@ -590,12 +594,12 @@ There, the check shows only that the rewriting finds nothing too. That includes
 | | LUBM: cells | faster | median | rescues | OAEI: cells | faster | median | rescues |
 |---|---|---|---|---|---|---|---|---|
 | `removeProjections` vs `rewriting` | 47 | 22 | 1.01 | 0–9 | 333 | 263 | 0.96 | 10–3 |
-| `pushDownAssertions` vs `removeProjections` | 47 | 47 | 0.10 | 121–0 | 343 | 343 | 0.01 | 174–0 |
-| `pullUpExtends` vs `pushDownAssertions` | 168 | 158 | 0.80 | 1–0 | 517 | 441 | 0.72 | 2–0 |
-| `pullUpExtends` vs `rewriting` | 56 | 56 | 0.06 | 113–0 | 336 | 333 | 0.01 | 183–0 |
+| `pushDownAssertions` vs `removeProjections` | 47 | 47 | 0.10 | 126–0 | 343 | 343 | 0.01 | 174–0 |
+| `pullUpExtends` vs `pushDownAssertions` | 173 | 162 | 0.80 | 1–0 | 517 | 441 | 0.72 | 2–0 |
+| `pullUpExtends` vs `rewriting` | 56 | 56 | 0.06 | 118–0 | 336 | 333 | 0.01 | 183–0 |
 
 - **`pushDownAssertions` is where the gain is.** It is 10–100× faster than the step before, faster in
-  every one of the 390 paired cells, and it rescues 295 cells without losing one. It is also what makes
+  every one of the 390 paired cells, and it rescues 300 cells without losing one. It is also what makes
   the query small: LUBM Q09 goes from 488,628 characters (1,428 `UNION`s, 1,758 triple patterns) to
   13,900, and `pullUpExtends` takes it to 7,610 (34 `UNION`s, 52 patterns).
 - **`removeProjections` alone does nothing for speed**, and on LUBM it loses 9 cells the plain
@@ -608,10 +612,10 @@ Queries answered, of 13 (LUBM) and 65 (OAEI), materialised views · `rewriting` 
 |---|---|---|---|---|
 | LUBM `u1` | 13 · 13 · 12 · 13 · 13 | 13 · 10 · 10 · 10 · 10 | 13 · 0 · 0 · 13 · 13 | 13 · 7 · 7 · 12 · 12 |
 | LUBM `u10` | 13 · 12 · 8 · 12 · 12 | 13 · 9 · 9 · 9 · 9 | 13 · 0 · 0 · 12 · 12 | 13 · 0 · 0 · 5 · 5 |
-| LUBM `u50` | 10 · 5 · 1 · 11 · 11 | 13 · 0 · 0 · 8 · 8 | 13 · 0 · 0 · 11 · 11 | 12 · 0 · 0 · 3 · 3 |
-| LUBM `u100` | 6 · 0 · 0 · 11 · 11 | 13 · 0 · 0 · 5 · 5 | 13 · 0 · 0 · 11 · 11 | 11 · 0 · 0 · 2 · 3 |
+| LUBM `u50` | 10 · 5 · 1 · 11 · 11 | 13 · 0 · 0 · 9 · 9 | 13 · 0 · 0 · 12 · 12 | 12 · 0 · 0 · 3 · 3 |
+| LUBM `u100` | 6 · 0 · 0 · 11 · 11 | 13 · 0 · 0 · 5 · 5 | 13 · 0 · 0 · 12 · 12 | 11 · 0 · 0 · 2 · 3 |
 | LUBM `u250` | — | — | 13 · 0 · 0 · 11 · 11 | — |
-| LUBM `u500` | — | — | 11 · 0 · 0 · 9 · 9 | — |
+| LUBM `u500` | — | — | 13 · 0 · 0 · 11 · 11 | — |
 | OAEI `eswc` | 65 · 64 · 64 · 65 · 65 | 65 · 63 · 63 · 65 · 65 | 65 · 0 · 0 · 65 · 65 | 65 · 63 · 62 · 65 · 65 |
 | OAEI `d100` | 65 · 64 · 64 · 65 · 65 | 65 · 63 · 62 · 64 · 65 | 65 · 0 · 0 · 65 · 65 | 65 · 19 · 28 · 63 · 64 |
 
@@ -623,8 +627,8 @@ their own. Median of `pullUpExtends` over the source against it, on cells where 
 | Engine | LUBM `u1` | `u10` | `u50` | `u100` | `u250` | `u500` | OAEI `eswc` | `d100` |
 |---|---|---|---|---|---|---|---|---|
 | Oxigraph | 1.20× | 0.88× | 0.58× | 0.51× | — | — | 1.00× | 0.80× |
-| Jena | 4.2× | 53× | 449× | 606× | — | — | 0.86× | 0.86× |
-| QLever | 11.8× | 16.1× | 18.1× | 31.9× | 70× | 143× | 1.92× | 1.74× |
+| Jena | 4.2× | 53× | 292× | 606× | — | — | 0.86× | 0.86× |
+| QLever | 11.8× | 16.1× | 18.1× | 31.9× | 70× | 106× | 1.92× | 1.74× |
 | Comunica | 32× | 13.8× | 19.5× | 31.9× | — | — | 1.50× | 2.50× |
 
 - **OAEI is vocabulary translation, and there the rewriting runs at parity:** 1.14× over all 519 cells,
@@ -692,12 +696,9 @@ saving against `pullUpExtends`, per engine, with that engine's own build time an
 | Engine | LUBM `u1` | `u10` | `u50` | `u100` | `u250` | `u500` | OAEI `eswc` | `d100` |
 |---|---|---|---|---|---|---|---|---|
 | Jena | ≤ 1 | ≤ 2 | ≤ 7 | ≤ 11 | — | — | 134 | 13 |
-| QLever | 6 | 14 | 48 | 44 | 63 | 169 | 110 | 38 |
+| QLever | 6 | 14 | 27 | 26 | ≤ 41 | ≤ 108 | 110 | 38 |
 | Comunica | ≤ 2 | ≤ 17 | ~365 | ~1,302 | — | — | 13 | ≤ 10 |
 | Oxigraph | 11 | ≤ 259 | never | never | — | — | never | 298 |
-
-QLever's `u500` figure is over the 9 queries both approaches answer there; Q02 and Q14, which it answered
-at `u250`, now overrun the response cap.
 
 A timed-out rewrite counts at the 60 s budget, which understates the saving: those counts are upper
 bounds (≤). Where materialised queries timed out as well (~, and Oxigraph's "never" at `u50`/`u100`),
@@ -708,8 +709,8 @@ So **the number of queries a view can serve before building it pays off rises wi
 engine**, because building gets more expensive faster than the saving per query grows. How far it rises
 depends on the engine. Jena's rewrites slow down so much with LUBM's fan-out that building still pays off
 within a dozen queries at `u100`. QLever builds fast, but its rewrites slow down from 12× to 70× its
-materialised queries between `u1` and `u250`, and to 143× at `u500`, so its pay-off point rises from 6
-queries to 63 and then 169 (with a dip from 48 to 44 at `u100`). Comunica's 14-hour build needs over a thousand. On Oxigraph the materialised views
+materialised queries between `u1` and `u250`, and to 106× at `u500`, so its pay-off point rises from 6
+queries at `u1` to at most 41 at `u250` and at most 108 at `u500`. Comunica's 14-hour build needs over a thousand. On Oxigraph the materialised views
 are no faster to query, so building never pays off at all. On OAEI, where the rewriting runs at parity,
 building takes 10 to 298 queries to pay off, and never on Oxigraph at `eswc`.
 
@@ -764,6 +765,7 @@ figures from any results JSON. In summary:
 | 2026-09-29 → 10-02 | The engines moved to native servers over on-disk stores they bulk-load once: Oxigraph's 0.5.11 binary instead of its WebAssembly build, Jena on TDB2 instead of an in-memory dataset, and QLever added for LUBM and OAEI. A server also stops a query shortly after its budget and is restarted after every timeout. LUBM grew to 50 and 100 universities. Every engine now materialises the views itself, and the pay-off point is worked out with its own build time. LUBM and OAEI re-measured on all four engines, StarBench re-measured on Oxigraph, where the plain rewriting went from answering nothing to 44 of 48 queries. |
 | 2026-10-02 | LUBM `u250` (250 universities, 33 million triples) added for QLever only, about where its materialisation takes five minutes: 6.3 minutes, paying off after 63 queries. |
 | 2026-10-02 | LUBM `u500` (67 million triples) run once on QLever: materialisation takes 25 minutes and pays off after 169 queries. `materializeViews.ts` now gzips its intermediate files and can check Jena's views against QLever (`--check qlever`), and materialisation requests no longer use `fetch`, whose five-minute header timeout Jena's `CONSTRUCT` of 67 million triples overran. |
+| 2026-10-03 | Answers are streamed: each binding is read and canonicalised as it arrives, so no answer becomes one giant string and the 268MB response cap is gone. Every row it had cut off re-measured, and Jena's StarBench block re-run on TDB2. Large answers now count: QLever's LUBM pay-off falls to 27 queries at `u50` and at most 108 at `u500` (from 48 and 169), and `singleton/F-Q3`'s baseline turns out to be a ninth that asks a different question. |
 
 ## Extending
 
