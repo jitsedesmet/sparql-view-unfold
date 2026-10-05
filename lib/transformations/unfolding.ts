@@ -25,9 +25,10 @@ import { rewriteSinglePattern } from './rewriteSinglePattern.js';
 export interface UnfoldingOptions {
   /**
    * Whether the unfolded query counts a triple two solutions of the mapping body both produce once, the way
-   * the mapped graph - a set - does, rather than twice. **Hugely costly**: it deduplicates the whole body
-   * of every unfolded pattern, where the unfolding otherwise streams. Off by default, so turn it on only
-   * when the multiplicity of a solution is part of the answer you need.
+   * the mapped graph - a set - does, rather than twice. **Potentially expensive**: it deduplicates the whole
+   * body of every unfolded pattern, where the unfolding otherwise streams. Where the mapping body produces
+   * many duplicate triples, it can instead speed the query up, since the joins then combine fewer
+   * solutions. Off by default.
    */
   preserveCardinality?: boolean;
 }

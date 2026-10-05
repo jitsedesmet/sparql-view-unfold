@@ -111,9 +111,11 @@ patterns, and `nullifyJoinOverIncompatibleBoundsTransformation` sees nothing unt
 By default the unfolded query treats the virtual RDF 1.2 graph as a **bag**: where two solutions of the
 mapping body produce the same triple, it is counted twice, and a `COUNT(*)` disagrees with the mapped graph.
 `unfoldingTransformation(mapping, { preserveCardinality: true })` deduplicates the mapping body so each
-triple is produced once. It is **hugely costly** — every unfolded pattern materialises and sorts its whole
-body, where it otherwise streams — so turn it on only when the multiplicity of a solution is part of the
-answer you need.
+triple is produced once. It is **potentially expensive** — every unfolded pattern materialises and sorts
+its whole body, where it otherwise streams. It can also make a query *faster*: where the mapping body
+produces many duplicate triples, deduplicating each pattern before the joins shrinks what the joins have to
+combine. On LUBM (scale 1, Oxigraph) it cut Q09 from 13.1 s to 0.17 s, while queries without duplicates
+paid a little for the extra `DISTINCT` (Q14: 134 ms to 189 ms). Measure on your own views and engine.
 
 ### Generalized RDF
 
