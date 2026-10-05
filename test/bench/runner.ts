@@ -22,7 +22,7 @@ import {
   removeProjectionsTransformation,
   unfoldingTransformation,
 } from '../../lib/index.js';
-import type { Mapping, QueryTransformation } from '../../lib/index.js';
+import type { Mapping, QueryTransformation, UnfoldingOptions } from '../../lib/index.js';
 import type { BenchEngine, EngineSource, SelectResult } from './engines.js';
 
 /**
@@ -50,9 +50,9 @@ const MAPPING_OPTIONS = <const> { generalizedRdfView: true };
  * argument, being the one pass that needs the mapping. The pipelines below are therefore built per case
  * rather than declared once.
  */
-function standardTransformations(mapping: Mapping): QueryTransformation[] {
+function standardTransformations(mapping: Mapping, options: UnfoldingOptions): QueryTransformation[] {
   return [
-    unfoldingTransformation(mapping),
+    unfoldingTransformation(mapping, options),
     filterFalseTransformation(),
     nullifyJoinOverIncompatibleBoundsTransformation(),
     filterFalseTransformation(),
@@ -67,9 +67,9 @@ function standardTransformations(mapping: Mapping): QueryTransformation[] {
  * nested sub-`SELECT`s poorly; this variant tests whether that structural
  * simplification changes engine performance on the benchmark queries.
  */
-function withProjectionRemovalTransformations(mapping: Mapping): QueryTransformation[] {
+function withProjectionRemovalTransformations(mapping: Mapping, options: UnfoldingOptions): QueryTransformation[] {
   return [
-    ...standardTransformations(mapping),
+    ...standardTransformations(mapping, options),
     removeProjectionsTransformation(),
   ];
 }
@@ -102,9 +102,9 @@ function withProjectionRemovalTransformations(mapping: Mapping): QueryTransforma
  * pass — and the recorded results were measured with it; it runs last to also pick up any new
  * sub-`SELECT`s the pushdown itself introduces.
  */
-function withPushDownAssertionsTransformations(mapping: Mapping): QueryTransformation[] {
+function withPushDownAssertionsTransformations(mapping: Mapping, options: UnfoldingOptions): QueryTransformation[] {
   return [
-    ...standardTransformations(mapping),
+    ...standardTransformations(mapping, options),
     pushDownAssertionsTransformation(),
     filterFalseTransformation(),
     removeProjectionsTransformation(),
@@ -124,9 +124,9 @@ function withPushDownAssertionsTransformations(mapping: Mapping): QueryTransform
  * runs where the plain pushdown pipeline has it (see that pipeline's own comment for why it is
  * kept now that Traqula 1.3.1 no longer needs it as a workaround).
  */
-function withPullUpExtendsTransformations(mapping: Mapping): QueryTransformation[] {
+function withPullUpExtendsTransformations(mapping: Mapping, options: UnfoldingOptions): QueryTransformation[] {
   return [
-    ...standardTransformations(mapping),
+    ...standardTransformations(mapping, options),
     pushDownAssertionsTransformation(),
     filterFalseTransformation(),
     pullUpExtendsTransformation(),
@@ -185,12 +185,12 @@ export interface BenchRecord {
 /** Which optimization pipeline {@link rewriteToSparql11} should apply. */
 export type RewriteVariant = 'standard' | 'removeProjections' | 'pushDownAssertions' | 'pullUpExtends';
 
-function pipelineFor(variant: RewriteVariant, mapping: Mapping): QueryTransformation[] {
+function pipelineFor(variant: RewriteVariant, mapping: Mapping, options: UnfoldingOptions): QueryTransformation[] {
   switch (variant) {
-    case 'removeProjections': return withProjectionRemovalTransformations(mapping);
-    case 'pushDownAssertions': return withPushDownAssertionsTransformations(mapping);
-    case 'pullUpExtends': return withPullUpExtendsTransformations(mapping);
-    default: return standardTransformations(mapping);
+    case 'removeProjections': return withProjectionRemovalTransformations(mapping, options);
+    case 'pushDownAssertions': return withPushDownAssertionsTransformations(mapping, options);
+    case 'pullUpExtends': return withPullUpExtendsTransformations(mapping, options);
+    default: return standardTransformations(mapping, options);
   }
 }
 
@@ -207,8 +207,10 @@ export async function rewriteToSparql11(
   mappers: string[],
   userQuery12: string,
   variant: RewriteVariant = 'standard',
+  unfoldingOptions: UnfoldingOptions = {},
 ): Promise<string> {
-  const rewriter = createQueryRewriter(pipelineFor(variant, mappingFromConstructQueries(mappers, MAPPING_OPTIONS)));
+  const mapping = mappingFromConstructQueries(mappers, MAPPING_OPTIONS);
+  const rewriter = createQueryRewriter(pipelineFor(variant, mapping, unfoldingOptions));
   return lowercaseBooleanLiterals(await rewriter.rewriteQuery(userQuery12));
 }
 

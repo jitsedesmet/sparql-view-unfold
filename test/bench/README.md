@@ -512,7 +512,8 @@ A rewritten query can repeat a row that the materialised graph, being a set, hol
 because the rewriting runs without `preserveCardinality`: a LUBM student who is a `GraduateStudent`
 and also takes a course is a `Student` twice. So rows carry `correctAsSet` next to `correct`. Where
 `correct` is false and `correctAsSet` is true, the mismatch is duplicates only, and that is expected
-in this configuration.
+in this configuration. LUBM was also run once with `preserveCardinality` on (`--preserve-cardinality`),
+which removes those duplicates: see "With `preserveCardinality`" below.
 
 All source data is skolemised before use (`toNTriples.mjs`), because the rewriter does not allow
 blank nodes in its source. Comunica reads HDT copies of the data rather than loading it into memory.
@@ -547,6 +548,10 @@ NODE_OPTIONS=--max-old-space-size=12000 npx tsx test/bench/run.ts \
   --engines oxigraph,jena,qlever,comunica --schemes lubm,oaei --reps 1 --timeout 60000 \
   --out test/bench/results/workloads.json
 npx tsx test/bench/timeMaterialization.ts --break-even test/bench/results/workloads.json
+# LUBM with each view's triples counted once (results/results-preserve-cardinality.json)
+NODE_OPTIONS=--max-old-space-size=12000 npx tsx test/bench/run.ts \
+  --engines oxigraph,jena,qlever,comunica --schemes lubm --preserve-cardinality --reps 1 --timeout 60000 \
+  --out test/bench/results/results-preserve-cardinality.json
 ```
 
 ### Results
@@ -723,8 +728,10 @@ building takes 10 to 298 queries to pay off, and never on Oxigraph at `eswc`.
   branches. Examples:
   - **LUBM Q09** (student, advisor, course: three typed variables joined in a triangle) fails from
     `u10` on with every pipeline on every engine (timeouts, and QLever's memory limit), while the
-    materialised query takes 0.16 s (QLever) to 47 s (Comunica) at `u10`.
-  - **Jena answers none of LUBM Q02, Q07 and Q09** with any pipeline at any scale.
+    materialised query takes 0.16 s (QLever) to 47 s (Comunica) at `u10`. Most of that is duplicates:
+    with `preserveCardinality` Oxigraph and QLever answer it at every scale (below).
+  - **Jena answers none of LUBM Q02, Q07 and Q09** with any pipeline at any scale (without
+    `preserveCardinality`).
   - **OAEI `is_author_of_paper`** on Jena `d100`: `pullUpExtends` takes 47 s, *slower* than the
     plain rewriting's 28 s, against 1.0 s on the materialised views.
 - **Identical `UNION` branches are not merged.** Where one view reaches a source predicate through a
@@ -740,6 +747,80 @@ building takes 10 to 298 queries to pay off, and never on Oxigraph at `eswc`.
   right. Treat it as unverified.
 - **Comunica and QLever stay at 1.5–2.5× the materialised views on OAEI** where Jena and Oxigraph are
   at parity: they pay more per `UNION` branch.
+
+#### With `preserveCardinality`
+
+The rows above run the rewriting without `preserveCardinality`, so a fact that several views derive
+comes out once per view: a LUBM `GraduateStudent` is a `Person` through a dozen derivations. A query
+joining such patterns multiplies the copies. LUBM Q02 returns 3.0 million rows at `u500` where the
+answer has 1,284, and Q09 exhausts QLever's 12 GB from `u10` on. With `preserveCardinality` the
+unfolding wraps each triple pattern's `UNION` of derivations in a `SELECT DISTINCT`, so the rewrite
+reads the virtual graph as the set it is. That makes the rewrites about 15% longer and takes no longer
+to rewrite.
+
+LUBM was re-run that way on all four engines on 2026-10-05: 1,170 rows, the same scales, budget and
+engines, in `results/results-preserve-cardinality.json` (each row marked `preserveCardinality: true`).
+The `materialized` rows were measured again in the same run. The median ratio to the earlier run is 0.96
+to 1.02 on QLever, Jena and Comunica, but 1.17 on Oxigraph, whose queries all ran slower this time, so
+part of Oxigraph's slowdown below is the machine.
+
+**Every answer is now exactly right.** All 459 graded rows equal the reference as multisets, against
+102 of 436 without it; the 334 duplicate-only mismatches are gone.
+
+**Speed: large wins where duplicates multiplied, losses where a big pattern meets a selective one.**
+The full pipeline (`pullUpExtends`) against itself without `preserveCardinality`, over every LUBM scale:
+
+| Engine | answered | rescued – lost | paired | median time ratio | faster · slower |
+|---|---|---|---|---|---|
+| Oxigraph | 47 → 52 | 5 – 0 | 47 | 1.32 | 8 · 30 |
+| Jena | 33 → 35 | 2 – 0 | 33 | 0.91 | 11 · 7 |
+| QLever | 71 → 76 | 7 – 2 | 69 | 1.07 | 20 · 26 |
+| Comunica | 23 → 24 | 1 – 0 | 23 | 1.02 | 6 · 9 |
+
+"Faster" and "slower" count paired cells that moved by more than a quarter. On QLever, per query:
+
+| QLever, `pullUpExtends` | `u100` without | `u100` with | `u500` without | `u500` with |
+|---|---|---|---|---|
+| Q02 | 3.5 s (123,882 rows) | 1.6 s (264) | 53.3 s (3.0 M) | 6.5 s (1,284) |
+| Q06 | 32.6 s (6.6 M) | 6.5 s (1.05 M) | not run | 28.7 s (5.2 M) |
+| Q09 | out of memory | 8.5 s (27,247) | out of memory | 40.8 s (136,165) |
+| Q05 | 8.9 s (5,625) | 25.4 s (719) | 14.6 s (5,625) | > 60 s |
+| Q13 | 8.6 s (6,472) | 22.4 s (472) | 22.4 s (32,441) | > 60 s |
+| Q14 | 6.0 s (795,970) | 4.1 s (795,970) | 18.9 s (4.0 M) | 20.2 s (4.0 M) |
+
+- **Where duplicates multiplied through joins, deduplicating first wins**, by up to 77× (Oxigraph's
+  Q09 at `u1`, 13.1 s to 0.17 s). Q09 now finishes at every scale on Oxigraph (2.4 s at `u10`, 35 s at
+  `u100`) and, through the full pipeline, on QLever up to `u500`, where it ran out of memory before. Jena answers Q07 at `u1` and Q08
+  at `u10` for the first time.
+- **Where a large pattern meets a selective one, deduplicating first loses.** Q05 asks for the `Person`s
+  who are members of one department, and Q13 for one university's alumni. Without `DISTINCT` the engine
+  joins each derivation of `Person` with the selective pattern and keeps few rows. With it, it must first
+  deduplicate every `Person` in the data, so the time follows the data while the answer stays the same:
+  QLever's Q05 takes 1.0, 3.2, 12, 25 and 58 s from `u1` to `u250` for the same 719 rows, and its Q13 at
+  `u250` slows down 4.3×. Q04
+  (`Professor`s of one department) behaves the same way, more mildly.
+- **Queries with no duplicates pay a little** for the extra `DISTINCT`s (Q14, Q01). On Comunica, five
+  plain `removeProjections` rows at `u1` that finished in 44–54 s now overrun the 60 s budget.
+
+**The pay-off point barely moves**:
+
+| Engine | LUBM `u1` | `u10` | `u50` | `u100` | `u250` | `u500` |
+|---|---|---|---|---|---|---|
+| Jena | ≤ 1 → ≤ 1 | ≤ 2 → ≤ 2 | ≤ 7 → ≤ 7 | ≤ 11 → ≤ 11 | — | — |
+| QLever | 6 → 9 | 14 → 16 | 27 → 23 | 26 → 24 | ≤ 41 → 31 | ≤ 108 → ≤ 90 |
+| Comunica | ≤ 2 → 7 | ≤ 17 → ≤ 17 | ~365 → ~359 | ~1,302 → ~1,252 | — | — |
+| Oxigraph | 11 → never | ≤ 259 → never | never | never | — | — |
+
+So duplicates are not why the pay-off fell when answers started being streamed (27 queries at `u50` from
+48 before, on QLever). That fall came from which queries are counted. Before streaming, the answers too
+large for the response cap were left out. Streaming let them in, and Q06, with 3.3 million rows where
+the answer has 0.5 million, saved 14 s a query at `u50`. With `preserveCardinality` that saving shrinks
+to 0.5 s. But Q05 and Q13 each save 8 s more than before, and Q09 now counts too (4.5 s), so the
+average saving stays about the same: 2.8 s against 2.4 s. The 48 measured before streaming was high
+because the expensive queries were left out, not because duplicates were inflating the costs.
+
+On Oxigraph, deduplication tips small scales towards the rewrite. Its rewrites now beat its own
+materialised views at `u1` (median 0.2×) and `u10` (0.7×), so building them never pays off at any scale.
 
 ## History
 
@@ -766,6 +847,7 @@ figures from any results JSON. In summary:
 | 2026-10-02 | LUBM `u250` (250 universities, 33 million triples) added for QLever only, about where its materialisation takes five minutes: 6.3 minutes, paying off after 63 queries. |
 | 2026-10-02 | LUBM `u500` (67 million triples) run once on QLever: materialisation takes 25 minutes and pays off after 169 queries. `materializeViews.ts` now gzips its intermediate files and can check Jena's views against QLever (`--check qlever`), and materialisation requests no longer use `fetch`, whose five-minute header timeout Jena's `CONSTRUCT` of 67 million triples overran. |
 | 2026-10-03 | Answers are streamed: each binding is read and canonicalised as it arrives, so no answer becomes one giant string and the 268MB response cap is gone. Every row it had cut off re-measured, and Jena's StarBench block re-run on TDB2. Large answers now count: QLever's LUBM pay-off falls to 27 queries at `u50` and at most 108 at `u500` (from 48 and 169), and `singleton/F-Q3`'s baseline turns out to be a ninth that asks a different question. |
+| 2026-10-05 | LUBM run once with `preserveCardinality` on all four engines (`--preserve-cardinality`): every graded answer exactly right, Q09 answered on Oxigraph and QLever at every scale, Q05 and Q13 up to 4× slower on QLever. The pay-off point barely moves (QLever 23 queries at `u50`, at most 90 at `u500`), which shows that the drop after streaming came from the large answers entering the average, not from duplicates. |
 
 ## Extending
 

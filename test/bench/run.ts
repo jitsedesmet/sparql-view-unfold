@@ -52,7 +52,8 @@
  * Usage:
  *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena,qlever]
  *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,u50,u100,u250,u500,d100,eswc] [--reps 1]
- *     [--approaches materialized,rewriting,...] [--cases lubm/Q06,...] [--timeout 60000] [--out results.json]
+ *     [--approaches materialized,rewriting,...] [--cases lubm/Q06,...] [--preserve-cardinality] [--timeout 60000]
+ *     [--out results.json]
  * `--scales` keeps, of each scheme's own scales, those it lists; without it StarBench runs xs,s,m and
  * the workloads run all of theirs.
  */
@@ -80,6 +81,8 @@ interface RunOptions {
   approaches: string[] | undefined;
   /** Cases to run, by id (`lubm/Q06`); `undefined` runs them all. */
   cases: string[] | undefined;
+  /** Whether the rewritings run with `preserveCardinality`, counting each triple of the views once. */
+  preserveCardinality: boolean;
   reps: number;
   timeoutMs: number;
   out: string;
@@ -115,6 +118,8 @@ interface ResultRow {
   referenceApproach: ResultRow['approach'] | null;
   /** The per-query time budget this row was run under; a `timeout` row is censored at it. */
   timeoutMs: number;
+  /** Set when the rewritings ran with `preserveCardinality`; absent otherwise. */
+  preserveCardinality?: true;
   error?: string;
 }
 
@@ -125,6 +130,7 @@ function parseArgs(argv: string[]): RunOptions {
     scales: undefined,
     approaches: undefined,
     cases: undefined,
+    preserveCardinality: false,
     reps: 1,
     timeoutMs: 60_000,
     out: join(RESULTS_DIR, 'results.json'),
@@ -152,6 +158,9 @@ function parseArgs(argv: string[]): RunOptions {
         break;
       case '--cases':
         opts.cases = next().split(',');
+        break;
+      case '--preserve-cardinality':
+        opts.preserveCardinality = true;
         break;
       case '--reps':
         opts.reps = Number.parseInt(next(), 10);
@@ -343,11 +352,11 @@ function schemePlan(scheme: string, scales: string[] | undefined): {
  */
 const rewrites = new Map<string, Promise<string>>();
 
-function rewrite(benchCase: BenchCase, variant: RewriteVariant): Promise<string> {
-  const key = `${benchCase.id}\n${variant}`;
+function rewrite(benchCase: BenchCase, variant: RewriteVariant, preserveCardinality: boolean): Promise<string> {
+  const key = `${benchCase.id}\n${variant}\n${preserveCardinality}`;
   let rewritten = rewrites.get(key);
   if (!rewritten) {
-    rewritten = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12, variant);
+    rewritten = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12, variant, { preserveCardinality });
     rewrites.set(key, rewritten);
   }
   return rewritten;
@@ -417,7 +426,8 @@ async function runEngine(
           [ 'rewriting+pushDownAssertions', 'pushDownAssertions' ],
           [ 'rewriting+pullUpExtends', 'pullUpExtends' ],
         ]) {
-          rewritings.push({ benchCase, approach, query: await rewrite(benchCase, variant), source });
+          const query = await rewrite(benchCase, variant, opts.preserveCardinality);
+          rewritings.push({ benchCase, approach, query, source });
         }
       }
       // Where the reference runs on data of its own (the materialised views), every reference goes first
@@ -459,6 +469,7 @@ async function runEngine(
           referenceApproach: null,
           timeoutMs: opts.timeoutMs,
           error: run.error,
+          ...opts.preserveCardinality ? { preserveCardinality: <const> true } : {},
         };
         rows.push(row);
         if (!caseRows.has(benchCase.id)) {
