@@ -10,6 +10,7 @@ import {
   splitConjunction,
 } from '../utils/expressionHelpers.js';
 import { keep, mapOperationPreOrderKeepingMetadata } from '../utils/metadataKeepingTraversal.js';
+import type { SingleInputOperation } from '../utils/operationhelpers.js';
 import { groupingKeysOf, rebuildMinus, rebuildOverInput } from '../utils/operationhelpers.js';
 import {
   everyOperandBindsCertainly,
@@ -155,6 +156,10 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
     }
     case Algebra.Types.DISTINCT:
     case Algebra.Types.REDUCED:
+      // A sub-SELECT is printed from its DISTINCT down as one, so only what its projection lets in passes.
+      return sinkIntoSingleInput(c, conjuncts, op, op.input.type === Algebra.Types.PROJECT ?
+        projectionLicence(op.input) :
+          () => true);
     case Algebra.Types.ORDER_BY:
     case Algebra.Types.FROM:
       return rebuildOverInput(c, op, filterOver(c, op.input, conjuncts));
@@ -162,14 +167,8 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
       return AF.createUnion(op.input.map(branch => filterOver(c, branch, conjuncts)), false);
     case Algebra.Types.MINUS:
       return rebuildMinus(c, op, filterOver(c, op.input[0], conjuncts), op.input[1]);
-    case Algebra.Types.PROJECT: {
-      // A variable the projection drops is unbound above it, and only reads the same below where nothing
-      // binds it there either.
-      const projected = new Set(op.variables.map(variable => variable.value));
-      const { vRanges } = cpMetaOf(op.input);
-      return sinkIntoSingleInput(c, conjuncts, op, conjunct =>
-        [ ...conjunct.reads ].every(name => projected.has(name) || vRanges.neverBinds(name)));
-    }
+    case Algebra.Types.PROJECT:
+      return sinkIntoSingleInput(c, conjuncts, op, projectionLicence(op));
     case Algebra.Types.GROUP: {
       // A conjunct on keys alone selects whole groups. That needs a key, since a keyless GROUP makes a group
       // of an empty input, and every moving conjunct reads at least one variable to be a key.
@@ -193,6 +192,38 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
 }
 
 /**
+ * What a sub-SELECT lets into its WHERE clause: a conjunct reading what it projects or never binds below,
+ * since a variable it drops is unbound above it. An aggregating one only lets in a conjunct on projected
+ * grouping keys, which sinks below the GROUP: `toAst` would print anything left above it into the WHERE clause.
+ * @param project - The projection of the sub-SELECT
+ * @returns whether a conjunct may enter it
+ */
+function projectionLicence(project: Algebra.Project): (conjunct: Conjunct) => boolean {
+  const projected = new Set(project.variables.map(variable => variable.value));
+  const group = groupBelowSelectClause(project.input);
+  if (group !== undefined) {
+    const keys = groupingKeysOf(group);
+    return conjunct => [ ...conjunct.reads ].every(name => projected.has(name) && keys.has(name));
+  }
+  const { vRanges } = cpMetaOf(project.input);
+  return conjunct => [ ...conjunct.reads ].every(name => projected.has(name) || vRanges.neverBinds(name));
+}
+
+/**
+ * The GROUP of an aggregating sub-SELECT, below the ORDER BY, select expressions and HAVING of its projection.
+ * @param projectInput - The input of the projection
+ * @returns the GROUP, or `undefined` when the sub-SELECT does not aggregate
+ */
+function groupBelowSelectClause(projectInput: Algebra.Operation): Algebra.Group | undefined {
+  let current = projectInput;
+  while (current.type === Algebra.Types.EXTEND || current.type === Algebra.Types.FILTER ||
+    current.type === Algebra.Types.ORDER_BY) {
+    current = current.input;
+  }
+  return current.type === Algebra.Types.GROUP ? current : undefined;
+}
+
+/**
  * Places conjuncts on the input of an operation where licensed, and above the operation otherwise.
  * @param c - The transformation context
  * @param conjuncts - The conjuncts to place
@@ -203,7 +234,7 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
 function sinkIntoSingleInput(
   c: TransformationContext,
   conjuncts: Conjunct[],
-  op: Algebra.Project | Algebra.Group | Algebra.Graph,
+  op: SingleInputOperation,
   licence: (conjunct: Conjunct) => boolean,
 ): Algebra.Operation {
   const { licensed, remaining } = splitByLicence(conjuncts, licence);

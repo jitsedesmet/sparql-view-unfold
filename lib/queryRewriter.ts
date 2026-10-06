@@ -1,6 +1,6 @@
-import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_USER_QUERY } from './consts.js';
+import { toAst } from './generator/toAst.js';
 import { filterFalseTransformation } from './transformations/filterFalse.js';
 import {
   nullifyJoinOverIncompatibleBoundsTransformation,
