@@ -14,6 +14,7 @@ import {
 import { constructedTermOf } from './expressionHelpers.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
+import { variablesRequiredBoundBy } from './unboundRejection.js';
 
 /**
  * What an operation binds, as one structure: its **key set is exactly the variables in scope** - what
@@ -412,7 +413,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       const unbound = variablesImpliedUnboundBy(resOp.expression);
       resOp.metadata.cVars = differenceSets(unionSets([
         input.metadata.cVars,
-        variablesImpliedBoundBy(resOp.expression),
+        variablesRequiredBoundBy(resOp.expression),
       ]), unbound);
       // A filter only drops solutions, so what survives still holds what the input put there. What the
       // *condition* narrows is the business of the pushdown, which reads it into an assertion instead.
@@ -505,33 +506,6 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
  */
 export function cpMetaOf(op: Algebra.Operation): CPMeta {
   return withCpVars(op).metadata;
-}
-
-/**
- * Collects the variables a filter condition can only hold for when they are bound.
- * @param expression - The condition to read
- * @param agg - The variables collected so far, filled in by the recursion
- * @returns those variables
- */
-function variablesImpliedBoundBy(expression: A.Expression, agg = new Set<string>()): Set<string> {
-  if (expression.subType !== ExpressionTypes.OPERATOR) {
-    return agg;
-  }
-  // Every conjunct of a `&&` has to hold, so each of them contributes.
-  if (expression.operator === '&&') {
-    for (const arg of expression.args) {
-      variablesImpliedBoundBy(arg, agg);
-    }
-    return agg;
-  }
-  if (expression.operator === 'bound' || expression.operator === 'sameterm') {
-    for (const arg of expression.args) {
-      if (arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
-        agg.add(arg.term.value);
-      }
-    }
-  }
-  return agg;
 }
 
 /**

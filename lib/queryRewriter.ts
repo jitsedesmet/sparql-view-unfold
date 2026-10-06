@@ -8,6 +8,7 @@ import {
 import { rewriteNonRecursivePathsTransformation } from './transformations/pathTransformation.js';
 import { pullUpExtendsTransformation } from './transformations/pullUpExtends.js';
 import { pushDownAssertionsTransformation } from './transformations/pushDownAssertions.js';
+import { pushDownFiltersTransformation } from './transformations/pushDownFilters.js';
 import { removeProjectionsTransformation } from './transformations/removeProjections.js';
 import type { UnfoldingOptions } from './transformations/unfolding.js';
 import { unfoldingTransformation } from './transformations/unfolding.js';
@@ -295,11 +296,11 @@ export function createQueryRewriter(transformations: readonly QueryTransformatio
  *
  * The order is not a preference, it is what each step needs to see. Paths are expanded *before* the
  * unfolding, which only knows triple patterns. `FILTER(FALSE)` is collapsed after every step that can
- * produce one, so the next step has less to walk. The pushdown drives terms into the leaves and the
- * pull-up floats the binds it leaves behind back out, in that order, because the pushdown is what creates
- * them. `nullifyJoinOverIncompatibleBounds` comes last, after `removeProjections` and `pullUpExtends`: it
- * reads each join operand's top-level `EXTEND` chain and halts at a `PROJECT`, so anywhere earlier it sees
- * nothing at all.
+ * produce one, so the next step has less to walk. The pushdowns drive terms and then the remaining
+ * conditions into the leaves, and the pull-up floats the binds they leave behind back out, in that order,
+ * because the pushdown is what creates them. `nullifyJoinOverIncompatibleBounds` comes last, after
+ * `removeProjections` and `pullUpExtends`: it reads each join operand's top-level `EXTEND` chain and halts at
+ * a `PROJECT`, so anywhere earlier it sees nothing at all.
  *
  * {@link transformations/nullifyUnbindableVars!nullifyUnbindableVars} is deliberately absent - nothing the
  * unfolding generates gives it anything to decide - and so are the blank node materialisations, which are
@@ -322,6 +323,7 @@ export function createDefaultTransformationPipeline(
     filterFalseTransformation(),
     pushDownAssertionsTransformation(),
     filterFalseTransformation(),
+    pushDownFiltersTransformation(),
     pullUpExtendsTransformation(),
     filterFalseTransformation(),
     removeProjectionsTransformation(),

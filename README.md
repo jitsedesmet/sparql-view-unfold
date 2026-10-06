@@ -87,6 +87,7 @@ import {
   mappingFromConstructQueries,
   pullUpExtendsTransformation,
   pushDownAssertionsTransformation,
+  pushDownFiltersTransformation,
   rewriteNonRecursivePathsTransformation,
   unfoldingTransformation,
 } from 'sparql-view-unfold';
@@ -97,6 +98,7 @@ const rewriter = createQueryRewriter([
   filterFalseTransformation(),
   pushDownAssertionsTransformation(),
   filterFalseTransformation(),
+  pushDownFiltersTransformation(),
   pullUpExtendsTransformation(),
   filterFalseTransformation(),
 ]);
@@ -171,6 +173,7 @@ The tables below are the short version; the generated
 | `rewriteNonRecursivePathsTransformation()` | Expands non-recursive property paths into BGPs and UNIONs. Belongs before the unfolding. |
 | `filterFalseTransformation()` | Lets every `FILTER(FALSE)` absorb what stands over it, sub-SELECTs included. |
 | `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))` as deep as it goes: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
+| `pushDownFiltersTransformation()` | Pushes every other filter condition as deep as it keeps its meaning: through DISTINCT, sub-SELECTs, GROUP keys and BINDs, into JOIN operands and UNION branches, and into an OPTIONAL, which becomes a plain join under a condition rejecting its unmatched side. |
 | `pullUpExtendsTransformation()` | Floats every `BIND` as high as the plan allows and drops the ones nothing reads. |
 | `removeProjectionsTransformation()` | Removes inner projections, renaming what they hid to keep the scoping. |
 | `nullifyJoinOverIncompatibleBoundsTransformation()` | Replaces a join whose branches bind one variable to incompatible terms by `FILTER(FALSE)`. |

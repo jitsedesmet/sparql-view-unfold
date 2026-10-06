@@ -53,3 +53,25 @@ export function projectSolutionExistence(
 ): Algebra.Project {
   return c.AF.createProject(operation, [ c.coinExistenceVariable() ]);
 }
+
+/**
+ * Rebuilds a MINUS over new operands, keeping the graph-scope marker that tells an engine which `?g`, bound
+ * outside the MINUS, its disjointness test ignores.
+ * @param c - The transformation context
+ * @param minus - The MINUS to rebuild
+ * @param left - Its new left operand
+ * @param right - Its new right operand
+ * @returns the rebuilt MINUS
+ */
+export function rebuildMinus(
+  c: TransformationContext,
+  minus: Algebra.Minus,
+  left: Algebra.Operation,
+  right: Algebra.Operation,
+): Algebra.Minus {
+  const rebuilt = c.AF.createMinus(left, right);
+  if (minus.graphScopeVar !== undefined) {
+    rebuilt.graphScopeVar = minus.graphScopeVar;
+  }
+  return rebuilt;
+}

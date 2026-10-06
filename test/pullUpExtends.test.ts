@@ -53,15 +53,26 @@ describe('pullUpExtends', () => {
    * @param expect - The assertion API of the running test
    * @param query - The query to rewrite, without its prefixes
    * @param expected - The query the rewrite has to generate
+   * @param certaintiesOnlyTheInputShows - Variables still certainly bound after the rewrite, but no longer
+   * provably so for {@link withCpVars}
    */
-  function expectTransform(expect: typeof Expect, query: string, expected: string): void {
+  function expectTransform(
+    expect: typeof Expect,
+    query: string,
+    expected: string,
+    certaintiesOnlyTheInputShows: string[] = [],
+  ): void {
     // The scope invariant is what the string comparison cannot see: a hoist that lost a variable out of
     // `cVars` still prints as a plausible query, and only changes what `SELECT *` returns on data that
     // leaves something unbound.
     const input = parseQuery(c, prefixes + query);
     const output = pullUpExtends(c, input);
     expect(c.generator.generate(toAst(output)).trim()).toEqual(expected.trim());
-    expect(scopeOf(output)).toEqual(scopeOf(parseQuery(c, prefixes + query)));
+    const inputScope = scopeOf(parseQuery(c, prefixes + query));
+    expect(scopeOf(output)).toEqual({
+      ...inputScope,
+      cVars: inputScope.cVars.filter(name => !certaintiesOnlyTheInputShows.includes(name)),
+    });
     expect(holdsCachedMetadata(output)).toBe(false);
     // Idempotence: what the pass produced is a fixpoint of it.
     expect(c.generator.generate(toAst(pullUpExtends(c, output))).trim()).toEqual(expected.trim());
@@ -632,6 +643,8 @@ ORDER BY ASC ( ?x )`,
     it('writes the whole term in when the construction can fail', ({ expect }) => {
       // `?o` occupies the subject position, and an object may be a literal, so the construction may raise
       // and leave `?x` unbound - where `SUBJECT(?x)` is an error and the component would not be.
+      // The filter still rejects every solution the construction fails on, but it no longer names `?x`, so
+      // only the input shows `?x` certain.
       expectTransform(
         expect,
         'SELECT * WHERE { ?s :p ?o BIND(<<( ?o :q ?s )>> AS ?x) FILTER(SUBJECT(?x) = :a) }',
@@ -639,6 +652,7 @@ ORDER BY ASC ( ?x )`,
   ?s <ex://p> ?o .
   FILTER ( SAMETERM( SUBJECT( <<( ?o <ex://q> ?s )>> ) , <ex://a> ) )
 }`,
+        [ 'x' ],
       );
     });
 

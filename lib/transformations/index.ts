@@ -16,6 +16,9 @@
  * - **pushDownAssertionsTransformation**: pushes assertion filters (`FILTER(sameTerm(?x, c))`) as deep into
  *   the plan as possible, substituting into BGPs, pruning VALUES rows and UNION branches, and turning an
  *   OPTIONAL over an asserted variable into a plain join.
+ * - **pushDownFiltersTransformation**: pushes every other filter condition as deep as it keeps its meaning,
+ *   through projections, groupings and binds and into join operands and union branches, turning an OPTIONAL
+ *   under a condition rejecting its unmatched side into a plain join.
  * - **pullUpExtendsTransformation**: the mirror of the pushdown, floating the `BIND`s it left behind at the
  *   leaves back up the plan and deleting the ones nothing above reads - a UNION every branch of which
  *   carries the same bind included.
@@ -56,6 +59,7 @@ export { nullifyUnbindableVarsTransformation } from './nullifyUnbindableVars.js'
 export { rewriteNonRecursivePathsTransformation } from './pathTransformation.js';
 export { pullUpExtendsTransformation } from './pullUpExtends.js';
 export { pushDownAssertionsTransformation } from './pushDownAssertions.js';
+export { pushDownFiltersTransformation } from './pushDownFilters.js';
 export { removeProjectionsTransformation } from './removeProjections.js';
 export { serviceCallPushUpTransformation } from './serviceCallMerge.js';
 export type { UnfoldingOptions } from './unfolding.js';

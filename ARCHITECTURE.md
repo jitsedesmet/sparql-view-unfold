@@ -73,9 +73,17 @@ Given a query Q without recursive paths and a mapping with head H and body B:
    would be fruitful for some operations — word equations testing whether a literal concatenation is
    possible given a variable, for instance.
 7. **Let the `FILTER(FALSE)`s walk up**, absorbing what stands over them — `transformFilterFalse`.
+8. **Push the remaining conditions down** with `pushDownFilters` (`lib/transformations/pushDownFilters.ts`):
+   every stable conjunct a filter or an OPTIONAL holds sinks to where it reads the same values, which is what
+   carries a user's `FILTER(?x > 5)` through the sub-SELECT and BINDs of an unfolded pattern onto the source
+   BGP. A conjunct is a function of the values it reads, so sinking it only needs those values unchanged;
+   SPARQL's error propagation (`lib/utils/unboundRejection.ts`) says which variables it needs bound, which
+   is what turns an OPTIONAL under it into a JOIN.
 
-`pullUpExtends` is the mirror of step 5: it floats the BINDs the pushdown left at the leaves back up the
-plan and deletes the ones nothing above reads.
+`pullUpExtends` is the mirror of steps 5 and 8: it floats the BINDs the pushdowns left at the leaves back
+up the plan and deletes the ones nothing above reads. A bind and a condition reading it swap by the same
+substitution either way (`lib/utils/bindSubstitution.ts`), and the three passes read one set of licences
+for what an operand of a JOIN decides (`lib/utils/pushdownLicences.ts`).
 
 ## Variable prefixes
 
@@ -125,5 +133,8 @@ So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
   default pipeline and deserves a proper study rather than the anecdote it rests on.
 - **`nullifyJoinOverIncompatibleBounds` seeing through a `PROJECT`**, which would free it from having to
   run after `removeProjections`.
+- **Conditions over a computed BIND.** `pushDownFilters` sinks a condition below a BIND only by writing in
+  a construction; writing in `STR(?o)` would evaluate it twice, which wants a cost model to pay off. Nothing
+  sinks into an EXISTS either, a sub-SELECT scoping out the variables substituted into it.
 - **Merging SERVICE calls.** A service can absorb a variable amount of computation, so there is a
   composition to choose; `transformServiceCallPushUp` makes one choice.

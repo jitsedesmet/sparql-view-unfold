@@ -370,6 +370,72 @@ describe('integration tests', () => {
       expect(resOnMappedData).toEqual(resUsingRewriter);
     });
 
+    it('selecting with a FILTER the pushdown sinks into the patterns returns the same results', async({ expect }) => {
+      const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        mappers,
+        `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+         PREFIX : <ex://>
+         SELECT ?s ?o ?c WHERE {
+           ?t rdf:reifies <<( ?s :knows ?o )>> .
+           ?t :confidence ?c
+           FILTER(STR(?c) > "0.8" && ?s != :bob)
+         }`,
+      );
+      expect(resOnMappedData).not.toHaveLength(0);
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+    });
+
+    it('selecting with a FILTER in an OPTIONAL returns the same results', async({ expect }) => {
+      const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        mappers,
+        `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+         PREFIX : <ex://>
+         SELECT ?s ?o ?c WHERE {
+           ?t rdf:reifies <<( ?s :knows ?o )>> .
+           OPTIONAL { ?t :confidence ?c FILTER(STR(?c) < "0.8") }
+         }`,
+      );
+      expect(resOnMappedData).not.toHaveLength(0);
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+    });
+
+    it('selecting with a FILTER turning an OPTIONAL into a join returns the same results', async({ expect }) => {
+      const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        mappers,
+        `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+         PREFIX : <ex://>
+         SELECT ?s ?o ?agent WHERE {
+           ?t rdf:reifies <<( ?s ?p ?o )>> .
+           OPTIONAL { ?t :statedBy ?agent }
+           FILTER(?agent != :survey)
+         }`,
+      );
+      expect(resOnMappedData).not.toHaveLength(0);
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+    });
+
+    it('selecting with a FILTER over a DISTINCT sub-SELECT returns the same results', async({ expect }) => {
+      const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        mappers,
+        `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+         PREFIX : <ex://>
+         SELECT ?s WHERE {
+           { SELECT DISTINCT ?s WHERE { ?t rdf:reifies <<( ?s ?p ?o )>> } }
+           FILTER(?s != :bob)
+         }`,
+      );
+      expect(resOnMappedData).not.toHaveLength(0);
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+    });
+
     it('selecting with a variable reused across positions (?x ?x ?o) returns the same results', async({ expect }) => {
       // Reusing the same variable in subject and predicate position unifies two mapping-head
       // variables, which has to bind that variable once rather than twice.

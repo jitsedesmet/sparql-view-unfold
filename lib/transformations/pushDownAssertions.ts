@@ -1,5 +1,5 @@
 import type * as RDF from '@rdfjs/types';
-import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
@@ -28,10 +28,12 @@ import {
   variablesOfTransferSource,
   asWeakenedConjunct,
 } from '../utils/assertions.js';
-import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { cpMetaOf } from '../utils/certainlyBoundVars.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
-import { createFilterFalse } from '../utils/operationhelpers.js';
+import { keep, keepMetadata, mapOperationPreOrderKeepingMetadata } from '../utils/metadataKeepingTraversal.js';
+import { createFilterFalse, rebuildMinus } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
+import { innerJoinUnderRejectingFilter, operandDecidesVariable } from '../utils/pushdownLicences.js';
 import { unionSets } from '../utils/setUtils.js';
 import type { DerivedVarNamer } from '../utils.js';
 import { collectVariableNames, derivedVarNamer } from '../utils.js';
@@ -86,9 +88,6 @@ import { collectVariableNames, derivedVarNamer } from '../utils.js';
  * below without recomputing anything as they are rewritten.
  */
 
-/** Metadata is a cache to carry along, never a tree to iterate into: its sets do not survive that. */
-const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
-
 /**
  * Pushes every assertion filter in `rootOp` as deep as possible, and into every branch that permits it -
  * for a join, that may be both sides at once.
@@ -112,20 +111,15 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // After:  SELECT * WHERE { ?o ?p ?o . BIND(?o AS ?s) }
  */
 export function pushDownAssertions<T extends Algebra.Operation>(c: TransformationContext, rootOp: T): T {
-  const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
-    Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]),
-  );
   // One namer for the whole pass, over every variable of the query as it stands *before* anything is
   // rewritten (D4). Both halves of that matter: a materialised position has to get the same name
   // wherever it is written, and a name coined against a part of the tree would collide with a variable
   // in the part that has not been met yet - which is also why this takes the root, see above.
   const namer = derivedVarNamer(collectVariableNames(c.astTransformer, rootOp));
-  callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(c, namer, filter);
-  // Starting from a copy without metadata gives both a tree of our own to rewrite and the guarantee that
-  // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out
-  // for the same reason, the rewrites having since changed what the traversal cached. Not *inside*
-  // `mapOperationPreOrder`: `keepMetadata` is how a filter hands its conjunction to the next `pushFilter`.
-  return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(rootOp), callbacks));
+  // `keepMetadata` is how a filter hands its conjunction to the next `pushFilter`.
+  return mapOperationPreOrderKeepingMetadata(rootOp, {
+    [Algebra.Types.FILTER]: (filter: Algebra.Filter) => pushFilter(c, namer, filter),
+  });
 }
 
 /**
@@ -253,7 +247,9 @@ function swapWith(
       // A mapping μ ∈ LHS is removed if:
       // ∃ μ' ∈ RHS . (μ and μ' are compatible) && (dom(μ) and dom(μ') are not disjoint)
       const [ left, right ] = op.input;
-      return keep(AF.createMinus(
+      return keep(rebuildMinus(
+        c,
+        op,
         // FMPush: the output is a subset of the LHS, so filtering it here is filtering the output.
         assertionFilter(c, left, assertions),
         // The RHS takes only the weakened form of what the LHS holds strongly ({@link admissibleOnMinusRhs}).
@@ -759,8 +755,7 @@ function pushIntoJoin(
   // of anything else it can bind, which the join consumes; and it *connects* what it takes, join
   // compatibility being what enforces an equality between two accesses it binds on the output.
   const placed = placeOverTargets(assertions, operands.map((operand, index) => ({
-    licensed: name => operand.cVars.has(name) ||
-      operands.every((other, otherIndex) => otherIndex === index || other.vRanges.neverBinds(name)),
+    licensed: name => operandDecidesVariable(name, index, operands),
     admitsWeakened: name => operand.vRanges.canBind(name),
     mayBind: name => operand.vRanges.canBind(name),
     connects: true,
@@ -831,14 +826,14 @@ function pushIntoLeftJoin(
   const [ left, right ] = leftJoin.input;
   const leftVars = cpMetaOf(left);
 
-  if ([ ...assertions.boundImpliedBy() ].some(name => leftVars.vRanges.neverBinds(name))) {
-    // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
-    const joined = AF.createJoin([ left, right ], true);
-    const rebuilt = leftJoin.expression === undefined ? joined : AF.createFilter(joined, leftJoin.expression);
-    return { ...keepMetadata, newValue: assertionFilter(c, rebuilt, assertions), reTransform: true };
+  // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
+  const innerJoin = innerJoinUnderRejectingFilter(c, leftJoin, assertions.boundImpliedBy(), leftVars);
+  if (innerJoin !== undefined) {
+    return { ...keepMetadata, newValue: assertionFilter(c, innerJoin, assertions), reTransform: true };
   }
 
   const rightVars = cpMetaOf(right);
+  const operands = [ leftVars, rightVars ];
   // (FLPush) on the left, and `?x ∈ cVars(A₁) ∩ cVars(A₂)` on the right - which implies the left's
   // licence, so the replication only ever happens beside a push the LHS already took.
   //
@@ -848,7 +843,7 @@ function pushIntoLeftJoin(
   // join where a join consumes it.
   const placed = placeOverTargets(assertions, [
     {
-      licensed: name => leftVars.cVars.has(name) || rightVars.vRanges.neverBinds(name),
+      licensed: name => operandDecidesVariable(name, 0, operands),
       admitsWeakened: name => leftVars.vRanges.canBind(name),
       mayBind: name => leftVars.vRanges.canBind(name),
       connects: true,
@@ -1082,15 +1077,6 @@ function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjun
     .filter(({ assertion }) => impliesBound(assertion))
     .map(conjunct => asWeakenedConjunct(conjunct))
     .filter(conjunct => conjunct !== undefined));
-}
-
-/**
- * Hands a value to the traversal, keeping the metadata of everything in it intact.
- * @param newValue - What to put in place of the operation
- * @returns the traversal's instruction
- */
-function keep(newValue: Algebra.Operation): PreOrderMappingReturn {
-  return { ...keepMetadata, newValue };
 }
 
 /**
