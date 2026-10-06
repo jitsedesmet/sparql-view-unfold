@@ -467,6 +467,10 @@ export interface TermTypeTest {
  * @returns the test, or `undefined` when the expression is not one
  */
 export function asTermTypeTest(expression: Algebra.Expression): TermTypeTest | undefined {
+  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR ||
+    (expression.operator !== '||' && asAssertableTermType(expression.operator) === undefined)) {
+    return undefined;
+  }
   return termTypeTestOf(splitDisjunction(expression));
 }
 

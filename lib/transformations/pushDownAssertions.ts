@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
+import type { RangeSet } from '../RangeSet.js';
 import { tripleTermRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
@@ -953,23 +954,52 @@ function placeOverTargets(assertions: AssertionConjunction, targets: PushTarget[
     }
   }
   for (const group of assertions.equatedGroups()) {
-    const placed = splitClique(
-      group.readings,
-      targets.map(target => group.readings.filter(reading => target.licensed(reading.name))),
-      targets.map(target => target.connects),
-    );
+    const licensedPerTarget = targets.map(target => group.readings.filter(reading => target.licensed(reading.name)));
+    const placed = splitClique(group.readings, licensedPerTarget, targets.map(target => target.connects));
     for (const [ index, pushed ] of placed.intoTarget.entries()) {
       intoTarget[index].push(...pushed);
     }
     kept.push(...placed.kept);
-    // Enforced of one reading, the term types hold of all of them through the edges kept above.
-    const typed = termTypesOfReadings(group);
-    const restated = typed.map(conjunct => placeConjunct(conjunct, targets, intoTarget));
-    if (restated.length > 0 && restated.every(Boolean)) {
-      kept.push(typed[0]);
+    if (group.range !== undefined &&
+      placeTermTypesOfGroup(group.readings, group.range, licensedPerTarget, targets, intoTarget)) {
+      kept.push({ access: group.readings[0], assertion: assertTermType(group.range) });
     }
   }
   return { intoTarget, kept };
+}
+
+/**
+ * Places the term types of a group over the targets of an operation: strongly on one reading of every target
+ * licensed for any, the edges it takes carrying them to its others, and weakly on each reading it may only bind.
+ * @param readings - The readings of the group
+ * @param range - The term types they hold
+ * @param licensedPerTarget - Per target, the readings it is licensed for
+ * @param targets - The places they can go
+ * @param intoTarget - The conjuncts per target, which this adds to
+ * @returns whether they still have to be stated above the operation, which the edges kept there spread over
+ * the group once a connecting target enforces them of one reading
+ */
+function placeTermTypesOfGroup(
+  readings: readonly Access[],
+  range: RangeSet,
+  licensedPerTarget: readonly Access[][],
+  targets: PushTarget[],
+  intoTarget: AssertionConjunct[][],
+): boolean {
+  let enforced = false;
+  for (const [ index, target ] of targets.entries()) {
+    const licensed = licensedPerTarget[index];
+    if (licensed.length > 0) {
+      intoTarget[index].push({ access: licensed[0], assertion: assertTermType(range) });
+      enforced ||= target.connects;
+    }
+    for (const reading of readings) {
+      if (!licensed.includes(reading) && target.admitsWeakened(reading.name)) {
+        intoTarget[index].push({ access: reading, assertion: assertTermType(range, false) });
+      }
+    }
+  }
+  return !enforced;
 }
 
 /**
