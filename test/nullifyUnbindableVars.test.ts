@@ -1,6 +1,7 @@
+import { toAst } from '@traqula/algebra-sparql-1-2';
 import { describe, it } from 'vitest';
 import { nullifyUnbindableVars } from '../lib/transformations/nullifyUnbindableVars.js';
-import { createTransformationContext } from '../lib/transformContext.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import { isFilterFalse } from '../lib/utils/operationhelpers.js';
 
 const c = createTransformationContext();
@@ -44,6 +45,13 @@ describe('nullifyUnbindableVars', () => {
       c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(x) ]),
     );
     expect(isFilterFalse(c, nullifyUnbindableVars(c, filtered))).toBe(true);
+  });
+
+  it('leaves the pattern of an EXISTS alone, the solution substituting what it does not bind', ({ expect }) => {
+    // `?z > ?y` requires ?y bound, which the pattern never binds but the outer solution does.
+    const query = parseQuery(c, 'SELECT * WHERE { ?x <ex://p> ?y FILTER EXISTS { ?x <ex://q> ?z FILTER(?z > ?y) } }');
+    expect(c.generator.generate(toAst(nullifyUnbindableVars(c, query))))
+      .toEqual(c.generator.generate(toAst(query)));
   });
 
   it('leaves a join an UNDEF row keeps satisfiable alone', ({ expect }) => {

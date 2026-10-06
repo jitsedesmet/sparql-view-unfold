@@ -26,8 +26,9 @@ export function keep(newValue: Algebra.Operation): PreOrderMappingReturn {
  * Rewrites a tree top-down, keeping every operation without a callback as it is.
  *
  * The tree is entered and left without metadata: entering gives a tree of its own to rewrite, on which what
- * {@link utils/certainlyBoundVars!withCpVars} caches describes the plan as it stands, and leaving clears what the
- * rewrites have since invalidated.
+ * {@link utils/certainlyBoundVars!withCpVars} caches describes the plan as it stands, and leaving clears what
+ * the rewrites have since invalidated. The pattern of an EXISTS is never entered: the solution it is asked
+ * about is substituted into it, so a variable it never binds itself may well be bound there.
  * @param rootOp - The tree to rewrite
  * @param callbacks - The rewrite per operation type
  * @returns the rewritten tree
@@ -39,6 +40,8 @@ export function mapOperationPreOrderKeepingMetadata<T extends Algebra.Operation>
   const everyCallback: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = {
     ...Object.fromEntries(Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ])),
     ...callbacks,
+    [Algebra.Types.EXPRESSION]: (expression: Algebra.Expression) =>
+      ({ ...keepMetadata, newValue: expression, continue: false }),
   };
   return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(rootOp), everyCallback));
 }

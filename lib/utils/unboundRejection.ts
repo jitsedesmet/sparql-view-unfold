@@ -8,6 +8,7 @@ import { intersectSets, unionSets } from './setUtils.js';
  * Evaluating an unbound variable raises an error, and every function raises the error of an argument except
  * the few SPARQL 1.1 §17.2-§17.4 define otherwise. So a condition raising whenever `?x` is unbound is false
  * for a filter there, which is what lets a filter certify `?x` bound and turn an OPTIONAL into a JOIN.
+ * The converse is only read off `!bound(?x)`.
  */
 
 /** The operators that do not simply raise the error of an argument; every other operator is strict. */
@@ -82,4 +83,24 @@ export function variablesRequiredBoundBy(expression: Algebra.Expression): SSet {
     default:
       return variablesRaisingWhenUnbound(expression);
   }
+}
+
+/**
+ * The variables a condition only holds for while they are unbound, read off its `!bound(?x)` conjuncts.
+ * @param expression - The condition to read
+ * @returns those variables
+ */
+export function variablesRequiredUnboundBy(expression: Algebra.Expression): SSet {
+  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR) {
+    return new Set();
+  }
+  const { operator, args } = expression;
+  if (operator === '&&') {
+    return unionSets(args.map(argument => variablesRequiredUnboundBy(argument)));
+  }
+  const [ negated ] = args;
+  if (operator === '!' && negated.subType === Algebra.ExpressionTypes.OPERATOR && negated.operator === 'bound') {
+    return variablesRaisingWhenUnbound(negated.args[0]);
+  }
+  return new Set();
 }

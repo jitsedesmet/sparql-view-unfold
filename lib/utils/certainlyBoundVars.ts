@@ -12,9 +12,10 @@ import {
   tripleTermRange,
 } from '../RangeSet.js';
 import { constructedTermOf } from './expressionHelpers.js';
+import { groupingKeysOf } from './operationhelpers.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
-import { variablesRequiredBoundBy } from './unboundRejection.js';
+import { variablesRequiredBoundBy, variablesRequiredUnboundBy } from './unboundRejection.js';
 
 /**
  * What an operation binds, as one structure: its **key set is exactly the variables in scope** - what
@@ -343,7 +344,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       // Only the grouping keys and the aggregate targets survive the grouping. A key is certain only
       // when the input binds it certainly: grouping on an unbound variable yields a group in which it
       // stays unbound. An aggregate may raise an evaluation error, so its target is never certain.
-      const keys = new Set(resOp.variables.map(variable => variable.value));
+      const keys = groupingKeysOf(resOp);
       const input = withCpVars(resOp.input);
       // COUNT is the one aggregate that cannot fail: it counts the bound, non-error values of its
       // argument, so it yields an integer.
@@ -356,7 +357,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       ]);
       // A grouping key keeps holding the value of the input; an aggregate computes a new one, of a type
       // this does not track (COUNT is an integer, MIN takes the type of whichever row won), so it is top.
-      // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins.
+      // Only the keys and the aggregate targets stay in scope.
       const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
       for (const aggregate of resOp.aggregates) {
         ranges.set(aggregate.variable.value, objectRange);
@@ -410,7 +411,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       // Also filters pVars and cVars for `!bound(?x)`
       // Keep in mind: Filter False is a special case.
       const input = withCpVars(resOp.input);
-      const unbound = variablesImpliedUnboundBy(resOp.expression);
+      const unbound = variablesRequiredUnboundBy(resOp.expression);
       resOp.metadata.cVars = differenceSets(unionSets([
         input.metadata.cVars,
         variablesRequiredBoundBy(resOp.expression),
@@ -506,36 +507,6 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
  */
 export function cpMetaOf(op: Algebra.Operation): CPMeta {
   return withCpVars(op).metadata;
-}
-
-/**
- * Collects the variables a filter condition can only hold for when they are *unbound*.
- * @param expression - The condition to read
- * @param agg - The variables collected so far, filled in by the recursion
- * @returns those variables
- */
-function variablesImpliedUnboundBy(expression: A.Expression, agg = new Set<string>()): SSet {
-  if (expression.subType !== ExpressionTypes.OPERATOR) {
-    return agg;
-  }
-  if (expression.operator === '&&') {
-    for (const arg of expression.args) {
-      variablesImpliedUnboundBy(arg, agg);
-    }
-    return agg;
-  }
-  if (expression.operator === '!') {
-    for (const arg of expression.args) {
-      if (arg.subType === ExpressionTypes.OPERATOR && arg.operator === 'bound') {
-        for (const nested of arg.args) {
-          if (nested.subType === ExpressionTypes.TERM && nested.term.termType === 'Variable') {
-            agg.add(nested.term.value);
-          }
-        }
-      }
-    }
-  }
-  return agg;
 }
 
 /**

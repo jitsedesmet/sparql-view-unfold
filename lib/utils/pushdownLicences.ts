@@ -1,3 +1,4 @@
+import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { CPMeta } from './certainlyBoundVars.js';
@@ -11,26 +12,64 @@ import type { CPMeta } from './certainlyBoundVars.js';
  */
 
 /**
- * Whether no operand but one can bind a variable, so that a merged solution holds what that one gave it.
+ * Whether no operand but the given ones can bind a variable, so that a merged solution holds what those gave it.
  * @param name - The variable to check
- * @param operandIndex - The index of the operand that may bind it
+ * @param ownOperandIndices - The indices of the operands that may bind it
  * @param operands - What each operand of the merge binds
  * @returns whether every other operand never binds it
  */
-export function noOtherOperandBinds(name: string, operandIndex: number, operands: readonly CPMeta[]): boolean {
-  return operands.every((operand, index) => index === operandIndex || operand.vRanges.neverBinds(name));
+export function noOtherOperandBinds(
+  name: string,
+  ownOperandIndices: readonly number[],
+  operands: readonly CPMeta[],
+): boolean {
+  return operands.every((operand, index) => ownOperandIndices.includes(index) || operand.vRanges.neverBinds(name));
 }
 
 /**
- * (FJPush)'s side condition for one variable: every merged solution holds the value - or the absence of one -
- * the operand gave it, because the operand binds it certainly or nothing else binds it at all.
- * @param name - The variable to check
- * @param operandIndex - The index of the operand to read it on
+ * (FJPush)'s side condition: every merged solution holds the value - or the absence of one - the operand gave
+ * each variable, because the operand binds it certainly or nothing else binds it at all.
+ * @param names - The variables to check
+ * @param operandIndex - The index of the operand to read them on
  * @param operands - What each operand of the merge binds
- * @returns whether that operand decides the variable
+ * @param certainInOperand - What the operand binds certainly, where that is read below the operand's top
+ * @returns whether that operand decides every one of them
  */
-export function operandDecidesVariable(name: string, operandIndex: number, operands: readonly CPMeta[]): boolean {
-  return operands[operandIndex].cVars.has(name) || noOtherOperandBinds(name, operandIndex, operands);
+export function operandDecidesVariables(
+  names: Iterable<string>,
+  operandIndex: number,
+  operands: readonly CPMeta[],
+  certainInOperand: ReadonlySet<string> = operands[operandIndex].cVars,
+): boolean {
+  return [ ...names ].every(name =>
+    certainInOperand.has(name) || noOtherOperandBinds(name, [ operandIndex ], operands));
+}
+
+/**
+ * Whether every operand binds each variable certainly, so that one operand's condition on them holds of every
+ * compatible solution of another: what licenses copying a condition into the right side of an OPTIONAL.
+ * @param names - The variables to check
+ * @param operands - What each operand binds
+ * @returns whether all of them are certain everywhere
+ */
+export function everyOperandBindsCertainly(names: Iterable<string>, operands: readonly CPMeta[]): boolean {
+  return [ ...names ].every(name => operands.every(operand => operand.cVars.has(name)));
+}
+
+/**
+ * Whether what is read below a GRAPH sees the value the GRAPH gives its graph variable, which it binds outside
+ * its pattern: the reader does not read it, or the pattern binds it certainly.
+ * @param reads - The variables read
+ * @param graphName - The name of the GRAPH
+ * @param certainInPattern - What the pattern binds certainly
+ * @returns whether the reads cross the GRAPH unchanged
+ */
+export function graphPatternDecides(
+  reads: ReadonlySet<string>,
+  graphName: RDF.Term,
+  certainInPattern: ReadonlySet<string>,
+): boolean {
+  return graphName.termType !== 'Variable' || !reads.has(graphName.value) || certainInPattern.has(graphName.value);
 }
 
 /**

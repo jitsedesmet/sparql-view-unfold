@@ -9,9 +9,14 @@ import {
   isStableExpression,
   splitConjunction,
 } from '../utils/expressionHelpers.js';
-import { keep, keepMetadata, mapOperationPreOrderKeepingMetadata } from '../utils/metadataKeepingTraversal.js';
-import { rebuildMinus } from '../utils/operationhelpers.js';
-import { innerJoinUnderRejectingFilter, operandDecidesVariable } from '../utils/pushdownLicences.js';
+import { keep, mapOperationPreOrderKeepingMetadata } from '../utils/metadataKeepingTraversal.js';
+import { groupingKeysOf, rebuildMinus, rebuildOverInput } from '../utils/operationhelpers.js';
+import {
+  everyOperandBindsCertainly,
+  graphPatternDecides,
+  innerJoinUnderRejectingFilter,
+  operandDecidesVariables,
+} from '../utils/pushdownLicences.js';
 import type { SSet } from '../utils/setUtils.js';
 import { unionSets } from '../utils/setUtils.js';
 import { variablesRequiredBoundBy } from '../utils/unboundRejection.js';
@@ -36,8 +41,8 @@ import { collectVariableNames } from '../utils.js';
  *   the conjuncts of its own condition into its right side where that side decides what they read.
  *
  * Only a *stable* conjunct reading a variable moves: an unstable one would be asked a different number of
- * times, and one reading nothing says the same everywhere. Neither moves into an EXISTS, whose pattern is
- * not rewritten at all, since outer variables are substituted into it and a sub-SELECT scopes them out.
+ * times, and one reading nothing says the same everywhere. An EXISTS stays too, and the traversal leaves
+ * its pattern alone.
  */
 
 /** One conjunct of a condition, with the variables it reads. */
@@ -61,8 +66,6 @@ export function pushDownFilters<T extends Algebra.Operation>(c: TransformationCo
   return mapOperationPreOrderKeepingMetadata(op, {
     [Algebra.Types.FILTER]: (filter: Algebra.Filter) => keep(sinkFilter(c, filter)),
     [Algebra.Types.LEFT_JOIN]: (leftJoin: Algebra.LeftJoin) => keep(sinkOptionalCondition(c, leftJoin)),
-    [Algebra.Types.EXPRESSION]: (expression: Algebra.Expression) =>
-      ({ ...keepMetadata, newValue: expression, continue: false }),
   });
 }
 
@@ -151,13 +154,10 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
       return filterOver(c, sinkInto(c, [ ...conjuncts, ...moving ], op.input), staying);
     }
     case Algebra.Types.DISTINCT:
-      return AF.createDistinct(filterOver(c, op.input, conjuncts));
     case Algebra.Types.REDUCED:
-      return AF.createReduced(filterOver(c, op.input, conjuncts));
     case Algebra.Types.ORDER_BY:
-      return AF.createOrderBy(filterOver(c, op.input, conjuncts), op.expressions);
     case Algebra.Types.FROM:
-      return AF.createFrom(filterOver(c, op.input, conjuncts), op.default, op.named);
+      return rebuildOverInput(c, op, filterOver(c, op.input, conjuncts));
     case Algebra.Types.UNION:
       return AF.createUnion(op.input.map(branch => filterOver(c, branch, conjuncts)), false);
     case Algebra.Types.MINUS:
@@ -167,29 +167,18 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
       // binds it there either.
       const projected = new Set(op.variables.map(variable => variable.value));
       const { vRanges } = cpMetaOf(op.input);
-      return sinkIntoSingleInput(c, conjuncts, op.input, conjunct =>
-        [ ...conjunct.reads ].every(name => projected.has(name) || vRanges.neverBinds(name)), input =>
-        AF.createProject(input, op.variables));
+      return sinkIntoSingleInput(c, conjuncts, op, conjunct =>
+        [ ...conjunct.reads ].every(name => projected.has(name) || vRanges.neverBinds(name)));
     }
     case Algebra.Types.GROUP: {
       // A conjunct on keys alone selects whole groups. That needs a key, since a keyless GROUP makes a group
       // of an empty input, and every moving conjunct reads at least one variable to be a key.
-      const keys = new Set(op.variables.map(variable => variable.value));
-      for (const aggregate of op.aggregates) {
-        keys.delete(aggregate.variable.value);
-      }
-      return sinkIntoSingleInput(c, conjuncts, op.input, conjunct =>
-        [ ...conjunct.reads ].every(name => keys.has(name)), input =>
-        AF.createGroup(input, op.variables, op.aggregates));
+      const keys = groupingKeysOf(op);
+      return sinkIntoSingleInput(c, conjuncts, op, conjunct => [ ...conjunct.reads ].every(name => keys.has(name)));
     }
     case Algebra.Types.GRAPH: {
-      // The graph variable is bound outside the pattern, so below it a conjunct only reads the same value
-      // where the pattern binds it certainly.
-      const graphVariable = op.name.termType === 'Variable' ? op.name.value : undefined;
       const { cVars } = cpMetaOf(op.input);
-      return sinkIntoSingleInput(c, conjuncts, op.input, conjunct =>
-        graphVariable === undefined || !conjunct.reads.has(graphVariable) || cVars.has(graphVariable), input =>
-        AF.createGraph(input, op.name));
+      return sinkIntoSingleInput(c, conjuncts, op, conjunct => graphPatternDecides(conjunct.reads, op.name, cVars));
     }
     case Algebra.Types.EXTEND:
       return sinkIntoExtend(c, conjuncts, op);
@@ -204,23 +193,21 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
 }
 
 /**
- * Places conjuncts on the one input of an operation where licensed, and above the operation otherwise.
+ * Places conjuncts on the input of an operation where licensed, and above the operation otherwise.
  * @param c - The transformation context
  * @param conjuncts - The conjuncts to place
- * @param input - The input of the operation
+ * @param op - The operation they stand on
  * @param licence - Whether a conjunct reads the same below the operation
- * @param rebuild - Builds the operation back over its filtered input
  * @returns the operation with the conjuncts placed
  */
 function sinkIntoSingleInput(
   c: TransformationContext,
   conjuncts: Conjunct[],
-  input: Algebra.Operation,
+  op: Algebra.Project | Algebra.Group | Algebra.Graph,
   licence: (conjunct: Conjunct) => boolean,
-  rebuild: (input: Algebra.Operation) => Algebra.Operation,
 ): Algebra.Operation {
   const { licensed, remaining } = splitByLicence(conjuncts, licence);
-  return filterOver(c, rebuild(filterOver(c, input, licensed)), remaining);
+  return filterOver(c, rebuildOverInput(c, op, filterOver(c, op.input, licensed)), remaining);
 }
 
 /**
@@ -265,8 +252,8 @@ function sinkIntoJoin(c: TransformationContext, conjuncts: Conjunct[], join: Alg
   const intoOperand: Conjunct[][] = operands.map(() => []);
   const kept: Conjunct[] = [];
   for (const conjunct of conjuncts) {
-    const deciding = operands.map((_, index) => index).filter(index =>
-      [ ...conjunct.reads ].every(name => operandDecidesVariable(name, index, operands)));
+    const deciding = operands.map((_, index) => index)
+      .filter(index => operandDecidesVariables(conjunct.reads, index, operands));
     for (const index of deciding) {
       intoOperand[index].push(conjunct);
     }
@@ -303,9 +290,9 @@ function sinkIntoOptional(
     return sinkInto(c, conjuncts, innerJoin);
   }
   const { licensed: intoLeft, remaining: kept } = splitByLicence(conjuncts, conjunct =>
-    [ ...conjunct.reads ].every(name => operandDecidesVariable(name, 0, operands)));
+    operandDecidesVariables(conjunct.reads, 0, operands));
   const { licensed: intoRight } = splitByLicence(intoLeft, conjunct =>
-    [ ...conjunct.reads ].every(name => operands[0].cVars.has(name) && operands[1].cVars.has(name)));
+    everyOperandBindsCertainly(conjunct.reads, operands));
   return filterOver(c, sinkOptionalCondition(c, c.AF.createLeftJoin(
     filterOver(c, left, intoLeft),
     filterOver(c, right, intoRight),
@@ -327,7 +314,7 @@ function sinkOptionalCondition(c: TransformationContext, leftJoin: Algebra.LeftJ
   const [ left, right ] = leftJoin.input;
   const operands = [ cpMetaOf(left), cpMetaOf(right) ];
   const { moving, staying } = splitCondition(c, leftJoin.expression, conjunct =>
-    [ ...conjunct.reads ].every(name => operandDecidesVariable(name, 1, operands)));
+    operandDecidesVariables(conjunct.reads, 1, operands));
   if (moving.length === 0) {
     return leftJoin;
   }

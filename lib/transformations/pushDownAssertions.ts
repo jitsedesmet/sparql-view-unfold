@@ -31,9 +31,13 @@ import {
 import { cpMetaOf } from '../utils/certainlyBoundVars.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { keep, keepMetadata, mapOperationPreOrderKeepingMetadata } from '../utils/metadataKeepingTraversal.js';
-import { createFilterFalse, rebuildMinus } from '../utils/operationhelpers.js';
+import { createFilterFalse, groupingKeysOf, rebuildMinus, rebuildOverInput } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
-import { innerJoinUnderRejectingFilter, operandDecidesVariable } from '../utils/pushdownLicences.js';
+import {
+  everyOperandBindsCertainly,
+  innerJoinUnderRejectingFilter,
+  operandDecidesVariables,
+} from '../utils/pushdownLicences.js';
 import { unionSets } from '../utils/setUtils.js';
 import type { DerivedVarNamer } from '../utils.js';
 import { collectVariableNames, derivedVarNamer } from '../utils.js';
@@ -261,14 +265,14 @@ function swapWith(
       // those groups are formed from. Anything else stays above: filtering before the aggregation would
       // change the aggregate. An edge with one endpoint outside the keys is one of those, and kept on top
       // normalisation correctly empties the plan, that endpoint being out of scope above the GROUP.
-      const groupsOn = new Set(op.variables.map(variable => variable.value));
+      const groupsOn = groupingKeysOf(op);
       const { inside, outside } = assertions.split(name => groupsOn.has(name));
       if (inside.size === 0) {
         return keep(assertionFilter(c, op, assertions));
       }
       return keep(assertionFilter(
         c,
-        AF.createGroup(assertionFilter(c, op.input, inside), op.variables, op.aggregates),
+        rebuildOverInput(c, op, assertionFilter(c, op.input, inside)),
         outside,
       ));
     }
@@ -277,20 +281,12 @@ function swapWith(
     // `normalisedFor` has already met Θ with the `vRanges` of this operation, and a variable it does not
     // project never binds here: the strong forms empty the plan there and the rest are dropped, so nothing
     // naming one is left to push.
-    case Algebra.Types.PROJECT: {
-      return keep(AF.createProject(assertionFilter(c, op.input, assertions), op.variables));
-    }
-    case Algebra.Types.DISTINCT: {
-      return keep(AF.createDistinct(assertionFilter(c, op.input, assertions)));
-    }
-    case Algebra.Types.REDUCED: {
-      return keep(AF.createReduced(assertionFilter(c, op.input, assertions)));
-    }
-    case Algebra.Types.ORDER_BY: {
-      return keep(AF.createOrderBy(assertionFilter(c, op.input, assertions), op.expressions));
-    }
+    case Algebra.Types.PROJECT:
+    case Algebra.Types.DISTINCT:
+    case Algebra.Types.REDUCED:
+    case Algebra.Types.ORDER_BY:
     case Algebra.Types.FROM: {
-      return keep(AF.createFrom(assertionFilter(c, op.input, assertions), op.default, op.named));
+      return keep(rebuildOverInput(c, op, assertionFilter(c, op.input, assertions)));
     }
     default: {
       // A barrier. SLICE and a GROUP over a non-key are genuine ones - filtering before a slice changes
@@ -755,7 +751,7 @@ function pushIntoJoin(
   // of anything else it can bind, which the join consumes; and it *connects* what it takes, join
   // compatibility being what enforces an equality between two accesses it binds on the output.
   const placed = placeOverTargets(assertions, operands.map((operand, index) => ({
-    licensed: name => operandDecidesVariable(name, index, operands),
+    licensed: name => operandDecidesVariables([ name ], index, operands),
     admitsWeakened: name => operand.vRanges.canBind(name),
     mayBind: name => operand.vRanges.canBind(name),
     connects: true,
@@ -843,13 +839,13 @@ function pushIntoLeftJoin(
   // join where a join consumes it.
   const placed = placeOverTargets(assertions, [
     {
-      licensed: name => operandDecidesVariable(name, 0, operands),
+      licensed: name => operandDecidesVariables([ name ], 0, operands),
       admitsWeakened: name => leftVars.vRanges.canBind(name),
       mayBind: name => leftVars.vRanges.canBind(name),
       connects: true,
     },
     {
-      licensed: name => leftVars.cVars.has(name) && rightVars.cVars.has(name),
+      licensed: name => everyOperandBindsCertainly([ name ], operands),
       admitsWeakened: () => false,
       mayBind: name => rightVars.vRanges.canBind(name),
       connects: false,

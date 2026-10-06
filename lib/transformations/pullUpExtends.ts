@@ -8,8 +8,8 @@ import { cpMetaOf, termVars, withoutCpVars } from '../utils/certainlyBoundVars.j
 import { expressionsEqual, isStableExpression } from '../utils/expressionHelpers.js';
 import type { ChainBind, PeeledChain } from '../utils/extendChain.js';
 import { peelExtends, replantExtends } from '../utils/extendChain.js';
-import { rebuildMinus } from '../utils/operationhelpers.js';
-import { noOtherOperandBinds } from '../utils/pushdownLicences.js';
+import { rebuildMinus, rebuildOverInput } from '../utils/operationhelpers.js';
+import { graphPatternDecides, noOtherOperandBinds, operandDecidesVariables } from '../utils/pushdownLicences.js';
 import type { SSet } from '../utils/setUtils.js';
 import { differenceSets } from '../utils/setUtils.js';
 import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
@@ -36,7 +36,8 @@ import { collectVariableNames } from '../utils.js';
  * `Op1(Op2(…))` ⟶ `Op2(Op1(…))`, preserving the solution multiset, `pVars` and `cVars` **at the node the
  * swap is anchored at**. Below that node nothing is preserved and nothing needs to be: the operation
  * without the bind has a smaller `pVars`, which is the point. Reaching the outer `PROJECT` is an outcome,
- * not a goal.
+ * not a goal. `cVars` is preserved of the solutions, not always of what `withCpVars` can show: a condition
+ * certifying `?x` no longer names it once the construction of `?x` is written in.
  *
  * For a bind `?x := e` on input `A` of `op`, with `V = vars(e)` and the other inputs `B`:
  *
@@ -198,20 +199,16 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformationCont
       transform: union => floatThroughUnion(c, union),
     },
     [Algebra.Types.DISTINCT]: {
-      transform: (distinct, original) =>
-        floatThroughCongruentOperation(c, distinct, sealed.has(original), input => c.AF.createDistinct(input)),
+      transform: (distinct, original) => floatThroughCongruentOperation(c, distinct, sealed.has(original)),
     },
     [Algebra.Types.REDUCED]: {
-      transform: (reduced, original) =>
-        floatThroughCongruentOperation(c, reduced, sealed.has(original), input => c.AF.createReduced(input)),
+      transform: (reduced, original) => floatThroughCongruentOperation(c, reduced, sealed.has(original)),
     },
     [Algebra.Types.SLICE]: {
-      transform: (slice, original) => floatThroughCongruentOperation(c, slice, sealed.has(original), input =>
-        c.AF.createSlice(input, slice.start, slice.length)),
+      transform: (slice, original) => floatThroughCongruentOperation(c, slice, sealed.has(original)),
     },
     [Algebra.Types.FROM]: {
-      transform: (from, original) => floatThroughCongruentOperation(c, from, sealed.has(original), input =>
-        c.AF.createFrom(input, from.default, from.named)),
+      transform: (from, original) => floatThroughCongruentOperation(c, from, sealed.has(original)),
     },
     // An EXTEND needs no callback of its own: a chain is one unit, decided by whatever it stands under.
     // Everything else is a leaf or a barrier, and a type without a callback is exactly a barrier.
@@ -468,14 +465,12 @@ function noBindLeaves(peeled: PeeledInputs): boolean {
  * @param c - The transformation context
  * @param op - The operation to float through
  * @param sealed - Whether it is part of the query's solution-modifier chain, which nothing rises into
- * @param rebuildOperation - Builds it back around its new input
  * @returns the rewritten operation
  */
 function floatThroughCongruentOperation(
   c: TransformationContext,
   op: Algebra.Distinct | Algebra.Reduced | Algebra.Slice | Algebra.From,
   sealed: boolean,
-  rebuildOperation: (input: Algebra.Operation) => Algebra.Operation,
 ): Algebra.Operation {
   // Nothing here drops, and a sealed operation lets nothing rise, so every bind would end up staying:
   // there is nothing to decide, and no reason to pay `peelInputs` to find that out.
@@ -493,7 +488,7 @@ function floatThroughCongruentOperation(
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     op :
-    assembleRewrittenNode(c, peeled, rewrittenInputs => rebuildOperation(rewrittenInputs[0]));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => rebuildOverInput(c, op, rewrittenInputs[0]));
 }
 
 /**
@@ -679,8 +674,7 @@ function floatThroughGroup(c: TransformationContext, group: Algebra.Group): Alge
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     group :
-    assembleRewrittenNode(c, peeled, rewrittenInputs =>
-      c.AF.createGroup(rewrittenInputs[0], group.variables, group.aggregates));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => rebuildOverInput(c, group, rewrittenInputs[0]));
 }
 
 /**
@@ -691,22 +685,19 @@ function floatThroughGroup(c: TransformationContext, group: Algebra.Group): Alge
  */
 function floatThroughGraph(c: TransformationContext, graph: Algebra.Graph): Algebra.Operation {
   const peeled = peelInputs(c, [ graph.input ]);
-  const graphVariableName = graph.name.termType === 'Variable' ? graph.name.value : undefined;
   // SPARQL evaluates a GRAPH as a union over the named graphs, each joined with the binding of the graph
   // variable *outside* the pattern, so `?g` is bound above where the pattern below may leave it unbound. A
   // bind reading `?g` may therefore only rise when the pattern binds it certainly anyway, and a bind
   // *writing* `?g` may never rise - that is (C1) with the operation itself as the other binder.
   for (const floatingBind of peeled.allBinds) {
-    const mayRise = graphVariableName === undefined || (
-      floatingBind.bind.variable.value !== graphVariableName &&
-      (!floatingBind.bind.reads.has(graphVariableName) || floatingBind.scopeBelowBind.cVars.has(graphVariableName))
-    );
+    const mayRise = !floatingBind.bind.variable.equals(graph.name) &&
+      graphPatternDecides(floatingBind.bind.reads, graph.name, floatingBind.scopeBelowBind.cVars);
     floatingBind.disposition = floatingBind.expressionIsStable && mayRise ? 'rise' : 'stay';
   }
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     graph :
-    assembleRewrittenNode(c, peeled, rewrittenInputs => c.AF.createGraph(rewrittenInputs[0], graph.name));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => rebuildOverInput(c, graph, rewrittenInputs[0]));
 }
 
 /**
@@ -748,16 +739,19 @@ function floatThroughJoin(c: TransformationContext, join: Algebra.Join): Algebra
         // is a pure win, but a join may *increase* cardinality, so anything else can end up evaluated more
         // often than it was. Nothing rises past a join that is not free to re-evaluate - there is no
         // second copy to delete here, so not even the merge's consolation applies.
-        const readsSameValuesAbove = [ ...floatingBind.bind.reads ].every(readVariable =>
-          floatingBind.scopeBelowBind.cVars.has(readVariable) ||
-            noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
+        const readsSameValuesAbove = operandDecidesVariables(
+          floatingBind.bind.reads,
+          floatingBind.inputIndex,
+          operands,
+          floatingBind.scopeBelowBind.cVars,
+        );
         // TODO(future) think about cardinality estimates. Joins can restrict but also grow.
         //  Here we say that we do not take the risk of pullUp in case the expression is complex.
         // The two operand checks are about two different variables and neither implies the other:
         // `nothingElseBindsTheVariable` is (C1), over the bind's *target* `?x`, and asks whether the
-        // re-planted EXTEND would land on a solution that already binds it; `noOtherOperandBinds` above is
-        // one disjunct of (C2), over each `?y ∈ V` that `e` *reads*, and has an escape hatch (C1) has no
-        // analogue for - a `?y` the carrier binds certainly needs nothing of the siblings. For a ground
+        // re-planted EXTEND would land on a solution that already binds it; `operandDecidesVariables` above
+        // is (C2), over each `?y ∈ V` that `e` *reads*, and has an escape hatch (C1) has no analogue
+        // for - a `?y` the carrier binds certainly needs nothing of the siblings. For a ground
         // `e`, `V` is empty and (C2) is vacuous, so (C1) is doing all of the work on its own.
         if (floatingBind.constructedTerm !== undefined &&
             nothingElseBindsTheVariable(floatingBind, carriers, operands) && readsSameValuesAbove) {
@@ -793,9 +787,12 @@ function floatThroughLeftJoin(c: TransformationContext, leftJoin: Algebra.LeftJo
         floatingBind.inputIndex === 0 &&
         floatingBind.constructedTerm !== undefined &&
         nothingElseBindsTheVariable(floatingBind, floatingBind.mustLeaveWith, operands) &&
-        [ ...floatingBind.bind.reads ].every(readVariable =>
-          floatingBind.scopeBelowBind.cVars.has(readVariable) ||
-            noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands))) {
+        operandDecidesVariables(
+          floatingBind.bind.reads,
+          floatingBind.inputIndex,
+          operands,
+          floatingBind.scopeBelowBind.cVars,
+        )) {
       floatingBind.disposition = 'rise';
     } else {
       floatingBind.disposition = 'stay';
@@ -926,9 +923,7 @@ function nothingElseBindsTheVariable(
   // operand; what the spec leaves undefined is extending a μ that already **binds** `?x`. So an all-UNDEF
   // VALUES column is a legitimate hoist target. A carrier is not a binder here either, its copy of the
   // bind being deleted by the same rewrite.
-  const variableName = floatingBind.bind.variable.value;
-  const carrying = new Set(carriers.map(carrier => carrier.inputIndex));
-  return operands.every((operand, index) => carrying.has(index) || operand.vRanges.neverBinds(variableName));
+  return noOtherOperandBinds(floatingBind.bind.variable.value, carriers.map(carrier => carrier.inputIndex), operands);
 }
 
 /**
