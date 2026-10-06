@@ -25,6 +25,7 @@ import {
   targetIsAccess,
   isAssertableTerm,
   isBareAccess,
+  readThrough,
   substituteInPattern,
   substituteInTerm,
   variablesOfTransferSource,
@@ -1081,15 +1082,6 @@ function entailedByReading(reading: Access): AssertionConjunct {
   return isBareAccess(reading) ?
       { access: reading, assertion: assertBound() } :
       { access: readThrough(reading), assertion: assertTermType(tripleTermRange) };
-}
-
-/**
- * The access one position short of this one - what it is read through, which it proves a triple term.
- * @param reading - The reading to shorten
- * @returns the shorter access
- */
-function readThrough(reading: Access): Access {
-  return { name: reading.name, positions: reading.positions.slice(0, -1) };
 }
 
 /**

@@ -79,6 +79,15 @@ export function isBareAccess(access: Access): boolean {
 }
 
 /**
+ * The access one position short of this one: what it is read through, which reading it proves a triple term.
+ * @param read - The access to shorten, reading at least one position
+ * @returns the shorter access
+ */
+export function readThrough(read: Access): Access {
+  return { name: read.name, positions: read.positions.slice(0, -1) };
+}
+
+/**
  * The term types a SPARQL condition names with a predicate of its own, and so the ones an assertion can be
  * about. `isNUMERIC` is not one: it asks after the datatype of a literal rather than after a kind of term.
  */

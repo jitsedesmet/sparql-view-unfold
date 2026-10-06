@@ -33,6 +33,7 @@ import {
   isBareAccess,
   isTripleConstruction,
   normalisedTarget,
+  readThrough,
   sameAccessAs,
 } from './assertions.js';
 import type { CPMeta } from './certainlyBoundVars.js';
@@ -584,7 +585,8 @@ export class AssertionConjunction {
 
   /**
    * Θ with `name` taken out of it and whatever it said about it restated against `replacement` - what
-   * carries its value where the result is going, which the caller is responsible for establishing.
+   * carries its value where the result is going, which the caller is responsible for establishing. Only for
+   * a `name` Θ implies bound: restating a weak member would make it strong.
    *
    * For a BIND that is its expression: below `BIND(?z AS ?t)` it is `?z` that holds what `?t` holds above.
    * An access takes over everything the group holds, a term is what the group has to be, and a construction
@@ -723,12 +725,12 @@ export class AssertionConjunction {
     if (!isSubsetOf(rangeOfAccess(access), range)) {
       return this.narrowing(access, strong, (clusters, group) => clusters.assertTermTypeRange(group, range));
     }
-    // A test every value of the access passes asks only that it is read: that a variable is bound, or that
-    // what a position is read through is a triple term.
+    // A test every value of the access passes asks only that it is read: that a variable is bound - which
+    // its weak form does not even ask - or that what a position is read through is a triple term.
     if (isBareAccess(access)) {
       return strong ? this.assertBound(access.name) : true;
     }
-    return this.narrowing(access, strong, () => true);
+    return this.assertTermType(readThrough(access), tripleTermRange, strong);
   }
 
   /**
@@ -1021,7 +1023,11 @@ export class AssertionConjunction {
       // I have kids, so I should assert that if they don't speak up
       return this.shapeIsWitnessed(group, walk) ? undefined : tripleTermRange;
     }
-    return this.assertedTermTypesOf(group);
+    const asserted = this.assertedTermTypesOf(group);
+    // A position the group is read at confines it already, so only what narrows that is worth stating.
+    const confined = walk.accessesPerGroup.get(group)!
+      .reduce((range, reading) => range.meet(rangeOfAccess(reading)), objectRange);
+    return asserted === undefined || isSubsetOf(confined, asserted) ? undefined : asserted.meet(confined);
   }
 
   /**
