@@ -2554,12 +2554,928 @@ GROUP BY ?x?y`,
     });
   });
 
+  describe('term type tests', () => {
+    it('reads a disjunction of tests over one variable as one assertion, in a fixed order', ({ expect }) => {
+      // `isBLANK(?o) || isIRI(?o)` holds of a row exactly when ?o is one of two kinds of term, which is a
+      // statement about ?o alone: T⟨?o : {IRI, BlankNode}⟩. It is written back one test per term type, in the
+      // order isIRI, isBLANK, isLITERAL, isTRIPLE, so that one range is always written the one way.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isBLANK(?o) || isIRI(?o)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ( ISIRI( ?o ) || ISBLANK( ?o ) ) )
+}`,
+      );
+    });
+
+    it('reads `isURI` in a disjunction as the `isIRI` it is a synonym of', ({ expect }) => {
+      // Which also makes a disjunction of the two the one test it is.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isLITERAL(?o) || isURI(?o)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ( ISIRI( ?o ) || ISLITERAL( ?o ) ) )
+}`,
+      );
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(?o) || isURI(?o)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ISIRI( ?o ) )
+}`,
+      );
+    });
+
+    it('reads a disjunction the same however its `||` nests', ({ expect }) => {
+      // The parentheses group the tests without changing which term types they admit between them, so both
+      // spellings are the one assertion, and the one plan.
+      const expected = `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ( ( ISBLANK( ?o ) || ISLITERAL( ?o ) ) || ISTRIPLE( ?o ) ) )
+}`;
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER((isTRIPLE(?o) || isLITERAL(?o)) || isBLANK(?o)) }',
+        expected,
+      );
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o) || (isLITERAL(?o) || isBLANK(?o))) }',
+        expected,
+      );
+    });
+
+    it('leaves a disjunction over two different accesses where it is', ({ expect }) => {
+      // A row the condition keeps need satisfy only one of the disjuncts, so it says nothing about either
+      // access on its own - and an accessor is an access other than the variable it reads. So it stays above
+      // the UNION an assertion would have gone into both branches of.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o } UNION { ?s :q ?o } FILTER(isIRI(?s) || isIRI(?o)) }',
+        `SELECT ?o ?s WHERE {
+  {
+    ?s <ex://p> ?o .
+  }
+  UNION {
+    ?s <ex://q> ?o .
+  }
+  FILTER ( ( ISIRI( ?s ) || ISIRI( ?o ) ) )
+}`,
+      );
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o } UNION { ?s :q ?o } FILTER(isIRI(?o) || isIRI(SUBJECT(?o))) }',
+        `SELECT ?o ?s WHERE {
+  {
+    ?s <ex://p> ?o .
+  }
+  UNION {
+    ?s <ex://q> ?o .
+  }
+  FILTER ( ( ISIRI( ?o ) || ISIRI( SUBJECT( ?o ) ) ) )
+}`,
+      );
+    });
+
+    it('drops a disjunction the position of a pattern entails, and keeps one it does not', ({ expect }) => {
+      // A subject is an IRI or a blank node and a predicate is an IRI, so the tests on ?s and ?p hold of
+      // every row the pattern matches: all they still ask is that the variable is bound, which the pattern
+      // sees to. An object may be any term, so the test on ?o still selects.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?s ?p ?o
+          FILTER((isIRI(?s) || isBLANK(?s)) && (isIRI(?p) || isLITERAL(?p)) && (isBLANK(?o) || isIRI(?o)))
+        }`,
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ( ISIRI( ?o ) || ISBLANK( ?o ) ) )
+}`,
+      );
+    });
+
+    it('narrows two disjunctions about one variable to the term types they share', ({ expect }) => {
+      // Two tests of one access meet in the term types they share, as any two assertions about one variable do.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER((isIRI(?o) || isBLANK(?o)) && (isBLANK(?o) || isLITERAL(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ISBLANK( ?o ) )
+}`,
+      );
+    });
+
+    it('empties the plan where a disjunction contradicts a single term type', ({ expect }) => {
+      // The meet of the two is empty, so no term passes both.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isLITERAL(?o) && (isIRI(?o) || isBLANK(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('empties the plan where a disjunction admits nothing the position of a pattern holds', ({ expect }) => {
+      // No subject is a literal or a triple term, which the range of the group decides before any term is
+      // asked to occupy the position.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isLITERAL(?s) || isTRIPLE(?s)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('keeps the weak form of a disjunction weak above the OPTIONAL that may bind it', ({ expect }) => {
+      // `!bound(?z) || isBLANK(?z) || isIRI(?z)` is the weak form of the assertion, whichever end of the
+      // disjunction the `!bound` is written at, and it is written back with the `!bound` first and the test
+      // after it in its own order. Only the right hand side of the OPTIONAL binds ?z, and no form of
+      // assertion may enter that.
+      const expected = `SELECT ?a ?b ?z WHERE {
+  ?a <ex://p> ?b .
+  OPTIONAL {
+    ?a <ex://q> ?z .
+  }
+  FILTER ( ( ! BOUND( ?z ) || ( ISIRI( ?z ) || ISBLANK( ?z ) ) ) )
+}`;
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?a :p ?b OPTIONAL { ?a :q ?z } FILTER(!bound(?z) || isBLANK(?z) || isIRI(?z)) }',
+        expected,
+      );
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?a :p ?b OPTIONAL { ?a :q ?z } FILTER((isIRI(?z) || isBLANK(?z)) || !bound(?z)) }',
+        expected,
+      );
+    });
+
+    it('promotes the weak form of a disjunction where the variable is certainly bound', ({ expect }) => {
+      // The pattern binds ?z in every row, so `!bound(?z)` holds of none of them and what is left is the
+      // strong form - which the object position does not entail, so it stays.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?a :p ?z FILTER(!bound(?z) || isIRI(?z) || isBLANK(?z)) }',
+        `SELECT ?a ?z WHERE {
+  ?a <ex://p> ?z .
+  FILTER ( ( ISIRI( ?z ) || ISBLANK( ?z ) ) )
+}`,
+      );
+    });
+
+    it('drops the weak form of a disjunction the position it may be bound in entails', ({ expect }) => {
+      // Wherever the OPTIONAL binds ?z it binds it as a subject, so ?z is either unbound or an IRI or a blank
+      // node: the condition holds of every row, and nothing of it is left to state.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?a :p ?b OPTIONAL { ?z :q ?b } FILTER(!bound(?z) || isIRI(?z) || isBLANK(?z)) }',
+        `SELECT ?a ?b ?z WHERE {
+  ?a <ex://p> ?b .
+  OPTIONAL {
+    ?z <ex://q> ?b .
+  }
+}`,
+      );
+    });
+
+    it('reads the weak form of a disjunction that position rules out as `!bound`', ({ expect }) => {
+      // The other side of the test above: no subject is a literal or a triple term, so the rows the condition
+      // keeps are exactly the ones the OPTIONAL leaves ?z unbound in.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?a :p ?b OPTIONAL { ?z :q ?b } FILTER(!bound(?z) || isLITERAL(?z) || isTRIPLE(?z)) }',
+        `SELECT ?a ?b ?z WHERE {
+  ?a <ex://p> ?b .
+  OPTIONAL {
+    ?z <ex://q> ?b .
+  }
+  FILTER ( ! BOUND( ?z ) )
+}`,
+      );
+    });
+
+    it('reads a test of every term type as `bound`', ({ expect }) => {
+      // Every term passes it, and an unbound variable fails it - by an error, which a FILTER discards all
+      // the same. So it disappears over the pattern binding ?o, and turns the OPTIONAL binding ?z into a
+      // join, the rows leaving ?z unbound being the only ones it rules out.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(?o) || isBLANK(?o) || isLITERAL(?o) || isTRIPLE(?o)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+}`,
+      );
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?a :p ?b
+          OPTIONAL { ?a :q ?z }
+          FILTER(isIRI(?z) || isBLANK(?z) || isLITERAL(?z) || isTRIPLE(?z))
+        }`,
+        `SELECT ?a ?b ?z WHERE {
+  ?a <ex://p> ?b .
+  ?a <ex://q> ?z .
+}`,
+      );
+    });
+
+    it('reads the weak form of a test of every term type as nothing at all', ({ expect }) => {
+      // `!bound(?z)` or any term at all holds of every row, so beside another assertion it adds nothing
+      // to the conjunction: `isIRI(?b)` is all that is left, and it goes into the left hand side.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?a :p ?b
+          OPTIONAL { ?a :q ?z }
+          FILTER((!bound(?z) || isIRI(?z) || isBLANK(?z) || isLITERAL(?z) || isTRIPLE(?z)) && isIRI(?b))
+        }`,
+        `SELECT ?a ?b ?z WHERE {
+  {
+    ?a <ex://p> ?b .
+    FILTER ( ISIRI( ?b ) )
+  }
+  OPTIONAL {
+    ?a <ex://q> ?z .
+  }
+}`,
+      );
+    });
+
+    it('reads an accessor disjunction admitting all its position holds as `isTRIPLE`', ({ expect }) => {
+      // Every subject is an IRI or a blank node, so all that is left to ask of `SUBJECT(?o)` is that it can
+      // be read - that ?o is a triple term - and the weak form asks the weak form of that.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(SUBJECT(?o)) || isBLANK(SUBJECT(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ISTRIPLE( ?o ) )
+}`,
+      );
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?a :p ?b
+          OPTIONAL { ?a :q ?o }
+          FILTER(!bound(?o) || isIRI(SUBJECT(?o)) || isBLANK(SUBJECT(?o)))
+        }`,
+        `SELECT ?a ?b ?o WHERE {
+  ?a <ex://p> ?b .
+  OPTIONAL {
+    ?a <ex://q> ?o .
+  }
+  FILTER ( ( ! BOUND( ?o ) || ISTRIPLE( ?o ) ) )
+}`,
+      );
+    });
+
+    it('decides an accessor test admitting all its position holds where `isTRIPLE` is decided', ({ expect }) => {
+      // The test is `isTRIPLE(?t)`, and the BIND binds ?t to a triple term wherever it binds it at all: the weak
+      // form holds of every row in either spelling, so the one plan is the one with no condition left.
+      const expected = `SELECT ?o ?s ( <<( ?s <ex://p> ?x )>> AS ?t ) ?x WHERE {
+  ?s <ex://p> ?o .
+  OPTIONAL {
+    ?s <ex://q> ?x .
+  }
+}`;
+      const bind = '?s :p ?o OPTIONAL { ?s :q ?x } BIND(<<( ?s :p ?x )>> AS ?t)';
+      expectTransform(
+        expect,
+        `SELECT * WHERE { ${bind} FILTER(!bound(?t) || isIRI(SUBJECT(?t)) || isBLANK(SUBJECT(?t))) }`,
+        expected,
+      );
+      expectTransform(expect, `SELECT * WHERE { ${bind} FILTER(!bound(?t) || isTRIPLE(?t)) }`, expected);
+    });
+
+    it('states a type of a position only as far as the position does not decide it', ({ expect }) => {
+      // A subject is an IRI or a blank node, so `isIRI(SUBJECT(?o)) || isLITERAL(SUBJECT(?o))` asks no more than
+      // `isIRI(SUBJECT(?o))` does.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(SUBJECT(?o)) || isLITERAL(SUBJECT(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ISIRI( SUBJECT( ?o ) ) )
+}`,
+      );
+    });
+
+    it('restates no type the edge to a position decides, giving each reading what it learns of it', ({ expect }) => {
+      // ?a is equal to the subject of ?z, which makes it an IRI or a blank node: the edge left above says all the
+      // type does. Below, the left operand binds ?a as a subject, which decides it, and the right one learns of
+      // `SUBJECT(?z)` - an IRI or a blank node, whatever the subject of a triple term is - that ?z is one.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?a WHERE { ?a :p ?b } }
+          { SELECT ?z WHERE { ?y :q ?z } }
+          FILTER(sameTerm(SUBJECT(?z), ?a) && (isIRI(?a) || isBLANK(?a)))
+        }`,
+        `SELECT ?a ?z WHERE {
+  {
+    SELECT ?a WHERE {
+      ?a <ex://p> ?b .
+    }
+  }
+  {
+    SELECT ?z WHERE {
+      ?y <ex://q> ?z .
+      FILTER ( ISTRIPLE( ?z ) )
+    }
+  }
+  FILTER ( SAMETERM( SUBJECT( ?z ) , ?a ) )
+}`,
+      );
+    });
+
+    it('writes an accessor disjunction its position does not entail back over the accessor', ({ expect }) => {
+      // The object of a triple term may be any term, so the test still selects, written in the order a test
+      // over a variable is.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isBLANK(OBJECT(?o)) || isIRI(OBJECT(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ( ISIRI( OBJECT( ?o ) ) || ISBLANK( OBJECT( ?o ) ) ) )
+}`,
+      );
+    });
+
+    it('sends a disjunction into every UNION branch, dropping it where the branch entails it', ({ expect }) => {
+      // (FUPush): the left branch binds ?o as an object and keeps the test, the right one binds it as a
+      // subject, which is an IRI or a blank node already.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o } UNION { ?o :q ?s } FILTER(isBLANK(?o) || isIRI(?o)) }',
+        `SELECT ?o ?s WHERE {
+  {
+    ?s <ex://p> ?o .
+    FILTER ( ( ISIRI( ?o ) || ISBLANK( ?o ) ) )
+  }
+  UNION {
+    ?o <ex://q> ?s .
+  }
+}`,
+      );
+    });
+
+    it('empties the UNION branch whose pattern holds none of the term types', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o } UNION { ?o :q ?s } FILTER(isLITERAL(?o) || isTRIPLE(?o)) }',
+        `SELECT ?o ?s WHERE {
+  {
+    ?s <ex://p> ?o .
+    FILTER ( ( ISLITERAL( ?o ) || ISTRIPLE( ?o ) ) )
+  }
+  UNION {
+    ?o <ex://q> ?s .
+    FILTER ( FALSE )
+  }
+}`,
+      );
+    });
+
+    it('prunes the VALUES rows holding a term type the disjunction rules out', ({ expect }) => {
+      // A row decides the term type of every column it binds, and an UNDEF satisfies the weak form alone.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { VALUES (?o) { (:a) ("l") (<<( :a :b :c )>>) (UNDEF) } FILTER(isIRI(?o) || isTRIPLE(?o)) }',
+        `SELECT ?o WHERE {
+  VALUES ?o {
+    <ex://a>
+    <<( <ex://a> <ex://b> <ex://c> )>>
+  }
+}`,
+      );
+      expectTransform(
+        expect,
+        'SELECT * WHERE { VALUES (?o) { (:a) ("l") (UNDEF) } FILTER(!bound(?o) || isLITERAL(?o) || isBLANK(?o)) }',
+        `SELECT ?o WHERE {
+  VALUES ?o {
+    "l"
+    UNDEF
+  }
+}`,
+      );
+    });
+
+    it('decides a whole type test in a condition it passes by the term types it knows', ({ expect }) => {
+      // Below the assertion ?o is an IRI or a blank node, so in the condition it meets on the way down
+      // `isBLANK(?o) || isIRI(?o)` is true - which takes the whole disjunction with it - and
+      // `isLITERAL(?o) || isTRIPLE(?o)` is false, which leaves the remaining disjunct to decide.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { ?s ?p ?o FILTER(isBLANK(?o) || isIRI(?o) || CONTAINS(STR(?o), "x")) }
+          FILTER(isIRI(?o) || isBLANK(?o))
+        }`,
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ( ISIRI( ?o ) || ISBLANK( ?o ) ) )
+}`,
+      );
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { ?s ?p ?o FILTER(isLITERAL(?o) || isTRIPLE(?o) || CONTAINS(STR(?o), "x")) }
+          FILTER(isIRI(?o) || isBLANK(?o))
+        }`,
+        `SELECT ?o ?p ?s WHERE {
+  {
+    ?s ?p ?o .
+    FILTER ( ( ISIRI( ?o ) || ISBLANK( ?o ) ) )
+  }
+  FILTER ( CONTAINS( STR( ?o ) , "x" ) )
+}`,
+      );
+    });
+
+    it('gives each operand of a join the type of the reading it binds, keeping the edge above', ({ expect }) => {
+      // The term types of a group hold of every reading of it, so each operand learns them of the member it
+      // is licensed for (FJPush). Neither binds both members, so the edge stays above, and it is what carries
+      // the type from either member to the other.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?a ?b WHERE { ?a :p ?b } }
+          { SELECT ?c ?d WHERE { ?c :q ?d } }
+          FILTER(sameTerm(?b, ?d) && (isLITERAL(?b) || isBLANK(?b)))
+        }`,
+        `SELECT ?a ?b ?c ?d WHERE {
+  {
+    SELECT ?a ?b WHERE {
+      ?a <ex://p> ?b .
+      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
+    }
+  }
+  {
+    SELECT ?c ?d WHERE {
+      ?c <ex://q> ?d .
+      FILTER ( ( ISBLANK( ?d ) || ISLITERAL( ?d ) ) )
+    }
+  }
+  FILTER ( SAMETERM( ?d , ?b ) )
+}`,
+      );
+    });
+
+    it('does the same for a type written on the member that is not the representative', ({ expect }) => {
+      // The type belongs to the group rather than to the member the condition wrote it on: ?b is the
+      // representative, and the operand binding it learns the type all the same.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?a ?b WHERE { ?a :p ?b } }
+          { SELECT ?c ?d WHERE { ?c :q ?d } }
+          FILTER(sameTerm(?b, ?d) && (isLITERAL(?d) || isBLANK(?d)))
+        }`,
+        `SELECT ?a ?b ?c ?d WHERE {
+  {
+    SELECT ?a ?b WHERE {
+      ?a <ex://p> ?b .
+      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
+    }
+  }
+  {
+    SELECT ?c ?d WHERE {
+      ?c <ex://q> ?d .
+      FILTER ( ( ISBLANK( ?d ) || ISLITERAL( ?d ) ) )
+    }
+  }
+  FILTER ( SAMETERM( ?d , ?b ) )
+}`,
+      );
+    });
+
+    it('types every piece of a clique of three split over two operands', ({ expect }) => {
+      // The right operand binds two of the members, so it takes the edge between them - written into its
+      // pattern - and the type of what is left of them; the left takes the type of the third. One edge
+      // between the two pieces stays above.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?a ?b WHERE { ?a :p ?b } }
+          { SELECT ?c ?d WHERE { ?e :q ?c . ?e :r ?d } }
+          FILTER(sameTerm(?b, ?c) && sameTerm(?c, ?d) && (isLITERAL(?d) || isBLANK(?d)))
+        }`,
+        `SELECT ?a ?b ?c ?d WHERE {
+  {
+    SELECT ?a ?b WHERE {
+      ?a <ex://p> ?b .
+      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
+    }
+  }
+  {
+    SELECT ?c ( ?c AS ?d ) WHERE {
+      ?e <ex://q> ?c .
+      ?e <ex://r> ?c .
+      FILTER ( ( ISBLANK( ?c ) || ISLITERAL( ?c ) ) )
+    }
+  }
+  FILTER ( SAMETERM( ?c , ?b ) )
+}`,
+      );
+    });
+
+    it('demotes the type of a reading no operand is licensed for into the ones that may bind it', ({ expect }) => {
+      // Both operands may bind ?b and neither does so certainly, so neither is licensed for it. The left one
+      // binds ?d in every row, though, and takes the type of that strongly - below its OPTIONAL. Of ?b each
+      // operand that may bind it takes the weak form, which a join consumes:
+      // `σ_W(A₁ ⋈ A₂) ≡ σ_W(A₁) ⋈ σ_W(A₂)`. Nothing of the type is restated above: the left enforces it of
+      // ?d, and the edge carries it to ?b.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { ?a :p ?d OPTIONAL { ?a :r ?b } }
+          { ?c :q ?e OPTIONAL { ?c :s ?b } }
+          FILTER(sameTerm(?b, ?d) && (isLITERAL(?b) || isBLANK(?b)))
+        }`,
+        `SELECT ?a ?b ?c ?d ?e WHERE {
+  {
+    {
+      ?a <ex://p> ?d .
+      FILTER ( ( ISBLANK( ?d ) || ISLITERAL( ?d ) ) )
+    }
+    OPTIONAL {
+      ?a <ex://r> ?b .
+    }
+    FILTER ( ( ! BOUND( ?b ) || ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) ) )
+  }
+  {
+    ?c <ex://q> ?e .
+    OPTIONAL {
+      ?c <ex://s> ?b .
+    }
+    FILTER ( ( ! BOUND( ?b ) || ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) ) )
+  }
+  FILTER ( SAMETERM( ?d , ?b ) )
+}`,
+      );
+    });
+
+    it('gives the right of an OPTIONAL the type only of a reading both sides certainly bind', ({ expect }) => {
+      // (FLPush) puts the whole clique into the left hand side, which binds both members. The right may take a
+      // copy of what is about a variable both sides bind in every row - ?b - but not of ?c, which it may leave
+      // unbound: pruning the rows that do would let the left row through the anti-join half unmatched.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?b ?c WHERE { ?a :p ?b . ?a :p2 ?c } }
+          OPTIONAL { SELECT ?b ?c WHERE { ?d :q ?b OPTIONAL { ?d :r ?c } } }
+          FILTER(sameTerm(?b, ?c) && (isLITERAL(?c) || isBLANK(?c)))
+        }`,
+        `SELECT ?b ?c WHERE {
+  {
+    SELECT ?b ( ?b AS ?c ) WHERE {
+      ?a <ex://p> ?b .
+      ?a <ex://p2> ?b .
+      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
+    }
+  }
+  OPTIONAL {
+    {
+      SELECT ?b ?c WHERE {
+        {
+          ?d <ex://q> ?b .
+          FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
+        }
+        OPTIONAL {
+          ?d <ex://r> ?c .
+        }
+      }
+    }
+  }
+}`,
+      );
+    });
+
+    it('sends the weak type of every reading of a clique into the right hand side of a MINUS', ({ expect }) => {
+      // A row of the left hand side binds ?a and ?b to one value of those term types, so a right hand side
+      // row binding either of them to a term of another type is compatible with none of them. The edge may
+      // not go there, having no weak form. The weak type becomes the strong one where the pattern binds ?a,
+      // and stays weak above the OPTIONAL that may bind ?b.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?s :p ?a . ?s :q ?b
+          MINUS { ?t :r ?a OPTIONAL { ?t :s ?b } }
+          FILTER(sameTerm(?a, ?b) && (isLITERAL(?b) || isBLANK(?b)))
+        }`,
+        `SELECT ?a ?b ?s WHERE {
+  {
+    {
+      ?s <ex://p> ?a .
+      ?s <ex://q> ?a .
+      FILTER ( ( ISBLANK( ?a ) || ISLITERAL( ?a ) ) )
+    }
+    BIND( ?a AS ?b )
+  }
+  MINUS {
+    {
+      {
+        ?t <ex://r> ?a .
+        FILTER ( ( ISBLANK( ?a ) || ISLITERAL( ?a ) ) )
+      }
+      OPTIONAL {
+        ?t <ex://s> ?b .
+      }
+      FILTER ( ( ! BOUND( ?b ) || ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) ) )
+    }
+  }
+}`,
+      );
+    });
+
+    it('puts the type below a BIND the clique cannot pass, onto the member bound there', ({ expect }) => {
+      // `CONCAT(...)` is nothing Θ can name, so the edge stays above the BIND. The type holds of ?o as much as
+      // of the target, and ?o is bound below - whether or not the target is the representative of the group,
+      // which ?t is not and ?a is.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?s :p ?o
+          BIND(CONCAT(STR(?s), "x") AS ?t)
+          FILTER(sameTerm(?t, ?o) && (isIRI(?t) || isLITERAL(?t)))
+        }`,
+        `SELECT ?o ?s ?t WHERE {
+  {
+    {
+      ?s <ex://p> ?o .
+      FILTER ( ( ISIRI( ?o ) || ISLITERAL( ?o ) ) )
+    }
+    BIND( CONCAT( STR( ?s ) , "x" ) AS ?t )
+  }
+  FILTER ( SAMETERM( ?t , ?o ) )
+}`,
+      );
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?s :p ?o
+          BIND(CONCAT(STR(?s), "x") AS ?a)
+          FILTER(sameTerm(?a, ?o) && (isIRI(?a) || isLITERAL(?a)))
+        }`,
+        `SELECT ?a ?o ?s WHERE {
+  {
+    {
+      ?s <ex://p> ?o .
+      FILTER ( ( ISIRI( ?o ) || ISLITERAL( ?o ) ) )
+    }
+    BIND( CONCAT( STR( ?s ) , "x" ) AS ?a )
+  }
+  FILTER ( SAMETERM( ?o , ?a ) )
+}`,
+      );
+    });
+
+    it('gives the operand binding a triple term the type of the position an edge reads', ({ expect }) => {
+      // `OBJECT(?o)` is a reading of the group as much as ?s is, so the operand binding ?o learns the type of
+      // its object position, written over the accessor - which says ?o is a triple term besides.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?s WHERE { ?x :p ?s } }
+          { SELECT ?o WHERE { ?t :says ?o } }
+          FILTER(sameTerm(object(?o), ?s) && (isIRI(?s) || isBLANK(?s)))
+        }`,
+        `SELECT ?o ?s WHERE {
+  {
+    SELECT ?s WHERE {
+      ?x <ex://p> ?s .
+      FILTER ( ( ISIRI( ?s ) || ISBLANK( ?s ) ) )
+    }
+  }
+  {
+    SELECT ?o WHERE {
+      ?t <ex://says> ?o .
+      FILTER ( ( ISIRI( OBJECT( ?o ) ) || ISBLANK( OBJECT( ?o ) ) ) )
+    }
+  }
+  FILTER ( SAMETERM( OBJECT( ?o ) , ?s ) )
+}`,
+      );
+    });
+
+    it('takes the type below a GROUP onto the key, leaving the edge to an aggregate above', ({ expect }) => {
+      // The HAVING equates the key with an aggregate, so the type it writes on the aggregate holds of the key,
+      // and selecting the groups whose key has it selects exactly the solutions those groups are formed from.
+      // The edge names a value the GROUP computes, and stays above it.
+      expectTransform(
+        expect,
+        `SELECT ?y (SAMPLE(?x) AS ?n) WHERE { ?x :p ?y }
+         GROUP BY ?y HAVING(sameTerm(?y, SAMPLE(?x)) && (isIRI(SAMPLE(?x)) || isLITERAL(SAMPLE(?x))))`,
+        `SELECT ?y ( SAMPLE( ?x ) AS ?n ) WHERE {
+  {
+    ?x <ex://p> ?y .
+    FILTER ( ( ISIRI( ?y ) || ISLITERAL( ?y ) ) )
+  }
+}
+GROUP BY ?y
+HAVING SAMETERM( ?y , SAMPLE( ?x ) )`,
+      );
+    });
+
+    it('drops the type of a clique the position of one member already confines', ({ expect }) => {
+      // ?a is a subject, so wherever the join binds the group it binds an IRI or a blank node: the type says
+      // nothing the edge does not, once the edge holds, and the edge is all that is kept.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?a ?b WHERE { ?a :p ?b } }
+          { SELECT ?c ?d WHERE { ?c :q ?d } }
+          FILTER(sameTerm(?a, ?d) && (isIRI(?d) || isBLANK(?d)))
+        }`,
+        `SELECT ?a ?b ?c ?d WHERE {
+  {
+    SELECT ?a ?b WHERE {
+      ?a <ex://p> ?b .
+    }
+  }
+  {
+    SELECT ?c ?d WHERE {
+      ?c <ex://q> ?d .
+    }
+  }
+  FILTER ( SAMETERM( ?d , ?a ) )
+}`,
+      );
+    });
+
+    it('gives the pattern of a GRAPH the type of the member it binds, keeping the edge above', ({ expect }) => {
+      // The pattern is licensed for every variable but the name, so it takes the type of ?o; the edge reads
+      // ?g and stays above, where it carries the type to the name.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?s :p ?o } FILTER(sameTerm(?g, ?o) && (isLITERAL(?o) || isBLANK(?o))) }',
+        `SELECT ?g ?o ?s WHERE {
+  GRAPH ?g {
+    {
+      ?s <ex://p> ?o .
+      FILTER ( ( ISBLANK( ?o ) || ISLITERAL( ?o ) ) )
+    }
+  }
+  FILTER ( SAMETERM( ?o , ?g ) )
+}`,
+      );
+    });
+
+    it('empties the UNION branch that cannot bind what a BIND copies into a clique', ({ expect }) => {
+      // Below `BIND(?z AS ?t)` the edge `?t ≡ ?z` is `?z ≡ ?z`: that ?z is bound. The right branch never binds
+      // it, so it has no row the condition keeps - in each of them ?z and ?t are unbound and `sameTerm`
+      // errors - and it is emptied rather than left to contribute those rows.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?a :p ?z } UNION { ?b :q ?c } BIND(?z AS ?t) FILTER(sameTerm(?t, ?z)) }',
+        `SELECT ?a ?b ?c ( ?z AS ?t ) ?z WHERE {
+  {
+    ?a <ex://p> ?z .
+  }
+  UNION {
+    ?b <ex://q> ?c .
+    FILTER ( FALSE )
+  }
+}`,
+      );
+    });
+
+    it('keeps what a triple term construction needs of a component for its target to be bound', ({ expect }) => {
+      // `<<( ?b :q ?a )>>` raises where ?b is no term a subject can be, and leaves ?t unbound there. So
+      // `bound(?t)` - and `isTRIPLE(?t)` with it, a construction only ever yielding a triple term - is, below
+      // the BIND, that ?b is an IRI or a blank node. ?a is in the object position, which admits any term, so
+      // nothing is asked of it but being bound, which the pattern sees to.
+      const expected = `SELECT ?a ?b ( <<( ?b <ex://q> ?a )>> AS ?t ) WHERE {
+  ?a <ex://value> ?b .
+  FILTER ( ( ISIRI( ?b ) || ISBLANK( ?b ) ) )
+}`;
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?a :value ?b BIND(<<( ?b :q ?a )>> AS ?t) FILTER(bound(?t)) }',
+        expected,
+      );
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?a :value ?b BIND(<<( ?b :q ?a )>> AS ?t) FILTER(isTRIPLE(?t)) }',
+        expected,
+      );
+    });
+
+    it('leaves the input tree untouched', ({ expect }) => {
+      const algebra = parseQuery(c, `${prefixes}SELECT * WHERE {
+        { SELECT ?a ?b WHERE { ?a :p ?b } }
+        { ?c :q ?d OPTIONAL { ?c :s ?e } }
+        FILTER(sameTerm(?b, ?d) && sameTerm(?d, ?e) && (isLITERAL(?e) || isBLANK(?e)) && (!bound(?c) || isIRI(?c)))
+      }`);
+      const before = JSON.stringify(algebra);
+      pushDownAssertions(c, algebra);
+      expect(JSON.stringify(algebra)).toEqual(before);
+    });
+
+    it('applying the transformation twice yields the same result as once', ({ expect }) => {
+      // Every range is written in the one order, which reads back as the same range, and the types handed to the
+      // readings of a group are read back into the one group - so the second run finds what the first left and
+      // places it the same way. Checked over the algebra, as above, and over the query the first run prints.
+      for (const query of [
+        'SELECT * WHERE { ?s ?p ?o FILTER(isBLANK(?o) || isIRI(?o)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER((isTRIPLE(?o) || isLITERAL(?o)) || isBLANK(?o)) }',
+        'SELECT * WHERE { ?a :p ?b OPTIONAL { ?a :q ?z } FILTER(!bound(?z) || isBLANK(?z) || isIRI(?z)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(SUBJECT(?o)) || isBLANK(SUBJECT(?o))) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(isBLANK(OBJECT(?o)) || isIRI(OBJECT(?o))) }',
+        'SELECT * WHERE { { ?s :p ?o } UNION { ?o :q ?s } FILTER(isLITERAL(?o) || isTRIPLE(?o)) }',
+        'SELECT * WHERE { VALUES (?o) { (:a) ("l") (UNDEF) } FILTER(!bound(?o) || isLITERAL(?o) || isBLANK(?o)) }',
+        `SELECT * WHERE {
+          { SELECT ?a ?b WHERE { ?a :p ?b } }
+          { SELECT ?c ?d WHERE { ?c :q ?d } }
+          FILTER(sameTerm(?b, ?d) && (isLITERAL(?d) || isBLANK(?d)))
+        }`,
+        `SELECT * WHERE {
+          { SELECT ?a ?b WHERE { ?a :p ?b } }
+          { SELECT ?c ?d WHERE { ?e :q ?c . ?e :r ?d } }
+          FILTER(sameTerm(?b, ?c) && sameTerm(?c, ?d) && (isLITERAL(?d) || isBLANK(?d)))
+        }`,
+        `SELECT * WHERE {
+          { ?a :p ?d OPTIONAL { ?a :r ?b } }
+          { ?c :q ?e OPTIONAL { ?c :s ?b } }
+          FILTER(sameTerm(?b, ?d) && (isLITERAL(?b) || isBLANK(?b)))
+        }`,
+        `SELECT * WHERE {
+          { ?a :p ?x OPTIONAL { ?a :r ?b } OPTIONAL { ?a :r2 ?d } }
+          { ?c :q ?y OPTIONAL { ?c :s ?b } OPTIONAL { ?c :s2 ?d } }
+          FILTER(sameTerm(?b, ?d) && (isLITERAL(?d) || isBLANK(?d)))
+        }`,
+        `SELECT * WHERE {
+          { SELECT ?b ?c WHERE { ?a :p ?b . ?a :p2 ?c } }
+          OPTIONAL { SELECT ?b ?c WHERE { ?d :q ?b OPTIONAL { ?d :r ?c } } }
+          FILTER(sameTerm(?b, ?c) && (isLITERAL(?c) || isBLANK(?c)))
+        }`,
+        `SELECT * WHERE {
+          ?s :p ?a . ?s :q ?b
+          MINUS { ?t :r ?a OPTIONAL { ?t :s ?b } }
+          FILTER(sameTerm(?a, ?b) && (isLITERAL(?b) || isBLANK(?b)))
+        }`,
+        `SELECT * WHERE {
+          ?s :p ?o
+          BIND(CONCAT(STR(?s), "x") AS ?t)
+          FILTER(sameTerm(?t, ?o) && (isIRI(?t) || isLITERAL(?t)))
+        }`,
+        `SELECT * WHERE {
+          ?s :p ?o
+          BIND(CONCAT(STR(?s), "x") AS ?a)
+          FILTER(sameTerm(?a, ?o) && (isIRI(?a) || isLITERAL(?a)))
+        }`,
+        `SELECT * WHERE {
+          { SELECT ?s WHERE { ?x :p ?s } }
+          { SELECT ?o WHERE { ?t :says ?o } }
+          FILTER(sameTerm(object(?o), ?s) && (isIRI(?s) || isBLANK(?s)))
+        }`,
+        `SELECT ?y (SAMPLE(?x) AS ?n) WHERE { ?x :p ?y }
+         GROUP BY ?y HAVING(sameTerm(?y, SAMPLE(?x)) && (isIRI(SAMPLE(?x)) || isLITERAL(SAMPLE(?x))))`,
+        `SELECT * WHERE {
+          { SELECT ?a ?b WHERE { ?a :p ?b } }
+          { SELECT ?c ?d WHERE { ?c :q ?d } }
+          FILTER(sameTerm(?a, ?d) && (isIRI(?d) || isBLANK(?d)))
+        }`,
+        'SELECT * WHERE { GRAPH ?g { ?s :p ?o } FILTER(sameTerm(?g, ?o) && (isLITERAL(?o) || isBLANK(?o))) }',
+        'SELECT * WHERE { { ?a :p ?z } UNION { ?b :q ?c } BIND(?z AS ?t) FILTER(sameTerm(?t, ?z)) }',
+        'SELECT * WHERE { ?a :value ?b BIND(<<( ?b :q ?a )>> AS ?t) FILTER(bound(?t)) }',
+        `SELECT * WHERE {
+          ?s :p ?o OPTIONAL { ?s :q ?x } BIND(<<( ?s :p ?x )>> AS ?t)
+          FILTER(!bound(?t) || isIRI(SUBJECT(?t)) || isBLANK(SUBJECT(?t)))
+        }`,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(SUBJECT(?o)) || isLITERAL(SUBJECT(?o))) }',
+        `SELECT * WHERE {
+          { SELECT ?a WHERE { ?a :p ?b } }
+          { SELECT ?z WHERE { ?y :q ?z } }
+          FILTER(sameTerm(SUBJECT(?z), ?a) && (isIRI(?a) || isLITERAL(?a)))
+        }`,
+      ]) {
+        const once = transform(query);
+        const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
+        expect(c.generator.generate(toAst(twice)).trim()).toEqual(once);
+        expect(transform(once)).toEqual(once);
+      }
+    });
+  });
+
   describe('semantic equivalence (evaluation)', () => {
     const engine = new QueryEngine();
+    /**
+     * An IRI, a blank node, a literal and a triple term in each of the places the term type tests tell
+     * apart. A file of its own, the tests counting the rows of the default one being left as they were.
+     */
+    const termTypeData = './test/statics/termTypePushdown.ttl';
 
-    async function bindings(query: string): Promise<string[]> {
+    async function bindings(query: string, source = './test/statics/assertionPushdown.ttl'): Promise<string[]> {
       const stream = await engine.queryBindings(query, {
-        sources: [ './test/statics/assertionPushdown.ttl' ],
+        sources: [ source ],
       });
       const rows: any[] = await arrayifyStream(stream);
       // Sorted, but duplicates kept: the multiplicity of every row is part of the answer.
@@ -2572,9 +3488,11 @@ GROUP BY ?x?y`,
       expect: typeof Expect,
       query: string,
       expectedRows: number,
+      source?: string,
     ): Promise<void> {
-      const original = await bindings(prefixes + query);
-      const transformed = await bindings(transform(query));
+      // A blank node is compared by its label, which the engine keeps for as long as it keeps the file it read.
+      const original = await bindings(prefixes + query, source);
+      const transformed = await bindings(transform(query), source);
       expect(transformed).toEqual(original);
       expect(original).toHaveLength(expectedRows);
     }
@@ -3125,6 +4043,75 @@ GROUP BY ?x?y`,
         OPTIONAL { ?s :says ?o }
         FILTER(isTRIPLE(?o))
       }`, 1);
+    });
+
+    it('drops the UNION rows that leave unbound what a BIND copies into a clique', async({ expect }) => {
+      // `:b :q :shared` comes from the branch binding no ?z, so ?t is unbound beside it and `sameTerm(?t, ?z)`
+      // errors: that row is the one a rewrite dropping the condition would add to the answer.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { ?a :p ?z } UNION { ?b :q ?c }
+        BIND(?z AS ?t)
+        FILTER(sameTerm(?t, ?z))
+      }`, 1);
+    });
+
+    it('keeps only the rows a triple term construction yields a value for', async({ expect }) => {
+      // `:lit` and `:triple` hold no term a subject can be, so the construction raises on them and leaves ?t
+      // unbound: they are the rows a rewrite dropping `bound(?t)` - or `isTRIPLE(?t)` - would add. `:iri`
+      // and `:blank` stay.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?a :value ?b
+        BIND(<<( ?b :q ?a )>> AS ?t)
+        FILTER(bound(?t))
+      }`, 2, termTypeData);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?a :value ?b
+        BIND(<<( ?b :q ?a )>> AS ?t)
+        FILTER(isTRIPLE(?t))
+      }`, 2, termTypeData);
+    });
+
+    it('keeps the rows a clique split over a join with a disjunctive type selects', async({ expect }) => {
+      // Both operands hold `:o`, so the edge alone would keep the row pairing them, and the type drops it;
+      // `"other"` is a literal only `:copy` holds, which the types pushed into the operands alone would keep
+      // and the edge left above drops. The rows of the blank node and of `"l"` stay.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { SELECT ?a ?b WHERE { ?a :value ?b } }
+        { SELECT ?c ?d WHERE { ?c :copy ?d } }
+        FILTER(sameTerm(?b, ?d) && (isLITERAL(?d) || isBLANK(?d)))
+      }`, 2, termTypeData);
+    });
+
+    it('keeps the rows the weak form of a disjunction leaves under an OPTIONAL', async({ expect }) => {
+      // `:none` has no `:value`, so it survives with ?o unbound: the row the strong form would lose. `:lit` and
+      // `:triple` have one of another type and go entirely: the rows that would come back with ?o unbound if
+      // the condition were pushed into the OPTIONAL. `:iri` and `:blank` stay.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :kind ?k
+        OPTIONAL { ?s :value ?o }
+        FILTER(!bound(?o) || isIRI(?o) || isBLANK(?o))
+      }`, 3, termTypeData);
+    });
+
+    it('keeps the rows of the UNION branch a disjunction does not empty', async({ expect }) => {
+      // The right branch binds ?o as a subject in each of its five rows, and the condition drops every one of
+      // them - which the rewrite does by emptying the branch, where one sending the condition into the left
+      // branch alone would keep all five. The left branch keeps the literal and the triple term.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { ?s :value ?o } UNION { ?o :kind ?k }
+        FILTER(isLITERAL(?o) || isTRIPLE(?o))
+      }`, 2, termTypeData);
+    });
+
+    it('keeps the rows a MINUS removes through a clique with a disjunctive type', async({ expect }) => {
+      // `:b1` blocks `"l"` and binds no ?b, so it removes the row holding `"l"`: a right hand side told the type
+      // of ?b strongly - or told the edge - would drop `:b1` and bring that row back. `:b2` binds ?b to an IRI,
+      // which no row the condition keeps has, so pruning it removes nothing: the row of the blank node stays.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :value ?a . ?c :copy ?b
+        MINUS { ?t :blocks ?a OPTIONAL { ?t :with ?b } }
+        FILTER(sameTerm(?a, ?b) && (isLITERAL(?b) || isBLANK(?b)))
+      }`, 1, termTypeData);
     });
   });
 });

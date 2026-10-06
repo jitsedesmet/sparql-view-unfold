@@ -2,10 +2,19 @@ import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import type { Algebra as AlgebraTypes } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
-import { emptyRange, graphRange, predicateRange, RangeSet } from '../lib/RangeSet.js';
-import { createTransformationContext } from '../lib/transformContext.js';
-import { AssertionConjunction, collectAssertions } from '../lib/utils/assertionConjunction.js';
-import type { Access, Assertion, Assertions } from '../lib/utils/assertions.js';
+import {
+  emptyRange,
+  graphRange,
+  objectRange,
+  predicateRange,
+  RangeSet,
+  subjectRange,
+  tripleTermRange,
+} from '../lib/RangeSet.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import type { AssertionConjunctionMeta } from '../lib/utils/assertionConjunction.js';
+import { AssertionConjunction, collectAssertions, termTypesOfReadings } from '../lib/utils/assertionConjunction.js';
+import type { Access, Assertion, AssertionConjunct, Assertions } from '../lib/utils/assertions.js';
 import {
   access,
   accessId,
@@ -59,7 +68,12 @@ function structuralConjunctionOf(...conjuncts: [ Access, Assertion ][]): Asserti
 
 /** What Θ decomposes into, each conjunct as `access=state`, in the order it hands them over. */
 function conjunctsOf(assertions: AssertionConjunction | undefined): string[] {
-  return (assertions?.conjuncts() ?? []).map(({ access: read, assertion }) => {
+  return conjunctStrings(assertions?.conjuncts() ?? []);
+}
+
+/** Conjuncts as `access=state`, in the order given - for the lists Θ hands out besides its conjuncts. */
+function conjunctStrings(conjuncts: readonly AssertionConjunct[]): string[] {
+  return conjuncts.map(({ access: read, assertion }) => {
     if (assertion.subType === 'strong' || assertion.subType === 'weak') {
       const target = 'positions' in assertion.term ? accessId(assertion.term) : assertion.term.value;
       return `${accessId(read)}=${assertion.subType}(${target})`;
@@ -139,6 +153,29 @@ function termTypes(...types: RDF.Term['termType'][]): RangeSet {
 /** A range as its term types, alphabetically, so that a test reads the same whatever order it was built in. */
 function rangeString(range: RangeSet): string {
   return [ ...range ].sort().join(',');
+}
+
+/** {@link equatedReadingsOf} with the term types Θ asserts of each group, `undefined` where it asserts none. */
+function equatedGroupsOf(assertions: AssertionConjunction | undefined): { readings: string[]; range?: string }[] {
+  return (assertions?.equatedGroups() ?? []).map(({ readings, range }) => ({
+    readings: readings.map(reading => accessId(reading)),
+    range: range === undefined ? undefined : rangeString(range),
+  }));
+}
+
+/** The two halves {@link AssertionConjunction.split} cuts Θ into, each as its conjuncts. */
+function splitOf(
+  assertions: AssertionConjunction,
+  predicate: (name: string) => boolean,
+): { inside: string[]; outside: string[] } {
+  const { inside, outside } = assertions.split(predicate);
+  return { inside: conjunctsOf(inside), outside: conjunctsOf(outside) };
+}
+
+/** What Θ the condition of `FILTER(condition)` reads into, nested the way the parser nests it. */
+function collectedFrom(condition: string, known?: AssertionConjunction): AssertionConjunctionMeta | undefined {
+  const query = <AlgebraTypes.Project> parseQuery(c, `SELECT * WHERE { FILTER(${condition}) }`);
+  return collectAssertions(c, (<AlgebraTypes.Filter> query.input).expression, known);
 }
 
 /** A substitution as `name=term`, in the order it hands the replacements over. */
@@ -260,6 +297,14 @@ describe('assertionConjunction', () => {
       expect(equatedReadingsOf(assertions)).toEqual([]);
     });
 
+    it('only reads a position it is asserted between and itself', ({ expect }) => {
+      // `sameTerm(SUBJECT(?o), SUBJECT(?o))` holds wherever there is a subject to read: it says `?o` is a triple
+      // term, and nothing about the subject - not even what a subject always is.
+      const subjectOfO = access('o', 'subject');
+      expect(conjunctsOf(structuralConjunctionOf([ subjectOfO, assertStrong(subjectOfO) ])))
+        .toEqual([ 'o=type(Quad)' ]);
+    });
+
     it('drags a term met later onto every member of the clique', ({ expect }) => {
       const assertions = conjunctionOf(
         [ 's', assertStrong(DF.variable('o')) ],
@@ -326,6 +371,52 @@ describe('assertionConjunction', () => {
       const rejoined = AssertionConjunction.of([ ...inside.conjuncts(), ...outside.conjuncts() ]);
       expect(equatedReadingsOf(rejoined)).toEqual([[ 'a', 'b', 'c' ]]);
     });
+
+    describe('a typed clique', () => {
+      /** `?y ≡ ?x` with `?x` a literal, which `?y` - the same value - is then too. */
+      function typedClique(): AssertionConjunction {
+        return <AssertionConjunction> conjunctionOf(
+          [ 'x', assertTermType(termTypes('Literal')) ],
+          [ 'y', assertStrong(DF.variable('x')) ],
+        );
+      }
+
+      it('gives the inside the term types of a reading it holds, the edge outside carrying them on', ({ expect }) => {
+        // `isLITERAL(?y)` inside and `?y ≡ ?x` outside say `isLITERAL(?x)` between them, so saying it outside as
+        // well would only say it twice - where saying it inside is what lets an operand binding `?y` use it.
+        expect(splitOf(typedClique(), name => name === 'y'))
+          .toEqual({ inside: [ 'y=type(Literal)' ], outside: [ 'y=strong(x)' ]});
+      });
+
+      it('keeps the term types outside, on the representative, where no reading goes inside', ({ expect }) => {
+        expect(splitOf(typedClique(), name => name === 'z'))
+          .toEqual({ inside: [], outside: [ 'y=strong(x)', 'x=type(Literal)' ]});
+      });
+
+      it('keeps the group whole where every reading goes inside', ({ expect }) => {
+        expect(splitOf(typedClique(), () => true))
+          .toEqual({ inside: [ 'y=strong(x)', 'x=type(Literal)' ], outside: []});
+      });
+
+      it('keeps the two halves equivalent to the whole, wherever the group is cut', ({ expect }) => {
+        const assertions = <AssertionConjunction> conjunctionOf(
+          [ 'x', assertTermType(termTypes('Literal')) ],
+          [ 'y', assertStrong(DF.variable('x')) ],
+          [ 'z', assertStrong(DF.variable('x')) ],
+        );
+        const cuts: ((name: string) => boolean)[] = [
+          name => name === 'z',
+          name => name !== 'z',
+          () => false,
+          () => true,
+        ];
+        for (const predicate of cuts) {
+          const { inside, outside } = assertions.split(predicate);
+          const rejoined = AssertionConjunction.of([ ...inside.conjuncts(), ...outside.conjuncts() ]);
+          expect(conditionOf(rejoined)).toBe(conditionOf(assertions));
+        }
+      });
+    });
   });
 
   describe('weakening', () => {
@@ -343,6 +434,12 @@ describe('assertionConjunction', () => {
       expect(stateOf(weakened, 'w')).toBe('none');
       expect(stateOf(weakened, 'z')).toBe('weak(ex://c)');
       expect(stateOf(weakened, 'v')).toBe('unbound');
+    });
+
+    it('weakens a range into its weak form, range and all', ({ expect }) => {
+      const range = termTypes('Literal', 'NamedNode');
+      const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertTermType(range) ]);
+      expect(stateOf(weakenedForm(assertions), 'x')).toBe('weakType(Literal,NamedNode)');
     });
   });
 
@@ -436,6 +533,85 @@ describe('assertionConjunction', () => {
       expect(stateOf(normalised, 'x')).toBe('strong(ex://c)');
       expect(stateOf(normalised, 'y')).toBe('weak(ex://c)');
     });
+
+    describe('a range', () => {
+      const graphName = termTypes('NamedNode', 'BlankNode');
+
+      it('comes to `bound` where the operation leaves the variable nothing outside the range', ({ expect }) => {
+        // `GRAPH ?g` leaves `?g` a graph name, so `isIRI(?g) || isBLANK(?g)` only asks that it is bound - which
+        // nothing is left to ask where the operation binds it in every solution.
+        const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertTermType(graphName) ]);
+        expect(conjunctsOf(assertions.normalisedFor(rangedMeta([], 'g', graphRange)))).toEqual([ 'g=bound' ]);
+        const certain = assertions.normalisedFor(rangedMeta([ 'g' ], 'g', graphRange));
+        expect(certain).toBeDefined();
+        expect(certain?.size).toBe(0);
+      });
+
+      it('is kept, as asserted, where the operation leaves the variable a term outside it', ({ expect }) => {
+        // `?g` can still be a blank node, which the condition rejects. That it can be no literal is a fact of the
+        // plan rather than of Θ, so the condition does not narrow to `isIRI(?g)` on its account.
+        const assertions = <AssertionConjunction> conjunctionOf([
+          'g',
+          assertTermType(termTypes('NamedNode', 'Literal')),
+        ]);
+        expect(stateOf(assertions.normalisedFor(rangedMeta([], 'g', graphRange)), 'g'))
+          .toBe('type(Literal,NamedNode)');
+      });
+
+      it('is dropped in its weak form where the operation leaves the variable nothing outside it', ({ expect }) => {
+        // `!bound(?g) || isIRI(?g) || isBLANK(?g)` holds of every solution where `?g` can only be a graph name.
+        const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertTermType(graphName, false) ]);
+        const normalised = assertions.normalisedFor(rangedMeta([], 'g', graphRange));
+        expect(normalised).toBeDefined();
+        expect(normalised?.size).toBe(0);
+        // And where it holds nothing `?g` can be, its right disjunct is false and `!bound` is what is left.
+        const outOfRange = <AssertionConjunction> conjunctionOf([ 'g', assertTermType(termTypes('Literal'), false) ]);
+        expect(stateOf(outOfRange.normalisedFor(rangedMeta([], 'g', graphRange)), 'g')).toBe('unbound');
+      });
+
+      it('is forgotten of a clique a member of which the operation confines, the clique staying', ({ expect }) => {
+        // `?y ≡ ?x` already says that `?x` is bound and holds the graph name `?y` holds, which is all the range
+        // says - of the group, whichever member the operation happens to confine.
+        const vRanges = new VRanges();
+        vRanges.addAtTop([ 'x' ]);
+        vRanges.narrow('y', graphRange);
+        const assertions = <AssertionConjunction> conjunctionOf(
+          [ 'x', assertTermType(graphName) ],
+          [ 'y', assertStrong(DF.variable('x')) ],
+        );
+        const normalised = assertions.normalisedFor({ cVars: new Set(), vRanges });
+        expect(conjunctsOf(normalised)).toEqual([ 'y=strong(x)' ]);
+        expect(equatedGroupsOf(normalised)).toEqual([{ readings: [ 'x', 'y' ], range: undefined }]);
+      });
+
+      it('is forgotten of an accessor test admitting all its position holds, as of `isTRIPLE`', ({ expect }) => {
+        // `isIRI(SUBJECT(?o)) || isBLANK(SUBJECT(?o))` asks only that `?o` is a triple term, so it is held as the
+        // range `isTRIPLE(?o)` is, and an operation confining `?o` to triple terms decides both alike.
+        const read = <AssertionConjunction> structuralConjunctionOf(
+          [ access('o', 'subject'), assertTermType(subjectRange) ],
+        );
+        const asserted = <AssertionConjunction> conjunctionOf([ 'o', assertTermType(tripleTermRange) ]);
+        for (const assertions of [ read, asserted ]) {
+          expect(conjunctsOf(assertions.normalisedFor(rangedMeta([], 'o', tripleTermRange)))).toEqual([ 'o=bound' ]);
+        }
+      });
+
+      it('is left alone on a pinned group, the pin saying more than the range does', ({ expect }) => {
+        // Forgetting it would take `?g` out of what is a group of one and leave `bound(?g)`, losing the pin.
+        const pinned = <AssertionConjunction> conjunctionOf(
+          [ 'g', assertTermType(graphName) ],
+          [ 'g', assertStrong(termC) ],
+        );
+        expect(stateOf(pinned.normalisedFor(rangedMeta([], 'g', graphRange)), 'g')).toBe('strong(ex://c)');
+        // A shape just as much: that `?o` is a triple term is the least of what it says.
+        const shaped = <AssertionConjunction> structuralConjunctionOf(
+          [ access('o'), assertTermType(tripleTermRange) ],
+          [ access('o', 'subject'), assertStrong(termC) ],
+        );
+        expect(conjunctsOf(shaped.normalisedFor(rangedMeta([], 'o', tripleTermRange))))
+          .toEqual([ 'o.subject=strong(ex://c)' ]);
+      });
+    });
   });
 
   describe('transferring a variable', () => {
@@ -522,6 +698,54 @@ describe('assertionConjunction', () => {
       expect(stateOf(assertions.transferred('t', termC), 'y')).toBe('strong(ex://c)');
       // `?t ≡ :c` with `?t` bound to `:d` does not.
       expect(assertions.transferred('t', termD)).toBeUndefined();
+    });
+
+    it('keeps `bound` on the member a clique of two is transferred onto', ({ expect }) => {
+      // `BIND(?z AS ?t)` under A⟨?t ≡ ?z⟩: `?t` is `?z` wherever `?z` is bound, so all the condition still asks
+      // below is that it is. Taking `?t` out drops the group, and must not drop that with it.
+      const assertions = <AssertionConjunction> conjunctionOf([ 't', assertStrong(DF.variable('z')) ]);
+      expect(conjunctsOf(assertions.transferred('t', access('z')))).toEqual([ 'z=bound' ]);
+    });
+
+    it('keeps the term types of a clique on the member left of it', ({ expect }) => {
+      const assertions = <AssertionConjunction> conjunctionOf(
+        [ 't', assertTermType(termTypes('Literal', 'NamedNode')) ],
+        [ 'z', assertStrong(DF.variable('t')) ],
+      );
+      expect(conjunctsOf(assertions.transferred('t', access('z')))).toEqual([ 'z=type(Literal,NamedNode)' ]);
+    });
+
+    it('restates the term types of a target built by a construction as what its positions admit', ({ expect }) => {
+      // `BIND(TRIPLE(?a, ?b, ?c) AS ?t)` under `isTRIPLE(?t)`: the construction raises - leaving `?t` unbound -
+      // unless `?a` can be a subject and `?b` a predicate, which is what the condition comes to below.
+      const construction = { subject: access('a'), predicate: access('b'), object: access('c') };
+      const tripleTerm = <AssertionConjunction> conjunctionOf([ 't', assertTermType(tripleTermRange) ]);
+      expect(conjunctsOf(tripleTerm.transferred('t', construction)))
+        .toEqual([ 'a=type(BlankNode,NamedNode)', 'b=type(NamedNode)', 'c=bound' ]);
+      // A construction yields nothing but a triple term, so term types without that one empty the plan.
+      const iri = <AssertionConjunction> conjunctionOf([ 't', assertTermType(termTypes('NamedNode')) ]);
+      expect(iri.transferred('t', construction)).toBeUndefined();
+    });
+
+    it('empties the plan on a construction nested in the subject of one', ({ expect }) => {
+      // `TRIPLE(TRIPLE(?a, ?b, ?c), ?p, ?q)` raises, a triple term being no subject, so the target is never bound
+      // - whether it was asserted bound or of a kind of term. In the object, the one place a triple term may be,
+      // it is a construction like the outer one.
+      const inner = { subject: access('a'), predicate: access('b'), object: access('c') };
+      for (const assertion of [ assertBound(), assertTermType(tripleTermRange) ]) {
+        const assertions = <AssertionConjunction> conjunctionOf([ 't', assertion ]);
+        expect(assertions.transferred('t', { subject: inner, predicate: access('p'), object: access('q') }))
+          .toBeUndefined();
+        const nestedInObject = { subject: access('p'), predicate: access('q'), object: inner };
+        expect(conjunctsOf(assertions.transferred('t', nestedInObject)))
+          .toEqual([
+            'p=type(BlankNode,NamedNode)',
+            'q=type(NamedNode)',
+            'a=type(BlankNode,NamedNode)',
+            'b=type(NamedNode)',
+            'c=bound',
+          ]);
+      }
     });
   });
 
@@ -812,6 +1036,263 @@ describe('assertionConjunction', () => {
       );
       expect(assertions.unaryConjuncts().map(conjunct => accessId(conjunct.access))).toEqual([]);
       expect(equatedReadingsOf(assertions)).toEqual([[ 's', 'o.subject' ], [ 'y', 'z' ]]);
+    });
+  });
+
+  describe('term type ranges', () => {
+    const iriOrLiteral = termTypes('Literal', 'NamedNode');
+    const iriOrBlank = termTypes('NamedNode', 'BlankNode');
+
+    it('writes a range back as one test per term type, always in the same order', ({ expect }) => {
+      // `isIRI`, `isBLANK`, `isLITERAL`, `isTRIPLE` in that order, whatever order the range was built in: one
+      // range written one way is what has a second run of the pass read back exactly what the first one wrote.
+      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'x', assertTermType(iriOrLiteral) ])))
+        .toBe('FILTER ( ( ISIRI( ?x ) || ISLITERAL( ?x ) ) )');
+      expect(conditionOf(<AssertionConjunction> conjunctionOf([
+        'x',
+        assertTermType(termTypes('Quad', 'Literal', 'BlankNode')),
+      ]))).toBe('FILTER ( ( ( ISBLANK( ?x ) || ISLITERAL( ?x ) ) || ISTRIPLE( ?x ) ) )');
+      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'x', assertTermType(iriOrLiteral, false) ])))
+        .toBe('FILTER ( ( ! BOUND( ?x ) || ( ISIRI( ?x ) || ISLITERAL( ?x ) ) ) )');
+    });
+
+    it('reports the range it holds of a variable, and how strongly', ({ expect }) => {
+      const strong = <AssertionConjunction> conjunctionOf([ 'x', assertTermType(iriOrLiteral) ]);
+      const weak = <AssertionConjunction> conjunctionOf([ 'x', assertTermType(iriOrLiteral, false) ]);
+      expect(stateOf(strong, 'x')).toBe('type(Literal,NamedNode)');
+      expect(stateOf(weak, 'x')).toBe('weakType(Literal,NamedNode)');
+      // Only the strong form fails where `?x` is unbound: a term type test raises there, and the weak form's
+      // `!bound(?x)` is what holds instead.
+      expect([ ...strong.boundImpliedBy() ]).toEqual([ 'x' ]);
+      expect([ ...weak.boundImpliedBy() ]).toEqual([]);
+    });
+
+    it('meets two ranges asserted of one variable', ({ expect }) => {
+      const assertions = <AssertionConjunction> conjunctionOf(
+        [ 'x', assertTermType(iriOrBlank) ],
+        [ 'x', assertTermType(iriOrLiteral) ],
+      );
+      expect(stateOf(assertions, 'x')).toBe('type(NamedNode)');
+      expect(conditionOf(assertions)).toBe('FILTER ( ISIRI( ?x ) )');
+    });
+
+    it('contradicts on two ranges with no term type in common', ({ expect }) => {
+      expect(conjunctionOf([ 'x', assertTermType(iriOrBlank) ], [ 'x', assertTermType(termTypes('Literal', 'Quad')) ]))
+        .toBeUndefined();
+      // A weak range is no way out of it once the other one is strong, which says that `?x` is bound.
+      expect(conjunctionOf([ 'x', assertTermType(iriOrBlank, false) ], [ 'x', assertTermType(termTypes('Literal')) ]))
+        .toBeUndefined();
+    });
+
+    it('comes to `!bound` on two weak ranges with no term type in common', ({ expect }) => {
+      // `(¬b ∨ ?x ∈ R) ∧ (¬b ∨ ?x ∈ S)` is `¬b ∨ ?x ∈ R ∩ S`: `¬b` where the two are disjoint, and the weak
+      // form of the meet where they are not.
+      expect(stateOf(conjunctionOf(
+        [ 'x', assertTermType(iriOrBlank, false) ],
+        [ 'x', assertTermType(termTypes('Literal'), false) ],
+      ), 'x')).toBe('unbound');
+      expect(stateOf(conjunctionOf(
+        [ 'x', assertTermType(iriOrBlank, false) ],
+        [ 'x', assertTermType(iriOrLiteral, false) ],
+      ), 'x')).toBe('weakType(NamedNode)');
+    });
+
+    it('is absorbed by a term inside it, and contradicts one outside it', ({ expect }) => {
+      // `?x ≡ :c` says which kind of term `?x` is by saying which term it is, whichever comes first.
+      expect(conjunctsOf(conjunctionOf([ 'x', assertTermType(iriOrLiteral) ], [ 'x', assertStrong(termC) ])))
+        .toEqual([ 'x=strong(ex://c)' ]);
+      expect(conjunctsOf(conjunctionOf([ 'x', assertStrong(termC) ], [ 'x', assertTermType(iriOrLiteral) ])))
+        .toEqual([ 'x=strong(ex://c)' ]);
+      const blankOrLiteral = termTypes('BlankNode', 'Literal');
+      expect(conjunctionOf([ 'x', assertTermType(blankOrLiteral) ], [ 'x', assertStrong(termC) ])).toBeUndefined();
+      expect(conjunctionOf([ 'x', assertStrong(termC) ], [ 'x', assertTermType(blankOrLiteral) ])).toBeUndefined();
+    });
+
+    it('meets `bound` and `!bound` the way a weak term does', ({ expect }) => {
+      // `b ∧ (¬b ∨ ?x ∈ R)` is `?x ∈ R`, in both orders, and `¬b ∧ (¬b ∨ ?x ∈ R)` is `¬b`.
+      expect(stateOf(conjunctionOf([ 'x', assertTermType(iriOrLiteral, false) ], [ 'x', assertBound() ]), 'x'))
+        .toBe('type(Literal,NamedNode)');
+      expect(stateOf(conjunctionOf([ 'x', assertBound() ], [ 'x', assertTermType(iriOrLiteral, false) ]), 'x'))
+        .toBe('type(Literal,NamedNode)');
+      expect(stateOf(conjunctionOf([ 'x', assertTermType(iriOrLiteral, false) ], [ 'x', assertUnbound() ]), 'x'))
+        .toBe('unbound');
+      // The strong form holds of a term, which an unbound variable is not.
+      expect(conjunctionOf([ 'x', assertTermType(iriOrLiteral) ], [ 'x', assertUnbound() ])).toBeUndefined();
+    });
+
+    it('says only that a variable is bound where it admits every term type', ({ expect }) => {
+      // Every RDF term is an IRI, a blank node, a literal or a triple term, so the four tests together fail
+      // exactly where `?x` is unbound.
+      const assertions = conjunctionOf([ 'x', assertTermType(objectRange) ]);
+      expect(stateOf(assertions, 'x')).toBe('bound');
+      expect(conjunctsOf(assertions)).toEqual([ 'x=bound' ]);
+    });
+
+    it('says nothing at all in its weak form where it admits every term type', ({ expect }) => {
+      // `!bound(?x) || bound(?x)` holds of every solution, so not even the variable is left to mention.
+      const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertTermType(objectRange, false) ]);
+      expect(assertions.size).toBe(0);
+      expect(conjunctsOf(assertions)).toEqual([]);
+    });
+
+    it('says only that a triple term is read where it admits all a position can hold', ({ expect }) => {
+      // `SUBJECT(?o)` is an IRI or a blank node wherever there is a subject to read, so the test holds exactly
+      // where `?o` is a triple term - and a range wider than the position says no more than that.
+      expect(conjunctsOf(structuralConjunctionOf([ access('o', 'subject'), assertTermType(subjectRange) ])))
+        .toEqual([ 'o=type(Quad)' ]);
+      expect(conjunctsOf(structuralConjunctionOf([ access('o', 'predicate'), assertTermType(iriOrBlank) ])))
+        .toEqual([ 'o=type(Quad)' ]);
+      expect(conjunctsOf(structuralConjunctionOf([ access('o', 'subject'), assertTermType(subjectRange, false) ])))
+        .toEqual([ 'o=weakType(Quad)' ]);
+    });
+
+    it('writes the range of a group read at a position only where the position does not decide it', ({ expect }) => {
+      // Equal to `SUBJECT(?o)`, `?s` is an IRI or a blank node whatever else is said of it: `isIRI(?s) || isBLANK(?s)`
+      // adds nothing to the edge, and `isIRI(?s) || isLITERAL(?s)` comes to `isIRI(?s)` beside it.
+      const edge: [ Access, Assertion ] = [ access('o', 'subject'), assertStrong(access('s')) ];
+      expect(conjunctsOf(structuralConjunctionOf(edge, [ access('s'), assertTermType(iriOrBlank) ])))
+        .toEqual([ 'o.subject=strong(s)' ]);
+      expect(conjunctsOf(structuralConjunctionOf(edge, [ access('s'), assertTermType(iriOrLiteral) ])))
+        .toEqual([ 'o.subject=strong(s)', 's=type(NamedNode)' ]);
+      // What the group reports is still what was asserted, which is what the pieces a rule splits it into learn.
+      expect(equatedGroupsOf(structuralConjunctionOf(edge, [ access('s'), assertTermType(iriOrLiteral) ])))
+        .toEqual([{ readings: [ 's', 'o.subject' ], range: 'Literal,NamedNode' }]);
+    });
+
+    it('reads a disjunction of term type tests about one access as one range, however it nests', ({ expect }) => {
+      // The parser nests `a || b || c` to the left, so the parenthesised form is the one nesting to the right.
+      for (const condition of [
+        'ISIRI(?x) || ISBLANK(?x) || ISLITERAL(?x)',
+        'ISIRI(?x) || (ISBLANK(?x) || ISLITERAL(?x))',
+      ]) {
+        const collected = collectedFrom(condition);
+        expect(collected?.residual).toBeUndefined();
+        expect(conjunctsOf(collected?.assertions)).toEqual([ 'x=type(BlankNode,Literal,NamedNode)' ]);
+      }
+      // `isURI` is the `isIRI` it is a synonym of, and a position is an access like any other.
+      expect(conjunctsOf(collectedFrom('ISURI(?x) || ISBLANK(?x)')?.assertions))
+        .toEqual([ 'x=type(BlankNode,NamedNode)' ]);
+      expect(conjunctsOf(collectedFrom('ISIRI(OBJECT(?o)) || ISLITERAL(OBJECT(?o))')?.assertions))
+        .toEqual([ 'o.object=type(Literal,NamedNode)' ]);
+    });
+
+    it('leaves a disjunction of tests about two accesses standing as a residual', ({ expect }) => {
+      // Neither access on its own has to be an IRI, so there is no range to hold of either one.
+      for (const condition of [ 'ISIRI(?x) || ISIRI(?y)', 'ISIRI(?o) || ISIRI(OBJECT(?o))' ]) {
+        const collected = collectedFrom(condition);
+        expect(collected?.assertions.size).toBe(0);
+        expect(collected?.residual).toBeDefined();
+      }
+    });
+
+    it('reads `!bound` beside a range about its variable as the weak form, however it nests', ({ expect }) => {
+      for (const condition of [
+        '!BOUND(?x) || ISIRI(?x) || ISBLANK(?x)',
+        '!BOUND(?x) || (ISIRI(?x) || ISBLANK(?x))',
+        'ISIRI(?x) || !BOUND(?x) || ISBLANK(?x)',
+      ]) {
+        const collected = collectedFrom(condition);
+        expect(collected?.residual).toBeUndefined();
+        expect(conjunctsOf(collected?.assertions)).toEqual([ 'x=weakType(BlankNode,NamedNode)' ]);
+      }
+    });
+
+    it('leaves `!bound` beside a range about another variable standing as a residual', ({ expect }) => {
+      // `!bound(?x) || isIRI(?y)` asks something of `?y` only where `?x` is bound, which no state of either says.
+      const collected = collectedFrom('!BOUND(?x) || ISIRI(?y)');
+      expect(collected?.assertions.size).toBe(0);
+      expect(collected?.residual).toBeDefined();
+    });
+
+    it('round-trips the weak form of a range about a position', ({ expect }) => {
+      // The `!bound` is about the root, which is what a conjunct about `OBJECT(?o)` is weak in.
+      const collected = collectedFrom('!BOUND(?o) || ISIRI(OBJECT(?o))');
+      expect(collected?.residual).toBeUndefined();
+      expect(conjunctsOf(collected?.assertions)).toEqual([ 'o.object=weakType(NamedNode)' ]);
+      const assertions = <AssertionConjunction> collected?.assertions;
+      expect(conditionOf(assertions)).toBe('FILTER ( ( ! BOUND( ?o ) || ISIRI( OBJECT( ?o ) ) ) )');
+      const again = collectAssertions(c, assertions.toExpression(c));
+      expect(again?.residual).toBeUndefined();
+      expect(conjunctsOf(again?.assertions)).toEqual([ 'o.object=weakType(NamedNode)' ]);
+    });
+
+    it('absorbs a range it already holds rather than stacking a copy of it', ({ expect }) => {
+      // Re-reading the condition it wrote, with what it already knows, is what a second run of the pass does.
+      const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertTermType(iriOrLiteral) ]);
+      const again = collectAssertions(c, assertions.toExpression(c), assertions);
+      expect(again?.residual).toBeUndefined();
+      expect(conjunctsOf(again?.assertions)).toEqual([ 'x=type(Literal,NamedNode)' ]);
+      // And a test no term type of the range passes is the empty filter.
+      expect(collectedFrom('ISBLANK(?x) || ISTRIPLE(?x)', assertions)).toBeUndefined();
+    });
+  });
+
+  describe('the term types of a clique', () => {
+    const iriOrLiteral = termTypes('Literal', 'NamedNode');
+
+    /** `?y ≡ ?x` with `?x` an IRI or a literal, which `?y` - the same value - is then too. */
+    function typedClique(): AssertionConjunction {
+      return <AssertionConjunction> conjunctionOf(
+        [ 'x', assertTermType(iriOrLiteral) ],
+        [ 'y', assertStrong(DF.variable('x')) ],
+      );
+    }
+
+    it('reports the range of a clique beside its readings', ({ expect }) => {
+      expect(equatedGroupsOf(typedClique())).toEqual([{ readings: [ 'x', 'y' ], range: 'Literal,NamedNode' }]);
+      expect(equatedGroupsOf(conjunctionOf([ 'y', assertStrong(DF.variable('x')) ])))
+        .toEqual([{ readings: [ 'x', 'y' ], range: undefined }]);
+    });
+
+    it('reports a shaped group as holding a triple term, which it is by being one', ({ expect }) => {
+      const assertions = structuralConjunctionOf(
+        [ access('x'), assertStrong(access('o')) ],
+        [ access('o', 'subject'), assertStrong(termC) ],
+      );
+      expect(equatedGroupsOf(assertions)).toEqual([{ readings: [ 'o', 'x' ], range: 'Quad' }]);
+    });
+
+    it('meets the ranges asserted of two variables it unifies, being about their one value', ({ expect }) => {
+      const assertions = conjunctionOf(
+        [ 'x', assertTermType(termTypes('NamedNode', 'BlankNode')) ],
+        [ 'y', assertTermType(iriOrLiteral) ],
+        [ 'x', assertStrong(DF.variable('y')) ],
+      );
+      expect(conjunctsOf(assertions)).toEqual([ 'y=strong(x)', 'x=type(NamedNode)' ]);
+      expect(conjunctionOf(
+        [ 'x', assertTermType(termTypes('NamedNode')) ],
+        [ 'y', assertTermType(termTypes('Literal')) ],
+        [ 'x', assertStrong(DF.variable('y')) ],
+      )).toBeUndefined();
+    });
+
+    it('leaves the range of a clique out of its unary conjuncts', ({ expect }) => {
+      // It holds of every reading, which a rule placing a conjunct by the one access it is about would place
+      // by the representative alone - so the group hands it to each of its readings instead.
+      const assertions = <AssertionConjunction> conjunctionOf(
+        [ 'x', assertTermType(iriOrLiteral) ],
+        [ 'y', assertStrong(DF.variable('x')) ],
+        [ 'z', assertTermType(termTypes('NamedNode')) ],
+      );
+      expect(conjunctsOf(assertions)).toEqual([ 'y=strong(x)', 'x=type(Literal,NamedNode)', 'z=type(NamedNode)' ]);
+      expect(conjunctStrings(assertions.unaryConjuncts())).toEqual([ 'z=type(NamedNode)' ]);
+    });
+
+    it('states the range of a group of every reading of it, representative first', ({ expect }) => {
+      const [ clique ] = typedClique().equatedGroups();
+      expect(conjunctStrings(termTypesOfReadings(clique)))
+        .toEqual([ 'x=type(Literal,NamedNode)', 'y=type(Literal,NamedNode)' ]);
+      // A position is a reading like any other, and comes after every variable.
+      const [ edge ] = (<AssertionConjunction> structuralConjunctionOf(
+        [ access('s'), assertStrong(access('o', 'subject')) ],
+        [ access('s'), assertTermType(termTypes('NamedNode')) ],
+      )).equatedGroups();
+      expect(conjunctStrings(termTypesOfReadings(edge)))
+        .toEqual([ 's=type(NamedNode)', 'o.subject=type(NamedNode)' ]);
+      // And a group that asserts no range has none to hand out.
+      const [ untyped ] = (<AssertionConjunction> conjunctionOf([ 'y', assertStrong(DF.variable('x')) ]))
+        .equatedGroups();
+      expect(termTypesOfReadings(untyped)).toEqual([]);
     });
   });
 
