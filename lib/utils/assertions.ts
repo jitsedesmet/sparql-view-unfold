@@ -510,9 +510,12 @@ function asTermTypePredicate(expression: Algebra.Expression):
  * @returns the conjunct it carries, or `undefined` when it is not of that shape
  */
 function asWeakAssertion(expression: Algebra.Expression): AssertionConjunct[] | undefined {
+  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR || expression.operator !== '||') {
+    return undefined;
+  }
   const disjuncts = splitDisjunction(expression);
   const unboundIndex = disjuncts.findIndex(disjunct => variableOfNotBound(disjunct) !== undefined);
-  if (unboundIndex === -1 || disjuncts.length < 2) {
+  if (unboundIndex === -1) {
     return undefined;
   }
   const unbound = variableOfNotBound(disjuncts[unboundIndex]);

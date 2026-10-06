@@ -762,12 +762,21 @@ function pushIntoJoin(
   // Read before any rewriting: every rewrite preserves pVars and never shrinks cVars, so these licences
   // stay valid while the operands are rewritten.
   const operands = join.input.map(operand => cpMetaOf(operand));
+  // How many operands can bind a variable, counted once per variable rather than per operand asking.
+  const binderCounts = new Map<string, number>();
+  const bindersOf = (name: string): number => {
+    let count = binderCounts.get(name);
+    if (count === undefined) {
+      count = operands.filter(operand => operand.vRanges.canBind(name)).length;
+      binderCounts.set(name, count);
+    }
+    return count;
+  };
   // An operand takes what it certainly binds, or what nothing else can bind; it takes the weakened form
   // of anything else it can bind, which the join consumes; and it *connects* what it takes, join
   // compatibility being what enforces an equality between two accesses it binds on the output.
-  const placed = placeOverTargets(assertions, operands.map((operand, index) => ({
-    licensed: name => operand.cVars.has(name) ||
-      operands.every((other, otherIndex) => otherIndex === index || other.vRanges.neverBinds(name)),
+  const placed = placeOverTargets(assertions, operands.map(operand => ({
+    licensed: name => operand.cVars.has(name) || bindersOf(name) === (operand.vRanges.canBind(name) ? 1 : 0),
     admitsWeakened: name => operand.vRanges.canBind(name),
     mayBind: name => operand.vRanges.canBind(name),
     connects: true,

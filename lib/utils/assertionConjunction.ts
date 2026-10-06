@@ -1024,10 +1024,13 @@ export class AssertionConjunction {
       return this.shapeIsWitnessed(group, walk) ? undefined : tripleTermRange;
     }
     const asserted = this.assertedTermTypesOf(group);
+    if (asserted === undefined) {
+      return undefined;
+    }
     // A position the group is read at confines it already, so only what narrows that is worth stating.
     const confined = walk.accessesPerGroup.get(group)!
       .reduce((range, reading) => range.meet(rangeOfAccess(reading)), objectRange);
-    return asserted === undefined || isSubsetOf(confined, asserted) ? undefined : asserted.meet(confined);
+    return isSubsetOf(confined, asserted) ? undefined : asserted.meet(confined);
   }
 
   /**
