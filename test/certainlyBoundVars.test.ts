@@ -227,11 +227,11 @@ describe('the target of a nested TRIPLE() BIND', () => {
 
 describe('the range of a graph variable', () => {
   it('is the graph name where the pattern does not certainly bind it', ({ expect }) => {
-    // `GRAPH ?g { OPTIONAL { VALUES ?g { "l" } } }`: every solution where the OPTIONAL misses binds `?g`
-    // to the name of the graph, so what the pattern says about it never applies on its own.
+    // `GRAPH ?g { ?x ?p ?o OPTIONAL { VALUES (?x ?g) { (:a "l") } } }`: every solution where the OPTIONAL
+    // misses binds `?g` to the name of the graph, so what the pattern says about it never applies on its own.
     const inner = c.AF.createLeftJoin(
-      c.AF.createBgp([]),
-      c.AF.createValues([ g ], [{ g: c.DF.literal('l') }]),
+      c.AF.createBgp([ c.AF.createPattern(x, c.DF.variable('p'), c.DF.variable('o')) ]),
+      c.AF.createValues([ x, g ], [{ x: c.DF.namedNode('ex://a'), g: c.DF.literal('l') }]),
     );
     const meta = withCpVars(c.AF.createGraph(inner, g)).metadata;
     expect([ ...meta.vRanges.rangeOf('g') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
@@ -280,7 +280,10 @@ describe('the metadata of an operation', () => {
       [ 'a minus of disagreeing sides', c.AF.createMinus(iri, literal) ],
       [ 'a graph over a pattern', c.AF.createGraph(pattern, g) ],
       [ 'a graph over an optional binding its name', c.AF.createGraph(
-        c.AF.createLeftJoin(c.AF.createBgp([]), c.AF.createValues([ g ], [{ g: c.DF.literal('l') }])),
+        c.AF.createLeftJoin(
+          c.AF.createBgp([ c.AF.createPattern(x, c.DF.variable('p'), c.DF.variable('o')) ]),
+          c.AF.createValues([ x, g ], [{ x: c.DF.namedNode('ex://a'), g: c.DF.literal('l') }]),
+        ),
         g,
       ) ],
       [ 'a projection over a join', c.AF.createProject(c.AF.createJoin([ undefCol, literal ], false), [ x ]) ],
