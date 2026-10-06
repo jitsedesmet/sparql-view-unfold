@@ -98,13 +98,13 @@ describe('mappingFromConstructQueries', () => {
       // `?o` is read in object position, where a literal is fine, and written in subject position.
       expect(mappingAsStrings(mappingFromConstructQueries([
         'CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?o }',
-      ])).body).toContain('( ISBLANK( ?mi_o ) || ISIRI( ?mi_o ) )');
+      ])).body).toContain('( ISIRI( ?mi_o ) || ISBLANK( ?mi_o ) )');
     });
 
     it('is filtered inside a triple term the head constructs', ({ expect }) => {
       expect(mappingAsStrings(mappingFromConstructQueries([
         'PREFIX : <ex://>\nCONSTRUCT { ?t :reifies <<( ?o :p ?s )>> } WHERE { ?t :src ?s . ?s :p ?o }',
-      ])).body).toContain('( ISBLANK( ?mi_o ) || ISIRI( ?mi_o ) )');
+      ])).body).toContain('( ISIRI( ?mi_o ) || ISBLANK( ?mi_o ) )');
     });
 
     it('is left alone where the body already proves the position, filtering nothing at all', ({ expect }) => {

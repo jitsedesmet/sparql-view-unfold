@@ -8,6 +8,28 @@ import { DF } from './rdfDatatypes.js';
 import { termIsStaticTerm } from './typeGuards.js';
 
 /**
+ * Splits an expression into the operands of the `&&` or `||` it nests at its top level.
+ * @param expression - The expression to split
+ * @param operator - The operator to split on
+ * @param accumulator - The operands collected so far, filled in by the recursion
+ * @returns the operands, the expression itself when it is not that operator
+ */
+function splitOnOperator(
+  expression: Algebra.Expression,
+  operator: '&&' | '||',
+  accumulator: Algebra.Expression[],
+): Algebra.Expression[] {
+  if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === operator) {
+    for (const operand of expression.args) {
+      splitOnOperator(operand, operator, accumulator);
+    }
+  } else {
+    accumulator.push(expression);
+  }
+  return accumulator;
+}
+
+/**
  * Splits a filter expression on top level logical conjunctions (`&&`), implementing (SDecompI):
  * `FILTER_{R1 && R2}(A) == FILTER_R1(FILTER_R2(A))`.
  * @param expression - The condition to split
@@ -18,24 +40,42 @@ export function splitConjunction(
   expression: Algebra.Expression,
   accumulator: Algebra.Expression[] = [],
 ): Algebra.Expression[] {
-  if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === '&&') {
-    for (const agg of expression.args) {
-      splitConjunction(agg, accumulator);
-    }
-  } else {
-    accumulator.push(expression);
-  }
-  return accumulator;
+  return splitOnOperator(expression, '&&', accumulator);
+}
+
+/**
+ * Splits an expression on its top level logical disjunctions (`||`), however they nest.
+ * @param expression - The expression to split
+ * @returns the disjuncts
+ */
+export function splitDisjunction(expression: Algebra.Expression): Algebra.Expression[] {
+  return splitOnOperator(expression, '||', []);
 }
 
 /**
  * Combines a non-empty list of expressions into a single conjunction (`&&`).
- * @param c - The transformation context
+ * @param c - Object containing the algebra factory
  * @param expressions - The conjuncts to combine
  * @returns the conjunction
  */
-export function conjunctionOf(c: TransformationContext, expressions: Algebra.Expression[]): Algebra.Expression {
+export function conjunctionOf(
+  c: Pick<TransformationContext, 'AF'>,
+  expressions: Algebra.Expression[],
+): Algebra.Expression {
   return expressions.reduce((acc, expr) => c.AF.createOperatorExpression('&&', [ acc, expr ]));
+}
+
+/**
+ * Combines a non-empty list of expressions into a single disjunction (`||`).
+ * @param c - Object containing the algebra factory
+ * @param expressions - The disjuncts to combine
+ * @returns the disjunction
+ */
+export function disjunctionOf(
+  c: Pick<TransformationContext, 'AF'>,
+  expressions: Algebra.Expression[],
+): Algebra.Expression {
+  return expressions.reduce((acc, expr) => c.AF.createOperatorExpression('||', [ acc, expr ]));
 }
 
 /**

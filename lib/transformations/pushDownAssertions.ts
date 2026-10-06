@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
+import { tripleTermRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import type { AssertionFilter } from '../utils/assertionConjunction.js';
@@ -8,6 +9,7 @@ import {
   AssertionConjunction,
   collectAssertions,
   isAssertionFilter,
+  termTypesOfReadings,
 } from '../utils/assertionConjunction.js';
 import type { Access, AssertionConjunct, Assertions } from '../utils/assertions.js';
 import {
@@ -40,9 +42,11 @@ import { collectVariableNames, derivedVarNamer } from '../utils.js';
  * @fileoverview Assertion filter pushdown.
  *
  * An earlier rewriting stage produces queries carrying *assertion filters*: `FILTER(sameTerm(?x, :p))`
- * fixing one variable to one term, and `FILTER(sameTerm(?x, ?y))` unifying two. Left where they are, they
- * only discard rows at the end; pushed down, they substitute into BGPs, prune VALUES rows and columns,
- * delete UNION branches, and can turn an OPTIONAL into a plain join.
+ * fixing one variable to one term, `FILTER(sameTerm(?x, ?y))` unifying two, and `FILTER(isIRI(?x) ||
+ * isBLANK(?x))` confining one to some kinds of term - the test a mapping writes for a head variable its body
+ * could bind to a term its position cannot hold. Left where they are, they only discard rows at the end;
+ * pushed down, they substitute into BGPs, prune VALUES rows and columns, delete UNION branches, and can turn
+ * an OPTIONAL into a plain join.
  *
  * Rule names in parentheses refer to Figure 2 of Schmidt et al., "Foundations of SPARQL Query
  * Optimization" (https://dl.acm.org/doi/pdf/10.1145/1804669.1804675). Writing A⟨?x ≡ c⟩ for
@@ -58,7 +62,9 @@ import { collectVariableNames, derivedVarNamer } from '../utils.js';
  * and splitting one means splitting its *edges*, never its variables ({@link splitClique}): a clique is
  * transitively closed, so what a rule pushes down plus what it keeps has to span it again. There is no
  * sound weak form of a clique, so a rule that cannot take a whole edge sends down what the edge *entails*
- * instead - every member is bound - which is what collapses an OPTIONAL over a right-only variable.
+ * instead - every member is bound - which is what collapses an OPTIONAL over a right-only variable. The
+ * term types of a clique are entailed of every member alike, so each piece takes them of the members it
+ * holds, and they are restated above only where no piece enforces them.
  *
  * ## What a triple term adds
  *
@@ -919,9 +925,8 @@ interface PushTarget {
  * form of what it is not, and the readings of a group it is licensed for.
  *
  * One routine for the join, the left join and the GRAPH, whose licences - (FJPush), (FLPush) and the join
- * with `{?g -> u_i}` of section 18.5 - are stated where their targets are built. A conjunct is discharged
- * rather than restated above in the two ways the identities give: one implying `bound(?x)` by a target that
- * took it *and* connects it, and a weak or unbound one by every target that may bind `?x` having taken it.
+ * with `{?g -> u_i}` of section 18.5 - are stated where their targets are built. A group is split by its
+ * edges ({@link splitClique}), while its term types hold of every reading and go wherever one of those does.
  * @param assertions - The conjunction to place
  * @param targets - The places it can go
  * @returns the conjuncts per target, and what has to be restated above the operation
@@ -933,41 +938,62 @@ function placeOverTargets(assertions: AssertionConjunction, targets: PushTarget[
   const intoTarget: AssertionConjunct[][] = targets.map(() => []);
   const kept: AssertionConjunct[] = [];
   for (const conjunct of assertions.unaryConjuncts()) {
-    const [ name ] = variablesReadByConjunct(conjunct);
-    const impliesItIsBound = impliesBound(conjunct.assertion);
-    const weakened = asWeakenedConjunct(conjunct);
-    let enforced = false;
-    let toldEveryBinder = true;
-    for (const [ index, target ] of targets.entries()) {
-      if (impliesItIsBound && target.licensed(name)) {
-        intoTarget[index].push(conjunct);
-        enforced ||= target.connects;
-      } else if (weakened !== undefined && target.admitsWeakened(name)) {
-        intoTarget[index].push(weakened);
-      } else {
-        toldEveryBinder &&= !target.mayBind(name);
-      }
-    }
-    if (!(impliesItIsBound ? enforced : toldEveryBinder)) {
+    if (placeConjunct(conjunct, targets, intoTarget)) {
       kept.push(conjunct);
     }
   }
-  for (const readings of assertions.equatedReadings()) {
+  for (const group of assertions.equatedGroups()) {
     const placed = splitClique(
-      readings,
-      targets.map(target => readings.filter(reading => target.licensed(reading.name))),
+      group.readings,
+      targets.map(target => group.readings.filter(reading => target.licensed(reading.name))),
       targets.map(target => target.connects),
     );
     for (const [ index, pushed ] of placed.intoTarget.entries()) {
       intoTarget[index].push(...pushed);
     }
     kept.push(...placed.kept);
+    // Enforced of one reading, the term types hold of all of them through the edges kept above.
+    const typed = termTypesOfReadings(group);
+    const restated = typed.map(conjunct => placeConjunct(conjunct, targets, intoTarget));
+    if (restated.length > 0 && restated.every(Boolean)) {
+      kept.push(typed[0]);
+    }
   }
   return { intoTarget, kept };
 }
 
 /**
- * Places one {@link AssertionConjunction.equatedReadings | group} over the targets of a join-like
+ * Places one conjunct about a single access over the targets of an operation.
+ *
+ * It is discharged rather than restated above in the two ways the identities give: one implying `bound(?x)`
+ * by a target that took it *and* connects it, and a weak or unbound one by every target that may bind `?x`
+ * having taken it.
+ * @param conjunct - The conjunct to place
+ * @param targets - The places it can go
+ * @param intoTarget - The conjuncts per target, which this adds to
+ * @returns whether it still has to be stated above the operation
+ */
+function placeConjunct(conjunct: AssertionConjunct, targets: PushTarget[], intoTarget: AssertionConjunct[][]): boolean {
+  const [ name ] = variablesReadByConjunct(conjunct);
+  const impliesItIsBound = impliesBound(conjunct.assertion);
+  const weakened = asWeakenedConjunct(conjunct);
+  let enforced = false;
+  let toldEveryBinder = true;
+  for (const [ index, target ] of targets.entries()) {
+    if (impliesItIsBound && target.licensed(name)) {
+      intoTarget[index].push(conjunct);
+      enforced ||= target.connects;
+    } else if (weakened !== undefined && target.admitsWeakened(name)) {
+      intoTarget[index].push(weakened);
+    } else {
+      toldEveryBinder &&= !target.mayBind(name);
+    }
+  }
+  return !(impliesItIsBound ? enforced : toldEveryBinder);
+}
+
+/**
+ * Places one {@link AssertionConjunction.equatedGroups | group} over the targets of a join-like
  * operation: each takes the readings it licenses, and the edges connecting what no single target covered
  * stay on top.
  *
@@ -1054,7 +1080,7 @@ function unification(reading: Access, representative: Access): AssertionConjunct
 function entailedByReading(reading: Access): AssertionConjunct {
   return isBareAccess(reading) ?
       { access: reading, assertion: assertBound() } :
-      { access: readThrough(reading), assertion: assertTermType('Quad') };
+      { access: readThrough(reading), assertion: assertTermType(tripleTermRange) };
 }
 
 /**
@@ -1068,7 +1094,7 @@ function readThrough(reading: Access): Access {
 
 /**
  * The assertions of Θ that may enter the right hand side of a MINUS: the ones about a single variable
- * that Θ holds *strongly*, weakened.
+ * that Θ holds *strongly*, weakened - the term types of a group about every reading of it.
  *
  * A surviving mapping of the LHS binds `?x` to a value, so an RHS mapping can only remove it by not binding
  * `?x` or binding it to that same value - which is why a shape and a term type travel here as readily as a
@@ -1078,7 +1104,10 @@ function readThrough(reading: Access): Access {
  * @returns what may be asserted on the right hand side
  */
 function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjunction {
-  return AssertionConjunction.of(assertions.unaryConjuncts()
+  return AssertionConjunction.of([
+    ...assertions.unaryConjuncts(),
+    ...assertions.equatedGroups().flatMap(group => termTypesOfReadings(group)),
+  ]
     .filter(({ assertion }) => impliesBound(assertion))
     .map(conjunct => asWeakenedConjunct(conjunct))
     .filter(conjunct => conjunct !== undefined));

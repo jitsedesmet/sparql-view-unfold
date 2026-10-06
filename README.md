@@ -121,8 +121,10 @@ paid a little for the extra `DISTINCT` (Q14: 134 ms to 189 ms). Measure on your 
 
 By default the mapping denotes a standard RDF graph: a solution binding a head variable to a term its
 position cannot hold — a literal subject, a blank node predicate — instantiates no triple, exactly as the
-CONSTRUCT the mapping is written as would not. `mappingFromConstructQueries(constructs, {
-generalizedRdfView: true })` keeps those triples instead, for a view that means to present generalized RDF.
+CONSTRUCT the mapping is written as would not. A type test in the mapping body filters those solutions out,
+and the assertion pushdown drops it wherever the rewritten query already guarantees it.
+`mappingFromConstructQueries(constructs, { generalizedRdfView: true })` keeps those triples instead, for a
+view that means to present generalized RDF.
 
 ### Blank nodes
 
@@ -170,7 +172,7 @@ The tables below are the short version; the generated
 | `unfoldingTransformation(mapping, options?)` | The rewriting proper: every triple pattern replaced by the mapping body producing the triples it could match. |
 | `rewriteNonRecursivePathsTransformation()` | Expands non-recursive property paths into BGPs and UNIONs. Belongs before the unfolding. |
 | `filterFalseTransformation()` | Lets every `FILTER(FALSE)` absorb what stands over it, sub-SELECTs included. |
-| `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))` as deep as it goes: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
+| `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))`, `FILTER(sameTerm(?x, ?y))` and term type tests like `FILTER(isIRI(?x) \|\| isBLANK(?x))` as deep as they go: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
 | `pullUpExtendsTransformation()` | Floats every `BIND` as high as the plan allows and drops the ones nothing reads. |
 | `removeProjectionsTransformation()` | Removes inner projections, renaming what they hid to keep the scoping. |
 | `nullifyJoinOverIncompatibleBoundsTransformation()` | Replaces a join whose branches bind one variable to incompatible terms by `FILTER(FALSE)`. |

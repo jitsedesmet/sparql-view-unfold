@@ -4,11 +4,11 @@ import { AssertionClusterSet } from '../datastructures/AssertionClusterSet.js';
 import type { PinChildren, TriplePosition } from '../datastructures/TermClusterSet.js';
 import { childGroupsOf, triplePositions } from '../datastructures/TermClusterSet.js';
 import type { RangeSet } from '../RangeSet.js';
+import { objectRange, rangeOfPosition, tripleTermRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { DerivedVarNamer } from '../utils.js';
 import type {
   Access,
-  AssertableTermType,
   Assertion,
   AssertionConjunct,
   Assertions,
@@ -19,7 +19,6 @@ import {
   accessId,
   compareAccesses,
   componentOf,
-  assertableTermTypes,
   assertBound,
   asAssertionConjuncts,
   assertStrong,
@@ -34,7 +33,6 @@ import {
   isBareAccess,
   isTripleConstruction,
   normalisedTarget,
-  rangeOfTermType,
   sameAccessAs,
 } from './assertions.js';
 import type { CPMeta } from './certainlyBoundVars.js';
@@ -43,6 +41,7 @@ import { booleanConstantOf, conjunctionOf, splitConjunction } from './expression
 import type { AssertionView } from './partialExpressionEvaluation.js';
 import { substituteInExpression } from './partialExpressionEvaluation.js';
 import { DF } from './rdfDatatypes.js';
+import { isSubsetOf } from './setUtils.js';
 
 /**
  * @fileoverview The conjunction of assertions (Θ) the pushdown moves around, and how a filter
@@ -75,6 +74,14 @@ interface Decomposition {
   readonly conjunctsPerGroup: Map<number, readonly AssertionConjunct[]>;
 }
 
+/** A group Θ reads more than one way: the readings of its value, and the term types all of them hold. */
+export interface EquatedGroup {
+  /** The ways of reading the value, representative first. */
+  readings: readonly Access[];
+  /** The term types Θ asserts of the value, `undefined` where it asserts none. */
+  range: RangeSet | undefined;
+}
+
 /**
  * A set of assertions Θ, in the states an assertion about an access can be in:
  *
@@ -83,8 +90,8 @@ interface Decomposition {
  * | strong member of a pinned group      | `sameTerm(?x, c)`                                          |
  * | weak member of a pinned group        | `!bound(?x) ∨ sameTerm(?x, c)`                             |
  * | member of an unpinned group (clique) | `sameTerm(?x, ?rep)`                                       |
- * | group with an asserted term type     | `isIRI(?x)`, `isBLANK(?x)`, `isLITERAL(?x)`, `isTRIPLE(?x)` |
- * | the same, asserted weakly            | `!bound(?x) ∨ is<τ>(?x)`                                   |
+ * | group with asserted term types       | `isIRI(?x) ∨ isBLANK(?x)`, one test per term type          |
+ * | the same, asserted weakly            | `!bound(?x) ∨ isIRI(?x) ∨ …`                               |
  * | member of a shaped group             | one conjunct per position of the shape that says something |
  * | unbound / bound                      | `!bound(?x)` / `bound(?x)`, no term                        |
  *
@@ -240,34 +247,32 @@ export class AssertionConjunction {
     }
     const representative = this.representativeMemberOf(group);
     if (representative === undefined || representative === name) {
-      const termType = this.assertedTermTypeOf(group);
-      return termType === undefined ? assertBound() : assertTermType(termType, isStrong);
+      const range = this.assertedTermTypesOf(group);
+      return range === undefined ? assertBound() : assertTermType(range, isStrong);
     }
     return assertStrong(access(representative));
   }
 
   /**
-   * The kind of term **Θ itself** says the group holds: a condition asserted it outright, or Θ holds
-   * a shape for the group, which is a triple term by being one.
+   * The term types **Θ itself** says the group holds: a condition asserted them outright, or Θ holds a shape
+   * for the group, which is a triple term by being one.
    * @param group - The group to look up
-   * @returns the term type, or `undefined` where Θ says nothing about it
+   * @returns the term types, or `undefined` where Θ says nothing about them
    */
-  private assertedTermTypeOf(group: number): AssertableTermType | undefined {
+  private assertedTermTypesOf(group: number): RangeSet | undefined {
     // Deliberately not {@link TermClusterSet.rangeOf}: that is narrowed by the position the group sits in
     // and by what the operation leaves its variables, which are facts of the plan Θ is written into
     // rather than facts of Θ. Reporting them would put {@link get} at odds with {@link conjuncts},
     // which states only what was asserted.
     if (this.clusters.childrenOf(group) !== undefined) {
-      return 'Quad';
+      return tripleTermRange;
     }
     const asserted = this.clusters.assertedRangeOf(group);
-    return asserted.size === 1 ?
-      assertableTermTypes.find(termType => asserted.has(termType)) :
-      undefined;
+    return isSubsetOf(objectRange, asserted) ? undefined : asserted;
   }
 
   /**
-   * The independent conjuncts Θ decomposes into: one per {@link equatedReadings | reading} of every
+   * The independent conjuncts Θ decomposes into: one per {@link equatedGroups | reading} of every
    * group it can reach from a named variable, plus the two term-less forms.
    * @returns the conjuncts, every one of them pointing at the representative of its group so that a re-run
    * of the pass absorbs what it finds instead of stacking it
@@ -307,43 +312,73 @@ export class AssertionConjunction {
   /**
    * The conjuncts of Θ about one access alone: what it is fixed to, which kind of term it is, whether it
    * is bound.
-   * @returns {@link conjuncts} without the edges, which are the only conjuncts mentioning two accesses and
-   * so the only ones a rule cannot decide by looking at a single one
+   * @returns {@link conjuncts} without the edges, which are the only conjuncts mentioning two accesses, and
+   * without the term types of an {@link equatedGroups | equated group}, which hold of all of its readings
    */
   public unaryConjuncts(): AssertionConjunct[] {
-    return this.conjuncts().filter(conjunct => !isEdgeConjunct(conjunct));
+    return this.conjunctsAndEquatedGroups().conjuncts.filter(conjunct => !isEdgeConjunct(conjunct));
   }
 
   /**
-   * Every group Θ names more than one way, as the ways of naming its value: a variable that is a member
-   * of it, or a position of a shape, read from the representative of the group holding that shape.
+   * Every group Θ names more than one way, as the ways of naming its value - a variable that is a member of
+   * it, or a position of a shape, read from the representative of the group holding that shape - and the
+   * term types those readings hold.
    *
    * Several readings is the statement that they are equal - a clique for a group of variables, one edge for
    * `sameTerm(SUBJECT(?o), ?s)`, and the two are one thing here. A rule deciding per reading would split
    * such a group into pieces that no longer say it, so it splits the *edges* instead (`splitClique` in the pushdown).
    * A group pinned to a term is not one of them: every reading of it is that term, which already states it.
-   * @returns the readings per group, each list representative first
+   * @returns the groups, the readings of each representative first
    */
-  public equatedReadings(): (readonly Access[])[] {
-    const result: (readonly Access[])[] = [];
+  public equatedGroups(): EquatedGroup[] {
+    const result: EquatedGroup[] = [];
     for (const [ group, readings ] of this.readingsPerGroup()) {
       if (this.clusters.pinOf(group)?.kind !== 'term' && readings.length > 1) {
-        result.push(readings);
+        result.push({ readings, range: this.assertedTermTypesOf(group) });
       }
     }
     return result;
   }
 
   /**
-   * Splits Θ in two: a conjunct all of whose variables match `predicate` goes inside, the rest outside.
+   * {@link conjuncts} without the term types of the equated groups, beside those groups: what a rule placing
+   * Θ a piece at a time works on.
+   * @returns the conjuncts and the equated groups
+   */
+  private conjunctsAndEquatedGroups(): { conjuncts: AssertionConjunct[]; groups: EquatedGroup[] } {
+    const groups = this.equatedGroups();
+    const typedRepresentatives = new Set(groups
+      .filter(group => group.range !== undefined)
+      .map(group => accessId(group.readings[0])));
+    return {
+      conjuncts: this.conjuncts().filter(({ access: read, assertion }) =>
+        assertion.subType !== 'termType' || !typedRepresentatives.has(accessId(read))),
+      groups,
+    };
+  }
+
+  /**
+   * Splits Θ in two: a conjunct all of whose variables match `predicate` goes inside, the rest outside, and
+   * inside learns the term types of a group of each of its readings that match.
    * @param predicate - Which variables belong inside
-   * @returns the two halves, which together hold every conjunct and so are equivalent to the whole
+   * @returns the two halves, which together are equivalent to the whole
    */
   public split(predicate: (name: string) => boolean): { inside: AssertionConjunction; outside: AssertionConjunction } {
     const inside: AssertionConjunct[] = [];
     const outside: AssertionConjunct[] = [];
-    for (const conjunct of this.conjuncts()) {
+    const { conjuncts, groups } = this.conjunctsAndEquatedGroups();
+    for (const conjunct of conjuncts) {
       (variablesReadByConjunct(conjunct).every(predicate) ? inside : outside).push(conjunct);
+    }
+    for (const group of groups) {
+      // The edges outside carry what holds of one reading inside onto all the others.
+      const typed = termTypesOfReadings(group);
+      const typedInside = typed.filter(conjunct => predicate(conjunct.access.name));
+      if (typedInside.length > 0) {
+        inside.push(...typedInside);
+      } else {
+        outside.push(...typed.slice(0, 1));
+      }
     }
     return { inside: AssertionConjunction.of(inside), outside: AssertionConjunction.of(outside) };
   }
@@ -516,10 +551,35 @@ export class AssertionConjunction {
             // Cannot fail: `?x` is neither `bound` nor a strong member, the two states it rejects.
             result.assertUnbound(name);
           }
+          result.forgetTermTypesEntailedBy(name, vRanges.rangeOf(name), cVars);
         }
       }
     }
     return result;
+  }
+
+  /**
+   * Forgets the term types asserted of the group of `name` where the operation already confines `name` to
+   * them: every value of the group is the one `name` holds, so T⟨?x : R⟩ comes to B⟨?x⟩ there.
+   * @param name - A member of a group, read against the operation
+   * @param range - The term types the operation leaves `name`
+   * @param cVars - The variables the operation certainly binds
+   */
+  private forgetTermTypesEntailedBy(name: string, range: RangeSet, cVars: ReadonlySet<string>): void {
+    const group = this.clusters.groupOf(name);
+    if (group === undefined || this.clusters.pinOf(group) !== undefined ||
+      this.assertedTermTypesOf(group) === undefined || !isSubsetOf(range, this.clusters.assertedRangeOf(group))) {
+      return;
+    }
+    this.clusters.forgetAssertedRange(group);
+    if (this.readingsPerGroup().get(group)?.length === 1) {
+      // Nothing is left of the group but that its member is bound, which a weak member does not even say.
+      const strong = this.isStrong(access(name));
+      this.removeMember(name);
+      if (strong && !cVars.has(name)) {
+        this.bound.add(name);
+      }
+    }
   }
 
   /**
@@ -540,18 +600,21 @@ export class AssertionConjunction {
     // reading it yields one, and dropping it would lose the solutions where the expression errored.
     const wasBound = result.bound.delete(name);
     result.unbound.delete(name);
-    if (wasBound && !result.assertReadingYieldValue(replacement)) {
-      return undefined;
-    }
-    if (result.clusters.groupOf(name) === undefined) {
-      return result;
-    }
+    const grouped = result.clusters.groupOf(name) !== undefined;
+    const yieldsValue = wasBound || (grouped && result.isStrong(access(name)));
     // The replacement takes over before `name` leaves, so that a group nothing else names does not go
     // away between the two - with it, the shape it carries and the anonymous groups that shape holds.
-    if (!result.assertRestatedOn(access(name), replacement)) {
+    if (grouped && !result.assertRestatedOn(access(name), replacement)) {
       return undefined;
     }
-    result.removeMember(name);
+    // What a construction's positions have to be for it to yield a value has to outlive the shape that
+    // leaves with `name`.
+    if (yieldsValue && !result.assertSourceYields(replacement, objectRange)) {
+      return undefined;
+    }
+    if (grouped) {
+      result.removeMember(name);
+    }
     return result;
   }
 
@@ -572,17 +635,19 @@ export class AssertionConjunction {
   }
 
   /**
-   * Conjoins what the source has to satisfy for reading it to yield a value at all, which is what B⟨?x⟩ on a
-   * transferred target comes to.
+   * Conjoins that reading the source yields a value of one of the term types of `range`: a construction
+   * yields one only where every position does, of a term type the position admits.
    * @param source - What carries the target's value below
+   * @param range - The term types the value may have
    * @returns `false` on a contradiction
    */
-  private assertReadingYieldValue(source: TransferSource): boolean {
+  private assertSourceYields(source: TransferSource, range: RangeSet): boolean {
     if (isTripleConstruction(source)) {
-      return triplePositions.every(position => this.assertReadingYieldValue(source[position]));
+      return range.has('Quad') && triplePositions.every(position =>
+        this.assertSourceYields(source[position], rangeOfPosition(position)));
     }
-    const access = normalisedTarget(source);
-    return !targetIsAccess(access) || this.assertUnify(access, access);
+    const target = normalisedTarget(source);
+    return targetIsAccess(target) ? this.assertTermType(target, range, true) : range.has(target.termType);
   }
 
   /**
@@ -602,7 +667,7 @@ export class AssertionConjunction {
         return this.assertBound(rootVarOfBare(access, 'bound'));
       }
       case 'termType': {
-        return this.assertTermType(access, assertion.termType, assertion.strong);
+        return this.assertTermType(access, assertion.range, assertion.strong);
       }
       case 'strong': {
         return targetIsAccess(assertion.term) ?
@@ -648,16 +713,22 @@ export class AssertionConjunction {
   }
 
   /**
-   * Conjoins T⟨a : τ⟩ - `isIRI(a)`, `isBLANK(a)`, `isLITERAL(a)`, `isTRIPLE(a)` - or its weak form,
-   * narrowing the group `a` names to the one kind of term it may hold.
+   * Conjoins T⟨a : R⟩, or its weak form, narrowing the group `a` names to the term types of `R`.
    * @param access - The access to narrow
-   * @param termType - The kind of term it holds
+   * @param range - The term types it may hold
    * @param strong - Whether it holds outright, rather than only where its root is bound
    * @returns `false` on a contradiction
    */
-  public assertTermType(access: Access, termType: AssertableTermType, strong: boolean): boolean {
-    return this.narrowing(access, strong, (clusters, group) =>
-      clusters.assertTermTypeRange(group, rangeOfTermType(termType)));
+  public assertTermType(access: Access, range: RangeSet, strong: boolean): boolean {
+    if (!isSubsetOf(rangeOfAccess(access), range)) {
+      return this.narrowing(access, strong, (clusters, group) => clusters.assertTermTypeRange(group, range));
+    }
+    // A test every value of the access passes asks only that it is read: that a variable is bound, or that
+    // what a position is read through is a triple term.
+    if (isBareAccess(access)) {
+      return strong ? this.assertBound(access.name) : true;
+    }
+    return this.narrowing(access, strong, () => true);
   }
 
   /**
@@ -692,12 +763,9 @@ export class AssertionConjunction {
    */
   public assertUnify(left: Access, right: Access): boolean {
     if (sameAccessAs(left, right)) {
-      // `sameTerm(a, a)` says only that `a` is bound - which for a bare variable is B⟨?x⟩, and for an
-      // accessor is that what it reads *through* is a triple term. Not that `a` itself is one: opening
-      // the access shapes every group on the way to it and leaves the group it names alone.
-      return isBareAccess(left) ?
-        this.assertBound(left.name) :
-        this.assertStrongly(left.name, target => target.assertAccessAndResolve(left) !== false);
+      // `sameTerm(a, a)` says only that `a` is read, as a test every term passes does: B⟨?x⟩ for a bare
+      // variable, and for an accessor that what it reads *through* is a triple term - not that `a` is one.
+      return this.assertTermType(left, objectRange, true);
     }
     this.remember(left.name);
     this.remember(right.name);
@@ -926,9 +994,9 @@ export class AssertionConjunction {
     for (const access of rest) {
       result.push({ access, assertion: assertStrong(representative) });
     }
-    const termType = this.termTypeToState(group, walk);
-    if (termType !== undefined) {
-      result.push({ access: representative, assertion: assertTermType(termType, this.isStrong(representative)) });
+    const range = this.termTypesToState(group, walk);
+    if (range !== undefined) {
+      result.push({ access: representative, assertion: assertTermType(range, this.isStrong(representative)) });
     } else if (result.length === 0 && isBareAccess(representative) && this.clusters.childrenOf(group) === undefined) {
       // A group of one, with nothing for that one to equal: all that is left of it is that it is bound.
       // A shape is never that - what it holds says everything this would - and neither is a position of
@@ -939,22 +1007,21 @@ export class AssertionConjunction {
   }
 
   /**
-   * The kind of term the group has to be *told* to be: only what is not already entailed by the rest of what
+   * The term types the group has to be *told* to be: only what is not already entailed by the rest of what
    * the group writes out, since restating it would stop the pass being idempotent.
    * @param group - The group to look at
    * @param walk - The decomposition being written
-   * @returns the term type, or `undefined` when nothing has to be told
+   * @returns the term types, or `undefined` when nothing has to be told
    */
-  private termTypeToState(group: number, walk: Decomposition): AssertableTermType | undefined {
+  private termTypesToState(group: number, walk: Decomposition): RangeSet | undefined {
     if (this.clusters.pinOf(group)?.kind === 'term') {
       return undefined;
     }
     if (this.clusters.childrenOf(group) !== undefined) {
       // I have kids, so I should assert that if they don't speak up
-      return this.shapeIsWitnessed(group, walk) ? undefined : 'Quad';
+      return this.shapeIsWitnessed(group, walk) ? undefined : tripleTermRange;
     }
-    const asserted = this.clusters.assertedRangeOf(group);
-    return asserted.size === 1 ? assertableTermTypes.find(termType => asserted.has(termType)) : undefined;
+    return this.assertedTermTypesOf(group);
   }
 
   /**
@@ -999,7 +1066,7 @@ export class AssertionConjunction {
    * - `FILTER(sameTerm(SUBJECT(?o), :a))` - the subject position has one reading, so no edge; it writes
    *   `SUBJECT(?o) = :a` from that single reading.
    * Memoised per state of {@link clusters}, which is the only thing the walk reads: an operation asks for the
-   * decomposition several times over ({@link conjuncts}, {@link equatedReadings}, {@link patternValues}), and
+   * decomposition several times over ({@link conjuncts}, {@link equatedGroups}, {@link patternValues}), and
    * the walk is a BFS over every group plus a sort per group. Handed out read-only, the memo being shared.
    * @returns the readings per group; a group nothing reaches is left out, being what is left of a shape a
    * variable was taken out of, which nothing may be written about
@@ -1258,7 +1325,7 @@ export class AssertionConjunction {
     const { assertion } = conjunct;
     if (assertion.subType === 'termType') {
       // Only being a triple term is something a pattern can state, by writing the three positions of one.
-      return assertion.strong && value.termType === assertion.termType;
+      return assertion.strong && assertion.range.has(value.termType);
     }
     if (assertion.subType !== 'strong') {
       return false;
@@ -1297,17 +1364,39 @@ export class AssertionConjunction {
   }
 
   /**
-   * Takes a variable out of its group, dropping the group when nothing is left to be equal to.
+   * Takes a variable out of its group, dropping the group when nothing is left to be equal to - a member it
+   * leaves alone in a dropped group keeping the B⟨?x⟩ that being equal to `name` entailed.
    * @param name - The variable to remove
    */
   private removeMember(name: string): void {
+    const group = this.clusters.groupOf(name);
+    const others = group === undefined ? [] : this.namedMembers(group).filter(member => member !== name);
     this.clusters.remove(name);
     this.strength.delete(name);
+    for (const member of others) {
+      if (this.clusters.groupOf(member) === undefined) {
+        this.strength.delete(member);
+        this.bound.add(member);
+      }
+    }
   }
 
   private remember(name: string): void {
     this.order.add(name);
   }
+}
+
+/**
+ * The term types of a group stated of each of its readings, which is how a rule splitting the group hands
+ * them to every piece.
+ * @param group - The group to read
+ * @returns T⟨r : R⟩ per reading `r`, representative first, or nothing where the group has no term types
+ */
+export function termTypesOfReadings(group: EquatedGroup): AssertionConjunct[] {
+  const { range } = group;
+  return range === undefined ?
+      [] :
+    group.readings.map(reading => ({ access: reading, assertion: assertTermType(range) }));
 }
 
 /**
@@ -1324,6 +1413,16 @@ function admitsRange(clusters: AssertionClusterSet, group: number, range: RangeS
   }
   const type = pin.kind === 'term' ? pin.term.termType : 'Quad';
   return clusters.rangeOf(group).meet(range).size > 0 && range.has(type);
+}
+
+/**
+ * The term types any value an access reads can have.
+ * @param read - The access to read
+ * @returns those of the position it reads last, every term type for a variable
+ */
+function rangeOfAccess(read: Access): RangeSet {
+  const position = read.positions.at(-1);
+  return position === undefined ? objectRange : rangeOfPosition(position);
 }
 
 /**

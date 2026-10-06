@@ -77,6 +77,16 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
   }
 
   /**
+   * Forgets what a condition asserted of the group's range, keeping the range it narrowed to: for the term
+   * types something else now states.
+   * @param group - The group to forget the asserted range of
+   */
+  public forgetAssertedRange(group: number): void {
+    this.touch();
+    this.groupToAssertedRange[this.resolveGroup(group)] = objectRange;
+  }
+
+  /**
    * Carries the asserted range of the disappearing group over: both groups hold one value, so it is asserted
    * of that value whichever of them it was asserted of.
    * @param oldGroup - The group disappearing

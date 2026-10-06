@@ -5,6 +5,7 @@ import { isTriplePosition, triplePositions } from '../datastructures/TermCluster
 import { RangeSet } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import { termVars } from './certainlyBoundVars.js';
+import { disjunctionOf, splitDisjunction } from './expressionHelpers.js';
 import { DF } from './rdfDatatypes.js';
 import { unionSets } from './setUtils.js';
 
@@ -91,8 +92,8 @@ const termTypePredicates: Readonly<Record<AssertableTermType, string>> = {
   Quad: 'istriple',
 };
 
-/** The term types, in the order the lattice writes them, for iterating over all of them. */
-export const assertableTermTypes = <AssertableTermType[]> Object.keys(termTypePredicates);
+/** The term types, in the order a term type test writes them, so that one range is always written one way. */
+const assertableTermTypes = <AssertableTermType[]> Object.keys(termTypePredicates);
 
 /**
  * The term type a predicate states, `isURI` reading as the `isIRI` it is a synonym of.
@@ -102,11 +103,6 @@ export const assertableTermTypes = <AssertableTermType[]> Object.keys(termTypePr
 export function asAssertableTermType(operator: string): AssertableTermType | undefined {
   const termAssertion = operator === 'isuri' ? 'isiri' : operator;
   return assertableTermTypes.find(termType => termTypePredicates[termType] === termAssertion);
-}
-
-/** The range a term type narrows a group to - a singleton, a term having exactly one kind. */
-export function rangeOfTermType(termType: AssertableTermType): RangeSet {
-  return new RangeSet([ termType ]);
 }
 
 /** What an assertion fixes an access to: another access, or a ground term. */
@@ -124,8 +120,8 @@ export function targetIsAccess(target: AssertionTarget): target is Access {
  *   may be another access, in which case it is an *edge* of a clique or of a shape.
  * - `weak` is W⟨a ≡ c⟩ ≔ `¬bnd(?x) ∨ sameTerm(a, c)`, which does not - it is what survives a move into
  *   a place that may leave the variable unbound (the RHS of a MINUS, the unlicensed operand of a join).
- * - `termType` is T⟨a : τ⟩ ≔ `isIRI(a)` / `isBLANK(a)` / `isLITERAL(a)` / `isTRIPLE(a)`, with `strong`
- *   recording whether it is asserted outright or only where the root is bound.
+ * - `termType` is T⟨a : R⟩ ≔ `isIRI(a) || isBLANK(a) || …`, one test per term type of the range `R`, with
+ *   `strong` recording whether it is asserted outright or only where the root is bound.
  * - `unbound` is U⟨?x⟩ ≔ `!bound(?x)`, and `bound` is B⟨?x⟩ ≔ `bound(?x)`, which fixes no term at all but
  *   decides the same emptiness rule the strong form does and completes a weak assertion into a strong one.
  *
@@ -147,10 +143,11 @@ export interface WeakAssertion extends BaseAssertion {
   subType: 'weak';
   term: AssertionTarget;
 }
-/** T⟨?x : τ⟩ when `strong`, and `!bound(?x) || is<τ>(?x)` when not. */
+/** T⟨a : R⟩ when `strong`, and `!bound(?x) || T⟨a : R⟩` when not. */
 export interface TermTypeAssertion extends BaseAssertion {
   subType: 'termType';
-  termType: AssertableTermType;
+  /** The term types the access may hold, one of which it does. */
+  range: RangeSet;
   strong: boolean;
 }
 export interface UnboundAssertion extends BaseAssertion {
@@ -189,12 +186,12 @@ export function normalisedTarget(target: AssertionTarget): AssertionTarget {
   return !targetIsAccess(target) && target.termType === 'Variable' ? access(target.value) : target;
 }
 
-/** Creates T⟨?x : τ⟩, or its weak form `!bound(?x) || is<τ>(?x)`. */
-export function assertTermType(termType: AssertableTermType, strong = true): TermTypeAssertion {
+/** Creates T⟨a : R⟩, or its weak form `!bound(?x) || T⟨a : R⟩`. */
+export function assertTermType(range: RangeSet, strong = true): TermTypeAssertion {
   return {
     type: 'assertion',
     subType: 'termType',
-    termType,
+    range,
     strong,
   };
 }
@@ -448,55 +445,82 @@ function decomposedSource(read: Access, source: TransferSource):
     decomposedSource({ name: read.name, positions: [ ...read.positions, position ]}, source[position]));
 }
 
-/**
- * Recognizes T⟨a : τ⟩ - `isIRI(a)`, `isBLANK(a)`, `isLITERAL(a)`, `isTRIPLE(a)` - which says which kind of
- * term `a` is and nothing about which one.
- * @param expression - The conjunct to recognize
- * @returns the conjunct it carries, or `undefined` when it is not one of the four predicates
- */
-function asTermTypeAssertion(expression: Algebra.Expression):
-    (AssertionConjunct & { assertion: TermTypeAssertion }) | undefined {
-  if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.args.length === 1) {
-    const termType = asAssertableTermType(expression.operator);
-    if (termType !== undefined) {
-      const access = asAccess(expression.args[0]);
-      if (access !== undefined) {
-        return { access, assertion: assertTermType(termType) };
-      }
-    }
-  }
-  return undefined;
+/** A term type test: the access it reads, and the term types it holds of. */
+export interface TermTypeTest {
+  access: Access;
+  range: RangeSet;
 }
 
 /**
- * Recognizes the weak conjuncts a condition carries: `!bound(?x) || φ`, where `φ` is a strong assertion
- * about `?x` and about nothing else.
+ * Reads a term type test: `isIRI(a)`, `isBLANK(a)`, `isLITERAL(a)`, `isTRIPLE(a)`, or a disjunction of them
+ * over one access, however the `||` nests.
+ * @param expression - The expression to read
+ * @returns the test, or `undefined` when the expression is not one
+ */
+export function asTermTypeTest(expression: Algebra.Expression): TermTypeTest | undefined {
+  return termTypeTestOf(splitDisjunction(expression));
+}
+
+/**
+ * The term type test a list of disjuncts makes together.
+ * @param disjuncts - The disjuncts to read
+ * @returns the test, or `undefined` unless every disjunct is a term type predicate over one same access
+ */
+function termTypeTestOf(disjuncts: readonly Algebra.Expression[]): TermTypeTest | undefined {
+  let test: TermTypeTest | undefined;
+  for (const disjunct of disjuncts) {
+    const predicate = asTermTypePredicate(disjunct);
+    if (predicate === undefined || (test !== undefined && !sameAccessAs(test.access, predicate.access))) {
+      return undefined;
+    }
+    test ??= { access: predicate.access, range: new RangeSet() };
+    test.range.add(predicate.termType);
+  }
+  return test;
+}
+
+/**
+ * Reads one term type predicate: `isIRI(a)`, `isBLANK(a)`, `isLITERAL(a)` or `isTRIPLE(a)`.
+ * @param expression - The expression to read
+ * @returns the access it reads and the term type it states, or `undefined` for anything else
+ */
+function asTermTypePredicate(expression: Algebra.Expression):
+  { access: Access; termType: AssertableTermType } | undefined {
+  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR || expression.args.length !== 1) {
+    return undefined;
+  }
+  const termType = asAssertableTermType(expression.operator);
+  const read = termType === undefined ? undefined : asAccess(expression.args[0]);
+  return termType === undefined || read === undefined ? undefined : { access: read, termType };
+}
+
+/**
+ * Recognizes the weak conjuncts a condition carries: `!bound(?x) || φ`, where `φ` is a strong assertion or a
+ * term type test about `?x` and about nothing else.
  * @param expression - The conjunct to recognize
  * @returns the conjunct it carries, or `undefined` when it is not of that shape
  */
 function asWeakAssertion(expression: Algebra.Expression): AssertionConjunct[] | undefined {
-  if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === '||' &&
-    expression.args.length === 2) {
-    for (const [ index, arg ] of expression.args.entries()) {
-      const unbound = variableOfNotBound(arg);
-      if (unbound === undefined) {
-        continue;
-      }
-      const other = expression.args[index === 0 ? 1 : 0];
-      const typed = asTermTypeAssertion(other);
-      if (typed === undefined) {
-        const strong = asStrongAssertion(other);
-        if (strong?.length === 1) {
-          const [{ access, assertion }] = strong;
-          // A weak *edge* is not a state the conjunction can be in - weakening one is the unsound merge
-          // that form does not exist to avoid - so an edge is left standing as an ordinary residual.
-          if (access.name === unbound && !targetIsAccess(assertion.term)) {
-            return [{ access, assertion: assertWeak(assertion.term) }];
-          }
-        }
-      } else if (accessId(typed.access) === unbound) {
-        return [{ access: typed.access, assertion: assertTermType(typed.assertion.termType, false) }];
-      }
+  const disjuncts = splitDisjunction(expression);
+  const unboundIndex = disjuncts.findIndex(disjunct => variableOfNotBound(disjunct) !== undefined);
+  if (unboundIndex === -1 || disjuncts.length < 2) {
+    return undefined;
+  }
+  const unbound = variableOfNotBound(disjuncts[unboundIndex]);
+  const others = disjuncts.filter((_, index) => index !== unboundIndex);
+  const test = termTypeTestOf(others);
+  if (test !== undefined) {
+    return test.access.name === unbound ?
+        [{ access: test.access, assertion: assertTermType(test.range, false) }] :
+      undefined;
+  }
+  const strong = others.length === 1 ? asStrongAssertion(others[0]) : undefined;
+  if (strong?.length === 1) {
+    const [{ access, assertion }] = strong;
+    // A weak *edge* is not a state the conjunction can be in - weakening one is the unsound merge that form
+    // does not exist to avoid - so an edge is left standing as an ordinary residual.
+    if (access.name === unbound && !targetIsAccess(assertion.term)) {
+      return [{ access, assertion: assertWeak(assertion.term) }];
     }
   }
   return undefined;
@@ -516,9 +540,9 @@ export function asAssertionConjuncts(expression: Algebra.Expression): AssertionC
   if (weak !== undefined) {
     return weak;
   }
-  const typed = asTermTypeAssertion(expression);
-  if (typed !== undefined) {
-    return [ typed ];
+  const test = asTermTypeTest(expression);
+  if (test !== undefined) {
+    return [{ access: test.access, assertion: assertTermType(test.range) }];
   }
   const unbound = variableOfNotBound(expression);
   if (unbound !== undefined) {
@@ -550,7 +574,7 @@ function variableOfNotBound(expression: Algebra.Expression): string | undefined 
 }
 
 /** The expression reading an access: the variable, wrapped in one accessor per position it reads. */
-function accessAsExpression(c: TransformationContext, access: Access): Algebra.Expression {
+function accessAsExpression(c: Pick<TransformationContext, 'AF'>, access: Access): Algebra.Expression {
   return access.positions.reduce<Algebra.Expression>(
     (inner, position) => c.AF.createOperatorExpression(position, [ inner ]),
     c.AF.createTermExpression(DF.variable(access.name)),
@@ -574,13 +598,22 @@ Algebra.Expression {
   ]);
 }
 
-/** Creates T⟨a : τ⟩: the predicate that states `τ`, applied to `a`. */
-function termTypeAssertionAsExpression(
-  c: TransformationContext,
+/**
+ * Creates T⟨a : R⟩: one predicate per term type of `R`, joined by `||` in a fixed order, so that a range
+ * reads back as itself.
+ * @param c - Object containing the algebra factory
+ * @param access - The access to test
+ * @param range - The term types it may hold, at least one
+ * @returns the test
+ */
+export function termTypeTestExpression(
+  c: Pick<TransformationContext, 'AF'>,
   access: Access,
-  termType: AssertableTermType,
+  range: RangeSet,
 ): Algebra.Expression {
-  return c.AF.createOperatorExpression(termTypePredicates[termType], [ accessAsExpression(c, access) ]);
+  return disjunctionOf(c, assertableTermTypes
+    .filter(termType => range.has(termType))
+    .map(termType => c.AF.createOperatorExpression(termTypePredicates[termType], [ accessAsExpression(c, access) ])));
 }
 
 /**
@@ -642,7 +675,7 @@ Algebra.Expression {
       return weakAssertionAsExpression(c, access, assertion.term);
     }
     case 'termType': {
-      const typed = termTypeAssertionAsExpression(c, access, assertion.termType);
+      const typed = termTypeTestExpression(c, access, assertion.range);
       return assertion.strong ? typed : weakenedExpression(c, access.name, typed);
     }
   }
@@ -684,7 +717,7 @@ export function asWeakenedConjunct(conjunct: AssertionConjunct): AssertionConjun
       return undefined;
     }
     case 'termType': {
-      return assertion.strong ? { access, assertion: assertTermType(assertion.termType, false) } : conjunct;
+      return assertion.strong ? { access, assertion: assertTermType(assertion.range, false) } : conjunct;
     }
     case 'strong': {
       return targetIsAccess(assertion.term) ? undefined : { access, assertion: assertWeak(assertion.term) };
