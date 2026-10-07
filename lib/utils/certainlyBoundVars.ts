@@ -434,8 +434,8 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       //
       // What the *pattern* says about it only holds on top of that where the pattern binds it certainly.
       // Where it does not, the solutions leaving it unbound down there take the graph name and nothing
-      // else, so `P`'s range does not narrow: `GRAPH ?g { OPTIONAL { VALUES ?g { "l" } } }` binds `?g` to
-      // a graph name whenever the OPTIONAL misses, where intersecting reports it as never bound at all.
+      // else, so `P`'s range does not narrow: `GRAPH ?g { ?x ?p ?o OPTIONAL { VALUES (?x ?g) { (:a "l") } } }`
+      // binds `?g` to a graph name whenever the OPTIONAL misses, where intersecting reports it as never bound.
       const ranges = new VRanges(input.metadata.vRanges);
       for (const name of graphVars) {
         if (input.metadata.cVars.has(name)) {

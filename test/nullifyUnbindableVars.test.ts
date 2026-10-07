@@ -55,8 +55,8 @@ describe('nullifyUnbindableVars', () => {
 
   it('leaves a GRAPH whose name only an OPTIONAL disagrees with alone', ({ expect }) => {
     const inner = c.AF.createLeftJoin(
-      c.AF.createBgp([]),
-      c.AF.createValues([ g ], [{ g: c.DF.literal('l') }]),
+      c.AF.createBgp([ c.AF.createPattern(x, c.DF.variable('p'), c.DF.variable('o')) ]),
+      c.AF.createValues([ x, g ], [{ x: c.DF.namedNode('ex://a'), g: c.DF.literal('l') }]),
     );
     expect(isFilterFalse(c, nullifyUnbindableVars(c, c.AF.createGraph(inner, g)))).toBe(false);
   });
