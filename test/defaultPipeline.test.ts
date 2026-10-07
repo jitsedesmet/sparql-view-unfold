@@ -54,3 +54,35 @@ describe('the default pipeline over an OPTIONAL', () => {
     )).toContain('OPTIONAL');
   });
 });
+
+describe('the default pipeline over a generic FILTER', () => {
+  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+    'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }',
+    'CONSTRUCT { ?s <ex://r> ?x } WHERE { ?s <ex://t> ?x . ?x <ex://u> ?z }',
+  ])));
+
+  it('sinks each conjunct onto the source pattern binding what it reads', async({ expect }) => {
+    // Each conjunct passes the join, the sub-SELECT of its pattern and the BIND renaming its variable.
+    expect((await rewriter.rewriteQuery(
+      'SELECT * { ?s <ex://p> ?o . ?s <ex://r> ?x FILTER(?x > 5 && REGEX(STR(?o), "a")) }',
+    )).trim()).toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) ( ?uq_x AS ?x ) WHERE {
+  {
+    {
+      ?v_0 <ex://q> ?v_1 .
+      FILTER ( REGEX( STR( ?v_1 ) , "a" ) )
+    }
+    BIND( ?v_1 AS ?uq_o )
+    BIND( ?v_0 AS ?uq_s )
+  }
+  {
+    {
+      ?v_4 <ex://t> ?v_3 .
+      ?v_3 <ex://u> ?v_5 .
+      FILTER ( ( ?v_3 > "5"^^<http://www.w3.org/2001/XMLSchema#integer> ) )
+    }
+    BIND( ?v_4 AS ?uq_s )
+    BIND( ?v_3 AS ?uq_x )
+  }
+}`);
+  });
+});

@@ -53,3 +53,75 @@ export function projectSolutionExistence(
 ): Algebra.Project {
   return c.AF.createProject(operation, [ c.coinExistenceVariable() ]);
 }
+
+/**
+ * Rebuilds a MINUS over new operands, keeping the graph-scope marker that tells an engine which `?g`, bound
+ * outside the MINUS, its disjointness test ignores.
+ * @param c - The transformation context
+ * @param minus - The MINUS to rebuild
+ * @param left - Its new left operand
+ * @param right - Its new right operand
+ * @returns the rebuilt MINUS
+ */
+export function rebuildMinus(
+  c: TransformationContext,
+  minus: Algebra.Minus,
+  left: Algebra.Operation,
+  right: Algebra.Operation,
+): Algebra.Minus {
+  const rebuilt = c.AF.createMinus(left, right);
+  if (minus.graphScopeVar !== undefined) {
+    rebuilt.graphScopeVar = minus.graphScopeVar;
+  }
+  return rebuilt;
+}
+
+/** The operations of one input a rewrite rebuilds over a new input, everything else about them unchanged. */
+export type SingleInputOperation = Algebra.Distinct | Algebra.Reduced | Algebra.OrderBy | Algebra.From |
+  Algebra.Slice | Algebra.Project | Algebra.Group | Algebra.Graph;
+
+/**
+ * Rebuilds a single-input operation over a new input, through the factory so that no cached metadata comes
+ * along.
+ * @param c - The transformation context
+ * @param op - The operation to rebuild
+ * @param input - Its new input
+ * @returns the rebuilt operation
+ */
+export function rebuildOverInput(
+  c: TransformationContext,
+  op: SingleInputOperation,
+  input: Algebra.Operation,
+): Algebra.Operation {
+  switch (op.type) {
+    case Algebra.Types.DISTINCT:
+      return c.AF.createDistinct(input);
+    case Algebra.Types.REDUCED:
+      return c.AF.createReduced(input);
+    case Algebra.Types.ORDER_BY:
+      return c.AF.createOrderBy(input, op.expressions);
+    case Algebra.Types.FROM:
+      return c.AF.createFrom(input, op.default, op.named);
+    case Algebra.Types.SLICE:
+      return c.AF.createSlice(input, op.start, op.length);
+    case Algebra.Types.PROJECT:
+      return c.AF.createProject(input, op.variables);
+    case Algebra.Types.GROUP:
+      return c.AF.createGroup(input, op.variables, op.aggregates);
+    case Algebra.Types.GRAPH:
+      return c.AF.createGraph(input, op.name);
+  }
+}
+
+/**
+ * The variables a GROUP groups on and passes through: its keys, except one an aggregate writes over.
+ * @param group - The grouping
+ * @returns the names of those keys
+ */
+export function groupingKeysOf(group: Algebra.Group): Set<string> {
+  const keys = new Set(group.variables.map(variable => variable.value));
+  for (const aggregate of group.aggregates) {
+    keys.delete(aggregate.variable.value);
+  }
+  return keys;
+}

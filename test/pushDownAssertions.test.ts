@@ -1544,6 +1544,12 @@ GROUP BY ?x?y`,
       );
     });
 
+    it('leaves an assertion on a variable the solution substitutes into an EXISTS alone', ({ expect }) => {
+      // ?y is bound by the solution the EXISTS is asked about, though nothing in its pattern binds it.
+      const query = 'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?x :q ?z FILTER(sameTerm(?z, ?y)) } }';
+      expect(transform(query)).toEqual(c.generator.generate(toAst(parseQuery(c, prefixes + query))).trim());
+    });
+
     it('re-serialises to valid SPARQL, never emitting BOUND of a term', ({ expect }) => {
       // What may not happen is substituting the term into the `BOUND` - `BOUND(<ex://c>)` does not parse -
       // so it folds to `true` instead, and that is what takes the whole `BOUND(?z) || BOUND(?x)` conjunct
@@ -1551,9 +1557,8 @@ GROUP BY ?x?y`,
       // matter here; the fold is licensed by the *sibling* conjunct `sameTerm(?x, :c)`, since a solution
       // this filter keeps has to satisfy that one too, and it implies `bound(?x)`. The test below shows
       // the disjunction surviving where no assertion decides one of its sides.
-      // The `FILTER(BOUND(?x))` inside the EXISTS is a bound assertion of its own, met by the traversal
-      // in the pattern it stands in: the BGP there binds ?x certainly, so it holds of every solution and
-      // disappears. The assertion on ?x outside says nothing about it - EXISTS is scoped separately.
+      // The `FILTER(BOUND(?x))` inside the EXISTS stays: the traversal does not enter the pattern of an
+      // EXISTS, whose variables the outer solution is substituted into.
       const result = transform(`SELECT * WHERE {
         ?x :p ?y
         OPTIONAL { ?y :q ?z }
@@ -1568,7 +1573,10 @@ GROUP BY ?x?y`,
     ?y <ex://q> ?z .
   }
   FILTER ( EXISTS {
-    ?w <ex://r> ?x .
+    {
+      ?w <ex://r> ?x .
+      FILTER ( BOUND( ?x ) )
+    }
   }
   )
 }`);

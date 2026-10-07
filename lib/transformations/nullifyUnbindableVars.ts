@@ -1,8 +1,9 @@
-import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { withCpVars } from '../utils/certainlyBoundVars.js';
+import { keepMetadata, mapOperationPreOrderKeepingMetadata } from '../utils/metadataKeepingTraversal.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 
 /**
@@ -28,9 +29,6 @@ import { createFilterFalse } from '../utils/operationhelpers.js';
  * the day the unfolding starts producing empty ranges of its own.
  */
 
-/** Metadata is a cache to carry along, never a tree to iterate into: its sets do not survive that. */
-const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
-
 /**
  * Replaces every operation whose ranges prove it has no solutions by the empty solution multiset.
  * @param c - The transformation context
@@ -41,13 +39,8 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // After:  the GRAPH replaced by FILTER(false), since no graph is named by a literal.
  */
 export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
-    Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => nullifyIfProvenEmpty(c, copy) ]),
-  );
-  // Starting from a copy without metadata gives us both a tree of our own to rewrite and the guarantee
-  // that what `withCpVars` hands us describes the plan as it is now - and clearing it again on the way
-  // out, since what the traversal cached describes the plan as this pass found it.
-  return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(op), callbacks));
+  return mapOperationPreOrderKeepingMetadata(op, Object.fromEntries(Object.values(Algebra.Types)
+    .map(type => [ type, (copy: Algebra.Operation) => nullifyIfProvenEmpty(c, copy) ])));
 }
 
 /**
