@@ -9,7 +9,8 @@ import { rangeOfPosition } from './RangeSet.js';
 import type { TransformationContext } from './transformContext.js';
 import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
 import type { Mapping, MappingHead } from './types.js';
-import { access, termTypeTestExpression } from './utils/assertions.js';
+import type { AssertionConjunct } from './utils/assertions.js';
+import { access, assertBound, assertTermType, conjunctAsExpression } from './utils/assertions.js';
 import type { VRanges } from './utils/certainlyBoundVars.js';
 import { withCpVars } from './utils/certainlyBoundVars.js';
 import { conjunctionOf, unstableOperators } from './utils/expressionHelpers.js';
@@ -101,28 +102,26 @@ function assertTemplateTriplePositionsAreAdmissible(templateTriple: RDF.BaseQuad
  *
  * A constant is settled when the mapping is built and needs none; a variable needs one exactly when the
  * body could bind it outside the range its position admits, which is what makes these free for the mappings
- * that keep every variable in the position it was read from. They are written the way the assertion pushdown
- * reads and writes a term type test, which is what lets it carry them.
- * @param tools - The factories to build with
+ * that keep every variable in the position it was read from. They are the term type assertions the assertion
+ * pushdown carries.
  * @param templateTerm - The term the position holds
  * @param admissibleRange - The term types that position admits
  * @param bodyRanges - What the body can bind each of its variables to
- * @returns one expression per variable needing one, recursing into a triple term
+ * @returns T⟨?x : R⟩ per variable needing one, recursing into a triple term
  */
 function headPositionTypeTests(
-  tools: MappingConstructionTools,
   templateTerm: RDF.Term,
   admissibleRange: RangeSet,
   bodyRanges: VRanges,
-): Algebra.Expression[] {
+): AssertionConjunct[] {
   if (templateTerm.termType === 'Quad') {
     return triplePositions.flatMap(position =>
-      headPositionTypeTests(tools, templateTerm[position], rangeOfPosition(position), bodyRanges));
+      headPositionTypeTests(templateTerm[position], rangeOfPosition(position), bodyRanges));
   }
   if (templateTerm.termType !== 'Variable' || isSubsetOf(bodyRanges.rangeOf(templateTerm.value), admissibleRange)) {
     return [];
   }
-  return [ termTypeTestExpression(tools, access(templateTerm.value), admissibleRange) ];
+  return [{ access: access(templateTerm.value), assertion: assertTermType(admissibleRange) }];
 }
 
 /**
@@ -166,16 +165,17 @@ function mappingOfSingleTemplateTriple(
   // is one its position can hold, so the solutions failing either do not belong to the mapping. Variables
   // that are certainly bound, or certainly of a term type the position admits, already need no condition.
   const { cVars: certainlyBoundVariableNames, vRanges: bodyRanges } = withCpVars(constructBody).metadata;
-  const conditions: Algebra.Expression[] = headVariableNames
+  const conditions: AssertionConjunct[] = headVariableNames
     .filter(name => !certainlyBoundVariableNames.has(name))
-    .map(name => AF.createOperatorExpression('bound', [ AF.createTermExpression(DF.variable(name)) ]));
+    .map(name => ({ access: access(name), assertion: assertBound() }));
   if (options.generalizedRdfView !== true) {
     conditions.push(...triplePositions.flatMap(position =>
-      headPositionTypeTests(tools, head[position], rangeOfPosition(position), bodyRanges)));
+      headPositionTypeTests(head[position], rangeOfPosition(position), bodyRanges)));
   }
   let body: Algebra.Operation = constructBody;
   if (conditions.length > 0) {
-    body = AF.createFilter(body, conjunctionOf(tools, conditions));
+    body = AF.createFilter(body, conjunctionOf(tools, conditions
+      .map(condition => conjunctAsExpression(tools, condition))));
   }
   return {
     head,

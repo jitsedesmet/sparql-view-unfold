@@ -1,11 +1,9 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
-import type { RangeSet } from '../RangeSet.js';
-import { tripleTermRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import type { AssertionFilter } from '../utils/assertionConjunction.js';
+import type { AssertionFilter, EquatedGroup } from '../utils/assertionConjunction.js';
 import {
   AssertionConjunction,
   collectAssertions,
@@ -16,17 +14,15 @@ import type { Access, AssertionConjunct, Assertions } from '../utils/assertions.
 import {
   accessId,
   asTransferSource,
-  assertBound,
   assertStrong,
   assertTermType,
   compareAccesses,
+  entailedByReading,
   variablesReadByConjunct,
   hasTarget,
   impliesBound,
   targetIsAccess,
   isAssertableTerm,
-  isBareAccess,
-  readThrough,
   substituteInPattern,
   substituteInTerm,
   variablesOfTransferSource,
@@ -568,11 +564,6 @@ function pushIntoExtend(
   const assertionOfTarget = assertions.get(target);
   // The expression is evaluated over the input of the EXTEND, wherever this rewrite ends up putting it.
   const { cVars } = cpMetaOf(extend.input);
-  // SPARQL spec keeps BINDing an in-scope variable explicitly undefined. We assume it errors,
-  // so in `bind(e AS ?x)` ?x is not bound below the EXTEND. It has to leave Θ before descending,
-  // or the (FBndII) check at the top of the swap wrongly yields empty.
-  const { inside: notAboutTarget, outside: aboutTarget } = assertions.split(name => name !== target);
-
   // A BIND of something Θ can name carries below the EXTEND whatever the target carries above it, so Θ
   // transfers onto it. A source *reading the target* is not one of them: `BIND(?x AS ?x)` binds nothing,
   // the target being unbound below itself, and a construction mentioning it reads a variable that is
@@ -598,6 +589,11 @@ function pushIntoExtend(
       substituteInExpression(c, expression, below.expressionSubstitution(), cVars),
     ));
   }
+
+  // SPARQL spec keeps BINDing an in-scope variable explicitly undefined. We assume it errors,
+  // so in `bind(e AS ?x)` ?x is not bound below the EXTEND. It has to leave Θ before descending,
+  // or the (FBndII) check at the top of the swap wrongly yields empty.
+  const { inside: notAboutTarget, outside: aboutTarget } = assertions.split(name => name !== target);
 
   if (assertionOfTarget?.subType === 'strong' && !targetIsAccess(assertionOfTarget.term) &&
     isAssertableTerm(assertionOfTarget.term)) {
@@ -948,22 +944,19 @@ function placeOverTargets(assertions: AssertionConjunction, targets: PushTarget[
 } {
   const intoTarget: AssertionConjunct[][] = targets.map(() => []);
   const kept: AssertionConjunct[] = [];
-  for (const conjunct of assertions.unaryConjuncts()) {
+  const { unaryConjuncts, equatedGroups } = assertions.unaryConjunctsAndEquatedGroups();
+  for (const conjunct of unaryConjuncts) {
     if (placeConjunct(conjunct, targets, intoTarget)) {
       kept.push(conjunct);
     }
   }
-  for (const group of assertions.equatedGroups()) {
+  for (const group of equatedGroups) {
     const licensedPerTarget = targets.map(target => group.readings.filter(reading => target.licensed(reading.name)));
     const placed = splitClique(group.readings, licensedPerTarget, targets.map(target => target.connects));
     for (const [ index, pushed ] of placed.intoTarget.entries()) {
       intoTarget[index].push(...pushed);
     }
-    kept.push(...placed.kept);
-    if (group.range !== undefined &&
-      placeTermTypesOfGroup(group.readings, group.range, licensedPerTarget, targets, intoTarget)) {
-      kept.push({ access: group.readings[0], assertion: assertTermType(group.range) });
-    }
+    kept.push(...placed.kept, ...placeTermTypesOfGroup(group, licensedPerTarget, targets, intoTarget));
   }
   return { intoTarget, kept };
 }
@@ -971,35 +964,38 @@ function placeOverTargets(assertions: AssertionConjunction, targets: PushTarget[
 /**
  * Places the term types of a group over the targets of an operation: strongly on one reading of every target
  * licensed for any, the edges it takes carrying them to its others, and weakly on each reading it may only bind.
- * @param readings - The readings of the group
- * @param range - The term types they hold
+ * @param group - The group to place the term types of
  * @param licensedPerTarget - Per target, the readings it is licensed for
  * @param targets - The places they can go
  * @param intoTarget - The conjuncts per target, which this adds to
- * @returns whether they still have to be stated above the operation, which the edges kept there spread over
- * the group once a connecting target enforces them of one reading
+ * @returns what has to be stated above the operation: nothing once a connecting target enforces them of one
+ * reading, the edges kept there spreading them over the group, and else the term types of its representative
  */
 function placeTermTypesOfGroup(
-  readings: readonly Access[],
-  range: RangeSet,
+  group: EquatedGroup,
   licensedPerTarget: readonly Access[][],
   targets: PushTarget[],
   intoTarget: AssertionConjunct[][],
-): boolean {
+): AssertionConjunct[] {
+  if (group.range === undefined) {
+    return [];
+  }
+  const strongly = assertTermType(group.range);
+  const weakly = assertTermType(group.range, false);
   let enforced = false;
   for (const [ index, target ] of targets.entries()) {
-    const licensed = licensedPerTarget[index];
-    if (licensed.length > 0) {
-      intoTarget[index].push({ access: licensed[0], assertion: assertTermType(range) });
+    const [ licensed ] = licensedPerTarget[index];
+    if (licensed !== undefined) {
+      intoTarget[index].push({ access: licensed, assertion: strongly });
       enforced ||= target.connects;
     }
-    for (const reading of readings) {
-      if (!licensed.includes(reading) && target.admitsWeakened(reading.name)) {
-        intoTarget[index].push({ access: reading, assertion: assertTermType(range, false) });
+    for (const reading of group.readings) {
+      if (!target.licensed(reading.name) && target.admitsWeakened(reading.name)) {
+        intoTarget[index].push({ access: reading, assertion: weakly });
       }
     }
   }
-  return !enforced;
+  return enforced ? [] : [{ access: group.readings[0], assertion: strongly }];
 }
 
 /**
@@ -1054,7 +1050,8 @@ function splitClique(readings: readonly Access[], licensedPer: Access[][], conne
   const edgesPerBranch = licensedPer.map(licensed => cliqueStar(licensed));
   const intoTarget: AssertionConjunct[][] = licensedPer.map((licensed, index) => edgesPerBranch[index].length > 0 ?
     edgesPerBranch[index].map(([ representative, hub ]) => unification(representative, hub)) :
-    // Means licensed.size is 0 or 1
+    // Licensed for one reading at most, a target learns what taking it entails, the equality it was part of
+    // being unable to travel (S6).
     licensed.map(reading => entailedByReading(reading)));
 
   // Union-find over the readings, joined by every sub-group that both went somewhere and holds above.
@@ -1112,18 +1109,6 @@ function unification(reading: Access, representative: Access): AssertionConjunct
 }
 
 /**
- * What a target licensed for a single reading of a group still learns from it: everything that *taking that
- * reading* entails, which is all that is left when the equality it was part of cannot travel (S6).
- * @param reading - The single reading the target is licensed for
- * @returns B⟨?x⟩ for a variable, and for a position that what it is read through is a triple term
- */
-function entailedByReading(reading: Access): AssertionConjunct {
-  return isBareAccess(reading) ?
-      { access: reading, assertion: assertBound() } :
-      { access: readThrough(reading), assertion: assertTermType(tripleTermRange) };
-}
-
-/**
  * The assertions of Θ that may enter the right hand side of a MINUS: the ones about a single variable
  * that Θ holds *strongly*, weakened - the term types of a group about every reading of it.
  *
@@ -1135,9 +1120,10 @@ function entailedByReading(reading: Access): AssertionConjunct {
  * @returns what may be asserted on the right hand side
  */
 function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjunction {
+  const { unaryConjuncts, equatedGroups } = assertions.unaryConjunctsAndEquatedGroups();
   return AssertionConjunction.of([
-    ...assertions.unaryConjuncts(),
-    ...assertions.equatedGroups().flatMap(group => termTypesOfReadings(group)),
+    ...unaryConjuncts,
+    ...equatedGroups.flatMap(group => termTypesOfReadings(group)),
   ]
     .filter(({ assertion }) => impliesBound(assertion))
     .map(conjunct => asWeakenedConjunct(conjunct))

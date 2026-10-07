@@ -166,17 +166,19 @@ function decidedByAccess(
   expression: Algebra.OperatorExpression,
   assertions: AssertionView,
 ): Algebra.Expression | undefined {
-  const test = asTermTypeTest(expression);
+  // Read as a test only where the view decides term types at all: this runs on every operator.
+  const test = assertions.typeRange === undefined ? undefined : asTermTypeTest(expression);
   if (test !== undefined) {
     const rangeOfAccess = assertions.typeRange?.(test.access);
     if (rangeOfAccess === undefined) {
       return undefined;
     }
+    const { range } = test.assertion;
     // `⊆` answers it `true`, an empty meet answers it `false`, and anything between leaves it standing.
-    if (isSubsetOf(rangeOfAccess, test.range)) {
+    if (isSubsetOf(rangeOfAccess, range)) {
       return createBooleanExpression(c, true);
     }
-    return rangeOfAccess.meet(test.range).size > 0 ? undefined : createBooleanExpression(c, false);
+    return rangeOfAccess.meet(range).size > 0 ? undefined : createBooleanExpression(c, false);
   }
   const access = asAccess(expression);
   const decided = access === undefined ? undefined : assertions.resolve(access);
