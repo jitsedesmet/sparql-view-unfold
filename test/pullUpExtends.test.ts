@@ -424,9 +424,8 @@ ORDER BY ASC ( ?x )`,
         `SELECT ?n ?x WHERE {
   SELECT ?x ( COUNT( ?o ) AS ?n ) WHERE {
     ?s <ex://p> ?o .
-    BIND( <ex://a> AS ?x )
   }
-  GROUP BY ?x
+  GROUP BY ( <ex://a> AS ?x )
 }`,
       );
     });

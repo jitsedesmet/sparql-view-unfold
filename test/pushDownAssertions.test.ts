@@ -477,9 +477,8 @@ describe('pushDownAssertions', () => {
          GROUP BY ?x HAVING(sameTerm(?x, :c))`,
         `SELECT ?x ( COUNT( ?y ) AS ?count ) WHERE {
   <ex://c> <ex://p> ?y .
-  BIND( <ex://c> AS ?x )
 }
-GROUP BY ?x`,
+GROUP BY ( <ex://c> AS ?x )`,
       );
     });
 
@@ -932,9 +931,11 @@ GROUP BY ?x`,
   OPTIONAL {
     ?a <ex://q> ?x .
   }
-  ?c <ex://r> ?d .
-  OPTIONAL {
-    ?c <ex://s> ?x .
+  {
+    ?c <ex://r> ?d .
+    OPTIONAL {
+      ?c <ex://s> ?x .
+    }
   }
   FILTER ( BOUND( ?x ) )
 }`,
@@ -1174,9 +1175,9 @@ GROUP BY ?x`,
         'SELECT ?x (COUNT(?y) AS ?n) WHERE { ?x :p ?y } GROUP BY ?x HAVING(sameTerm(?x, ?y))',
         `SELECT ?x ( COUNT( ?y ) AS ?n ) WHERE {
   ?x <ex://p> ?y .
-  FILTER ( FALSE )
 }
-GROUP BY ?x`,
+GROUP BY ?x
+HAVING ( FALSE )`,
       );
     });
 
@@ -1187,9 +1188,8 @@ GROUP BY ?x`,
         `SELECT ?x ?y ( COUNT( ?z ) AS ?n ) WHERE {
   ?x <ex://p> ?x .
   ?x <ex://q> ?z .
-  BIND( ?x AS ?y )
 }
-GROUP BY ?x?y`,
+GROUP BY ?x ( ?x AS ?y )`,
       );
     });
 
@@ -1199,7 +1199,7 @@ GROUP BY ?x?y`,
       expectTransform(
         expect,
         'SELECT * WHERE { ?z :p ?y BIND(?z AS ?t) FILTER(sameTerm(?t, ?y)) }',
-        `SELECT ( ?y AS ?t ) ?y ( ?y AS ?z ) WHERE {
+        `SELECT ( ?y AS ?z ) ?y ( ?y AS ?t ) WHERE {
   ?y <ex://p> ?y .
 }`,
       );
@@ -1211,7 +1211,7 @@ GROUP BY ?x?y`,
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND(:c AS ?t) FILTER(sameTerm(?t, ?y)) }',
-        `SELECT ( <ex://c> AS ?t ) ?w ( <ex://c> AS ?y ) WHERE {
+        `SELECT ( <ex://c> AS ?y ) ?w ( <ex://c> AS ?t ) WHERE {
   <ex://c> <ex://p> ?w .
 }`,
       );
@@ -1221,7 +1221,7 @@ GROUP BY ?x?y`,
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND(:c AS ?t) FILTER(sameTerm(?t, ?y) && sameTerm(?y, ?w)) }',
-        `SELECT ( <ex://c> AS ?t ) ( <ex://c> AS ?w ) ( <ex://c> AS ?y ) WHERE {
+        `SELECT ( <ex://c> AS ?y ) ( <ex://c> AS ?w ) ( <ex://c> AS ?t ) WHERE {
   <ex://c> <ex://p> <ex://c> .
 }`,
       );
@@ -3374,10 +3374,8 @@ GROUP BY ?x?y`,
         `SELECT ?y (SAMPLE(?x) AS ?n) WHERE { ?x :p ?y }
          GROUP BY ?y HAVING(sameTerm(?y, SAMPLE(?x)) && (isIRI(SAMPLE(?x)) || isLITERAL(SAMPLE(?x))))`,
         `SELECT ?y ( SAMPLE( ?x ) AS ?n ) WHERE {
-  {
-    ?x <ex://p> ?y .
-    FILTER ( ( ISIRI( ?y ) || ISLITERAL( ?y ) ) )
-  }
+  ?x <ex://p> ?y .
+  FILTER ( ( ISIRI( ?y ) || ISLITERAL( ?y ) ) )
 }
 GROUP BY ?y
 HAVING SAMETERM( ?y , SAMPLE( ?x ) )`,
