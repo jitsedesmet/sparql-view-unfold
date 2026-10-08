@@ -2896,6 +2896,33 @@ GROUP BY ?x?y`,
       );
     });
 
+    // TODO adress this test - either remove it if it is redunant, keep it, or fix it.
+    it('does something I wonder', ({ expect }) => {
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?a WHERE { ?a :p ?b } }
+          { SELECT ?z WHERE { ?y :q ?z } }
+          FILTER(sameTerm(SUBJECT(?z), ?a) && (isIRI(?a)))
+        }`,
+        `SELECT ?a ?z WHERE {
+  {
+    SELECT ?a WHERE {
+      ?a <ex://p> ?b .
+      FILTER ( ISIRI( ?a ) )
+    }
+  }
+  {
+    SELECT ?z WHERE {
+      ?y <ex://q> ?z .
+      FILTER ( ISIRI( SUBJECT( ?z ) ) )
+    }
+  }
+  FILTER ( SAMETERM( SUBJECT( ?z ) , ?a ) )
+}`,
+      );
+    });
+
     it('writes an accessor disjunction its position does not entail back over the accessor', ({ expect }) => {
       // The object of a triple term may be any term, so the test still selects, written in the order a test
       // over a variable is.
@@ -2968,6 +2995,25 @@ GROUP BY ?x?y`,
       );
     });
 
+    // TODO: same as last todo
+    it('how I ponder', ({ expect }) => {
+      // A row decides the term type of every column it binds, and an UNDEF satisfies the weak form alone.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { ?s ?p ?o FILTER(isBLANK(?o) || isIRI(?o) || CONTAINS(STR(?o), "x")) }
+          FILTER(isLiteral(?o) || isBLANK(?o))
+        }`,
+        `SELECT ?o ?p ?s WHERE {
+  {
+    ?s ?p ?o .
+    FILTER ( ( ISBLANK( ?o ) || ISLITERAL( ?o ) ) )
+  }
+  FILTER ( ( ISBLANK( ?o ) || CONTAINS( STR( ?o ) , "x" ) ) )
+}`,
+      );
+    });
+
     it('decides a whole type test in a condition it passes by the term types it knows', ({ expect }) => {
       // Below the assertion ?o is an IRI or a blank node, so in the condition it meets on the way down
       // `isBLANK(?o) || isIRI(?o)` is true - which takes the whole disjunction with it - and
@@ -3009,6 +3055,105 @@ GROUP BY ?x?y`,
           { SELECT ?a ?b WHERE { ?a :p ?b } }
           { SELECT ?c ?d WHERE { ?c :q ?d } }
           FILTER(sameTerm(?b, ?d) && (isLITERAL(?b) || isBLANK(?b)))
+        }`,
+        `SELECT ?a ?b ?c ?d WHERE {
+  {
+    SELECT ?a ?b WHERE {
+      ?a <ex://p> ?b .
+      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
+    }
+  }
+  {
+    SELECT ?c ?d WHERE {
+      ?c <ex://q> ?d .
+      FILTER ( ( ISBLANK( ?d ) || ISLITERAL( ?d ) ) )
+    }
+  }
+  FILTER ( SAMETERM( ?d , ?b ) )
+}`,
+      );
+    });
+
+    // TODO: same as before, classify please.
+    it('ponder wonder can it know they were actually equal', ({ expect }) => {
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?a ?b WHERE { ?a :p ?b } }
+          { SELECT ?c ?d WHERE { ?c :q ?d } }
+          FILTER(sameTerm(?b, ?d) && (isLITERAL(?b) || isBLANK(?d)))
+        }`,
+        `SELECT ?a ?b ?c ?d WHERE {
+  {
+    SELECT ?a ?b WHERE {
+      ?a <ex://p> ?b .
+      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
+    }
+  }
+  {
+    SELECT ?c ?d WHERE {
+      ?c <ex://q> ?d .
+      FILTER ( ( ISBLANK( ?d ) || ISLITERAL( ?d ) ) )
+    }
+  }
+  FILTER ( SAMETERM( ?d , ?b ) )
+}`,
+      );
+
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?a ?b WHERE { ?a :p ?b } }
+          { SELECT ?c ?d WHERE { ?c :q ?d } }
+          FILTER((isLITERAL(?b) || isBLANK(?d)) && sameTerm(?b, ?d))
+        }`,
+        `SELECT ?a ?b ?c ?d WHERE {
+  {
+    SELECT ?a ?b WHERE {
+      ?a <ex://p> ?b .
+      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
+    }
+  }
+  {
+    SELECT ?c ?d WHERE {
+      ?c <ex://q> ?d .
+      FILTER ( ( ISBLANK( ?d ) || ISLITERAL( ?d ) ) )
+    }
+  }
+  FILTER ( SAMETERM( ?d , ?b ) )
+}`,
+      );
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?a ?b WHERE { ?a :p ?b } }
+          { SELECT ?c ?d WHERE { ?c :q ?d } }
+          FILTER((isLITERAL(?b) || isBLANK(?d)))
+          FILTER(sameTerm(?b, ?d))
+        }`,
+        `SELECT ?a ?b ?c ?d WHERE {
+  {
+    SELECT ?a ?b WHERE {
+      ?a <ex://p> ?b .
+      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
+    }
+  }
+  {
+    SELECT ?c ?d WHERE {
+      ?c <ex://q> ?d .
+      FILTER ( ( ISBLANK( ?d ) || ISLITERAL( ?d ) ) )
+    }
+  }
+  FILTER ( SAMETERM( ?d , ?b ) )
+}`,
+      );
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?a ?b WHERE { ?a :p ?b } }
+          { SELECT ?c ?d WHERE { ?c :q ?d } }
+          FILTER(sameTerm(?b, ?d))
+          FILTER((isLITERAL(?b) || isBLANK(?d)))
         }`,
         `SELECT ?a ?b ?c ?d WHERE {
   {
@@ -3130,10 +3275,10 @@ GROUP BY ?x?y`,
         expect,
         `SELECT * WHERE {
           { SELECT ?b ?c WHERE { ?a :p ?b . ?a :p2 ?c } }
-          OPTIONAL { SELECT ?b ?c WHERE { ?d :q ?b OPTIONAL { ?d :r ?c } } }
+          OPTIONAL { SELECT ?b ?c ?d WHERE { ?d :q ?b OPTIONAL { ?d :r ?c } } }
           FILTER(sameTerm(?b, ?c) && (isLITERAL(?c) || isBLANK(?c)))
         }`,
-        `SELECT ?b ?c WHERE {
+        `SELECT ?b ?c ?d WHERE {
   {
     SELECT ?b ( ?b AS ?c ) WHERE {
       ?a <ex://p> ?b .
@@ -3143,7 +3288,7 @@ GROUP BY ?x?y`,
   }
   OPTIONAL {
     {
-      SELECT ?b ?c WHERE {
+      SELECT ?b ?c ?d WHERE {
         {
           ?d <ex://q> ?b .
           FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
