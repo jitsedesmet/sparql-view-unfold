@@ -45,7 +45,7 @@ describe('pushDownAssertions', () => {
    */
   function expectIdempotent(expect: typeof Expect, query: string): void {
     const once = transform(query);
-    const twice = pushDownAssertions(c, zC(c, parseQuery(c, prefixes + query)));
+    const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
     expect(c.generator.generate(toAst(twice)).trim()).toEqual(once);
     expect(transform(once)).toEqual(once);
   }
@@ -2921,9 +2921,10 @@ GROUP BY ?x?y`,
       );
     });
 
-    // TODO adress this test - either remove it if it is redunant, keep it, or fix it.
-    it('does something I wonder', ({ expect }) => {
-      expectTransform(
+    it('gives both readings of an edge into a position a type the position does not decide', ({ expect }) => {
+      // A subject may also be a blank node, so `isIRI(?a)` says more than the edge does: each operand learns it of
+      // the reading it binds, ?a on the left and `SUBJECT(?z)` on the right, and the edge above joins the two.
+      expectStableTransform(
         expect,
         `SELECT * WHERE {
           { SELECT ?a WHERE { ?a :p ?b } }
@@ -3020,29 +3021,11 @@ GROUP BY ?x?y`,
       );
     });
 
-    // TODO: same as last todo
-    it('how I ponder', ({ expect }) => {
-      // A row decides the term type of every column it binds, and an UNDEF satisfies the weak form alone.
-      expectTransform(
-        expect,
-        `SELECT * WHERE {
-          { ?s ?p ?o FILTER(isBLANK(?o) || isIRI(?o) || CONTAINS(STR(?o), "x")) }
-          FILTER(isLiteral(?o) || isBLANK(?o))
-        }`,
-        `SELECT ?o ?p ?s WHERE {
-  {
-    ?s ?p ?o .
-    FILTER ( ( ISBLANK( ?o ) || ISLITERAL( ?o ) ) )
-  }
-  FILTER ( ( ISBLANK( ?o ) || CONTAINS( STR( ?o ) , "x" ) ) )
-}`,
-      );
-    });
-
-    it('decides a whole type test in a condition it passes by the term types it knows', ({ expect }) => {
+    it('decides what it can of a type test in a condition it passes by the term types it knows', ({ expect }) => {
       // Below the assertion ?o is an IRI or a blank node, so in the condition it meets on the way down
       // `isBLANK(?o) || isIRI(?o)` is true - which takes the whole disjunction with it - and
-      // `isLITERAL(?o) || isTRIPLE(?o)` is false, which leaves the remaining disjunct to decide.
+      // `isLITERAL(?o) || isTRIPLE(?o)` is false, which leaves the remaining disjunct to decide. Where ?o is a
+      // literal or a blank node instead, `isBLANK(?o) || isIRI(?o)` is decided only in part: `isIRI(?o)` drops out.
       expectStableTransform(
         expect,
         `SELECT * WHERE {
@@ -3068,6 +3051,20 @@ GROUP BY ?x?y`,
   FILTER ( CONTAINS( STR( ?o ) , "x" ) )
 }`,
       );
+      expectStableTransform(
+        expect,
+        `SELECT * WHERE {
+          { ?s ?p ?o FILTER(isBLANK(?o) || isIRI(?o) || CONTAINS(STR(?o), "x")) }
+          FILTER(isLiteral(?o) || isBLANK(?o))
+        }`,
+        `SELECT ?o ?p ?s WHERE {
+  {
+    ?s ?p ?o .
+    FILTER ( ( ISBLANK( ?o ) || ISLITERAL( ?o ) ) )
+  }
+  FILTER ( ( ISBLANK( ?o ) || CONTAINS( STR( ?o ) , "x" ) ) )
+}`,
+      );
     });
 
     it('gives each operand of a join the type of the reading it binds, keeping the edge above', ({ expect }) => {
@@ -3080,105 +3077,6 @@ GROUP BY ?x?y`,
           { SELECT ?a ?b WHERE { ?a :p ?b } }
           { SELECT ?c ?d WHERE { ?c :q ?d } }
           FILTER(sameTerm(?b, ?d) && (isLITERAL(?b) || isBLANK(?b)))
-        }`,
-        `SELECT ?a ?b ?c ?d WHERE {
-  {
-    SELECT ?a ?b WHERE {
-      ?a <ex://p> ?b .
-      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
-    }
-  }
-  {
-    SELECT ?c ?d WHERE {
-      ?c <ex://q> ?d .
-      FILTER ( ( ISBLANK( ?d ) || ISLITERAL( ?d ) ) )
-    }
-  }
-  FILTER ( SAMETERM( ?d , ?b ) )
-}`,
-      );
-    });
-
-    // TODO: same as before, classify please.
-    it('ponder wonder can it know they were actually equal', ({ expect }) => {
-      expectTransform(
-        expect,
-        `SELECT * WHERE {
-          { SELECT ?a ?b WHERE { ?a :p ?b } }
-          { SELECT ?c ?d WHERE { ?c :q ?d } }
-          FILTER(sameTerm(?b, ?d) && (isLITERAL(?b) || isBLANK(?d)))
-        }`,
-        `SELECT ?a ?b ?c ?d WHERE {
-  {
-    SELECT ?a ?b WHERE {
-      ?a <ex://p> ?b .
-      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
-    }
-  }
-  {
-    SELECT ?c ?d WHERE {
-      ?c <ex://q> ?d .
-      FILTER ( ( ISBLANK( ?d ) || ISLITERAL( ?d ) ) )
-    }
-  }
-  FILTER ( SAMETERM( ?d , ?b ) )
-}`,
-      );
-
-      expectTransform(
-        expect,
-        `SELECT * WHERE {
-          { SELECT ?a ?b WHERE { ?a :p ?b } }
-          { SELECT ?c ?d WHERE { ?c :q ?d } }
-          FILTER((isLITERAL(?b) || isBLANK(?d)) && sameTerm(?b, ?d))
-        }`,
-        `SELECT ?a ?b ?c ?d WHERE {
-  {
-    SELECT ?a ?b WHERE {
-      ?a <ex://p> ?b .
-      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
-    }
-  }
-  {
-    SELECT ?c ?d WHERE {
-      ?c <ex://q> ?d .
-      FILTER ( ( ISBLANK( ?d ) || ISLITERAL( ?d ) ) )
-    }
-  }
-  FILTER ( SAMETERM( ?d , ?b ) )
-}`,
-      );
-      expectTransform(
-        expect,
-        `SELECT * WHERE {
-          { SELECT ?a ?b WHERE { ?a :p ?b } }
-          { SELECT ?c ?d WHERE { ?c :q ?d } }
-          FILTER((isLITERAL(?b) || isBLANK(?d)))
-          FILTER(sameTerm(?b, ?d))
-        }`,
-        `SELECT ?a ?b ?c ?d WHERE {
-  {
-    SELECT ?a ?b WHERE {
-      ?a <ex://p> ?b .
-      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
-    }
-  }
-  {
-    SELECT ?c ?d WHERE {
-      ?c <ex://q> ?d .
-      FILTER ( ( ISBLANK( ?d ) || ISLITERAL( ?d ) ) )
-    }
-  }
-  FILTER ( SAMETERM( ?d , ?b ) )
-}`,
-      );
-      expectTransform(
-        expect,
-        `SELECT * WHERE {
-          { SELECT ?a ?b WHERE { ?a :p ?b } }
-          { SELECT ?c ?d WHERE { ?c :q ?d } }
-          FILTER(sameTerm(?b, ?d))
-          FILTER((isLITERAL(?b) || isBLANK(?d)))
         }`,
         `SELECT ?a ?b ?c ?d WHERE {
   {
@@ -3224,6 +3122,38 @@ GROUP BY ?x?y`,
   FILTER ( SAMETERM( ?d , ?b ) )
 }`,
       );
+    });
+
+    it('reads a type test spread over the members of a clique as the type of the clique', ({ expect }) => {
+      // `sameTerm(?b, ?d)` writes ?d as ?b in the rest of the condition, which makes `isLITERAL(?b) || isBLANK(?d)` a
+      // test of the one value - whichever comes first, and whether or not the two share a FILTER.
+      const expected = `SELECT ?a ?b ?c ?d WHERE {
+  {
+    SELECT ?a ?b WHERE {
+      ?a <ex://p> ?b .
+      FILTER ( ( ISBLANK( ?b ) || ISLITERAL( ?b ) ) )
+    }
+  }
+  {
+    SELECT ?c ?d WHERE {
+      ?c <ex://q> ?d .
+      FILTER ( ( ISBLANK( ?d ) || ISLITERAL( ?d ) ) )
+    }
+  }
+  FILTER ( SAMETERM( ?d , ?b ) )
+}`;
+      for (const filters of [
+        'FILTER(sameTerm(?b, ?d) && (isLITERAL(?b) || isBLANK(?d)))',
+        'FILTER((isLITERAL(?b) || isBLANK(?d)) && sameTerm(?b, ?d))',
+        'FILTER(isLITERAL(?b) || isBLANK(?d)) FILTER(sameTerm(?b, ?d))',
+        'FILTER(sameTerm(?b, ?d)) FILTER(isLITERAL(?b) || isBLANK(?d))',
+      ]) {
+        expectStableTransform(expect, `SELECT * WHERE {
+          { SELECT ?a ?b WHERE { ?a :p ?b } }
+          { SELECT ?c ?d WHERE { ?c :q ?d } }
+          ${filters}
+        }`, expected);
+      }
     });
 
     it('types every piece of a clique of three split over two operands', ({ expect }) => {

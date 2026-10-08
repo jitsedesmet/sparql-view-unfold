@@ -754,7 +754,7 @@ function pushIntoJoin(
   // of anything else it can bind, which the join consumes; and it *connects* what it takes, join
   // compatibility being what enforces an equality between two accesses it binds on the output.
   const placed = placeOverTargets(assertions, operands.map(operand => ({
-    licensed: name => operand.cVars.has(name) || binderCountOf(name) === ((operand.vRanges.canBind(name) ? 1 : 0)),
+    licensed: name => operand.cVars.has(name) || binderCountOf(name) === (operand.vRanges.canBind(name) ? 1 : 0),
     admitsWeakened: name => operand.vRanges.canBind(name),
     mayBind: name => operand.vRanges.canBind(name),
     connects: true,
