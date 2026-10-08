@@ -123,45 +123,35 @@ export function targetIsAccess(target: AssertionTarget): target is Access {
 }
 
 /**
- * One assertion about one {@link Access}, in one of the five forms this pass moves around:
- *
- * - `strong` is A⟨a ≡ c⟩ ≔ `sameTerm(a, c)`, which implies `bound(?x)` of the root of `a`. Its target
- *   may be another access, in which case it is an *edge* of a clique or of a shape.
- * - `weak` is W⟨a ≡ c⟩ ≔ `¬bnd(?x) ∨ sameTerm(a, c)`, which does not - it is what survives a move into
- *   a place that may leave the variable unbound (the RHS of a MINUS, the unlicensed operand of a join).
- * - `termType` is T⟨a : R⟩ ≔ `isIRI(a) || isBLANK(a) || …`, one test per term type of the range `R`, with
- *   `strong` recording whether it is asserted outright or only where the root is bound.
- * - `unbound` is U⟨?x⟩ ≔ `!bound(?x)`, and `bound` is B⟨?x⟩ ≔ `bound(?x)`, which fixes no term at all but
- *   decides the same emptiness rule the strong form does and completes a weak assertion into a strong one.
- *
- * `bound` and `unbound` are restricted to a bare access, `BOUND` taking a `Var` by the grammar; a
- * `termType` is not, `isTRIPLE(SUBJECT(?o))` being a fact about the group `SUBJECT(?o)` names.
- *
- * Only the strong form may be substituted into a pattern: the others say what the variable is *not* bound
- * to, or say nothing about which term it is.
+ * One assertion about one {@link Access}, in one of the five forms the pass moves around. Only the strong form may be
+ * substituted into a pattern, and only a bare access can be `bound` or `unbound`, `BOUND` taking a variable.
  */
 interface BaseAssertion {
   type: 'assertion';
   subType: string;
 }
+/** A⟨a ≡ c⟩ ≔ `sameTerm(a, c)`, implying `bound(?x)` of the root of `a`; an edge where `c` is an access. */
 export interface StrongAssertion extends BaseAssertion {
   subType: 'strong';
   term: AssertionTarget;
 }
+/** W⟨a ≡ c⟩ ≔ `!bound(?x) || sameTerm(a, c)`, what survives a move to where `?x` may be unbound. */
 export interface WeakAssertion extends BaseAssertion {
   subType: 'weak';
   term: AssertionTarget;
 }
-/** T⟨a : R⟩ when `strong`, and `!bound(?x) || T⟨a : R⟩` when not. */
+/** T⟨a : R⟩ ≔ `isIRI(a) || …`, one test per term type of `R`, or `!bound(?x) || T⟨a : R⟩` where not `strong`. */
 export interface TermTypeAssertion extends BaseAssertion {
   subType: 'termType';
   /** The term types the access may hold, one of which it does. */
   range: RangeSet;
   strong: boolean;
 }
+/** U⟨?x⟩ ≔ `!bound(?x)`. */
 export interface UnboundAssertion extends BaseAssertion {
   subType: 'unbound';
 }
+/** B⟨?x⟩ ≔ `bound(?x)`, which fixes no term but decides the same emptiness rule the strong form does. */
 export interface BoundAssertion extends BaseAssertion {
   subType: 'bound';
 }
@@ -195,7 +185,12 @@ export function normalisedTarget(target: AssertionTarget): AssertionTarget {
   return !targetIsAccess(target) && target.termType === 'Variable' ? access(target.value) : target;
 }
 
-/** Creates T⟨a : R⟩, or its weak form `!bound(?x) || T⟨a : R⟩`. */
+/**
+ * Creates T⟨a : R⟩, or its weak form `!bound(?x) || T⟨a : R⟩`.
+ * @param range - The term types the access may hold
+ * @param strong - Whether it holds outright, rather than only where the root is bound
+ * @returns the assertion
+ */
 export function assertTermType(range: RangeSet, strong = true): TermTypeAssertion {
   return {
     type: 'assertion',
@@ -480,10 +475,8 @@ export function asTermTypeTest(expression: Algebra.Expression): TermTypeConjunct
 }
 
 /**
- * The term type test disjuncts make, together with the ones read before them.
- *
- * Read last to first, as is every `||` among them: the parser nests a disjunction to the left, so one that is
- * not a test is told apart at its shallowest leaf rather than after a walk over all of it.
+ * The term type test disjuncts make, together with the ones read before them. Read last to first, a left-nested
+ * disjunction that is not a test is told apart at its shallowest leaf.
  * @param disjuncts - The disjuncts to read
  * @param test - The test the disjuncts read before them make, if any
  * @returns the test, or `undefined` unless every disjunct is a term type predicate over one same access
@@ -612,7 +605,12 @@ function variableOfNotBound(expression: Algebra.Expression): string | undefined 
   return undefined;
 }
 
-/** The expression reading an access: the variable, wrapped in one accessor per position it reads. */
+/**
+ * The expression reading an access: the variable, wrapped in one accessor per position it reads.
+ * @param c - Object containing the algebra factory
+ * @param access - The access to read
+ * @returns the expression
+ */
 function accessAsExpression(c: Pick<TransformationContext, 'AF'>, access: Access): Algebra.Expression {
   return access.positions.reduce<Algebra.Expression>(
     (inner, position) => c.AF.createOperatorExpression(position, [ inner ]),
@@ -620,7 +618,12 @@ function accessAsExpression(c: Pick<TransformationContext, 'AF'>, access: Access
   );
 }
 
-/** The expression one side of an assertion stands for. */
+/**
+ * The expression one side of an assertion stands for.
+ * @param c - Object containing the algebra factory
+ * @param target - The access or term that side is
+ * @returns the expression
+ */
 function targetAsExpression(c: Pick<TransformationContext, 'AF'>, target: AssertionTarget): Algebra.Expression {
   if (targetIsAccess(target)) {
     return accessAsExpression(c, target);
@@ -628,7 +631,13 @@ function targetAsExpression(c: Pick<TransformationContext, 'AF'>, target: Assert
   return c.AF.createTermExpression(target);
 }
 
-/** Creates the strong assertion A⟨a ≡ c⟩: `sameTerm(a, c)`. */
+/**
+ * Creates the strong assertion A⟨a ≡ c⟩: `sameTerm(a, c)`.
+ * @param c - Object containing the algebra factory
+ * @param access - The access the assertion is about
+ * @param target - What it is fixed to
+ * @returns the condition
+ */
 function strongAssertionAsExpression(
   c: Pick<TransformationContext, 'AF'>,
   access: Access,
@@ -660,7 +669,7 @@ function termTypeAssertionAsExpression(
 
 /**
  * Creates the weak form of a condition about `?x`: `!bound(?x) || φ`.
- * @param c - The transformation context
+ * @param c - Object containing the algebra factory
  * @param name - The variable the condition is about
  * @param strong - The condition to weaken
  * @returns the disjunction, which may only ever be placed as a filter condition (S1)
@@ -672,7 +681,7 @@ Algebra.Expression {
 
 /**
  * Creates the weak assertion W⟨a ≡ c⟩: `¬bnd(?x) ∨ sameTerm(a, c)`.
- * @param c - The transformation context
+ * @param c - Object containing the algebra factory
  * @param access - The access the assertion is about
  * @param target - The term it is fixed to where its root is bound
  * @returns the condition
@@ -685,25 +694,36 @@ function weakAssertionAsExpression(
   return weakenedExpression(c, access.name, strongAssertionAsExpression(c, access, target));
 }
 
-/** Creates the bound assertion B⟨?x⟩: `bound(?x)`. */
+/**
+ * Creates the bound assertion B⟨?x⟩: `bound(?x)`.
+ * @param c - Object containing the algebra factory
+ * @param name - The variable
+ * @returns the condition
+ */
 function boundAssertionAsExpression(c: Pick<TransformationContext, 'AF'>, name: string): Algebra.Expression {
   return c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(DF.variable(name)) ]);
 }
 
-/** Creates the unbound assertion U⟨?x⟩: `!bound(?x)`. */
+/**
+ * Creates the unbound assertion U⟨?x⟩: `!bound(?x)`.
+ * @param c - Object containing the algebra factory
+ * @param name - The variable
+ * @returns the condition
+ */
 function unboundAssertionAsExpression(c: Pick<TransformationContext, 'AF'>, name: string): Algebra.Expression {
   return c.AF.createOperatorExpression('!', [ boundAssertionAsExpression(c, name) ]);
 }
 
 /**
- * The condition one conjunct stands for - the inverse of {@link asAssertionConjuncts}, and next to it so
- * that the two can be read against each other.
+ * The condition one conjunct stands for: the inverse of {@link asAssertionConjuncts}, next to it so that the two can
+ * be read against each other.
+ * @param c - Object containing the algebra factory
+ * @param conjunct - The conjunct to write
  * @returns the condition, in the shape the recogniser reads straight back into the same state
  */
-export function conjunctAsExpression(
-  c: Pick<TransformationContext, 'AF'>,
-  { access, assertion }: AssertionConjunct,
-): Algebra.Expression {
+export function conjunctAsExpression(c: Pick<TransformationContext, 'AF'>, conjunct: AssertionConjunct):
+Algebra.Expression {
+  const { access, assertion } = conjunct;
   // Nothing new is ever serialised, which is what keeps a second run of the pass from stacking a second
   // copy of what it derived. A shape in particular is never written as `sameTerm(?o, <<( ... )>>)` (S2):
   // it arrives here one position at a time, the positions nobody named having no variable that is bound

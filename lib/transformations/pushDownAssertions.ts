@@ -531,23 +531,9 @@ function rowSatisfies(
 }
 
 /**
- * Pushes the assertions through an EXTEND (BIND).
- *
- * Asserting the variable the BIND targets is the interesting case:
- * `σ_{?x=c}(Extend(A,?x,e)) == Extend(σ_{sameTerm(e,c)}(A), ?x, c)`. Whenever `e` is something
- * Θ can *name* ({@link asTransferSource}), everything the conjunction says about `?x`
- * {@link AssertionConjunction.transferred | transfers} onto it below, which is one rule covering every
- * combination of what `?x` had to equal with what now carries it:
- *
- * - `BIND(?z AS ?t)` under A⟨?t ≡ c⟩ leaves A⟨?z ≡ c⟩ below, so a renaming propagates an assertion;
- * - `BIND(?z AS ?t)` under A⟨?t ≡ ?y⟩ propagates a unification, which may then reach a BGP;
- * - `BIND(:c AS ?t)` under A⟨?t ≡ ?y⟩ pins a clique the assertions had found no term for;
- * - `BIND(SUBJECT(?o) AS ?t)` leaves what was said about `?t` on the *access* below, giving `?o` a shape;
- * - `BIND(<<( ?a ?b ?c )>> AS ?t)` under a shape on `?t` is that shape taken apart, so `sameTerm(SUBJECT(
- *   ?t), :a)` reaches the pattern binding `?a` as `sameTerm(?a, :a)`.
- *
- * Only the forms that imply `bound(?x)` do any of that: W⟨?x ≡ c⟩ is also satisfied by the solutions where
- * `e` errored and left `?x` unbound, so it says nothing about `e`, and neither does U⟨?x⟩.
+ * Pushes the assertions through an EXTEND (BIND). Where Θ implies `bound(?x)` for `BIND(e AS ?x)` and can name `e`
+ * ({@link asTransferSource}), what it says about `?x` {@link AssertionConjunction.transferred | transfers} onto `e`
+ * below.
  * @param c - The transformation context
  * @param extend - The EXTEND the filter sits on
  * @param assertions - The conjunction to place
@@ -731,14 +717,9 @@ function pushIntoGraph(
 }
 
 /**
- * Pushes the assertions into the operands of a JOIN their licence holds for (FJPush).
- *
- * The licence is per variable: `L(?x, A_i) := ?x in cVars(A_i) or no other operand ever binds ?x`. Under it
- * the value `?x` takes in a merged mapping is the one `A_i` gave it, so a condition over licensed variables
- * evaluates the same on the operand as on the join - and an assertion goes into *every* operand it is
- * licensed for, which is sideways information passing rather than a push. What no operand is licensed for
- * is demoted rather than left behind, `σ_W(A1 join A2) == σ_W(A1) join σ_W(A2)` holding
- * unconditionally; B⟨?x⟩ has no such form and stays on top when unlicensed.
+ * Pushes the assertions into the operands of a JOIN their licence holds for (FJPush): an operand is licensed for `?x`
+ * where it certainly binds `?x` or no other operand can. Any other operand that may bind `?x` takes the weakened
+ * form, and what has no weak form stays on top.
  * @param c - The transformation context
  * @param join - The JOIN the filter sits on
  * @param assertions - The conjunction to place
@@ -928,12 +909,9 @@ interface PushTarget {
 }
 
 /**
- * Places a conjunction over the targets of an operation: each takes what it is licensed for, the weakened
- * form of what it is not, and the readings of a group it is licensed for.
- *
- * One routine for the join, the left join and the GRAPH, whose licences - (FJPush), (FLPush) and the join
- * with `{?g -> u_i}` of section 18.5 - are stated where their targets are built. A group is split by its
- * edges ({@link splitClique}), while its term types hold of every reading and go wherever one of those does.
+ * Places a conjunction over the targets of a join, left join or GRAPH: each takes what it is licensed for, and the
+ * weakened form of what it may only bind. A group is split by its edges ({@link splitClique}), its term types going
+ * to every reading.
  * @param assertions - The conjunction to place
  * @param targets - The places it can go
  * @returns the conjuncts per target, and what has to be restated above the operation
@@ -962,14 +940,13 @@ function placeOverTargets(assertions: AssertionConjunction, targets: PushTarget[
 }
 
 /**
- * Places the term types of a group over the targets of an operation: strongly on one reading of every target
- * licensed for any, the edges it takes carrying them to its others, and weakly on each reading it may only bind.
+ * Places the term types of a group over the targets of an operation: strongly on one licensed reading per target,
+ * whose edges carry them to the rest, and weakly on each reading a target may bind unlicensed.
  * @param group - The group to place the term types of
  * @param licensedPerTarget - Per target, the readings it is licensed for
  * @param targets - The places they can go
  * @param intoTarget - The conjuncts per target, which this adds to
- * @returns what has to be stated above the operation: nothing once a connecting target enforces them of one
- * reading, the edges kept there spreading them over the group, and else the term types of its representative
+ * @returns the term types of the representative, unless a connecting target already enforces them
  */
 function placeTermTypesOfGroup(
   group: EquatedGroup,
@@ -999,11 +976,8 @@ function placeTermTypesOfGroup(
 }
 
 /**
- * Places one conjunct about a single access over the targets of an operation.
- *
- * It is discharged rather than restated above in the two ways the identities give: one implying `bound(?x)`
- * by a target that took it *and* connects it, and a weak or unbound one by every target that may bind `?x`
- * having taken it.
+ * Places one conjunct about a single access over the targets of an operation. One implying `bound(?x)` is discharged
+ * by a connecting target taking it, any other by every target that may bind `?x` taking it.
  * @param conjunct - The conjunct to place
  * @param targets - The places it can go
  * @param intoTarget - The conjuncts per target, which this adds to
@@ -1029,15 +1003,9 @@ function placeConjunct(conjunct: AssertionConjunct, targets: PushTarget[], intoT
 }
 
 /**
- * Places one {@link AssertionConjunction.equatedGroups | group} over the targets of a join-like
- * operation: each takes the readings it licenses, and the edges connecting what no single target covered
- * stay on top.
- *
- * Splitting *edges* rather than readings is the point. For `w ≡ x ≡ y ≡ z` over a join with `cVars(LHS)`
- * holding `{w,x}` and `cVars(RHS)` holding `{y,z}` no operand is licensed for the whole group, yet each
- * takes half of it and one edge between the halves puts it back together. Two targets that *share* a
- * reading need no such edge, which is what `connects` records: a reading both are licensed for goes through
- * a variable certainly bound in both, so join compatibility already enforces the equality.
+ * Places one {@link AssertionConjunction.equatedGroups | group} over the targets of a join-like operation, splitting
+ * its edges rather than its readings: each target takes the edges between the readings it is licensed for. The edges
+ * joining what the targets leave apart stay on top.
  * @param readings - The ways of reading the group, its representative first
  * @param licensedPer - Per target, the readings it is licensed for
  * @param connects - Per target, whether it enforces the equalities its sub-group states on the output
@@ -1109,13 +1077,9 @@ function unification(reading: Access, representative: Access): AssertionConjunct
 }
 
 /**
- * The assertions of Θ that may enter the right hand side of a MINUS: the ones about a single variable
- * that Θ holds *strongly*, weakened - the term types of a group about every reading of it.
- *
- * A surviving mapping of the LHS binds `?x` to a value, so an RHS mapping can only remove it by not binding
- * `?x` or binding it to that same value - which is why a shape and a term type travel here as readily as a
- * term does. The argument needs the LHS to *have* `?x` bound, which is exactly what the weak form does not
- * give, hence {@link impliesBound} rather than "says something about a value".
+ * The assertions of Θ that may enter the right-hand side of a MINUS: the weakened forms of what it holds strongly about
+ * a single access, a group's term types included for each of its readings. Only strong ones qualify, the argument
+ * needing every surviving left-hand mapping to bind `?x`.
  * @param assertions - The conjunction to filter
  * @returns what may be asserted on the right hand side
  */

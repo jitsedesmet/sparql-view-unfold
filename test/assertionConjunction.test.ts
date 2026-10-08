@@ -66,23 +66,40 @@ function structuralConjunctionOf(...conjuncts: [ Access, Assertion ][]): Asserti
   return result;
 }
 
-/** What Θ decomposes into, each conjunct as `access=state`, in the order it hands them over. */
+/**
+ * What Θ decomposes into, each conjunct as `access=state`, in the order it hands them over.
+ * @param assertions - The conjunction to read, if any
+ * @returns the conjuncts
+ */
 function conjunctsOf(assertions: AssertionConjunction | undefined): string[] {
   return conjunctStrings(assertions?.conjuncts() ?? []);
 }
 
-/** Conjuncts as `access=state`, in the order given - for the lists Θ hands out besides its conjuncts. */
+/**
+ * Conjuncts as `access=state`, in the order given.
+ * @param conjuncts - The conjuncts to write
+ * @returns one string per conjunct
+ */
 function conjunctStrings(conjuncts: readonly AssertionConjunct[]): string[] {
   return conjuncts.map(({ access: read, assertion }) => `${accessId(read)}=${assertionString(assertion)}`);
 }
 
-/** The state of a variable, as the form it is in. */
+/**
+ * The state of a variable, as the form it is in.
+ * @param assertions - The conjunction to read, if any
+ * @param name - The variable to look up
+ * @returns the form, or `none`
+ */
 function stateOf(assertions: AssertionConjunction | undefined, name: string): string {
   const assertion = assertions?.get(name);
   return assertion === undefined ? 'none' : assertionString(assertion);
 }
 
-/** An assertion as the form it is in, with what it fixes its access to or the term types it allows it. */
+/**
+ * An assertion as its form, with what it fixes its access to or the term types it allows.
+ * @param assertion - The assertion to write
+ * @returns the string
+ */
 function assertionString(assertion: Assertion): string {
   if (assertion.subType === 'strong' || assertion.subType === 'weak') {
     const target = 'positions' in assertion.term ? accessId(assertion.term) : assertion.term.value;
@@ -132,12 +149,20 @@ function weakenedForm(assertions: AssertionConjunction): AssertionConjunction {
     .filter(conjunct => conjunct !== undefined));
 }
 
-/** {@link equatedGroupsOf} without the term types. */
+/**
+ * {@link equatedGroupsOf} without the term types.
+ * @param assertions - The conjunction to read, if any
+ * @returns the ids of the readings per group
+ */
 function equatedReadingsOf(assertions: AssertionConjunction | undefined): string[][] {
   return equatedGroupsOf(assertions).map(({ readings }) => readings);
 }
 
-/** The range holding exactly the given term types. */
+/**
+ * The range holding exactly the given term types.
+ * @param types - The term types
+ * @returns the range
+ */
 function termTypes(...types: RDF.Term['termType'][]): RangeSet {
   return new RangeSet(types);
 }
@@ -148,14 +173,19 @@ const iriOrLiteral = termTypes('Literal', 'NamedNode');
 /** The range of an IRI or a blank node. */
 const iriOrBlank = termTypes('NamedNode', 'BlankNode');
 
-/** A range as its term types, alphabetically, so that a test reads the same whatever order it was built in. */
+/**
+ * A range as its term types, alphabetically, so that a test reads the same whatever order it was built in.
+ * @param range - The range to write
+ * @returns the string
+ */
 function rangeString(range: RangeSet): string {
   return [ ...range ].sort().join(',');
 }
 
 /**
- * The groups Θ can read more than one way, each as the ids of its readings, representative first, and the term
- * types Θ asserts of it, `undefined` where it asserts none.
+ * The groups Θ reads more than one way, as the ids of their readings, representative first, with their term types.
+ * @param assertions - The conjunction to read, if any
+ * @returns the groups, `range` being `undefined` where Θ asserts none
  */
 function equatedGroupsOf(assertions: AssertionConjunction | undefined): { readings: string[]; range?: string }[] {
   return (assertions?.equatedGroups() ?? []).map(({ readings, range }) => ({
@@ -164,7 +194,12 @@ function equatedGroupsOf(assertions: AssertionConjunction | undefined): { readin
   }));
 }
 
-/** The two halves {@link AssertionConjunction.split} cuts Θ into, each as its conjuncts. */
+/**
+ * The two halves {@link AssertionConjunction.split} cuts Θ into, each as its conjuncts.
+ * @param assertions - The conjunction to split
+ * @param predicate - Which variables belong inside
+ * @returns the two halves
+ */
 function splitOf(
   assertions: AssertionConjunction,
   predicate: (name: string) => boolean,
@@ -173,7 +208,12 @@ function splitOf(
   return { inside: conjunctsOf(inside), outside: conjunctsOf(outside) };
 }
 
-/** The two halves {@link AssertionConjunction.split} cuts Θ into, conjoined again. */
+/**
+ * The two halves {@link AssertionConjunction.split} cuts Θ into, conjoined again.
+ * @param assertions - The conjunction to split
+ * @param predicate - Which variables belong inside
+ * @returns the conjunction of the halves
+ */
 function rejoined(assertions: AssertionConjunction, predicate: (name: string) => boolean): AssertionConjunction {
   const { inside, outside } = assertions.split(predicate);
   return AssertionConjunction.of([ ...inside.conjuncts(), ...outside.conjuncts() ]);
@@ -191,7 +231,12 @@ function typedClique(range: RangeSet): AssertionConjunction {
   );
 }
 
-/** What Θ the condition of `FILTER(condition)` reads into, nested the way the parser nests it. */
+/**
+ * What Θ the condition of `FILTER(condition)` reads into, nested the way the parser nests it.
+ * @param condition - The condition to read
+ * @param known - The assertions already known to hold, if any
+ * @returns the conjunction and the residual, or `undefined` when the condition is contradictory
+ */
 function collectedFrom(condition: string, known?: AssertionConjunction): AssertionConjunctionMeta | undefined {
   const query = <AlgebraTypes.Project> parseQuery(c, `SELECT * WHERE { FILTER(${condition}) }`);
   return collectAssertions(c, (<AlgebraTypes.Filter> query.input).expression, known);

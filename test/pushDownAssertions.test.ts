@@ -38,8 +38,10 @@ describe('pushDownAssertions', () => {
   }
 
   /**
-   * Checks that a second run of the pass changes nothing, over the algebra the first one left and over the query
-   * it prints.
+   * Checks that a second run of the pass changes nothing, over the algebra the first one left and over the query it
+   * prints.
+   * @param expect - The `expect` of the test
+   * @param query - The query to transform
    */
   function expectIdempotent(expect: typeof Expect, query: string): void {
     const once = transform(query);
@@ -48,7 +50,12 @@ describe('pushDownAssertions', () => {
     expect(transform(once)).toEqual(once);
   }
 
-  /** {@link expectTransform}, and {@link expectIdempotent} of the same query. */
+  /**
+   * {@link expectTransform}, and {@link expectIdempotent} of the same query.
+   * @param expect - The `expect` of the test
+   * @param query - The query to transform
+   * @param expected - The query it has to come to
+   */
   function expectStableTransform(expect: typeof Expect, query: string, expected: string): void {
     expectTransform(expect, query, expected);
     expectIdempotent(expect, query);
