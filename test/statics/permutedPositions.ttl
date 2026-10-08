@@ -1,0 +1,38 @@
+PREFIX : <ex://>
+
+# Objects of every kind of term, which the mappings write into a subject position (`?o :knownBy ?s`, the
+# subject of the triple term in `?s :claims <<( ?o :knownBy ?s )>>`, `?o :contactOf ?s`). Only an IRI or a
+# blank node is a subject, so the plain literal, the typed literal and the triple term make no triple through
+# those mappings: they are the rows a rewrite that forgot the mapping's type test would return all the same.
+:alice :knows :bob .
+:alice :knows "Bob" .
+:bob :knows :carol .
+:bob :knows 42 .
+:carol :knows <<( :alice :knows :bob )>> .
+# A loop: the one row binding both sides of `:knownBy` to the same term.
+:carol :knows :carol .
+# A blank node *is* a subject, so it does make a triple: the row a rewrite testing for an IRI alone would lose.
+# It is reached through a join on either side of a comparison alike; only its label differs between the two,
+# which `termToComparableString` in integration.test.ts reads back to the one written here.
+:dave :knows _:someone .
+_:someone :knows :erin .
+
+# The other branch of the UNION in `?o :contactOf ?s`, and the OPTIONAL `:via` of `?o :introducedBy ?w`.
+:alice :met :dave .
+:alice :via :bob .
+# A literal that does have an introducer: only the type test keeps it out of `:introducedBy`.
+:alice :met "Zoe" .
+# An IRI that has no introducer: only `bound(?w)` keeps it out of `:introducedBy`.
+:erin :met :alice .
+
+# A table of statements, one node per row, which `?s ?p ?o` reads out of `:subj`, `:pred` and `:obj` - three
+# object positions, so the subject and the predicate it writes both need a type test. The first two rows are
+# triples, a literal object being fine.
+:r1 :subj :carol ; :pred :likes ; :obj :alice .
+:r2 :subj :carol ; :pred :likes ; :obj "tea" .
+# A literal subject.
+:r3 :subj "Dave" ; :pred :likes ; :obj :alice .
+# A literal, a blank node and a triple term as predicate: only an IRI is one.
+:r4 :subj :bob ; :pred "likes" ; :obj :alice .
+:r5 :subj :dave ; :pred _:p ; :obj :alice .
+:r6 :subj :erin ; :pred <<( :a :b :c )>> ; :obj :alice .

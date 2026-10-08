@@ -1,0 +1,32 @@
+PREFIX : <ex://>
+
+# One subject per term type `:value` holds, so that a term type test over the object selects a known subset
+# of the rows. `:lit` and `:triple` are also what a triple term built with that object as its subject raises
+# on: no subject is a literal or a triple term.
+:iri    :value :o .
+:blank  :value _:b .
+:lit    :value "l" .
+:triple :value <<( :iri :value :o )>> .
+
+# Every subject above has a `:kind`, and so has `:none`, which has no `:value`: the row an OPTIONAL over
+# `:value` leaves unbound, which the weak form of a test keeps and the strong form drops.
+:iri    :kind :k .
+:blank  :kind :k .
+:lit    :kind :k .
+:triple :kind :k .
+:none   :kind :k .
+
+# `:copy` holds the IRI, the blank node and the literal `:value` holds, and a literal it does not. Equating the
+# two keeps the first three, and a type admitting literals and blank nodes keeps the blank node and `"l"` of
+# those - where the type alone would have kept `"other"` as well.
+:c1 :copy :o .
+:c2 :copy _:b .
+:c3 :copy "l" .
+:c4 :copy "other" .
+
+# What the right hand side of a MINUS over `?t :blocks ?a OPTIONAL { ?t :with ?b }` removes: `:b1` blocks the
+# literal without binding `?b`, so it removes every row holding that literal in `?a`; `:b2` binds `?b` to an
+# IRI beside the blank node, so it is compatible with no row holding the blank node in both.
+:b1 :blocks "l" .
+:b2 :blocks _:b .
+:b2 :with :o .

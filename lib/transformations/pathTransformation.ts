@@ -1,15 +1,13 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { VAR_PREFIX_USER_QUERY } from '../consts.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import { createFilterFalse } from '../utils/operationhelpers.js';
+import { termVars } from '../utils/certainlyBoundVars.js';
+import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
 
 import { isRdfVar } from '../utils/typeGuards.js';
-
-/**
- * Counter for generating unique variable names during path rewriting.
- */
-let counter = 0;
+import { collectVariableNames, freshVarGenerator } from '../utils.js';
 
 /**
  * Transformation that rewrites non-recursive property paths into equivalent BGPs and UNIONs.
@@ -24,8 +22,10 @@ let counter = 0;
  * - **Alt** (`path1|path2`): UNION of alternatives
  * - **Seq** (`path1/path2`): JOIN with intermediate variables
  * - **Inv** (`^path`): Swaps subject and object
- * - **NPS** (`!(<p1>|<p2>)`): Negated property set (FILTER NOT IN)
- * - **ZeroOrOne** (`path?`): UNION with empty match case
+ * - **NPS** (`!(<p1>|<p2>)`): Negated property set (FILTER NOT IN), DISTINCT over subject and object
+ * - **ZeroOrOne** (`path?`): UNION with empty match case, DISTINCT over subject and object
+ *
+ * Coined variables carry {@link VAR_PREFIX_USER_QUERY}, so the unfolding treats them as user query variables.
  *
  * ## Not Fully Supported:
  * - **ZeroOrMore** (`path*`): Returns original (recursive, cannot be fully expanded)
@@ -37,7 +37,7 @@ let counter = 0;
  *
  * @example
  * // ex:knows/ex:name becomes:
- * // ?s ex:knows ?linkvar_0 . ?linkvar_0 ex:name ?o
+ * // ?s ex:knows ?uq_path_0 . ?uq_path_0 ex:name ?o
  *
  * @example
  * // ex:knows|ex:worksWith becomes:
@@ -45,6 +45,40 @@ let counter = 0;
  */
 export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   const { AF, DF } = c;
+  const fresh = freshVarGenerator(collectVariableNames(c.astTransformer, op), `${VAR_PREFIX_USER_QUERY}path_`);
+
+  /**
+   * Gives an expanded path set semantics: a DISTINCT projection onto the variables of its subject, object and graph.
+   * @param operation - The expanded path
+   * @param path - The path it expands
+   * @returns the projection, or an existence check when there are no variables
+   */
+  function overSubjectAndObject(operation: Algebra.Operation, path: Algebra.Path): Algebra.Operation {
+    const visible = [ ...new Set([ path.subject, path.object, path.graph ].flatMap(term => [ ...termVars(term) ])) ]
+      .map(name => DF.variable(name));
+    if (visible.length === 0) {
+      return AF.createDistinct(projectSolutionExistence(c, operation));
+    }
+    return AF.createDistinct(AF.createProject(operation, visible));
+  }
+
+  /**
+   * Binds a variable to every [node](https://www.w3.org/TR/sparql12-query/#defn_nodeSet) of the graph.
+   * @param variable - The variable to bind
+   * @param graph - The graph to read the nodes from
+   * @returns the distinct nodes
+   */
+  function nodes(variable: RDF.Variable, graph: RDF.Term): Algebra.Operation {
+    const predicate = fresh();
+    const other = fresh();
+    return AF.createDistinct(AF.createProject(
+      AF.createUnion([
+        AF.createBgp([ AF.createPattern(variable, predicate, other, graph) ]),
+        AF.createBgp([ AF.createPattern(other, predicate, variable, graph) ]),
+      ]),
+      [ variable ],
+    ));
+  }
 
   function resolvePathOp(pathOp: Algebra.PropertyPathSymbol, path: Algebra.Path): Algebra.Operation {
     const { subject, object } = path;
@@ -69,10 +103,10 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
       if (pathOp.input.length === 1) {
         return resolvePathOp(pathOp.input[0], path);
       }
-      let linkVar = DF.variable(`linkvar_${counter++}`);
+      let linkVar = fresh();
       const operations = [ resolvePathOp(pathOp.input[0], { ...path, object: linkVar }) ];
       for (const subOp of pathOp.input.slice(1, -1)) {
-        const newLink = DF.variable(`linkvar_${counter++}`);
+        const newLink = fresh();
         operations.push(resolvePathOp(subOp, { ...path, subject: linkVar, object: newLink }));
         linkVar = newLink;
       }
@@ -82,58 +116,39 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
     }
     if (pathOp.type === Algebra.Types.NPS) {
       // https://www.w3.org/TR/sparql12-query/#eval_negatedPropertySet
-      const predicate = DF.variable(`rewrite_${counter++}`);
-      return AF.createFilter(
-        AF.createPattern(subject, predicate, object, path.graph),
+      const predicate = fresh();
+      return overSubjectAndObject(AF.createFilter(
+        AF.createBgp([ AF.createPattern(subject, predicate, object, path.graph) ]),
         AF.createOperatorExpression('notin', [
           AF.createTermExpression(predicate),
           ...pathOp.iris.map(x => AF.createTermExpression(x)),
         ]),
-      );
+      ), path);
     }
     // https://www.w3.org/TR/sparql12-query/#defn_evalPP_ZeroOrOnePath
     if (pathOp.type === Algebra.Types.ZERO_OR_ONE_PATH) {
       if (isRdfVar(subject) && isRdfVar(object)) {
-        // Both are var
-        return AF.createUnion([
+        // The zero length match binds both to one node; a single shared variable needs no BIND.
+        return overSubjectAndObject(AF.createUnion([
           resolvePathOp(pathOp.path, path),
-          AF.createExtend(
-            // Nodes implementation: https://www.w3.org/TR/sparql12-query/#defn_nodeSet
-            AF.createDistinct(AF.createProject(
-              AF.createUnion([
-                AF.createBgp([ AF.createPattern(
-                  subject,
-                  DF.variable(`p_${subject.value}`),
-                  DF.variable(`o_${subject.value}`),
-                  path.graph,
-                ) ]),
-                AF.createBgp([ AF.createPattern(
-                  DF.variable(`o_${subject.value}`),
-                  DF.variable(`p_${subject.value}`),
-                  subject,
-                  path.graph,
-                ) ]),
-              ]),
-              [ subject ],
-            )),
-            object,
-            AF.createTermExpression(subject),
-          ),
-        ]);
+          subject.equals(object) ?
+            nodes(subject, path.graph) :
+            AF.createExtend(nodes(subject, path.graph), object, AF.createTermExpression(subject)),
+        ]), path);
       }
       if (!isRdfVar(subject) && !isRdfVar(object)) {
         if (subject.equals(object)) {
           return AF.createBgp([]);
         }
-        return resolvePathOp(pathOp.path, path);
+        return overSubjectAndObject(resolvePathOp(pathOp.path, path), path);
       }
       // Only one is a var, the other is term
       const [ variable, term ] =
         <[RDF.Variable, RDF.Term]> (isRdfVar(subject) ? [ subject, object ] : [ object, subject ]);
-      return AF.createUnion([
+      return overSubjectAndObject(AF.createUnion([
         resolvePathOp(pathOp.path, path),
         AF.createExtend(AF.createBgp([]), variable, AF.createTermExpression(term)),
-      ]);
+      ]), path);
     }
     // If (pathOp.type === 'ZeroOrMorePath' || pathOp.type === 'OneOrMorePath') {
     // Throw new Error('Cannot transform recursive paths');

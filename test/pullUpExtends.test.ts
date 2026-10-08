@@ -579,6 +579,30 @@ ORDER BY ASC ( ?x )`,
       );
     });
 
+    it('rises past a join for every spelling of a nested construction', ({ expect }) => {
+      // A nested `TRIPLE()` is read through as well, so it is the same construction as the other two.
+      const built = 'SELECT * WHERE { { ?s :p ?o BIND(%s AS ?x) } { ?a :r ?b } }';
+      const expected = `SELECT ?a ?b ?o ?s ( %s AS ?x ) WHERE {
+  ?s <ex://p> ?o .
+  ?a <ex://r> ?b .
+}`;
+      expectTransform(
+        expect,
+        built.replace('%s', '<<( ?s :q <<( ?s :r ?o )>> )>>'),
+        expected.replace('%s', '<<( ?s <ex://q> <<( ?s <ex://r> ?o )>> )>>'),
+      );
+      expectTransform(
+        expect,
+        built.replace('%s', 'TRIPLE(?s, :q, <<( ?s :r ?o )>>)'),
+        expected.replace('%s', 'TRIPLE( ?s , <ex://q> , <<( ?s <ex://r> ?o )>> )'),
+      );
+      expectTransform(
+        expect,
+        built.replace('%s', 'TRIPLE(?s, :q, TRIPLE(?s, :r, ?o))'),
+        expected.replace('%s', 'TRIPLE( ?s , <ex://q> , TRIPLE( ?s , <ex://r> , ?o ) )'),
+      );
+    });
+
     it('reads a position out of the construction it wrote in', ({ expect }) => {
       // `SUBJECT(?x)` of a construction that cannot fail is the component itself, so the reader is left
       // with the variable rather than with an accessor over a triple term it has to build first.
@@ -628,6 +652,21 @@ ORDER BY ASC ( ?x )`,
   {
     ?s <ex://p> ?o .
     BIND( TRIPLE( "lit" , <ex://q> , ?o ) AS ?x )
+  }
+  ?a <ex://r> ?b .
+}`,
+      );
+    });
+
+    it('leaves a nested TRIPLE() in a position no triple term can take', ({ expect }) => {
+      // Only the object of a triple term may be one, so this raises however its components are bound.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o BIND(TRIPLE(TRIPLE(?s, :r, ?o), :q, ?o) AS ?x) } { ?a :r ?b } }',
+        `SELECT ?a ?b ?o ?s ?x WHERE {
+  {
+    ?s <ex://p> ?o .
+    BIND( TRIPLE( TRIPLE( ?s , <ex://r> , ?o ) , <ex://q> , ?o ) AS ?x )
   }
   ?a <ex://r> ?b .
 }`,

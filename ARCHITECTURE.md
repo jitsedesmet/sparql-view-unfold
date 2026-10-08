@@ -61,7 +61,8 @@ Given a query Q without recursive paths and a mapping with head H and body B:
    substituted to the lexicographically first member, with a BIND per member replacing the ones it
    substituted away (`?s ?p ?o FILTER(sameTerm(?s, ?o))` becomes `?o ?p ?o . BIND(?o AS ?s)`, keeping
    `pVars` and `cVars` unchanged). The two interact: a term meeting a clique fixes every variable in it at
-   once.
+   once. It also moves the type tests of the mapping (`isIRI(?x) || isBLANK(?x)`), which hold of every member
+   of a clique alike and are dropped wherever the plan already confines the variable to those types.
 
    Two invariants that are not guessable from the code, and are argued for in the pass's `@fileoverview`:
    a clique is split by *edges* rather than by variables, so that what is pushed down plus what is kept on
@@ -93,8 +94,7 @@ query) variables, so the mapping variables of two patterns are in two scopes alr
 variables are meant to be shared between patterns, being the natural join keys. The one exception is the
 existence variable a pattern binding nothing projects in place of an empty projection — that one leaves the
 sub-SELECT, so the context coins it (`mExists0`, `mExists1`, …), holding the count for the whole rewrite.
-Two patterns sharing it would share a join key, and a `MINUS` decides compatibility on exactly the
-variables its two sides share.
+It is never bound; coining it keeps it apart from the variables the pattern does bind.
 
 ## Blank nodes
 
