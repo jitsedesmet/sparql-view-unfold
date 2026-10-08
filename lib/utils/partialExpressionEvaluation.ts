@@ -150,12 +150,8 @@ function substitutedTerm(term: RDF.Term, assertions: AssertionView): RDF.Term | 
 }
 
 /**
- * Reads an accessor chain - `SUBJECT(?o)`, `OBJECT(SUBJECT(?o))` - or a term type test of one against what
- * theta decides, before its argument is substituted into.
- *
- * These folds are what make the pass **idempotent** (S7): the condition an assertion was read from is
- * written back over the operation it was pushed into, and unless it collapses to `true` there, a second run
- * reads it as a second assertion and stacks a second copy of the rewrite it caused.
+ * Reads an accessor chain such as `OBJECT(SUBJECT(?o))`, or a term type test of one, against what Θ decides, before
+ * its argument is substituted into. These folds are what keep the pass idempotent (S7).
  * @param c - The transformation context
  * @param expression - The expression to read
  * @param assertions - What the conjunction decides about it

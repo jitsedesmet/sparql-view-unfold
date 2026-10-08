@@ -77,8 +77,8 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
   }
 
   /**
-   * Forgets what a condition asserted of the group's range, keeping the range it narrowed to: for the term
-   * types something else now states. As {@link remove} does, it drops a group that no longer says anything.
+   * Forgets what a condition asserted of the group's range, keeping the range it narrowed to. Like {@link remove}, it
+   * drops a group that no longer says anything.
    * @param group - The group to forget the asserted range of
    */
   public forgetAssertedRange(group: number): void {
@@ -104,13 +104,8 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
   }
 
   /**
-   * A group a condition narrowed the range of carries information however few members it has: what it was
-   * told is what its last member is still constrained by, and what {@link
-   * utils/assertionConjunction!AssertionConjunction.get} reads back out of it as `T⟨?x : R⟩`.
-   *
-   * Without this the whole of `FILTER(isTRIPLE(?x))` would be dropped the moment its group falls to one
-   * member - which the transfer through a `BIND(?y AS ?x)` does at once, `?x` leaving the group it just
-   * put `?y` in - and a condition dropped from Θ is a condition dropped from the query.
+   * A group whose range a condition narrowed carries information however few members it has. Without this,
+   * `FILTER(isTRIPLE(?x))` would be dropped as soon as its group falls to one member.
    * @param group - The group to check
    * @returns whether it is worth keeping
    */

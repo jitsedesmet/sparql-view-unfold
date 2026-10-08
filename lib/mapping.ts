@@ -98,12 +98,8 @@ function assertTemplateTriplePositionsAreAdmissible(templateTriple: RDF.BaseQuad
 }
 
 /**
- * The type tests a head position needs of the body, one term of the template at a time.
- *
- * A constant is settled when the mapping is built and needs none; a variable needs one exactly when the
- * body could bind it outside the range its position admits, which is what makes these free for the mappings
- * that keep every variable in the position it was read from. They are the term type assertions the assertion
- * pushdown carries.
+ * The type tests a head position needs of the body, one term of the template at a time. A variable needs one exactly
+ * when the body could bind it outside the range its position admits.
  * @param templateTerm - The term the position holds
  * @param admissibleRange - The term types that position admits
  * @param bodyRanges - What the body can bind each of its variables to

@@ -32,7 +32,12 @@ describe('integration tests', () => {
   const engine = new QueryEngine();
   const DF = DataFactory;
 
-  /** Every comparison below goes through the default pipeline, which is what these tests are here to check. */
+  /**
+   * The rewriter of the default pipeline over the given mappings, which is what these tests are here to check.
+   * @param mappers - The CONSTRUCT queries of the mappings
+   * @param options - What the mapping is configured with
+   * @returns the rewriter
+   */
   function rewriterFor(mappers: string[], options: MappingOptions = {}): ReturnType<typeof createQueryRewriter> {
     return createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries(mappers, options)));
   }
@@ -48,8 +53,10 @@ describe('integration tests', () => {
   }
 
   /**
-   * Whether RDF 1.2 admits a triple: an IRI or a blank node as subject, an IRI as predicate, and the same of a
-   * triple term in the object.
+   * Whether RDF 1.2 admits a triple: an IRI or a blank node as subject, an IRI as predicate, and the same of a triple
+   * term in the object.
+   * @param triple - The triple to check
+   * @returns whether RDF 1.2 admits it
    */
   function isRdfTriple(triple: RDF.BaseQuad): boolean {
     return (triple.subject.termType === 'NamedNode' || triple.subject.termType === 'BlankNode') &&
@@ -58,9 +65,12 @@ describe('integration tests', () => {
   }
 
   /**
-   * Materialises the graph the mappings denote. Comunica's CONSTRUCT keeps a triple RDF does not admit - a
-   * literal subject, a literal predicate - where SPARQL 1.1 §16.2 instantiates none, so this drops them itself,
-   * unless the mapping is a generalized RDF view, which keeps them.
+   * Materialises the graph the mappings denote. Comunica's CONSTRUCT keeps triples RDF does not admit, which
+   * SPARQL 1.1 §16.2 does not instantiate, so this drops them unless the view is generalized RDF.
+   * @param source - The RDF 1.1 store
+   * @param mappers - The CONSTRUCT queries of the mappings
+   * @param options - What the mapping is configured with
+   * @returns the materialised store
    */
   async function storeTo12Store(source: Store, mappers: string[], options: MappingOptions = {}): Promise<Store> {
     const result = new Store();
@@ -92,10 +102,10 @@ describe('integration tests', () => {
   }
 
   /**
-   * Writes a term out for comparison the way `rdf-string` does, so that two triple terms, or two literals of
-   * different datatypes, tell apart - except a blank node, which is written by the label the data file gives it.
-   * N3 prefixes the labels of every document it parses with `b<n>_`, and Comunica scopes every blank node it
-   * reads from a source under `bc_<n>_`: once more on the mapped data, which went through one CONSTRUCT more.
+   * Writes a term out as `rdf-string` does, so that triple terms and literals of different datatypes tell apart. A
+   * blank node is written by its label in the data file, without the prefixes N3 and Comunica give it.
+   * @param term - The term to write
+   * @returns the string
    */
   function termToComparableString(term: RDF.Term): string {
     if (term.termType === 'Quad') {
@@ -106,8 +116,9 @@ describe('integration tests', () => {
   }
 
   /**
-   * Converts a binding to a canonical sorted string representation for comparison.
-   * Variables are sorted alphabetically to ensure consistent ordering.
+   * Writes a binding out for comparison, its variables sorted alphabetically.
+   * @param binding - The binding to write
+   * @returns the string
    */
   function bindingToString(binding: RDF.Bindings): string {
     const entries = [ ...binding ]
@@ -118,10 +129,12 @@ describe('integration tests', () => {
   }
 
   /**
-   * For a given RDF 1.1 store, mappers, and user SPARQL 1.2 SELECT query:
-   * - Maps the store to an RDF 1.2 store and runs the SELECT query on it.
-   * - Rewrites the SELECT query for the original store and runs it there.
-   * Returns both bindings arrays as sorted strings for comparison.
+   * Runs a SELECT over the RDF 1.2 store the mappings materialise, and its rewriting over the RDF 1.1 store.
+   * @param store11 - The RDF 1.1 store
+   * @param mappers - The CONSTRUCT queries of the mappings
+   * @param userQuery - The SELECT query
+   * @param options - What the mapping is configured with
+   * @returns the two answers, each as the sorted strings of its bindings
    */
   async function compareSelectRewrittenToMapped(
     store11: Store,
@@ -544,8 +557,12 @@ describe('integration tests', () => {
     ];
 
     /**
-     * Checks that a SELECT over the mapped data and its rewriting over permutedPositions.ttl give the same rows,
-     * and that those are the rows expected.
+     * Checks that a SELECT over the mapped data and its rewriting over permutedPositions.ttl give the same rows, and
+     * that those are the rows expected.
+     * @param expect - The `expect` of the test
+     * @param userQuery - The SELECT query, without its prefix
+     * @param rows - The rows it has to give
+     * @param options - What the mapping is configured with
      */
     async function expectRowsOverPermutedPositions(
       expect: typeof Expect,

@@ -57,6 +57,18 @@ import { isSubsetOf } from './setUtils.js';
  * A shape on the group is what makes `FILTER(sameTerm(SUBJECT(?o), ?s))` expressible: unifying `?o` with
  * `?x` makes everything known about `SUBJECT(?o)` known about `SUBJECT(?x)`, and a conjunct is about an
  * {@link Access} rather than about a variable.
+ *
+ * An access is in one of these states, each written back in the form the recogniser reads straight back into it:
+ *
+ * | state                                | means                                                      |
+ * |--------------------------------------|------------------------------------------------------------|
+ * | strong member of a pinned group      | `sameTerm(?x, c)`                                          |
+ * | weak member of a pinned group        | `!bound(?x) ∨ sameTerm(?x, c)`                             |
+ * | member of an unpinned group (clique) | `sameTerm(?x, ?rep)`                                       |
+ * | group with asserted term types       | `isIRI(?x) ∨ isBLANK(?x)`, one test per term type          |
+ * | the same, asserted weakly            | `!bound(?x) ∨ isIRI(?x) ∨ …`                               |
+ * | member of a shaped group             | one conjunct per position of the shape that says something |
+ * | unbound / bound                      | `!bound(?x)` / `bound(?x)`, no term                        |
  */
 
 /**
@@ -90,36 +102,9 @@ export interface EquatedGroup {
 }
 
 /**
- * A set of assertions Θ, in the states an assertion about an access can be in:
- *
- * | state                                | means                                                      |
- * |--------------------------------------|------------------------------------------------------------|
- * | strong member of a pinned group      | `sameTerm(?x, c)`                                          |
- * | weak member of a pinned group        | `!bound(?x) ∨ sameTerm(?x, c)`                             |
- * | member of an unpinned group (clique) | `sameTerm(?x, ?rep)`                                       |
- * | group with asserted term types       | `isIRI(?x) ∨ isBLANK(?x)`, one test per term type          |
- * | the same, asserted weakly            | `!bound(?x) ∨ isIRI(?x) ∨ …`                               |
- * | member of a shaped group             | one conjunct per position of the shape that says something |
- * | unbound / bound                      | `!bound(?x)` / `bound(?x)`, no term                        |
- *
- * Every row is written back in the form the recogniser reads straight back into the same state, which is
- * what {@link toExpression} and {@link collectAssertions} being inverses of each other means. What was
- * derived rather than asserted - that a subject holds no literal, that a shaped group holds a triple term -
- * is left unsaid ({@link AssertionClusterSet}).
- *
- * Two invariants shape everything below:
- *
- * - **A shape is never written as `sameTerm(?o, <<( ... )>>)`** (S2), only as one `sameTerm(SUBJECT(?o),
- *   ...)` per position that says something: the positions nobody named would be unbound wherever the
- *   filter sits, so the condition would error and drop every row.
- * - **Weak means sole member of a pinned group.** There is no sound weak form of a clique - cluster-level
- *   weak does not distribute over a join, and merging two weak edges is unsound - so a pin, a value both
- *   sides of a join already agree on, is what makes the weak form work. Every operation that would put a
- *   second named member into a group promotes the weak one first.
- *
- * The `assert...` methods report a contradiction by returning `false` rather than raising: one variable
- * asserted to be two terms at once is an ordinary outcome, which the pass turns into the empty operation.
- * A conjunction they returned `false` for holds no meaningful state and has to be discarded.
+ * A conjunction of assertions Θ, held as a union-find over the accesses it is about beside the variables it says are
+ * bound or unbound. The `assert...` methods return `false` on a contradiction, after which the conjunction holds no
+ * meaningful state.
  */
 export class AssertionConjunction {
   /**
@@ -229,10 +214,8 @@ export class AssertionConjunction {
   }
 
   /**
-   * What the conjunction says about one variable, read as a bare access.
-   *
-   * What a *shape* says about the positions is not about this variable at all - it is about the groups those
-   * positions name - so it is {@link conjuncts} rather than this that reports it.
+   * What the conjunction says about one variable, read as a bare access. What a shape says of its positions is
+   * reported by {@link conjuncts} instead.
    * @param name - The variable to look up
    * @returns the assertion, or `undefined` when the conjunction says nothing about it
    */
@@ -289,9 +272,8 @@ export class AssertionConjunction {
   }
 
   /**
-   * {@link conjuncts}, or {@link conjuncts} without the term types of the {@link equatedGroups | equated groups},
-   * which a rule placing Θ a piece at a time hands to every reading of them instead.
-   * @param withoutEquatedTermTypes - Whether to leave those out
+   * {@link conjuncts}, optionally without the term types of the {@link equatedGroups | equated groups}.
+   * @param withoutEquatedTermTypes - Whether to leave those out, for a rule handing them to every reading
    * @returns the conjuncts
    */
   private decomposed(withoutEquatedTermTypes: boolean): AssertionConjunct[] {
@@ -331,10 +313,9 @@ export class AssertionConjunction {
   }
 
   /**
-   * Θ a piece at a time: the conjuncts about one access alone - what it is fixed to, which kinds of term it
-   * is, whether it is bound - and the groups read more than one way, with the term types all their readings hold.
-   * @returns {@link conjuncts} without the edges, which are the only conjuncts mentioning two accesses, and
-   * without the term types of the {@link equatedGroups | equated groups}, beside those groups
+   * Θ a piece at a time: the conjuncts about a single access, and the groups read more than one way with the term
+   * types all their readings hold.
+   * @returns {@link conjuncts} without the edges and without the equated groups' term types, beside those groups
    */
   public unaryConjunctsAndEquatedGroups(): { unaryConjuncts: AssertionConjunct[]; equatedGroups: EquatedGroup[] } {
     return {
@@ -344,14 +325,8 @@ export class AssertionConjunction {
   }
 
   /**
-   * Every group Θ names more than one way, as the ways of naming its value - a variable that is a member of
-   * it, or a position of a shape, read from the representative of the group holding that shape - and the
-   * term types those readings hold.
-   *
-   * Several readings is the statement that they are equal - a clique for a group of variables, one edge for
-   * `sameTerm(SUBJECT(?o), ?s)`, and the two are one thing here. A rule deciding per reading would split
-   * such a group into pieces that no longer say it, so it splits the *edges* instead (`splitClique` in the pushdown).
-   * A group pinned to a term is not one of them: every reading of it is that term, which already states it.
+   * Every group Θ reads more than one way - as a member variable, or as a position of a shape - with the term types
+   * those readings hold. A group pinned to a term is left out, every reading of it being that term.
    * @returns the groups, the readings of each representative first
    */
   public equatedGroups(): EquatedGroup[] {
@@ -496,20 +471,14 @@ export class AssertionConjunction {
   }
 
   /**
-   * Reads Θ in terms of what an operation binds, converting between the forms at every step of the
-   * pushdown.
-   *
-   * Where `?x` is certainly bound, `!bound(?x)` is unsatisfiable, so W *is* A, B is `true` and U is empty;
-   * where `?x` can never be bound, A and B empty the operation by (FBndII) while W and U are `true`. The
-   * ranges decide the same two things one level finer - a variable whose range is empty never binds, exactly
-   * as one out of scope does, and a variable pinned to something outside a non-empty range cannot be bound
-   * to it, which makes the strong form unsatisfiable and the weak form exactly U⟨?x⟩.
-   *
-   * Takes the {@link CPMeta} of the operation the filter sits on: the variables it binds in every
-   * solution, and the scope it binds with the term types each variable there can take.
+   * Reads Θ against what an operation binds: where `?x` is certainly bound, W comes to A, B holds and U empties the
+   * operation, and where it never is, A and B empty it while W and U hold. The ranges decide the same one level
+   * finer, and a term type the operation already guarantees is forgotten.
+   * @param meta - The variables the operation certainly binds, and the term types each variable it binds can take
    * @returns the normalised conjunction, or `undefined` when it makes that operation empty
    */
-  public normalisedFor({ cVars, vRanges }: CPMeta): AssertionConjunction | undefined {
+  public normalisedFor(meta: CPMeta): AssertionConjunction | undefined {
+    const { cVars, vRanges } = meta;
     const result = this.clone();
     for (const name of this.names()) {
       if (this.unbound.has(name)) {
@@ -586,14 +555,9 @@ export class AssertionConjunction {
   }
 
   /**
-   * Θ with `name` taken out of it and whatever it said about it restated against `replacement` - what
-   * carries its value where the result is going, which the caller is responsible for establishing. Only for
-   * a `name` Θ implies bound: restating a weak member would make it strong.
-   *
-   * For a BIND that is its expression: below `BIND(?z AS ?t)` it is `?z` that holds what `?t` holds above.
-   * An access takes over everything the group holds, a term is what the group has to be, and a construction
-   * is the shape itself, so what the group said about a position is restated about the variable holding it.
-   * @param name - The variable to take out
+   * Θ with `name` taken out and what it said about `name` restated against `replacement`, which carries its value
+   * below. For `BIND(?z AS ?t)` it is `?z` that holds below what `?t` holds above.
+   * @param name - The variable to take out, which Θ has to imply bound
    * @param replacement - What carries its value below
    * @returns the transferred conjunction, or `undefined` when the transfer contradicts what is known
    */
@@ -979,10 +943,8 @@ export class AssertionConjunction {
   }
 
   /**
-   * The walk {@link groupConjuncts} memoises, run once per group and decomposition.
-   *
-   * A shape holds no cycles ({@link datastructures/TermClusterSet!TermClusterSet}), so a group is never
-   * asked for while it is being written, and the memo is filled in with a finished list.
+   * The walk {@link groupConjuncts} memoises, run once per group and decomposition. A shape holds no cycles, so a
+   * group is never asked for while it is being written.
    * @param group - The group to write out
    * @param walk - The decomposition being written
    * @returns its conjuncts
@@ -1080,18 +1042,11 @@ export class AssertionConjunction {
   }
 
   /**
-   * Every group Θ can reach from a variable it names, with the readings of it, representative first.
-   *
-   * - `FILTER(sameTerm(?x, ?y))` - one group, readings `[?x, ?y]`, giving the edge `?y = ?x`.
-   * - `FILTER(sameTerm(SUBJECT(?o), ?s))` - `?o`'s group holds `[?o]`; its subject position holds
-   *   `[?s, SUBJECT(?o)]`, giving the edge `SUBJECT(?o) = ?s`. The other two positions are anonymous.
-   * - `FILTER(sameTerm(SUBJECT(?o), :a))` - the subject position has one reading, so no edge; it writes
-   *   `SUBJECT(?o) = :a` from that single reading.
-   * Memoised per state of {@link clusters}, which is the only thing the walk reads: an operation asks for the
-   * decomposition several times over ({@link conjuncts}, {@link equatedGroups}, {@link patternValues}), and
-   * the walk is a BFS over every group plus a sort per group. Handed out read-only, the memo being shared.
-   * @returns the readings per group; a group nothing reaches is left out, being what is left of a shape a
-   * variable was taken out of, which nothing may be written about
+   * Every group Θ can reach from a variable it names, with its readings, representative first:
+   * `sameTerm(SUBJECT(?o), ?s)` reads the subject position of `?o` as `[?s, SUBJECT(?o)]`. Memoised per state of
+   * {@link clusters}, the only thing the walk reads, and handed out read-only.
+   * @returns the readings per group, without a group nothing reaches, which is what is left of a shape a variable was
+   * taken out of
    */
   private readingsPerGroup(): ReadonlyMap<number, readonly Access[]> {
     // Stamped before the walk rather than after it: a walk that wrote something - it does not, reading only
