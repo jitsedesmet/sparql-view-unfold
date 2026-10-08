@@ -74,7 +74,10 @@ interface Decomposition {
   readonly accessesPerGroup: ReadonlyMap<number, readonly Access[]>;
   /** What each group written out so far contributes, filled in as the walk reaches it. */
   readonly conjunctsPerGroup: Map<number, readonly AssertionConjunct[]>;
-  /** Whether a group read more than one way leaves its term types to {@link AssertionConjunction.equatedGroups}. */
+  /**
+   * Whether to leave out the term types of a group read more than one way,
+   * for a caller that puts them on each of its readings itself.
+   */
   readonly withoutEquatedTermTypes: boolean;
 }
 
@@ -374,16 +377,15 @@ export class AssertionConjunction {
       (variablesReadByConjunct(conjunct).every(predicate) ? inside : outside).push(conjunct);
     }
     for (const group of this.equatedGroups()) {
-      if (group.range === undefined) {
-        continue;
-      }
-      // The edges outside carry what holds of one reading inside onto all the others.
-      const typed = termTypesOfReadings(group);
-      const typedInside = typed.filter(conjunct => predicate(conjunct.access.name));
-      if (typedInside.length > 0) {
-        inside.push(...typedInside);
-      } else {
-        outside.push(typed[0]);
+      if (group.range !== undefined) {
+        // The edges outside carry what holds of one reading inside onto all the others.
+        const typed = termTypesOfReadings(group);
+        const typedInside = typed.filter(conjunct => predicate(conjunct.access.name));
+        if (typedInside.length > 0) {
+          inside.push(...typedInside);
+        } else {
+          outside.push(typed[0]);
+        }
       }
     }
     return { inside: AssertionConjunction.of(inside), outside: AssertionConjunction.of(outside) };

@@ -43,7 +43,7 @@ describe('pushDownAssertions', () => {
    */
   function expectIdempotent(expect: typeof Expect, query: string): void {
     const once = transform(query);
-    const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
+    const twice = pushDownAssertions(c, zC(c, parseQuery(c, prefixes + query)));
     expect(c.generator.generate(toAst(twice)).trim()).toEqual(once);
     expect(transform(once)).toEqual(once);
   }
