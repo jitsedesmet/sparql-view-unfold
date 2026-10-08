@@ -54,3 +54,78 @@ describe('the default pipeline over an OPTIONAL', () => {
     )).toContain('OPTIONAL');
   });
 });
+
+describe('the default pipeline over a mapping that types its head', () => {
+  // The head writes the body's object into its subject position, where a literal or a triple term makes no
+  // triple, so the mapping body tests it for an IRI or a blank node.
+  const construct = 'CONSTRUCT { ?o <ex://p> ?s } WHERE { ?s <ex://q> ?o }';
+  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([ construct ])));
+
+  it('keeps the type test where nothing guarantees it', async({ expect }) => {
+    // `?v_1` is read from an object position, which holds literals and triple terms as well.
+    expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b }')).trim())
+      .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    ?v_0 <ex://q> ?v_1 .
+    FILTER ( ( ISIRI( ?v_1 ) || ISBLANK( ?v_1 ) ) )
+  }
+  BIND( ?v_1 AS ?uq_a )
+  BIND( ?v_0 AS ?uq_b )
+}`);
+  });
+
+  it('drops the type test once a clique puts the variable in a subject position', async({ expect }) => {
+    // `sameTerm(?a, ?b)` equates the body's object with its subject, and a pattern binds its subject to an IRI or
+    // a blank node only: the pattern decides the test.
+    expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(sameTerm(?a, ?b)) }')).trim())
+      .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  ?v_0 <ex://q> ?v_0 .
+  BIND( ?v_0 AS ?uq_a )
+  BIND( ?v_0 AS ?uq_b )
+}`);
+  });
+
+  it('empties the query when a user type test contradicts the mapping\'s', async({ expect }) => {
+    // No triple of the view has a literal subject.
+    expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isLITERAL(?a)) }')).trim())
+      .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  FILTER ( FALSE )
+}`);
+  });
+
+  it('narrows the mapping\'s type test to a narrower one of the user', async({ expect }) => {
+    // The two tests are one assertion about `?v_1`, holding the term types both of them admit.
+    expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isIRI(?a)) }')).trim())
+      .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    ?v_0 <ex://q> ?v_1 .
+    FILTER ( ISIRI( ?v_1 ) )
+  }
+  BIND( ?v_1 AS ?uq_a )
+  BIND( ?v_0 AS ?uq_b )
+}`);
+  });
+
+  it('writes no type test for a generalized RDF view', async({ expect }) => {
+    // The view keeps the triples with a literal subject, so the body is read as it stands, and a user isLITERAL is
+    // a condition on it rather than a contradiction.
+    const generalized = createQueryRewriter(createDefaultTransformationPipeline(
+      mappingFromConstructQueries([ construct ], { generalizedRdfView: true }),
+    ));
+    expect((await generalized.rewriteQuery('SELECT * { ?a <ex://p> ?b }')).trim())
+      .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  ?v_0 <ex://q> ?v_1 .
+  BIND( ?v_1 AS ?uq_a )
+  BIND( ?v_0 AS ?uq_b )
+}`);
+    expect((await generalized.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isLITERAL(?a)) }')).trim())
+      .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    ?v_0 <ex://q> ?v_1 .
+    FILTER ( ISLITERAL( ?v_1 ) )
+  }
+  BIND( ?v_1 AS ?uq_a )
+  BIND( ?v_0 AS ?uq_b )
+}`);
+  });
+});

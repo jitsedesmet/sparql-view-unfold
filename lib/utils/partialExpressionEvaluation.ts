@@ -5,10 +5,10 @@ import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { RangeSet } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Access } from './assertions.js';
-import { asAccess, componentOf, isAssertableTerm, rangeOfTermType, asAssertableTermType } from './assertions.js';
+import { asAccess, asAssertableTermType, asTermTypeTest, componentOf, isAssertableTerm } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
 import { DF } from './rdfDatatypes.js';
-import { unionSets } from './setUtils.js';
+import { isSubsetOf, unionSets } from './setUtils.js';
 
 /**
  * What an {@link utils/assertionConjunction!AssertionConjunction} decides about the expressions it is substituted into.
@@ -150,12 +150,8 @@ function substitutedTerm(term: RDF.Term, assertions: AssertionView): RDF.Term | 
 }
 
 /**
- * Reads an accessor chain - `SUBJECT(?o)`, `OBJECT(SUBJECT(?o))` - or an `isTRIPLE` of one against what
- * theta decides, before its argument is substituted into.
- *
- * These folds are what make the pass **idempotent** (S7): the condition an assertion was read from is
- * written back over the operation it was pushed into, and unless it collapses to `true` there, a second run
- * reads it as a second assertion and stacks a second copy of the rewrite it caused.
+ * Reads an accessor chain such as `OBJECT(SUBJECT(?o))`, or a term type test of one, against what Θ decides, before
+ * its argument is substituted into. These folds are what keep the pass idempotent (S7).
  * @param c - The transformation context
  * @param expression - The expression to read
  * @param assertions - What the conjunction decides about it
@@ -166,18 +162,19 @@ function decidedByAccess(
   expression: Algebra.OperatorExpression,
   assertions: AssertionView,
 ): Algebra.Expression | undefined {
-  const termTypeAssertion = asAssertableTermType(expression.operator);
-  if (termTypeAssertion !== undefined && expression.args.length === 1) {
-    const access = asAccess(expression.args[0]);
-    const rangeOfAccess = access === undefined ? undefined : assertions.typeRange?.(access);
+  // Read as a test only where the view decides term types at all: this runs on every operator.
+  const test = assertions.typeRange === undefined ? undefined : asTermTypeTest(expression);
+  if (test !== undefined) {
+    const rangeOfAccess = assertions.typeRange?.(test.access);
     if (rangeOfAccess === undefined) {
       return undefined;
     }
+    const { range } = test.assertion;
     // `⊆` answers it `true`, an empty meet answers it `false`, and anything between leaves it standing.
-    if (rangeOfAccess.size === rangeOfAccess.meet(rangeOfTermType(termTypeAssertion)).size) {
+    if (isSubsetOf(rangeOfAccess, range)) {
       return createBooleanExpression(c, true);
     }
-    return rangeOfAccess.has(termTypeAssertion) ? undefined : createBooleanExpression(c, false);
+    return rangeOfAccess.meet(range).size > 0 ? undefined : createBooleanExpression(c, false);
   }
   const access = asAccess(expression);
   const decided = access === undefined ? undefined : assertions.resolve(access);

@@ -9,10 +9,13 @@ import { rangeOfPosition } from './RangeSet.js';
 import type { TransformationContext } from './transformContext.js';
 import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
 import type { Mapping, MappingHead } from './types.js';
+import type { AssertionConjunct } from './utils/assertions.js';
+import { access, assertBound, assertTermType, conjunctAsExpression } from './utils/assertions.js';
 import type { VRanges } from './utils/certainlyBoundVars.js';
 import { withCpVars } from './utils/certainlyBoundVars.js';
-import { unstableOperators } from './utils/expressionHelpers.js';
+import { conjunctionOf, unstableOperators } from './utils/expressionHelpers.js';
 import { projectSolutionExistence } from './utils/operationhelpers.js';
+import { isSubsetOf } from './utils/setUtils.js';
 import { collectVariableNames } from './utils.js';
 
 /**
@@ -94,48 +97,27 @@ function assertTemplateTriplePositionsAreAdmissible(templateTriple: RDF.BaseQuad
   }
 }
 
-/** The SPARQL test asking whether a term is of each term type, so that a range reads as an expression. */
-const termTypeTestOperators: Partial<Record<RDF.Term['termType'], string>> = {
-  NamedNode: 'isiri',
-  BlankNode: 'isblank',
-  Literal: 'isliteral',
-  Quad: 'istriple',
-};
-
 /**
- * The type tests a head position needs of the body, one term of the template at a time.
- *
- * A constant is settled when the mapping is built and needs none; a variable needs one exactly when the
- * body could bind it outside the range its position admits, which is what makes these free for the mappings
- * that keep every variable in the position it was read from.
- * @param tools - The factories to build with
+ * The type tests a head position needs of the body, one term of the template at a time. A variable needs one exactly
+ * when the body could bind it outside the range its position admits.
  * @param templateTerm - The term the position holds
  * @param admissibleRange - The term types that position admits
  * @param bodyRanges - What the body can bind each of its variables to
- * @returns one expression per variable needing one, recursing into a triple term
+ * @returns T⟨?x : R⟩ per variable needing one, recursing into a triple term
  */
 function headPositionTypeTests(
-  tools: MappingConstructionTools,
   templateTerm: RDF.Term,
   admissibleRange: RangeSet,
   bodyRanges: VRanges,
-): Algebra.OperatorExpression[] {
-  const { AF } = tools;
+): AssertionConjunct[] {
   if (templateTerm.termType === 'Quad') {
     return triplePositions.flatMap(position =>
-      headPositionTypeTests(tools, templateTerm[position], rangeOfPosition(position), bodyRanges));
+      headPositionTypeTests(templateTerm[position], rangeOfPosition(position), bodyRanges));
   }
-  if (templateTerm.termType !== 'Variable') {
+  if (templateTerm.termType !== 'Variable' || isSubsetOf(bodyRanges.rangeOf(templateTerm.value), admissibleRange)) {
     return [];
   }
-  if ([ ...bodyRanges.rangeOf(templateTerm.value) ].every(termType => admissibleRange.has(termType))) {
-    return [];
-  }
-  return [ [ ...admissibleRange ]
-    .map(termType => AF.createOperatorExpression(<string> termTypeTestOperators[termType], [
-      AF.createTermExpression(templateTerm),
-    ]))
-    .reduce((disjunction, test) => AF.createOperatorExpression('||', [ disjunction, test ])) ];
+  return [{ access: access(templateTerm.value), assertion: assertTermType(admissibleRange) }];
 }
 
 /**
@@ -179,17 +161,17 @@ function mappingOfSingleTemplateTriple(
   // is one its position can hold, so the solutions failing either do not belong to the mapping. Variables
   // that are certainly bound, or certainly of a term type the position admits, already need no condition.
   const { cVars: certainlyBoundVariableNames, vRanges: bodyRanges } = withCpVars(constructBody).metadata;
-  const conditions = headVariableNames
+  const conditions: AssertionConjunct[] = headVariableNames
     .filter(name => !certainlyBoundVariableNames.has(name))
-    .map(name => AF.createOperatorExpression('bound', [ AF.createTermExpression(DF.variable(name)) ]));
+    .map(name => ({ access: access(name), assertion: assertBound() }));
   if (options.generalizedRdfView !== true) {
     conditions.push(...triplePositions.flatMap(position =>
-      headPositionTypeTests(tools, head[position], rangeOfPosition(position), bodyRanges)));
+      headPositionTypeTests(head[position], rangeOfPosition(position), bodyRanges)));
   }
   let body: Algebra.Operation = constructBody;
   if (conditions.length > 0) {
-    body = AF.createFilter(body, conditions
-      .reduce((conjunction, condition) => AF.createOperatorExpression('&&', [ conjunction, condition ])));
+    body = AF.createFilter(body, conjunctionOf(tools, conditions
+      .map(condition => conjunctAsExpression(tools, condition))));
   }
   return {
     head,
