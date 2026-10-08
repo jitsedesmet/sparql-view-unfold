@@ -78,12 +78,16 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
 
   /**
    * Forgets what a condition asserted of the group's range, keeping the range it narrowed to: for the term
-   * types something else now states.
+   * types something else now states. As {@link remove} does, it drops a group that no longer says anything.
    * @param group - The group to forget the asserted range of
    */
   public forgetAssertedRange(group: number): void {
     this.touch();
-    this.groupToAssertedRange[this.resolveGroup(group)] = objectRange;
+    const resolved = this.resolveGroup(group);
+    this.groupToAssertedRange[resolved] = objectRange;
+    if (!this.isLive(resolved)) {
+      this.dropGroup(resolved);
+    }
   }
 
   /**
@@ -102,7 +106,7 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
   /**
    * A group a condition narrowed the range of carries information however few members it has: what it was
    * told is what its last member is still constrained by, and what {@link
-   * utils/assertionConjunction!AssertionConjunction.get} reads back out of it as `T⟨?x : τ⟩`.
+   * utils/assertionConjunction!AssertionConjunction.get} reads back out of it as `T⟨?x : R⟩`.
    *
    * Without this the whole of `FILTER(isTRIPLE(?x))` would be dropped the moment its group falls to one
    * member - which the transfer through a `BIND(?y AS ?x)` does at once, `?x` leaving the group it just

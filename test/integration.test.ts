@@ -3,6 +3,7 @@ import type * as RDF from '@rdfjs/types';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import { DataFactory, Store } from 'n3';
 import { termToString } from 'rdf-string';
+import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
 import type { MappingOptions } from '../lib/mapping.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
@@ -542,29 +543,37 @@ describe('integration tests', () => {
       `${prefix}CONSTRUCT { ?o :introducedBy ?w } WHERE { ?s :met ?o OPTIONAL { ?s :via ?w } }`,
     ];
 
-    /** Compares a SELECT over the mapped data with its rewriting over permutedPositions.ttl. */
-    async function compareOverPermutedPositions(
+    /**
+     * Checks that a SELECT over the mapped data and its rewriting over permutedPositions.ttl give the same rows,
+     * and that those are the rows expected.
+     */
+    async function expectRowsOverPermutedPositions(
+      expect: typeof Expect,
       userQuery: string,
+      rows: string[],
       options: MappingOptions = {},
-    ): Promise<{ resOnMappedData: string[]; resUsingRewriter: string[] }> {
+    ): Promise<void> {
       const store11 = await sourceToStore([ './test/statics/permutedPositions.ttl' ]);
-      return compareSelectRewrittenToMapped(store11, mappers, `${prefix}${userQuery}`, options);
+      const { resOnMappedData, resUsingRewriter } =
+        await compareSelectRewrittenToMapped(store11, mappers, `${prefix}${userQuery}`, options);
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+      expect(resOnMappedData).toEqual(rows);
     }
 
     it('returns an object as subject only where it can be one', async({ expect }) => {
       // "Bob", 42 and the triple term make no `:knownBy` triple: a rewrite without the type test returns them as
       // `?x`. The blank node does make one, which a rewrite testing for an IRI alone would lose.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?x :knownBy ?y }',
+        [
+          '{x=_:someone,y=ex://dave}',
+          '{x=ex://bob,y=ex://alice}',
+          '{x=ex://carol,y=ex://bob}',
+          '{x=ex://carol,y=ex://carol}',
+          '{x=ex://erin,y=_:someone}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{x=_:someone,y=ex://dave}',
-        '{x=ex://bob,y=ex://alice}',
-        '{x=ex://carol,y=ex://bob}',
-        '{x=ex://carol,y=ex://carol}',
-        '{x=ex://erin,y=_:someone}',
-      ]);
     });
 
     it('returns an object as predicate only where it is an IRI', async({ expect }) => {
@@ -572,260 +581,260 @@ describe('integration tests', () => {
       // and `:r6` a literal, a blank node and a triple term as predicate - a rewrite admitting a blank node there,
       // as a subject does, keeps `:r5`. "Bob" and "Zoe", objects of `:alice`, make no `:knownBy` or `:contactOf`
       // triple.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?s ?p :alice }',
+        [
+          '{p=ex://contactOf,s=ex://bob}',
+          '{p=ex://contactOf,s=ex://dave}',
+          '{p=ex://knownBy,s=ex://bob}',
+          '{p=ex://likes,s=ex://carol}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{p=ex://contactOf,s=ex://bob}',
-        '{p=ex://contactOf,s=ex://dave}',
-        '{p=ex://knownBy,s=ex://bob}',
-        '{p=ex://likes,s=ex://carol}',
-      ]);
     });
 
     it('still tests the subject where the query fixes the predicate', async({ expect }) => {
       // `:likes` decides the type test of the predicate, not the one of the subject: `:r3` ("Dave") would be back.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?s :likes ?o }',
+        [
+          '{o="tea",s=ex://carol}',
+          '{o=ex://alice,s=ex://carol}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{o="tea",s=ex://carol}',
-        '{o=ex://alice,s=ex://carol}',
-      ]);
     });
 
     it('builds a triple term only out of an object that can be its subject', async({ expect }) => {
       // "Bob", 42 and the triple term make no `:claims` triple. Without the type test, building the triple term
       // raises for them and leaves `?t` unbound: rows of `:alice`, `:bob` and `:carol` without a `?t` come back.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?s :claims ?t }',
+        [
+          '{s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
+          '{s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
+          '{s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
+          '{s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
+          '{s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
-        '{s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
-        '{s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
-        '{s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
-        '{s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
-      ]);
     });
 
     it('matches a triple term pattern only where the head builds a triple term', async({ expect }) => {
       // The same rows tell: without a type test, reading the positions of the triple term that could not be built
       // binds neither `?x` nor `?y`, and `:alice`, `:bob` and `:carol` come back with `?s` alone.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?s :claims <<( ?x :knownBy ?y )>> }',
+        [
+          '{s=_:someone,x=ex://erin,y=_:someone}',
+          '{s=ex://alice,x=ex://bob,y=ex://alice}',
+          '{s=ex://bob,x=ex://carol,y=ex://bob}',
+          '{s=ex://carol,x=ex://carol,y=ex://carol}',
+          '{s=ex://dave,x=_:someone,y=ex://dave}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{s=_:someone,x=ex://erin,y=_:someone}',
-        '{s=ex://alice,x=ex://bob,y=ex://alice}',
-        '{s=ex://bob,x=ex://carol,y=ex://bob}',
-        '{s=ex://carol,x=ex://carol,y=ex://carol}',
-        '{s=ex://dave,x=_:someone,y=ex://dave}',
-      ]);
     });
 
     it('tests the objects of both branches of a UNION body', async({ expect }) => {
       // "Bob", 42 and the triple term from the `:knows` branch, and "Zoe" from the `:met` one, make no triple.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?x :contactOf ?y }',
+        [
+          '{x=_:someone,y=ex://dave}',
+          '{x=ex://alice,y=ex://erin}',
+          '{x=ex://bob,y=ex://alice}',
+          '{x=ex://carol,y=ex://bob}',
+          '{x=ex://carol,y=ex://carol}',
+          '{x=ex://dave,y=ex://alice}',
+          '{x=ex://erin,y=_:someone}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{x=_:someone,y=ex://dave}',
-        '{x=ex://alice,y=ex://erin}',
-        '{x=ex://bob,y=ex://alice}',
-        '{x=ex://carol,y=ex://bob}',
-        '{x=ex://carol,y=ex://carol}',
-        '{x=ex://dave,y=ex://alice}',
-        '{x=ex://erin,y=_:someone}',
-      ]);
     });
 
     it('tests an object beside an OPTIONAL whose variable has to be bound', async({ expect }) => {
       // "Zoe" has an introducer, so only the type test keeps it out; `:alice`, met by `:erin`, has none, so only
       // `bound(?w)` does - a rewrite without it returns `:alice` with no `?w`.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?x :introducedBy ?w }',
+        [
+          '{w=ex://bob,x=ex://dave}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{w=ex://bob,x=ex://dave}',
-      ]);
     });
 
     it('drops only the branch a user isLITERAL contradicts', async({ expect }) => {
       // No `:knownBy` triple has a literal subject, so only the `:knows` branch has rows here. A rewrite without
       // the type test returns "Bob" and 42 from the `:knownBy` branch as well, twice over in all; one emptying the
       // whole UNION loses both.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { { ?x :knownBy ?y } UNION { ?y :knows ?x } FILTER(isLITERAL(?x)) }',
+        [
+          '{x="42"^^http://www.w3.org/2001/XMLSchema#integer,y=ex://bob}',
+          '{x="Bob",y=ex://alice}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{x="42"^^http://www.w3.org/2001/XMLSchema#integer,y=ex://bob}',
-        '{x="Bob",y=ex://alice}',
-      ]);
     });
 
     it('keeps the rows a user isIRI || isBLANK restating the mapping\'s test keeps', async({ expect }) => {
       // The two tests are one, so the rewrite needs only one of them: a rewrite that took either for the other
       // and dropped both returns "Bob", 42, "Zoe" and the triple term.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?x :contactOf ?y FILTER(isIRI(?x) || isBLANK(?x)) }',
+        [
+          '{x=_:someone,y=ex://dave}',
+          '{x=ex://alice,y=ex://erin}',
+          '{x=ex://bob,y=ex://alice}',
+          '{x=ex://carol,y=ex://bob}',
+          '{x=ex://carol,y=ex://carol}',
+          '{x=ex://dave,y=ex://alice}',
+          '{x=ex://erin,y=_:someone}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{x=_:someone,y=ex://dave}',
-        '{x=ex://alice,y=ex://erin}',
-        '{x=ex://bob,y=ex://alice}',
-        '{x=ex://carol,y=ex://bob}',
-        '{x=ex://carol,y=ex://carol}',
-        '{x=ex://dave,y=ex://alice}',
-        '{x=ex://erin,y=_:someone}',
-      ]);
     });
 
     it('narrows the mapping\'s test to a user isIRI', async({ expect }) => {
       // The blank node passes the mapping's test and fails the user's: a rewrite keeping only the wider of the two
       // returns `_:someone` as `?x`.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?x :knownBy ?y FILTER(isIRI(?x)) }',
+        [
+          '{x=ex://bob,y=ex://alice}',
+          '{x=ex://carol,y=ex://bob}',
+          '{x=ex://carol,y=ex://carol}',
+          '{x=ex://erin,y=_:someone}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{x=ex://bob,y=ex://alice}',
-        '{x=ex://carol,y=ex://bob}',
-        '{x=ex://carol,y=ex://carol}',
-        '{x=ex://erin,y=_:someone}',
-      ]);
     });
 
     it('joins a variable in a subject position with one in an object position', async({ expect }) => {
       // `?x` is the subject of `:knownBy`, typed, and an object of `:knows`, which holds anything: "Bob", 42 and
       // the triple term are objects of `:knows` the join would keep if `:knownBy` had kept them as subjects.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?x :knownBy ?y . ?z :knows ?x }',
+        [
+          '{x=_:someone,y=ex://dave,z=ex://dave}',
+          '{x=ex://bob,y=ex://alice,z=ex://alice}',
+          '{x=ex://carol,y=ex://bob,z=ex://bob}',
+          '{x=ex://carol,y=ex://bob,z=ex://carol}',
+          '{x=ex://carol,y=ex://carol,z=ex://bob}',
+          '{x=ex://carol,y=ex://carol,z=ex://carol}',
+          '{x=ex://erin,y=_:someone,z=_:someone}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{x=_:someone,y=ex://dave,z=ex://dave}',
-        '{x=ex://bob,y=ex://alice,z=ex://alice}',
-        '{x=ex://carol,y=ex://bob,z=ex://bob}',
-        '{x=ex://carol,y=ex://bob,z=ex://carol}',
-        '{x=ex://carol,y=ex://carol,z=ex://bob}',
-        '{x=ex://carol,y=ex://carol,z=ex://carol}',
-        '{x=ex://erin,y=_:someone,z=_:someone}',
-      ]);
     });
 
     it('carries the type test across a sameTerm between the two patterns', async({ expect }) => {
       // The join above as a clique `{ ?x, ?w }`: every reading of it holds only what `?x` can, so the same rows
       // tell - "Bob", 42 and the triple term, as both `?x` and `?w`.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?x :knownBy ?y . ?z :knows ?w FILTER(sameTerm(?x, ?w)) }',
+        [
+          '{w=_:someone,x=_:someone,y=ex://dave,z=ex://dave}',
+          '{w=ex://bob,x=ex://bob,y=ex://alice,z=ex://alice}',
+          '{w=ex://carol,x=ex://carol,y=ex://bob,z=ex://bob}',
+          '{w=ex://carol,x=ex://carol,y=ex://bob,z=ex://carol}',
+          '{w=ex://carol,x=ex://carol,y=ex://carol,z=ex://bob}',
+          '{w=ex://carol,x=ex://carol,y=ex://carol,z=ex://carol}',
+          '{w=ex://erin,x=ex://erin,y=_:someone,z=_:someone}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{w=_:someone,x=_:someone,y=ex://dave,z=ex://dave}',
-        '{w=ex://bob,x=ex://bob,y=ex://alice,z=ex://alice}',
-        '{w=ex://carol,x=ex://carol,y=ex://bob,z=ex://bob}',
-        '{w=ex://carol,x=ex://carol,y=ex://bob,z=ex://carol}',
-        '{w=ex://carol,x=ex://carol,y=ex://carol,z=ex://bob}',
-        '{w=ex://carol,x=ex://carol,y=ex://carol,z=ex://carol}',
-        '{w=ex://erin,x=ex://erin,y=_:someone,z=_:someone}',
-      ]);
     });
 
     it('drops nothing when a sameTerm makes the type test redundant', async({ expect }) => {
       // Equating `?x` with `?y` puts the object the test is about in the subject position of `:knows`, which
       // decides the test: what is left to tell is the loop on `:carol`, which a rewrite emptying the query loses.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?x :knownBy ?y FILTER(sameTerm(?x, ?y)) }',
+        [
+          '{x=ex://carol,y=ex://carol}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{x=ex://carol,y=ex://carol}',
-      ]);
     });
 
     it('leaves an object no subject can be without a match in an OPTIONAL', async({ expect }) => {
       // "Bob", 42 and the triple term keep their row, with no `?k`: a rewrite without the type test finds them a
       // `?k`, and one making the OPTIONAL a join loses them.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?s :knows ?o OPTIONAL { ?o :knownBy ?k } }',
+        [
+          '{k=_:someone,o=ex://erin,s=_:someone}',
+          '{k=ex://alice,o=ex://bob,s=ex://alice}',
+          '{k=ex://bob,o=ex://carol,s=ex://bob}',
+          '{k=ex://bob,o=ex://carol,s=ex://carol}',
+          '{k=ex://carol,o=ex://carol,s=ex://bob}',
+          '{k=ex://carol,o=ex://carol,s=ex://carol}',
+          '{k=ex://dave,o=_:someone,s=ex://dave}',
+          '{o="42"^^http://www.w3.org/2001/XMLSchema#integer,s=ex://bob}',
+          '{o="Bob",s=ex://alice}',
+          '{o=<<ex://alice ex://knows ex://bob>>,s=ex://carol}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{k=_:someone,o=ex://erin,s=_:someone}',
-        '{k=ex://alice,o=ex://bob,s=ex://alice}',
-        '{k=ex://bob,o=ex://carol,s=ex://bob}',
-        '{k=ex://bob,o=ex://carol,s=ex://carol}',
-        '{k=ex://carol,o=ex://carol,s=ex://bob}',
-        '{k=ex://carol,o=ex://carol,s=ex://carol}',
-        '{k=ex://dave,o=_:someone,s=ex://dave}',
-        '{o="42"^^http://www.w3.org/2001/XMLSchema#integer,s=ex://bob}',
-        '{o="Bob",s=ex://alice}',
-        '{o=<<ex://alice ex://knows ex://bob>>,s=ex://carol}',
-      ]);
     });
 
     it('keeps a bound() on a triple term the query builds out of an object', async({ expect }) => {
       // Building `<<( ?o :knownBy ?s )>>` raises for "Bob", 42 and the triple term, which leaves `?t` unbound: a
       // rewrite dropping the condition returns their rows without a `?t`.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?s :knows ?o BIND(<<( ?o :knownBy ?s )>> AS ?t) FILTER(bound(?t)) }',
+        [
+          '{o=_:someone,s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
+          '{o=ex://bob,s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
+          '{o=ex://carol,s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
+          '{o=ex://carol,s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
+          '{o=ex://erin,s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{o=_:someone,s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
-        '{o=ex://bob,s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
-        '{o=ex://carol,s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
-        '{o=ex://carol,s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
-        '{o=ex://erin,s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
-      ]);
     });
 
     it('keeps a sameTerm over a BIND of a variable one UNION branch leaves unbound', async({ expect }) => {
       // `sameTerm(?t, ?z)` raises where `?z` is unbound, so the `:likes` branch has no rows: a rewrite dropping the
       // filter returns `:carol` liking `:alice` and "tea". "Bob", 42 and the triple term tell the type test again.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { { ?a :knownBy ?z } UNION { ?a :likes ?b } BIND(?z AS ?t) FILTER(sameTerm(?t, ?z)) }',
+        [
+          '{a=_:someone,t=ex://dave,z=ex://dave}',
+          '{a=ex://bob,t=ex://alice,z=ex://alice}',
+          '{a=ex://carol,t=ex://bob,z=ex://bob}',
+          '{a=ex://carol,t=ex://carol,z=ex://carol}',
+          '{a=ex://erin,t=_:someone,z=_:someone}',
+        ],
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{a=_:someone,t=ex://dave,z=ex://dave}',
-        '{a=ex://bob,t=ex://alice,z=ex://alice}',
-        '{a=ex://carol,t=ex://bob,z=ex://bob}',
-        '{a=ex://carol,t=ex://carol,z=ex://carol}',
-        '{a=ex://erin,t=_:someone,z=_:someone}',
-      ]);
     });
 
     it('returns the rows the type tests drop when the mapping is a generalized RDF view', async({ expect }) => {
       // The query of the second test above: with `generalizedRdfView` there is no type test, and the triples it
       // would drop - the ones Comunica's CONSTRUCT keeps - are what the view holds.
-      const { resOnMappedData, resUsingRewriter } = await compareOverPermutedPositions(
+      await expectRowsOverPermutedPositions(
+        expect,
         'SELECT * WHERE { ?s ?p :alice }',
+        [
+          '{p="likes",s=ex://bob}',
+          '{p=<<ex://a ex://b ex://c>>,s=ex://erin}',
+          '{p=_:p,s=ex://dave}',
+          '{p=ex://contactOf,s="Bob"}',
+          '{p=ex://contactOf,s="Zoe"}',
+          '{p=ex://contactOf,s=ex://bob}',
+          '{p=ex://contactOf,s=ex://dave}',
+          '{p=ex://knownBy,s="Bob"}',
+          '{p=ex://knownBy,s=ex://bob}',
+          '{p=ex://likes,s="Dave"}',
+          '{p=ex://likes,s=ex://carol}',
+        ],
         { generalizedRdfView: true },
       );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual([
-        '{p="likes",s=ex://bob}',
-        '{p=<<ex://a ex://b ex://c>>,s=ex://erin}',
-        '{p=_:p,s=ex://dave}',
-        '{p=ex://contactOf,s="Bob"}',
-        '{p=ex://contactOf,s="Zoe"}',
-        '{p=ex://contactOf,s=ex://bob}',
-        '{p=ex://contactOf,s=ex://dave}',
-        '{p=ex://knownBy,s="Bob"}',
-        '{p=ex://knownBy,s=ex://bob}',
-        '{p=ex://likes,s="Dave"}',
-        '{p=ex://likes,s=ex://carol}',
-      ]);
     });
   });
 });
