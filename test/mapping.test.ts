@@ -87,6 +87,12 @@ describe('mappingFromConstructQueries', () => {
         'PREFIX : <ex://>\nCONSTRUCT { "literalSubject" :p ?o } WHERE { ?s :p ?o }',
       ])).toThrow('cannot use Literal in this position');
     });
+
+    it('rejects a blank node, which the template mints afresh per solution', ({ expect }) => {
+      expect(() => mappingFromConstructQueries([
+        'PREFIX : <ex://>\nCONSTRUCT { ?s :p _:fresh } WHERE { ?s :p ?o }',
+      ])).toThrow('cannot use BlankNode in this position');
+    });
   });
 
   /**
@@ -118,6 +124,45 @@ describe('mappingFromConstructQueries', () => {
         [ 'CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?o }' ],
         { generalizedRdfView: true },
       )).body).not.toContain('FILTER');
+    });
+  });
+
+  describe('a generalized RDF view', () => {
+    it('is what the mapping says it denotes, merged or not', ({ expect }) => {
+      const construct = 'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }';
+      expect(mappingFromConstructQueries([ construct ]).generalizedRdfView).toBe(false);
+      expect(mappingFromConstructQueries([ construct ], { generalizedRdfView: true }).generalizedRdfView).toBe(true);
+      expect(mappingFromConstructQueries([ construct, construct ], { generalizedRdfView: true }).generalizedRdfView)
+        .toBe(true);
+    });
+
+    it('admits a literal or a triple term as subject', ({ expect }) => {
+      const literalSubject = mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { "literalSubject" :p ?o } WHERE { ?s :p ?o }' ],
+        { generalizedRdfView: true },
+      );
+      expect(literalSubject.head.subject).toEqual(expect.objectContaining({ termType: 'Literal' }));
+      const tripleTermSubject = mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { <<( ?s :p ?o )>> :q ?o } WHERE { ?s :p ?o }' ],
+        { generalizedRdfView: true },
+      );
+      expect(tripleTermSubject.head.subject).toEqual(expect.objectContaining({ termType: 'Quad' }));
+    });
+
+    it('still rejects a term a position of a triple term does not admit', ({ expect }) => {
+      // SPARQL's TRIPLE builds no triple term out of a literal subject.
+      expect(() => mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { ?s :p <<( "literalSubject" :q ?o )>> } WHERE { ?s :p ?o }' ],
+        { generalizedRdfView: true },
+      )).toThrow('cannot use Literal in this position');
+    });
+
+    it('still filters a head variable inside a triple term', ({ expect }) => {
+      // `?o` is read in object position and written in the subject position of the triple term.
+      expect(mappingAsStrings(mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { ?t :reifies <<( ?o :p ?s )>> } WHERE { ?t :src ?s . ?s :p ?o }' ],
+        { generalizedRdfView: true },
+      )).body).toContain('( ISIRI( ?mi_o ) || ISBLANK( ?mi_o ) )');
     });
   });
 

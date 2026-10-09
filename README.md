@@ -124,7 +124,9 @@ position cannot hold — a literal subject, a blank node predicate — instantia
 CONSTRUCT the mapping is written as would not. A type test in the mapping body filters those solutions out,
 and the assertion pushdown drops it wherever the rewritten query already guarantees it.
 `mappingFromConstructQueries(constructs, { generalizedRdfView: true })` keeps those triples instead, for a
-view that means to present generalized RDF.
+view that means to present generalized RDF: any term in any position, a literal or triple term subject in the
+template included. A triple term the head writes is still an RDF triple, SPARQL's `TRIPLE` building no other,
+so the type tests inside it stay.
 
 ### Blank nodes
 

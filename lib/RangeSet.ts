@@ -41,7 +41,7 @@ export const objectRange = new RangeSet([ 'Quad', 'NamedNode', 'BlankNode', 'Lit
  */
 export const graphRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
 
-/** Valid term types for a triple term, which only ever occupies an object position. */
+/** Valid term types for a triple term. */
 export const tripleTermRange = new RangeSet([ 'Quad' ]);
 
 /**
@@ -78,4 +78,19 @@ export function rangeOfPosition(position: 'object' | 'predicate' | 'subject'): R
       return objectRange;
     }
   }
+}
+
+/**
+ * The range of a position of an asserted triple, the one a mapping head writes: any term in a generalized RDF
+ * graph, and what RDF admits there otherwise. A triple term is an RDF triple either way, SPARQL's `TRIPLE`
+ * building no other, so its positions keep {@link rangeOfPosition}.
+ * @param position - The position to read
+ * @param generalizedRdf - Whether the graph is a generalized RDF graph
+ * @returns the term types it admits
+ */
+export function rangeOfAssertedPosition(
+  position: 'object' | 'predicate' | 'subject',
+  generalizedRdf: boolean,
+): RangeSet {
+  return generalizedRdf ? objectRange : rangeOfPosition(position);
 }

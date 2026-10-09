@@ -22,9 +22,10 @@ RDF 1.2 pattern and its RDF 1.1 representation. `mappingFromConstructQueries`
 
 The body also gets what SPARQL 1.1 §16.2 asks of a CONSTRUCT: a `FILTER(bound(?x))` per head variable the
 body does not certainly bind, and a type test per head variable whose `vRanges` range exceeds what its head
-position admits (`generalizedRdfView` turns those off). Both read one template triple, so both happen
-*before* the merge — after it the head is three plain variables and a triple term is a BIND whose interior
-nothing re-reads, which is exactly the case the type tests are for.
+position admits (`rangeOfAssertedPosition`: any term in a `generalizedRdfView`, except inside a triple term,
+which stays an RDF triple). Both read one template triple, so both happen *before* the merge — after it the
+head is three plain variables and a triple term is a BIND whose interior nothing re-reads, which is exactly
+the case the type tests are for.
 
 ## The rewriting, step by step
 
@@ -33,7 +34,7 @@ Given a query Q without recursive paths and a mapping with head H and body B:
 1. **Rewrite the paths** to triple patterns without any paths — `lib/transformations/pathTransformation.ts`.
 2. **For each triple pattern of Q, unfold B into it** — `lib/transformations/rewriteSinglePattern.ts`:
    1. unify H with the pattern, giving groups of equality between expressions, head variables and triple
-      term variables (`lib/ClusterSolver.ts`);
+      term variables (`lib/ClusterSolver.ts`), each held to what its position of H admits;
    2. `B' = FILTER(B)` with the equality between head variables that have to be equal;
    3. `B' = FILTER(B')` with the other constraints found on those variables (equality with a static term);
    4. `B' = EXTEND(B')` with how the pattern's variables are constructed from the head variables;
