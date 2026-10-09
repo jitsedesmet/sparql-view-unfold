@@ -75,6 +75,10 @@ Given a query Q without recursive paths and a mapping with head H and body B:
    possible given a variable, for instance.
 7. **Let the `FILTER(FALSE)`s walk up**, absorbing what stands over them — `transformFilterFalse`.
 
+A `SERVICE` is evaluated by its endpoint over that endpoint's own data, so its answer does not depend on the
+data the mapping is defined over: steps 1 and 2 leave it as it stands. The later
+steps are equivalences over any data and may still rewrite inside it.
+
 `pullUpExtends` is the mirror of step 5: it floats the BINDs the pushdown left at the leaves back up the
 plan and deletes the ones nothing above reads.
 

@@ -316,6 +316,65 @@ LIMIT 10`,
     });
   });
 
+  // Its endpoint evaluates a SERVICE over its own data, which the mapping does not describe.
+  describe('a SERVICE in the user query', () => {
+    /** Rewrites a query over a mapping renaming `<ex://p>` to `<ex://q>`, expanding its paths first. */
+    function testService(expect: typeof Expect, userQuery: string, expectedQuery: string): Promise<void> {
+      return testConstructMappers(
+        expect,
+        userQuery,
+        expectedQuery,
+        [ 'CONSTRUCT { ?s <ex://q> ?o } WHERE { ?s <ex://p> ?o }' ],
+        [],
+        [ rewriteNonRecursivePathsTransformation() ],
+      );
+    }
+
+    it('is left as it stands while the patterns beside it are unfolded', ({ expect }) => testService(
+      expect,
+      'SELECT * { ?s <ex://q> ?o SERVICE <ex://endpoint> { ?o <ex://q> ?x } }',
+      `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) ( ?uq_x AS ?x ) WHERE {
+  {
+    SELECT ( ?mi_o AS ?uq_o ) ( ?mi_s AS ?uq_s ) WHERE {
+      ?mi_s <ex://p> ?mi_o .
+    }
+  }
+  SERVICE <ex://endpoint> {
+    ?uq_o <ex://q> ?uq_x .
+  }
+}`,
+    ));
+
+    it('is left as it stands inside an EXISTS', ({ expect }) => testService(
+      expect,
+      'SELECT * { ?s <ex://q> ?o FILTER EXISTS { SERVICE <ex://endpoint> { ?o <ex://q> ?x } } }',
+      `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
+  {
+    SELECT ( ?mi_o AS ?uq_o ) ( ?mi_s AS ?uq_s ) WHERE {
+      ?mi_s <ex://p> ?mi_o .
+    }
+  }
+  FILTER ( EXISTS {
+    SERVICE <ex://endpoint> {
+      ?uq_o <ex://q> ?uq_x .
+    }
+  }
+  )
+}`,
+    ));
+
+    it('keeps its property paths, recursive ones included, for the endpoint to evaluate', ({ expect }) => testService(
+      expect,
+      'SELECT * { SERVICE <ex://endpoint> { ?s <ex://q>? ?o . ?o <ex://q>+ ?x } }',
+      `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) ( ?uq_x AS ?x ) WHERE {
+  SERVICE <ex://endpoint> {
+    ?uq_s (<ex://q>?) ?uq_o .
+    ?uq_o (<ex://q>+) ?uq_x .
+  }
+}`,
+    ));
+  });
+
   // It('spo with blank in mapping head', ({ expect }) => {
   //   expect(() => transformQueryUsingConstructs(
   //     'SELECT * { { ?s <http://ex.org/a> ?a ; <http://ex.org/b> ?b } UNION { ?s <http://ex.org/b> ?b2 } }',

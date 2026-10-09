@@ -154,6 +154,10 @@ only the `WHERE` is rewritten. That graph is virtual, so nothing can be written 
 rewritten `WHERE`. Writing RDF 1.2 through the mapping is a different problem (the view update problem) and
 is not what this does.
 
+`SERVICE` is supported and means what it always does: its endpoint evaluates the pattern over its own data.
+The mapping describes your data, not the endpoint's, so nothing inside a `SERVICE` is unfolded, and the
+restrictions on the user query do not apply inside one.
+
 ## API
 
 The tables below are the short version; the generated
@@ -169,8 +173,8 @@ The tables below are the short version; the generated
 
 | Transformation | Description |
 |---|---|
-| `unfoldingTransformation(mapping, options?)` | The rewriting proper: every triple pattern replaced by the mapping body producing the triples it could match. |
-| `rewriteNonRecursivePathsTransformation()` | Expands non-recursive property paths into BGPs and UNIONs. Belongs before the unfolding. |
+| `unfoldingTransformation(mapping, options?)` | The rewriting proper: every triple pattern outside a `SERVICE` replaced by the mapping body producing the triples it could match. |
+| `rewriteNonRecursivePathsTransformation()` | Expands non-recursive property paths outside a `SERVICE` into BGPs and UNIONs. Belongs before the unfolding. |
 | `filterFalseTransformation()` | Lets every `FILTER(FALSE)` absorb what stands over it, sub-SELECTs included. |
 | `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))`, `FILTER(sameTerm(?x, ?y))` and term type tests like `FILTER(isIRI(?x) \|\| isBLANK(?x))` as deep as they go: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
 | `pullUpExtendsTransformation()` | Floats every `BIND` as high as the plan allows and drops the ones nothing reads. |
