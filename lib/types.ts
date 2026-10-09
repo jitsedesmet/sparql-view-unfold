@@ -24,7 +24,10 @@ export interface Mapping {
   head: MappingHead;
   /** The projected query body pattern that matches source data */
   body: Algebra.Project;
-  /** Whether the mapping denotes a generalized RDF graph, see {@link mapping!MappingOptions.generalizedRdfView}. */
+  /**
+   * Whether the mapping denotes a generalized RDF graph, whose triple terms are still RDF triple terms, see
+   * {@link mapping!MappingOptions.generalizedRdfView}.
+   */
   generalizedRdfView: boolean;
 }
 

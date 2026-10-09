@@ -56,7 +56,8 @@ import { collectVariableNames } from './utils.js';
 export interface MappingOptions {
   /**
    * Whether the mapping denotes a generalized RDF graph, keeping the triples with any term in any position that a
-   * CONSTRUCT drops. A triple term the head writes stays an RDF triple, SPARQL's `TRIPLE` building no other.
+   * CONSTRUCT drops. A triple term is never a generalized one: SPARQL's `TRIPLE` builds RDF triple terms only, so
+   * a solution that would need another instantiates no triple.
    */
   generalizedRdfView?: boolean;
 }
