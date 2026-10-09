@@ -53,20 +53,23 @@ describe('integration tests', () => {
   }
 
   /**
-   * Whether RDF 1.2 admits a triple: an IRI or a blank node as subject, an IRI as predicate, and the same of a triple
-   * term in the object.
+   * Whether a view holds a triple: RDF 1.2 admits an IRI or a blank node as subject and an IRI as predicate, a
+   * generalized RDF view any term, and a triple term is an RDF triple either way.
    * @param triple - The triple to check
-   * @returns whether RDF 1.2 admits it
+   * @param generalizedRdf - Whether the view is a generalized RDF view
+   * @returns whether the view holds it
    */
-  function isRdfTriple(triple: RDF.BaseQuad): boolean {
-    return (triple.subject.termType === 'NamedNode' || triple.subject.termType === 'BlankNode') &&
-      triple.predicate.termType === 'NamedNode' &&
-      (triple.object.termType !== 'Quad' || isRdfTriple(triple.object));
+  function viewHoldsTriple(triple: RDF.BaseQuad, generalizedRdf: boolean): boolean {
+    const positionTerms = [ triple.subject, triple.predicate, triple.object ];
+    return (generalizedRdf || (
+      (triple.subject.termType === 'NamedNode' || triple.subject.termType === 'BlankNode') &&
+      triple.predicate.termType === 'NamedNode'
+    )) && positionTerms.every(term => term.termType !== 'Quad' || viewHoldsTriple(term, false));
   }
 
   /**
-   * Materialises the graph the mappings denote. Comunica's CONSTRUCT keeps triples RDF does not admit, which
-   * SPARQL 1.1 §16.2 does not instantiate, so this drops them unless the view is generalized RDF.
+   * Materialises the graph the mappings denote. Comunica's CONSTRUCT keeps triples the view does not hold, which
+   * SPARQL 1.1 §16.2 does not instantiate, so this drops them.
    * @param source - The RDF 1.1 store
    * @param mappers - The CONSTRUCT queries of the mappings
    * @param options - What the mapping is configured with
@@ -76,7 +79,7 @@ describe('integration tests', () => {
     const result = new Store();
     for (const mapper of mappers) {
       const subRes = (await sourceToStore([ source ], mapper)).getQuads(null, null, null, null);
-      result.addQuads(options.generalizedRdfView === true ? subRes : subRes.filter(isRdfTriple));
+      result.addQuads(subRes.filter(triple => viewHoldsTriple(triple, options.generalizedRdfView === true)));
     }
     return result;
   }
@@ -563,16 +566,18 @@ describe('integration tests', () => {
      * @param userQuery - The SELECT query, without its prefix
      * @param rows - The rows it has to give
      * @param options - What the mapping is configured with
+     * @param viewMappers - The CONSTRUCT queries of the view, the ones above unless a test needs others
      */
     async function expectRowsOverPermutedPositions(
       expect: typeof Expect,
       userQuery: string,
       rows: string[],
       options: MappingOptions = {},
+      viewMappers: string[] = mappers,
     ): Promise<void> {
       const store11 = await sourceToStore([ './test/statics/permutedPositions.ttl' ]);
       const { resOnMappedData, resUsingRewriter } =
-        await compareSelectRewrittenToMapped(store11, mappers, `${prefix}${userQuery}`, options);
+        await compareSelectRewrittenToMapped(store11, viewMappers, `${prefix}${userQuery}`, options);
       expect(resOnMappedData).toEqual(resUsingRewriter);
       expect(resOnMappedData).toEqual(rows);
     }
@@ -851,6 +856,100 @@ describe('integration tests', () => {
           '{p=ex://likes,s=ex://carol}',
         ],
         { generalizedRdfView: true },
+      );
+    });
+
+    it('matches a literal subject the query writes in a generalized RDF view', async({ expect }) => {
+      // "Bob" is the subject of a `:knownBy` and a `:contactOf` triple: a rewrite holding the subject to the terms RDF
+      // admits there contradicts the literal and finds nothing.
+      await expectRowsOverPermutedPositions(
+        expect,
+        'SELECT * WHERE { "Bob" ?p ?o }',
+        [
+          '{o=ex://alice,p=ex://contactOf}',
+          '{o=ex://alice,p=ex://knownBy}',
+        ],
+        { generalizedRdfView: true },
+      );
+    });
+
+    it('matches a variable in two positions with the literal a generalized RDF head writes', async({ expect }) => {
+      // The view holds `"Bob" :named "Bob"`. A lone mapping keeps its head, constant and all, so a rewrite holding `?x`
+      // to the subjects RDF admits contradicts that literal and finds nothing.
+      await expectRowsOverPermutedPositions(
+        expect,
+        'SELECT * WHERE { ?x :named ?x }',
+        [
+          '{x="Bob"}',
+        ],
+        { generalizedRdfView: true },
+        [ `${prefix}CONSTRUCT { ?o :named "Bob" } WHERE { :alice :knows ?o }` ],
+      );
+    });
+
+    it('matches the literal subject a generalized RDF head writes', async({ expect }) => {
+      // Only a generalized RDF view admits a literal subject in its template.
+      await expectRowsOverPermutedPositions(
+        expect,
+        'SELECT * WHERE { ?x :names ?x }',
+        [
+          '{x="Bob"}',
+        ],
+        { generalizedRdfView: true },
+        [ `${prefix}CONSTRUCT { "Bob" :names ?o } WHERE { :alice :knows ?o }` ],
+      );
+    });
+
+    it('builds a triple term of a generalized RDF view only out of an RDF triple', async({ expect }) => {
+      // A triple term is an RDF triple in a generalized RDF view too, SPARQL's TRIPLE building no other. Without the
+      // type test inside it, building the triple term raises for "Bob", 42 and the triple term and leaves `?t`
+      // unbound: rows of `:alice`, `:bob` and `:carol` without a `?t` come back.
+      await expectRowsOverPermutedPositions(
+        expect,
+        'SELECT * WHERE { ?s :claims ?t }',
+        [
+          '{s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
+          '{s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
+          '{s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
+          '{s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
+          '{s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
+        ],
+        { generalizedRdfView: true },
+      );
+    });
+
+    it('builds the triple term a generalized RDF head writes only out of an RDF triple', async({ expect }) => {
+      // The same rows, from the head that writes the triple term itself rather than a variable bound to one.
+      await expectRowsOverPermutedPositions(
+        expect,
+        'SELECT * WHERE { ?s :claims ?t }',
+        [
+          '{s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
+          '{s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
+          '{s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
+          '{s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
+          '{s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
+        ],
+        { generalizedRdfView: true },
+        [ `${prefix}CONSTRUCT { ?s :claims <<( ?o :knownBy ?s )>> } WHERE { ?s :knows ?o }` ],
+      );
+    });
+
+    it('matches a triple term pattern of a generalized RDF head only where it is an RDF triple', async({ expect }) => {
+      // Unifying the two triple terms builds none, so only the type test inside the head keeps "Bob", 42 and the
+      // triple term out as `?x`.
+      await expectRowsOverPermutedPositions(
+        expect,
+        'SELECT * WHERE { ?s :claims <<( ?x :knownBy ?y )>> }',
+        [
+          '{s=_:someone,x=ex://erin,y=_:someone}',
+          '{s=ex://alice,x=ex://bob,y=ex://alice}',
+          '{s=ex://bob,x=ex://carol,y=ex://bob}',
+          '{s=ex://carol,x=ex://carol,y=ex://carol}',
+          '{s=ex://dave,x=_:someone,y=ex://dave}',
+        ],
+        { generalizedRdfView: true },
+        [ `${prefix}CONSTRUCT { ?s :claims <<( ?o :knownBy ?s )>> } WHERE { ?s :knows ?o }` ],
       );
     });
   });

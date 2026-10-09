@@ -79,3 +79,18 @@ export function rangeOfPosition(position: 'object' | 'predicate' | 'subject'): R
     }
   }
 }
+
+/**
+ * The range of a position of an asserted triple, the one a mapping head writes: any term in a generalized RDF
+ * graph, and what RDF admits there otherwise. A triple term is an RDF triple either way, SPARQL's `TRIPLE`
+ * building no other, so its positions keep {@link rangeOfPosition}.
+ * @param position - The position to read
+ * @param generalizedRdf - Whether the graph is a generalized RDF graph
+ * @returns the term types it admits
+ */
+export function rangeOfAssertedPosition(
+  position: 'object' | 'predicate' | 'subject',
+  generalizedRdf: boolean,
+): RangeSet {
+  return generalizedRdf ? objectRange : rangeOfPosition(position);
+}

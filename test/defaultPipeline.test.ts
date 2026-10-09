@@ -1,6 +1,7 @@
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import type { QueryRewriter } from '../lib/queryRewriter.js';
 
 /**
  * `nullifyJoinOverIncompatibleBounds` reads each join operand's top-level `EXTEND` chain and its recursion
@@ -126,6 +127,45 @@ describe('the default pipeline over a mapping that types its head', () => {
   }
   BIND( ?v_1 AS ?uq_a )
   BIND( ?v_0 AS ?uq_b )
+}`);
+  });
+});
+
+describe('the default pipeline over a generalized RDF view', () => {
+  /**
+   * The rewriter of the default pipeline over the generalized RDF view one CONSTRUCT query denotes.
+   * @param construct - The CONSTRUCT query of the mapping
+   * @returns the rewriter
+   */
+  function generalizedRdfViewRewriter(construct: string): QueryRewriter {
+    return createQueryRewriter(createDefaultTransformationPipeline(
+      mappingFromConstructQueries([ construct ], { generalizedRdfView: true }),
+    ));
+  }
+
+  it('unifies a variable in two positions with the literal the head writes', async({ expect }) => {
+    // The view holds `"lit" <ex://p> "lit"`: a rewrite holding `?x` to the subjects RDF admits empties the query.
+    const rewriter = generalizedRdfViewRewriter('CONSTRUCT { ?o <ex://p> "lit" } WHERE { ?s <ex://q> ?o }');
+    expect((await rewriter.rewriteQuery('SELECT * { ?x <ex://p> ?x }')).trim())
+      .toEqual(`SELECT ( ?uq_x AS ?x ) WHERE {
+  ?v_0 <ex://q> "lit" .
+  BIND( "lit" AS ?uq_x )
+}`);
+  });
+
+  it('keeps the type test inside a triple term the head writes', async({ expect }) => {
+    // A triple term stays an RDF triple: `TRIPLE` raises for a literal subject, which would leave `?t` unbound.
+    const rewriter = generalizedRdfViewRewriter(
+      'CONSTRUCT { ?s <ex://p> <<( ?o <ex://q> ?s )>> } WHERE { ?s <ex://q> ?o }',
+    );
+    expect((await rewriter.rewriteQuery('SELECT * { ?s <ex://p> ?t }')).trim())
+      .toEqual(`SELECT ( ?uq_s AS ?s ) ( ?uq_t AS ?t ) WHERE {
+  {
+    ?v_0 <ex://q> ?v_1 .
+    FILTER ( ( ISIRI( ?v_1 ) || ISBLANK( ?v_1 ) ) )
+  }
+  BIND( ?v_0 AS ?uq_s )
+  BIND( <<( ?v_1 <ex://q> ?v_0 )>> AS ?uq_t )
 }`);
   });
 });
