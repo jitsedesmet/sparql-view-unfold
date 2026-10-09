@@ -57,26 +57,24 @@ describe('the restrictions on a user query', () => {
       .rejects.toThrow('Querying a named graph (GRAPH) is not supported');
   });
 
-  describe('a SERVICE, whose semantics under unfolding are not settled', () => {
-    for (const [ placement, query ] of <const>[
-      [ 'at the top', 'SELECT * { SERVICE <ex://endpoint> { ?s <ex://p> ?o } }' ],
-      [ 'under an OPTIONAL', 'SELECT * { ?s <ex://p> ?o OPTIONAL { SERVICE <ex://endpoint> { ?o <ex://q> ?x } } }' ],
-      [ 'inside an EXISTS', 'SELECT * { ?s <ex://p> ?o FILTER EXISTS { SERVICE <ex://endpoint> { ?o <ex://q> ?x } } }' ],
-      [ 'in the WHERE of an update', 'DELETE { ?s <ex://p> ?o } WHERE { SERVICE <ex://endpoint> { ?s <ex://p> ?o } }' ],
+  describe('inside a SERVICE, which its endpoint evaluates over its own data', () => {
+    for (const [ construct, query ] of <const>[
+      [ 'a recursive property path', 'SELECT * { SERVICE <ex://endpoint> { ?s <ex://p>+ ?o } }' ],
+      [ 'a GRAPH', 'SELECT * { SERVICE <ex://endpoint> { GRAPH ?g { ?s <ex://p> ?o } } }' ],
+      [
+        'a GRAPH an update names as the graph of a pattern',
+        'DELETE { ?s <ex://p> ?o } WHERE { SERVICE <ex://endpoint> { GRAPH ?g { ?s <ex://p> ?o } } }',
+      ],
     ]) {
-      it(`is rejected ${placement}`, async({ expect }) => {
-        await expect(rewriter.rewriteQuery(query))
-          .rejects.toThrow('Querying a remote endpoint (SERVICE) is not supported');
+      it(`accepts ${construct}`, async({ expect }) => {
+        await expect(rewriter.rewriteQuery(query)).resolves.toBeTypeOf('string');
       });
     }
-  });
 
-  it('accepts a SERVICE in the mapping body, which the restrictions on a user query do not read', async({ expect }) => {
-    const serviceRewriter = createQueryRewriter([
-      unfoldingTransformation(mappingFromConstructQueries([
-        'CONSTRUCT { ?s ?p ?o } WHERE { SERVICE <ex://endpoint> { ?s ?p ?o } }',
-      ])),
-    ]);
-    await expect(serviceRewriter.rewriteQuery('SELECT * { ?s <ex://p> ?o }')).resolves.toContain('SERVICE');
+    it('still rejects what stands beside it', async({ expect }) => {
+      await expect(rewriter.rewriteQuery(
+        'SELECT * { SERVICE <ex://endpoint> { ?s <ex://p> ?o } GRAPH ?g { ?o <ex://p> ?x } }',
+      )).rejects.toThrow('Querying a named graph (GRAPH) is not supported');
+    });
   });
 });

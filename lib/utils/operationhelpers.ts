@@ -1,4 +1,5 @@
 import { Algebra } from '@traqula/algebra-transformations-1-2';
+import type { TransformContext } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import { datatypeBoolean, DF } from './rdfDatatypes.js';
 
@@ -7,6 +8,12 @@ export const termFalse = DF.literal('false', datatypeBoolean);
 
 /** The literal `true` with xsd:boolean datatype, the condition of a filter that constrains nothing */
 export const termTrue = DF.literal('true', datatypeBoolean);
+
+/**
+ * The traversal callbacks that keep a walk out of a `SERVICE`: its endpoint evaluates the pattern over its own
+ * data, which the mapping does not describe, so nothing that applies the mapping belongs inside it.
+ */
+export const doNotDescendIntoService = { preVisitor: (): TransformContext => ({ continue: false }) };
 
 /**
  * Whether an operation is the `FILTER(FALSE)` sentinel for a pattern that never matches.

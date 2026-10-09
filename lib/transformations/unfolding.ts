@@ -2,6 +2,7 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { withDeduplicatedBody } from '../mapping.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, QueryTransformation } from '../types.js';
+import { doNotDescendIntoService } from '../utils/operationhelpers.js';
 import { rewriteSinglePattern } from './rewriteSinglePattern.js';
 
 /**
@@ -19,6 +20,9 @@ import { rewriteSinglePattern } from './rewriteSinglePattern.js';
  * the user query, and the projection keeps it apart from the other patterns. The only internal variable
  * that *does* leave a sub-SELECT is the existence variable a pattern binding nothing projects in place of
  * an empty projection, and {@link rewriteSinglePattern} names that one after the pattern.
+ *
+ * **A `SERVICE` is left as it stands.** Its endpoint evaluates the pattern over its own data, which the mapping
+ * does not describe, and that answer does not depend on the data the rest of the query is unfolded over.
  */
 
 /** What an unfolding may be configured with. */
@@ -34,7 +38,8 @@ export interface UnfoldingOptions {
 }
 
 /**
- * Rewrites every BGP of an operation into a join of its patterns unfolded against the mapping.
+ * Rewrites every BGP of an operation outside a `SERVICE` into a join of its patterns unfolded against the
+ * mapping.
  * @param c - The transformation context
  * @param mapping - The mapping to unfold
  * @param input - The operation to rewrite
@@ -47,18 +52,21 @@ export function unfoldTriplePatternsAgainstMapping(
 ): Algebra.Operation {
   return algebraUtils.mapOperation<'unsafe', typeof input>(
     input,
-    { [Algebra.Types.BGP]: { transform: input =>
-      c.AF.createJoin(
-        input.patterns.map(pattern => rewriteSinglePattern(c, pattern, mapping)),
-        true,
-      ),
-    }},
+    {
+      [Algebra.Types.BGP]: { transform: input =>
+        c.AF.createJoin(
+          input.patterns.map(pattern => rewriteSinglePattern(c, pattern, mapping)),
+          true,
+        ),
+      },
+      [Algebra.Types.SERVICE]: doNotDescendIntoService,
+    },
   );
 }
 
 /**
- * The pipeline step replacing every triple pattern of the user query by the mapping body producing the
- * triples it could match.
+ * The pipeline step replacing every triple pattern of the user query outside a `SERVICE` by the mapping body
+ * producing the triples it could match.
  * @param mapping - The mapping to unfold, from {@link mapping!mappingFromConstructQueries}
  * @param options - What to configure the unfolding with
  * @returns the transformation

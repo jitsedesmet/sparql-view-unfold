@@ -28,7 +28,7 @@ nothing re-reads, which is exactly the case the type tests are for.
 
 ## The rewriting, step by step
 
-Given a query Q without recursive paths, `GRAPH` or `SERVICE`, and a mapping with head H and body B:
+Given a query Q without recursive paths and a mapping with head H and body B:
 
 1. **Rewrite the paths** to triple patterns without any paths — `lib/transformations/pathTransformation.ts`.
 2. **For each triple pattern of Q, unfold B into it** — `lib/transformations/rewriteSinglePattern.ts`:
@@ -74,6 +74,10 @@ Given a query Q without recursive paths, `GRAPH` or `SERVICE`, and a mapping wit
    would be fruitful for some operations — word equations testing whether a literal concatenation is
    possible given a variable, for instance.
 7. **Let the `FILTER(FALSE)`s walk up**, absorbing what stands over them — `transformFilterFalse`.
+
+A `SERVICE` is evaluated by its endpoint over that endpoint's own data, so its answer does not depend on the
+data the mapping is defined over: steps 1 and 2 leave it as it stands (`doNotDescendIntoService`). The later
+steps are equivalences over any data and may still rewrite inside it.
 
 `pullUpExtends` is the mirror of step 5: it floats the BINDs the pushdown left at the leaves back up the
 plan and deletes the ones nothing above reads.
@@ -122,9 +126,6 @@ So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
 - **Named graphs.** `GRAPH` is rejected by the precheck: what unfolding a mapping *inside* a named graph
   means is not decided. The GRAPH rules in `pushDownAssertions` and `pullUpExtends` are there and tested,
   so the work left is semantic rather than mechanical.
-- **`SERVICE` in a user query.** Rejected by the precheck: the endpoint's data is not the data the mapping
-  is defined over. Unfolding into it reads the endpoint through the mapping, leaving it alone reads it as it
-  is; either one extends the correctness argument, but which one a query means is not decided.
 - **`removeProjections`.** Dropping inner projections helps many engines and hurts some; it is in the
   default pipeline and deserves a proper study rather than the anecdote it rests on.
 - **`nullifyJoinOverIncompatibleBounds` seeing through a `PROJECT`**, which would free it from having to

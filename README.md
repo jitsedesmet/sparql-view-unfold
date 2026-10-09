@@ -140,7 +140,6 @@ literal or as a prefixed IRI respectively.
 |---|---|
 | No `+` or `*` property path in the user query | The rewrite throws. A recursive path cannot be expanded into triple patterns, so the mapping could not be unfolded into it. `?`, `|`, `/`, `^` and `!(…)` are all fine. |
 | No `GRAPH` in the user query | The rewrite throws. What unfolding a mapping inside a named graph means is not settled. |
-| No `SERVICE` in the user query | The rewrite throws. A remote endpoint holds data the mapping is not defined over, and whether to read it through the mapping or as it is, is not settled. A `SERVICE` in a mapping body is fine. |
 | No unstable function (`BNODE`, `RAND`, `UUID`, `STRUUID`) in a mapping body | Building the mapping throws, naming the function. A mapping has to denote one fixed graph, and those answer differently on every evaluation. `NOW` is allowed: SPARQL 1.1 §17.4.5.1 fixes it per query execution. |
 | A mapping head holds exactly one triple | Nothing — `mappingFromConstructQueries` splits a larger CONSTRUCT template into one mapping per triple for you, which denotes the same graph. |
 | No blank nodes in the RDF 1.1 dataset, unless skolemised | **Wrong answers, silently.** A blank node cannot be referenced across the sub-queries the unfolding produces, so triples reached through one are lost. Skolemise them into IRIs before querying. |
@@ -154,6 +153,10 @@ only the `WHERE` is rewritten. That graph is virtual, so nothing can be written 
 `DELETE` template goes to the RDF 1.1 source exactly as you wrote it, with its variables bound by the
 rewritten `WHERE`. Writing RDF 1.2 through the mapping is a different problem (the view update problem) and
 is not what this does.
+
+`SERVICE` is supported and means what it always does: its endpoint evaluates the pattern over its own data.
+The mapping describes your data, not the endpoint's, so nothing inside a `SERVICE` is unfolded, and the
+restrictions on the user query do not apply inside one.
 
 ## API
 
@@ -170,8 +173,8 @@ The tables below are the short version; the generated
 
 | Transformation | Description |
 |---|---|
-| `unfoldingTransformation(mapping, options?)` | The rewriting proper: every triple pattern replaced by the mapping body producing the triples it could match. |
-| `rewriteNonRecursivePathsTransformation()` | Expands non-recursive property paths into BGPs and UNIONs. Belongs before the unfolding. |
+| `unfoldingTransformation(mapping, options?)` | The rewriting proper: every triple pattern outside a `SERVICE` replaced by the mapping body producing the triples it could match. |
+| `rewriteNonRecursivePathsTransformation()` | Expands non-recursive property paths outside a `SERVICE` into BGPs and UNIONs. Belongs before the unfolding. |
 | `filterFalseTransformation()` | Lets every `FILTER(FALSE)` absorb what stands over it, sub-SELECTs included. |
 | `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))`, `FILTER(sameTerm(?x, ?y))` and term type tests like `FILTER(isIRI(?x) \|\| isBLANK(?x))` as deep as they go: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
 | `pullUpExtendsTransformation()` | Floats every `BIND` as high as the plan allows and drops the ones nothing reads. |
