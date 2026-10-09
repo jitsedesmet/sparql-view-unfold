@@ -56,4 +56,27 @@ describe('the restrictions on a user query', () => {
     await expect(rewriter.rewriteQuery('DELETE { ?s <ex://p> ?o } WHERE { GRAPH ?g { ?s <ex://p> ?o } }'))
       .rejects.toThrow('Querying a named graph (GRAPH) is not supported');
   });
+
+  describe('a SERVICE, whose semantics under unfolding are not settled', () => {
+    for (const [ placement, query ] of <const>[
+      [ 'at the top', 'SELECT * { SERVICE <ex://endpoint> { ?s <ex://p> ?o } }' ],
+      [ 'under an OPTIONAL', 'SELECT * { ?s <ex://p> ?o OPTIONAL { SERVICE <ex://endpoint> { ?o <ex://q> ?x } } }' ],
+      [ 'inside an EXISTS', 'SELECT * { ?s <ex://p> ?o FILTER EXISTS { SERVICE <ex://endpoint> { ?o <ex://q> ?x } } }' ],
+      [ 'in the WHERE of an update', 'DELETE { ?s <ex://p> ?o } WHERE { SERVICE <ex://endpoint> { ?s <ex://p> ?o } }' ],
+    ]) {
+      it(`is rejected ${placement}`, async({ expect }) => {
+        await expect(rewriter.rewriteQuery(query))
+          .rejects.toThrow('Querying a remote endpoint (SERVICE) is not supported');
+      });
+    }
+  });
+
+  it('accepts a SERVICE in the mapping body, which the restrictions on a user query do not read', async({ expect }) => {
+    const serviceRewriter = createQueryRewriter([
+      unfoldingTransformation(mappingFromConstructQueries([
+        'CONSTRUCT { ?s ?p ?o } WHERE { SERVICE <ex://endpoint> { ?s ?p ?o } }',
+      ])),
+    ]);
+    await expect(serviceRewriter.rewriteQuery('SELECT * { ?s <ex://p> ?o }')).resolves.toContain('SERVICE');
+  });
 });
