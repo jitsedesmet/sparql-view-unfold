@@ -41,7 +41,7 @@ export const objectRange = new RangeSet([ 'Quad', 'NamedNode', 'BlankNode', 'Lit
  */
 export const graphRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
 
-/** Valid term types for a triple term, which only ever occupies an object position. */
+/** Valid term types for a triple term. */
 export const tripleTermRange = new RangeSet([ 'Quad' ]);
 
 /**

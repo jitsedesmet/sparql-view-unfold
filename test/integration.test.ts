@@ -900,6 +900,21 @@ describe('integration tests', () => {
       );
     });
 
+    it('matches the triple term subject a generalized RDF head writes', async({ expect }) => {
+      // Only a generalized RDF view admits a triple term subject in its template. Reading the positions of that
+      // subject builds no triple term, so the rows are the `:knows` triples of `:carol`, triple term object and all.
+      await expectRowsOverPermutedPositions(
+        expect,
+        'SELECT * WHERE { <<( ?s :knows ?o )>> :statedBy :carol }',
+        [
+          '{o=<<ex://alice ex://knows ex://bob>>,s=ex://carol}',
+          '{o=ex://carol,s=ex://carol}',
+        ],
+        { generalizedRdfView: true },
+        [ `${prefix}CONSTRUCT { <<( ?s :knows ?o )>> :statedBy ?s } WHERE { ?s :knows ?o }` ],
+      );
+    });
+
     it('builds a triple term of a generalized RDF view only out of an RDF triple', async({ expect }) => {
       // A triple term is an RDF triple in a generalized RDF view too, SPARQL's TRIPLE building no other. Without the
       // type test inside it, building the triple term raises for "Bob", 42 and the triple term and leaves `?t`

@@ -3,14 +3,16 @@ import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { Patch } from '@traqula/core';
 import type { TransformationContext } from './transformContext.js';
 
-/**
- * The one triple a mapping writes. Only a generalized RDF view writes a literal or a triple term as subject, and
- * a triple term's own positions hold what RDF admits there.
- */
-export type MappingHead = Patch<Algebra.Pattern, {
-  subject: RDF.NamedNode | RDF.Variable | RDF.Literal | MappingHead;
+/** A triple term a mapping head writes, an RDF triple whatever the view. */
+export type MappingTripleTerm = Patch<Algebra.Pattern, {
+  subject: RDF.NamedNode | RDF.Variable;
   predicate: RDF.NamedNode | RDF.Variable;
-  object: RDF.NamedNode | RDF.Variable | RDF.Literal | MappingHead;
+  object: RDF.NamedNode | RDF.Variable | RDF.Literal | MappingTripleTerm;
+}>;
+
+/** The one triple a mapping writes, whose subject only a generalized RDF view makes a literal or a triple term. */
+export type MappingHead = Patch<MappingTripleTerm, {
+  subject: RDF.NamedNode | RDF.Variable | RDF.Literal | MappingTripleTerm;
 }>;
 
 /**

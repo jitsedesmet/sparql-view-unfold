@@ -55,9 +55,8 @@ import { collectVariableNames } from './utils.js';
 /** What building a mapping may be configured with. */
 export interface MappingOptions {
   /**
-   * Whether the mapping denotes a generalized RDF graph, whose triples may hold any term in any position, rather
-   * than dropping the solutions that would make an illegal triple. A triple term the head writes stays an RDF
-   * triple either way, SPARQL's `TRIPLE` building no other. Off by default.
+   * Whether the mapping denotes a generalized RDF graph, keeping the triples with any term in any position that a
+   * CONSTRUCT drops. A triple term the head writes stays an RDF triple, SPARQL's `TRIPLE` building no other.
    */
   generalizedRdfView?: boolean;
 }
@@ -66,7 +65,7 @@ export interface MappingOptions {
 type MappingConstructionTools = Pick<TransformationContext, 'parser' | 'AF' | 'DF' | 'astTransformer'>;
 
 /**
- * The type tests a term of the template needs to be one its position admits, recursing into a triple term.
+ * The type tests making a term of the template one its position admits, recursing into a triple term.
  * @param templateTerm - The term the position holds
  * @param admissibleRange - The term types that position admits
  * @param bodyRanges - What the body can bind each of its variables to
@@ -74,7 +73,7 @@ type MappingConstructionTools = Pick<TransformationContext, 'parser' | 'AF' | 'D
  * @throws Error for a constant the position does not admit, or a blank node, which the template mints afresh
  * per solution
  */
-function headPositionTypeTests(
+function admissibilityTypeTests(
   templateTerm: RDF.Term,
   admissibleRange: RangeSet,
   bodyRanges: VRanges,
@@ -90,7 +89,7 @@ function headPositionTypeTests(
   }
   if (templateTerm.termType === 'Quad') {
     return triplePositions.flatMap(position =>
-      headPositionTypeTests(templateTerm[position], rangeOfPosition(position), bodyRanges));
+      admissibilityTypeTests(templateTerm[position], rangeOfPosition(position), bodyRanges));
   }
   return [];
 }
@@ -137,7 +136,7 @@ function mappingOfSingleTemplateTriple(
   // that are certainly bound, or certainly of a term type the position admits, already need no condition.
   const { cVars: certainlyBoundVariableNames, vRanges: bodyRanges } = withCpVars(constructBody).metadata;
   const typeTests = triplePositions.flatMap(position =>
-    headPositionTypeTests(head[position], rangeOfAssertedPosition(position, generalizedRdfView), bodyRanges));
+    admissibilityTypeTests(head[position], rangeOfAssertedPosition(position, generalizedRdfView), bodyRanges));
   const conditions: AssertionConjunct[] = [
     ...headVariableNames
       .filter(name => !certainlyBoundVariableNames.has(name))
