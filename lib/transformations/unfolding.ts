@@ -2,7 +2,6 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { withDeduplicatedBody } from '../mapping.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, QueryTransformation } from '../types.js';
-import { doNotDescendIntoService } from '../utils/operationhelpers.js';
 import { rewriteSinglePattern } from './rewriteSinglePattern.js';
 
 /**
@@ -59,7 +58,7 @@ export function unfoldTriplePatternsAgainstMapping(
           true,
         ),
       },
-      [Algebra.Types.SERVICE]: doNotDescendIntoService,
+      [Algebra.Types.SERVICE]: { preVisitor: () => ({ continue: false }) },
     },
   );
 }

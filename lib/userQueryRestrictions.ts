@@ -1,6 +1,5 @@
 import type { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import { doNotDescendIntoService } from './utils/operationhelpers.js';
 
 /**
  * @fileoverview What a user query may not ask, checked once per query part before the pipeline runs over it.
@@ -48,7 +47,7 @@ export function assertUserQueryIsSupported(queryPart: Algebra.Operation): void {
     [Algebra.Types.ZERO_OR_MORE_PATH]: { visitor: () => rejectRecursivePath('*') },
     [Algebra.Types.ONE_OR_MORE_PATH]: { visitor: () => rejectRecursivePath('+') },
     [Algebra.Types.GRAPH]: { visitor: () => rejectNamedGraph() },
-    [Algebra.Types.SERVICE]: doNotDescendIntoService,
+    [Algebra.Types.SERVICE]: { preVisitor: () => ({ continue: false }) },
     [Algebra.Types.PATTERN]: { visitor: (pattern: Alg.Pattern) => {
       if (pattern.graph.termType !== 'DefaultGraph') {
         rejectNamedGraph();

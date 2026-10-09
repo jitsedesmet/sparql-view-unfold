@@ -4,7 +4,7 @@ import { VAR_PREFIX_USER_QUERY } from '../consts.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import { termVars } from '../utils/certainlyBoundVars.js';
-import { createFilterFalse, doNotDescendIntoService, projectSolutionExistence } from '../utils/operationhelpers.js';
+import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
 
 import { isRdfVar } from '../utils/typeGuards.js';
 import { collectVariableNames, freshVarGenerator } from '../utils.js';
@@ -161,7 +161,7 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
     op,
     {
       [Algebra.Types.PATH]: { transform: pathOp => resolvePathOp(pathOp.predicate, pathOp) },
-      [Algebra.Types.SERVICE]: doNotDescendIntoService,
+      [Algebra.Types.SERVICE]: { preVisitor: () => ({ continue: false }) },
     },
   );
 }
