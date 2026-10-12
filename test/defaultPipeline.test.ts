@@ -250,7 +250,7 @@ describe('the default pipeline over an EXISTS', () => {
             BIND( ?v_1 AS ?uq_exists_0 )
             BIND( ?v_0 AS ?uq_exists_1 )
           }
-          FILTER ( ( SAMETERM( ?uq_s , ?uq_exists_0 ) && SAMETERM( ?uq_o , ?uq_exists_1 ) ) )
+          FILTER ( ( SAMETERM( ?uq_exists_0 , ?uq_s ) && SAMETERM( ?uq_exists_1 , ?uq_o ) ) )
         }
         BIND( <ex://knows> AS ?uq_q )
       }
@@ -263,10 +263,53 @@ describe('the default pipeline over an EXISTS', () => {
 
   it('splits on bound() where the enclosing solution only possibly binds a variable', async({ expect }) => {
     // Where the OPTIONAL left ?w unbound, the EXISTS has to bind it itself, which no condition can.
-    const rewritten = await rewriter.rewriteQuery(
-      'SELECT * { ?s ?p ?o OPTIONAL { ?o ?r ?w } FILTER NOT EXISTS { ?w ?q ?s } }',
-    );
-    expect(rewritten).toContain('IF( BOUND( ?uq_w ) , NOT EXISTS');
-    expect(rewritten).toContain('SAMETERM( ?uq_w ,');
+    expect((await rewriter.rewriteQuery('SELECT * { ?s ?p ?o OPTIONAL { ?o ?r ?w } FILTER NOT EXISTS { ?w ?q ?s } }'))
+      .trim()).toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_r AS ?r ) ( ?uq_s AS ?s ) ( ?uq_w AS ?w ) WHERE {
+  {
+    {
+      ?v_4 <ex://knows> ?v_5 .
+      BIND( ?v_5 AS ?uq_o )
+      BIND( ?v_4 AS ?uq_s )
+    }
+    OPTIONAL {
+      {
+        {
+          ?v_7 <ex://knows> ?v_6 .
+          BIND( ?v_7 AS ?uq_o )
+          BIND( ?v_6 AS ?uq_w )
+        }
+        BIND( <ex://knows> AS ?uq_r )
+      }
+    }
+    FILTER ( IF( BOUND( ?uq_w ) , NOT EXISTS {
+      {
+        {
+          {
+            ?v_0 <ex://knows> ?v_1 .
+            BIND( ?v_1 AS ?uq_exists_1 )
+            BIND( ?v_0 AS ?uq_exists_2 )
+          }
+          FILTER ( ( SAMETERM( ?uq_exists_1 , ?uq_s ) && SAMETERM( ?uq_exists_2 , ?uq_w ) ) )
+        }
+        BIND( <ex://knows> AS ?uq_q )
+      }
+    }
+    , NOT EXISTS {
+      {
+        {
+          {
+            ?v_3 <ex://knows> ?v_2 .
+            BIND( ?v_3 AS ?uq_exists_0 )
+            BIND( ?v_2 AS ?uq_exists_3 )
+          }
+          FILTER ( SAMETERM( ?uq_exists_3 , ?uq_s ) )
+        }
+        BIND( <ex://knows> AS ?uq_q )
+      }
+    }
+    ) )
+  }
+  BIND( <ex://knows> AS ?uq_p )
+}`);
   });
 });

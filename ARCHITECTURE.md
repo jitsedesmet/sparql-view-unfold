@@ -83,10 +83,12 @@ steps are equivalences over any data and may still rewrite inside it.
 An `EXISTS` is evaluated against the row it filters, by substituting the row into its pattern (SPARQL 1.1
 §18.6) or by injecting it as initial bindings - engines differ, and neither defines a `BIND` of a variable the
 row binds already, which Comunica drops. So before step 2, `correlateExistencePatterns` renames such a
-variable out of every triple pattern in the `EXISTS` and reads it back with `FILTER(sameTerm(?row, ?local))`,
-which means the same under either; where the row only possibly binds it, the `EXISTS` is split on
-`bound(?x)` first. The passes that reason about scope then take an `EXISTS` pattern in the scope it is
-evaluated in (`mapExistenceExpressions`): the pushdown asserts nothing about a variable of the row.
+variable out of every triple pattern, `BIND` and `VALUES` in the `EXISTS` - the zero length match of a `?`
+path is a `BIND` - and reads it back with `FILTER(sameTerm(?local, ?row))`, weakened to `!bound(?local) || …`
+where the local may stay unbound, which means the same under either; where the row only possibly binds it, the
+`EXISTS` is split on `bound(?x)` first. The passes that reason about scope then take an `EXISTS` pattern in
+the scope it is evaluated in (`mapExistenceExpressions`): the pushdown asserts nothing about a variable of the
+row.
 
 `pullUpExtends` is the mirror of step 5: it floats the BINDs the pushdown left at the leaves back up the
 plan and deletes the ones nothing above reads.

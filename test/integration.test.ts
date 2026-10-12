@@ -1185,6 +1185,30 @@ describe('integration tests', () => {
       );
     });
 
+    it('holds the zero length match of a ? path in an EXISTS to the row', async({ expect }) => {
+      // The path expansion writes that match as a BIND of `?s` to `?o`: uncorrelated, every row comes back.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :knows ?o FILTER EXISTS { ?o :knows? ?s } }',
+        [ '{o=ex://carol,s=ex://carol}' ],
+      );
+    });
+
+    it('keeps the rows a VALUES in an EXISTS agrees with', async({ expect }) => {
+      // Uncorrelated, every row comes back.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :knows ?o FILTER EXISTS { VALUES ?o { :bob :carol } } }',
+        [
+          '{o=ex://bob,s=ex://alice}',
+          '{o=ex://carol,s=ex://bob}',
+          '{o=ex://carol,s=ex://carol}',
+        ],
+      );
+    });
+
     it('holds a literal subject of a generalized RDF view to the row', async({ expect }) => {
       // "Bob" is known by `:alice` in a generalized RDF view, but knows nobody; uncorrelated, it comes back.
       await expectRowsOverPermutedPositions(
