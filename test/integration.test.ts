@@ -988,4 +988,48 @@ describe('integration tests', () => {
       );
     });
   });
+
+  describe('an empty group in the user query', () => {
+    // The zero length half of a `?` path and the input of a BIND opening a group are the empty BGP, which has one
+    // empty solution: unfolding it into a join of no operands made the pipeline throw.
+    const mappers = [ `${prefix}CONSTRUCT WHERE { ?s :knows ?o }` ];
+
+    it('matches a ? path from a fixed subject, the subject itself included', async({ expect }) => {
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { :alice :knows? ?o }',
+        [ '{o="Bob"}', '{o=ex://alice}', '{o=ex://bob}' ],
+      );
+    });
+
+    it('matches a ? path to a fixed object, the object itself included', async({ expect }) => {
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :knows? :bob }',
+        [ '{s=ex://alice}', '{s=ex://bob}' ],
+      );
+    });
+
+    it('matches a ? path from a term to itself once', async({ expect }) => {
+      // `:carol` knows itself, yet there is one row: the path expansion writes the zero length match alone, as the
+      // empty BGP.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { :carol :knows? :carol }',
+        [ '{}' ],
+      );
+    });
+
+    it('joins a BIND opening the group with the pattern after it', async({ expect }) => {
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { BIND(:alice AS ?s) ?s ?p ?o }',
+        [ '{o="Bob",p=ex://knows,s=ex://alice}', '{o=ex://bob,p=ex://knows,s=ex://alice}' ],
+      );
+    });
+  });
 });

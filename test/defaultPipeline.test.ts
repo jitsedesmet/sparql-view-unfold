@@ -2,6 +2,8 @@ import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import type { QueryRewriter } from '../lib/queryRewriter.js';
+import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
+import { createTransformationContext } from '../lib/transformContext.js';
 
 /**
  * `nullifyJoinOverIncompatibleBounds` reads each join operand's top-level `EXTEND` chain and its recursion
@@ -165,5 +167,61 @@ describe('the default pipeline over a generalized RDF view', () => {
   BIND( ?v_0 AS ?uq_s )
   BIND( <<( ?v_1 <ex://q> ?v_0 )>> AS ?uq_t )
 }`);
+  });
+});
+
+describe('the default pipeline over an empty group', () => {
+  // The empty BGP has one empty solution. The zero length half of a `?` path is one, and so is the input of a BIND
+  // opening a group.
+  const mapping = mappingFromConstructQueries([ 'CONSTRUCT WHERE { ?s <ex://knows> ?o }' ]);
+  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mapping));
+
+  it('keeps the zero length match of a ? path', async({ expect }) => {
+    expect((await rewriter.rewriteQuery('SELECT * { <ex://alice> <ex://knows>? ?o }')).trim())
+      .toEqual(`SELECT ( ?uq_o AS ?o ) WHERE {
+  SELECT DISTINCT ?uq_o WHERE {
+    {
+      {
+        <ex://alice> <ex://knows> ?v_0 .
+        BIND( ?v_0 AS ?uq_o )
+      }
+    }
+    UNION {
+      BIND( <ex://alice> AS ?uq_o )
+    }
+  }
+}`);
+  });
+
+  it('keeps a ? path from a term to itself as the empty group', async({ expect }) => {
+    expect((await rewriter.rewriteQuery('SELECT * { <ex://alice> <ex://knows>? <ex://alice> }')).trim())
+      .toEqual(`SELECT * WHERE {
+}`);
+  });
+
+  it('joins a BIND opening the group with the pattern after it', async({ expect }) => {
+    expect((await rewriter.rewriteQuery('SELECT * { BIND(<ex://alice> AS ?s) ?s ?p ?o }')).trim())
+      .toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  {
+    BIND( <ex://alice> AS ?uq_s )
+  }
+  {
+    ?v_0 <ex://knows> ?v_1 .
+    BIND( ?v_1 AS ?uq_o )
+    BIND( ?v_0 AS ?uq_s )
+  }
+  BIND( <ex://knows> AS ?uq_p )
+}`);
+  });
+
+  it('unfolds the empty BGP into itself', async({ expect }) => {
+    const { AF } = createTransformationContext();
+    await expect(createQueryRewriter([ unfoldingTransformation(mapping) ]).rewriteOperation(AF.createBgp([])))
+      .resolves.toEqual(AF.createBgp([]));
+  });
+
+  it('leaves a join of no operands handed over as algebra alone', async({ expect }) => {
+    const { AF } = createTransformationContext();
+    await expect(rewriter.rewriteOperation(AF.createJoin([]))).resolves.toEqual(AF.createJoin([]));
   });
 });
