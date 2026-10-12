@@ -56,4 +56,25 @@ describe('the restrictions on a user query', () => {
     await expect(rewriter.rewriteQuery('DELETE { ?s <ex://p> ?o } WHERE { GRAPH ?g { ?s <ex://p> ?o } }'))
       .rejects.toThrow('Querying a named graph (GRAPH) is not supported');
   });
+
+  describe('inside a SERVICE, which its endpoint evaluates over its own data', () => {
+    for (const [ construct, query ] of <const>[
+      [ 'a recursive property path', 'SELECT * { SERVICE <ex://endpoint> { ?s <ex://p>+ ?o } }' ],
+      [ 'a GRAPH', 'SELECT * { SERVICE <ex://endpoint> { GRAPH ?g { ?s <ex://p> ?o } } }' ],
+      [
+        'a GRAPH an update names as the graph of a pattern',
+        'DELETE { ?s <ex://p> ?o } WHERE { SERVICE <ex://endpoint> { GRAPH ?g { ?s <ex://p> ?o } } }',
+      ],
+    ]) {
+      it(`accepts ${construct}`, async({ expect }) => {
+        await expect(rewriter.rewriteQuery(query)).resolves.toBeTypeOf('string');
+      });
+    }
+
+    it('still rejects what stands beside it', async({ expect }) => {
+      await expect(rewriter.rewriteQuery(
+        'SELECT * { SERVICE <ex://endpoint> { ?s <ex://p> ?o } GRAPH ?g { ?o <ex://p> ?x } }',
+      )).rejects.toThrow('Querying a named graph (GRAPH) is not supported');
+    });
+  });
 });

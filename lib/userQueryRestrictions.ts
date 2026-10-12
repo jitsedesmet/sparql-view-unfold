@@ -18,6 +18,9 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
  * A query names its graphs with a `GRAPH` operation and an update - which has an algebra only in quad mode -
  * with the graph component of a pattern, so both spellings are rejected.
  *
+ * Neither restriction applies inside a `SERVICE`: its endpoint evaluates the pattern over its own data, so
+ * nothing inside one is unfolded.
+ *
  * The mapping-side restrictions live in {@link mapping!mappingFromConstructQueries}, which can check them
  * once, when the mapping is built.
  */
@@ -44,6 +47,7 @@ export function assertUserQueryIsSupported(queryPart: Algebra.Operation): void {
     [Algebra.Types.ZERO_OR_MORE_PATH]: { visitor: () => rejectRecursivePath('*') },
     [Algebra.Types.ONE_OR_MORE_PATH]: { visitor: () => rejectRecursivePath('+') },
     [Algebra.Types.GRAPH]: { visitor: () => rejectNamedGraph() },
+    [Algebra.Types.SERVICE]: { preVisitor: () => ({ continue: false }) },
     [Algebra.Types.PATTERN]: { visitor: (pattern: Alg.Pattern) => {
       if (pattern.graph.termType !== 'DefaultGraph') {
         rejectNamedGraph();

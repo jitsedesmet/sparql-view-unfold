@@ -26,6 +26,7 @@ import { collectVariableNames, freshVarGenerator } from '../utils.js';
  * - **ZeroOrOne** (`path?`): UNION with empty match case, DISTINCT over subject and object
  *
  * Coined variables carry {@link VAR_PREFIX_USER_QUERY}, so the unfolding treats them as user query variables.
+ * A path inside a `SERVICE` is left to its endpoint, the unfolding leaving that pattern as it stands.
  *
  * ## Not Fully Supported:
  * - **ZeroOrMore** (`path*`): Returns original (recursive, cannot be fully expanded)
@@ -158,12 +159,16 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
 
   return algebraUtils.mapOperation<'unsafe', typeof op>(
     op,
-    { path: { transform: pathOp => resolvePathOp(pathOp.predicate, pathOp) }},
+    {
+      [Algebra.Types.PATH]: { transform: pathOp => resolvePathOp(pathOp.predicate, pathOp) },
+      [Algebra.Types.SERVICE]: { preVisitor: () => ({ continue: false }) },
+    },
   );
 }
 
 /**
- * The pipeline step expanding every non-recursive property path into the BGPs and UNIONs the unfolding can read.
+ * The pipeline step expanding every non-recursive property path outside a `SERVICE` into the BGPs and UNIONs
+ * the unfolding can read.
  * @returns the transformation
  */
 export function rewriteNonRecursivePathsTransformation(): QueryTransformation {
