@@ -1032,4 +1032,194 @@ describe('integration tests', () => {
       );
     });
   });
+
+  describe('an EXISTS correlated with the solution it is evaluated against', () => {
+    // Inside an EXISTS, a variable the solution it is evaluated against binds is that solution's. A rewrite binding
+    // it again with a BIND loses the correlation on an engine that substitutes the solution into the pattern, as
+    // Comunica does, dropping the BIND: the EXISTS then holds for every row or for none.
+    const mappers = [
+      `${prefix}CONSTRUCT WHERE { ?s :knows ?o }`,
+      `${prefix}CONSTRUCT { ?o :knownBy ?s } WHERE { ?s :knows ?o }`,
+      `${prefix}CONSTRUCT { ?s :claims <<( ?o :knownBy ?s )>> } WHERE { ?s :knows ?o }`,
+      `${prefix}CONSTRUCT WHERE { ?s :met ?o }`,
+      `${prefix}CONSTRUCT WHERE { ?s :via ?o }`,
+    ];
+    const yes = '"true"^^http://www.w3.org/2001/XMLSchema#boolean';
+    const no = '"false"^^http://www.w3.org/2001/XMLSchema#boolean';
+
+    it('holds a FILTER EXISTS to the row it filters', async({ expect }) => {
+      // Only `:carol` knows who knows her; uncorrelated, every `:knows` triple comes back.
+      await expectRowsOverPermutedPositions(
+        expect,
+        [ mappers[0] ],
+        'SELECT * WHERE { ?s ?p ?o FILTER EXISTS { ?o ?q ?s } }',
+        [ '{o=ex://carol,p=ex://knows,s=ex://carol}' ],
+      );
+    });
+
+    it('holds a FILTER NOT EXISTS to the row it filters', async({ expect }) => {
+      // The objects that know nobody; uncorrelated, someone knowing someone leaves no row at all.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :knows ?o FILTER NOT EXISTS { ?o :knows ?x } }',
+        [
+          '{o="42"^^http://www.w3.org/2001/XMLSchema#integer,s=ex://bob}',
+          '{o="Bob",s=ex://alice}',
+          '{o=<<ex://alice ex://knows ex://bob>>,s=ex://carol}',
+          '{o=ex://erin,s=_:someone}',
+        ],
+      );
+    });
+
+    it('holds an EXISTS in a SELECT expression to its row', async({ expect }) => {
+      // Uncorrelated, every row would be `true`.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT ?s ?o (EXISTS { ?o :knows ?s } AS ?mutual) WHERE { ?s :knows ?o }',
+        [
+          `{mutual=${no},o="42"^^http://www.w3.org/2001/XMLSchema#integer,s=ex://bob}`,
+          `{mutual=${no},o="Bob",s=ex://alice}`,
+          `{mutual=${no},o=<<ex://alice ex://knows ex://bob>>,s=ex://carol}`,
+          `{mutual=${no},o=_:someone,s=ex://dave}`,
+          `{mutual=${no},o=ex://bob,s=ex://alice}`,
+          `{mutual=${no},o=ex://carol,s=ex://bob}`,
+          `{mutual=${no},o=ex://erin,s=_:someone}`,
+          `{mutual=${yes},o=ex://carol,s=ex://carol}`,
+        ],
+      );
+    });
+
+    it('holds a NOT EXISTS in a BIND to its row', async({ expect }) => {
+      // An object that cannot be a subject makes no `:knownBy` triple; uncorrelated, every row would be `false`.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :knows ?o BIND(NOT EXISTS { ?o :knownBy ?s } AS ?unknown) }',
+        [
+          `{o="42"^^http://www.w3.org/2001/XMLSchema#integer,s=ex://bob,unknown=${yes}}`,
+          `{o="Bob",s=ex://alice,unknown=${yes}}`,
+          `{o=<<ex://alice ex://knows ex://bob>>,s=ex://carol,unknown=${yes}}`,
+          `{o=_:someone,s=ex://dave,unknown=${no}}`,
+          `{o=ex://bob,s=ex://alice,unknown=${no}}`,
+          `{o=ex://carol,s=ex://bob,unknown=${no}}`,
+          `{o=ex://carol,s=ex://carol,unknown=${no}}`,
+          `{o=ex://erin,s=_:someone,unknown=${no}}`,
+        ],
+      );
+    });
+
+    it('lets an EXISTS bind a variable the OPTIONAL left unbound', async({ expect }) => {
+      // Where `?w` is bound, the NOT EXISTS asks whether `?w` knows `?s`; where it is not, whether anyone does.
+      // That drops `:bob` with 42, `:carol` with the triple term and the blank node with `:erin`, whom someone
+      // knows - a rewrite only testing `?w` keeps them - and keeps `:alice` with "Bob", whom nobody knows.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :knows ?o OPTIONAL { ?o :knows ?w } FILTER NOT EXISTS { ?w :knows ?s } }',
+        [
+          '{o="Bob",s=ex://alice}',
+          '{o=_:someone,s=ex://dave,w=ex://erin}',
+          '{o=ex://bob,s=ex://alice,w="42"^^http://www.w3.org/2001/XMLSchema#integer}',
+          '{o=ex://bob,s=ex://alice,w=ex://carol}',
+          '{o=ex://carol,s=ex://bob,w=<<ex://alice ex://knows ex://bob>>}',
+          '{o=ex://carol,s=ex://bob,w=ex://carol}',
+          '{o=ex://carol,s=ex://carol,w=<<ex://alice ex://knows ex://bob>>}',
+        ],
+      );
+    });
+
+    it('holds a nested NOT EXISTS to both rows it reads', async({ expect }) => {
+      // `?s` comes from the outer query, `?x` from the EXISTS around the NOT EXISTS.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :knows ?o FILTER EXISTS { ?o :knows ?x FILTER NOT EXISTS { ?x :knows ?s } } }',
+        [
+          '{o=_:someone,s=ex://dave}',
+          '{o=ex://bob,s=ex://alice}',
+          '{o=ex://carol,s=ex://bob}',
+          '{o=ex://carol,s=ex://carol}',
+        ],
+      );
+    });
+
+    it('holds a triple term pattern in an EXISTS to its row', async({ expect }) => {
+      // The head builds the triple term out of both variables of the row; uncorrelated, every row with a subject
+      // `:claims` anything comes back.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :knows ?o FILTER EXISTS { ?o :claims <<( ?s :knownBy ?o )>> } }',
+        [ '{o=ex://carol,s=ex://carol}' ],
+      );
+    });
+
+    it('holds an EXISTS to a triple term of the row and to a variable only its condition reads', async({ expect }) => {
+      // Nobody else claims the triple term a row claims; uncorrelated, someone else always does.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :claims ?t FILTER NOT EXISTS { ?x :claims ?t FILTER(!sameTerm(?x, ?s)) } }',
+        [
+          '{s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
+          '{s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
+          '{s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
+          '{s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
+          '{s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
+        ],
+      );
+    });
+
+    it('holds a predicate the head writes as a constant to the row', async({ expect }) => {
+      // `:carol` knows someone and is known by someone, but has no `:via`; uncorrelated, the `:via` row comes back.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s ?p :bob FILTER EXISTS { :carol ?p ?x } }',
+        [
+          '{p=ex://knownBy,s=ex://carol}',
+          '{p=ex://knows,s=ex://alice}',
+        ],
+      );
+    });
+
+    it('holds a literal subject of a generalized RDF view to the row', async({ expect }) => {
+      // "Bob" is known by `:alice` in a generalized RDF view, but knows nobody; uncorrelated, it comes back.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?x :knownBy :alice FILTER EXISTS { ?x :knows ?z } }',
+        [ '{x=ex://bob}' ],
+        { generalizedRdfView: true },
+      );
+    });
+
+    it('holds a NOT EXISTS over a reified triple to the triple of the row', async({ expect }) => {
+      // Only the statement of `:alice :knows :bob` is by `:wikipedia`; uncorrelated, no row comes back.
+      const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        [ tripleTermConstruct, nonTripleTermConstruct ],
+        `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+         ${prefix}SELECT * WHERE { ?s :knows ?o FILTER NOT EXISTS { ?t rdf:reifies <<( ?s :knows ?o )>> ; :statedBy :wikipedia } }`,
+      );
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+      expect(resOnMappedData).toEqual([ '{o=ex://charlie,s=ex://alice}', '{o=ex://dave,s=ex://bob}' ]);
+    });
+
+    it('holds an EXISTS to the triple term a mapping builds for the row', async({ expect }) => {
+      // `?triple` is built by `TRIPLE(...)` in both the row and the EXISTS; uncorrelated, every reifier comes back.
+      const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        [ tripleTermConstruct, nonTripleTermConstruct ],
+        `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+         ${prefix}SELECT ?t WHERE { ?t rdf:reifies ?triple FILTER EXISTS { ?other rdf:reifies ?triple ; :statedBy :alice } }`,
+      );
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+      expect(resOnMappedData).toEqual([ '{t=ex://t3}' ]);
+    });
+  });
 });

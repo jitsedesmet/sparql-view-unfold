@@ -225,3 +225,48 @@ describe('the default pipeline over an empty group', () => {
     await expect(rewriter.rewriteOperation(AF.createJoin([]))).resolves.toEqual(AF.createJoin([]));
   });
 });
+
+describe('the default pipeline over an EXISTS', () => {
+  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+    'CONSTRUCT WHERE { ?s <ex://knows> ?o }',
+  ])));
+
+  it('binds no variable of the enclosing solution inside it, but reads them in a condition', async({ expect }) => {
+    // A BIND of ?uq_o or ?uq_s inside the EXISTS binds what the row already does. Comunica drops such a BIND, and
+    // the EXISTS then holds for every row as long as there is a `:knows` triple anywhere.
+    expect((await rewriter.rewriteQuery('SELECT * { ?s ?p ?o FILTER EXISTS { ?o ?q ?s } }')).trim())
+      .toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  {
+    {
+      ?v_2 <ex://knows> ?v_3 .
+      BIND( ?v_3 AS ?uq_o )
+      BIND( ?v_2 AS ?uq_s )
+    }
+    FILTER ( EXISTS {
+      {
+        {
+          {
+            ?v_0 <ex://knows> ?v_1 .
+            BIND( ?v_1 AS ?uq_exists_0 )
+            BIND( ?v_0 AS ?uq_exists_1 )
+          }
+          FILTER ( ( SAMETERM( ?uq_s , ?uq_exists_0 ) && SAMETERM( ?uq_o , ?uq_exists_1 ) ) )
+        }
+        BIND( <ex://knows> AS ?uq_q )
+      }
+    }
+    )
+  }
+  BIND( <ex://knows> AS ?uq_p )
+}`);
+  });
+
+  it('splits on bound() where the enclosing solution only possibly binds a variable', async({ expect }) => {
+    // Where the OPTIONAL left ?w unbound, the EXISTS has to bind it itself, which no condition can.
+    const rewritten = await rewriter.rewriteQuery(
+      'SELECT * { ?s ?p ?o OPTIONAL { ?o ?r ?w } FILTER NOT EXISTS { ?w ?q ?s } }',
+    );
+    expect(rewritten).toContain('IF( BOUND( ?uq_w ) , NOT EXISTS');
+    expect(rewritten).toContain('SAMETERM( ?uq_w ,');
+  });
+});

@@ -1,3 +1,4 @@
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
 import { nullifyUnbindableVars } from '../lib/transformations/nullifyUnbindableVars.js';
 import { createTransformationContext } from '../lib/transformContext.js';
@@ -44,6 +45,19 @@ describe('nullifyUnbindableVars', () => {
       c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(x) ]),
     );
     expect(isFilterFalse(c, nullifyUnbindableVars(c, filtered))).toBe(true);
+  });
+
+  it('leaves `FILTER(bound(?x))` in an EXISTS alone where the enclosing solution binds ?x', ({ expect }) => {
+    // Nothing in the pattern binds ?x, but the solution the EXISTS is evaluated against does.
+    const pattern = c.AF.createFilter(
+      c.AF.createBgp([]),
+      c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(x) ]),
+    );
+    const result = nullifyUnbindableVars(
+      c,
+      c.AF.createFilter(iri, c.AF.createExistenceExpression(false, pattern)),
+    );
+    expect(isFilterFalse(c, (<Algebra.ExistenceExpression> result.expression).input)).toBe(false);
   });
 
   it('leaves a join an UNDEF row keeps satisfiable alone', ({ expect }) => {

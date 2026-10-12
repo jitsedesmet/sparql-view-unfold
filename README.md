@@ -144,6 +144,7 @@ literal or as a prefixed IRI respectively.
 | No `GRAPH` in the user query | The rewrite throws. What unfolding a mapping inside a named graph means is not settled. |
 | No unstable function (`BNODE`, `RAND`, `UUID`, `STRUUID`) in a mapping body | Building the mapping throws, naming the function. A mapping has to denote one fixed graph, and those answer differently on every evaluation. `NOW` is allowed: SPARQL 1.1 §17.4.5.1 fixes it per query execution. |
 | A mapping head holds exactly one triple | Nothing — `mappingFromConstructQueries` splits a larger CONSTRUCT template into one mapping per triple for you, which denotes the same graph. |
+| Inside an `EXISTS`, a variable of the row it filters is not bound again — by a `BIND`, a `VALUES` — nor hidden in a sub-SELECT that does not project it | **The answer is your engine's call, and may differ from the one over the view.** SPARQL 1.1 §18.6 substitutes the row into such a pattern without saying what that means, and engines disagree; the rewrite reads a hidden variable as the sub-SELECT's own. A variable read by triple patterns and conditions is fine, bound by the row or not. |
 | No blank nodes in the RDF 1.1 dataset, unless skolemised | **Wrong answers, silently.** A blank node cannot be referenced across the sub-queries the unfolding produces, so triples reached through one are lost. Skolemise them into IRIs before querying. |
 
 `DESCRIBE` is supported, with the caveat inherent to it: a `DESCRIBE` answers with a description of the
