@@ -3,16 +3,11 @@ import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { Patch } from '@traqula/core';
 import type { TransformationContext } from './transformContext.js';
 
-/** A triple term a mapping head writes, an RDF triple whatever the view. */
-export type MappingTripleTerm = Patch<Algebra.Pattern, {
-  subject: RDF.NamedNode | RDF.Variable;
-  predicate: RDF.NamedNode | RDF.Variable;
-  object: RDF.NamedNode | RDF.Variable | RDF.Literal | MappingTripleTerm;
-}>;
-
-/** The one triple a mapping writes, whose subject only a generalized RDF view makes a literal or a triple term. */
-export type MappingHead = Patch<MappingTripleTerm, {
-  subject: RDF.NamedNode | RDF.Variable | RDF.Literal | MappingTripleTerm;
+/** The triple a mapping writes; only a generalized RDF view puts a literal or triple term in subject or predicate. */
+export type MappingHead = Patch<Algebra.Pattern, {
+  subject: RDF.NamedNode | RDF.Variable | RDF.Literal | MappingHead;
+  predicate: RDF.NamedNode | RDF.Variable | RDF.Literal | MappingHead;
+  object: RDF.NamedNode | RDF.Variable | RDF.Literal | MappingHead;
 }>;
 
 /**
@@ -24,10 +19,7 @@ export interface Mapping {
   head: MappingHead;
   /** The projected query body pattern that matches source data */
   body: Algebra.Project;
-  /**
-   * Whether the mapping denotes a generalized RDF graph, whose triple terms are still RDF triple terms, see
-   * {@link mapping!MappingOptions.generalizedRdfView}.
-   */
+  /** Whether the view is generalized RDF, see {@link mapping!MappingOptions.generalizedRdfView}. */
   generalizedRdfView: boolean;
 }
 

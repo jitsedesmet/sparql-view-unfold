@@ -78,8 +78,8 @@ function iterateMappingHead(
     // What the head can write in a position is the range a variable written there can take.
     const variablePosRange = rangeOfHeadPosition(position);
     if (isRdfQuad(headTerm) && isRdfQuad(patternTerm)) {
-      // Recursion in triple term, an RDF triple whatever the view.
-      iterateMappingHead(c, mHVars, tPVars, headTerm, patternTerm, rangeOfPosition);
+      // Recursion in triple term
+      iterateMappingHead(c, mHVars, tPVars, headTerm, patternTerm, rangeOfHeadPosition);
     } else if (isRdfQuad(patternTerm) && isRdfVar(headTerm)) {
       // The pattern writes a triple term where the head writes a variable: anything else the head could
       // write there - a triple term, a term of its own - was taken by a branch above, or fails to unify.

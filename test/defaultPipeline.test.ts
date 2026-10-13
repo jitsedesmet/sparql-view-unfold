@@ -153,17 +153,13 @@ describe('the default pipeline over a generalized RDF view', () => {
 }`);
   });
 
-  it('keeps the type test inside a triple term the head writes', async({ expect }) => {
-    // A triple term stays an RDF triple: `TRIPLE` raises for a literal subject, which would leave `?t` unbound.
+  it('writes no type test inside a triple term the head writes', async({ expect }) => {
     const rewriter = generalizedRdfViewRewriter(
       'CONSTRUCT { ?s <ex://p> <<( ?o <ex://q> ?s )>> } WHERE { ?s <ex://q> ?o }',
     );
     expect((await rewriter.rewriteQuery('SELECT * { ?s <ex://p> ?t }')).trim())
       .toEqual(`SELECT ( ?uq_s AS ?s ) ( ?uq_t AS ?t ) WHERE {
-  {
-    ?v_0 <ex://q> ?v_1 .
-    FILTER ( ( ISIRI( ?v_1 ) || ISBLANK( ?v_1 ) ) )
-  }
+  ?v_0 <ex://q> ?v_1 .
   BIND( ?v_0 AS ?uq_s )
   BIND( <<( ?v_1 <ex://q> ?v_0 )>> AS ?uq_t )
 }`);
