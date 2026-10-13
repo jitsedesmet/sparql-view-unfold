@@ -7,7 +7,6 @@ import type { RangeSet } from '../RangeSet.js';
 import { objectRange, rangeOfPosition, tripleTermRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { DerivedVarNamer } from '../utils.js';
-import { collectVariableNames } from '../utils.js';
 import type {
   Access,
   Assertion,
@@ -1488,25 +1487,14 @@ export type AssertionFilter = Algebra.Filter & {
  * assertions, and one met in the input tree is analysed once and carries the result from then on.
  * @param c - The transformation context
  * @param filter - The filter to analyse
- * @param enclosingVariables - The variables the solution an enclosing `EXISTS` is evaluated against may bind
  * @returns the same filter, with its conjunction cached on it
  */
-function withAssertionConjunction(
-  c: TransformationContext,
-  filter: Algebra.Filter,
-  enclosingVariables: ReadonlySet<string>,
-): AssertionFilter {
+function withAssertionConjunction(c: TransformationContext, filter: Algebra.Filter): AssertionFilter {
   const casted = <Algebra.Filter & { metadata?: Partial<AssertionFilter['metadata']> }> filter;
   const known = casted.metadata?.assertions;
   if (known === undefined) {
     // The condition is evaluated over the solutions of the input, so those are the variables bound in it.
-    const collected = collectAssertions(
-      c,
-      filter.expression,
-      undefined,
-      withCpVars(filter.input).metadata.cVars,
-      enclosingVariables,
-    );
+    const collected = collectAssertions(c, filter.expression, undefined, withCpVars(filter.input).metadata.cVars);
     casted.metadata ??= {};
     casted.metadata.assertions = collected ?? {
       assertions: new AssertionConjunction(),
@@ -1523,19 +1511,14 @@ function withAssertionConjunction(
  * about at least one variable, and the contradictory ones, which are the empty operation.
  * @param c - The transformation context
  * @param op - The operation to check
- * @param enclosingVariables - The variables the solution an enclosing `EXISTS` is evaluated against may bind
  * @returns whether it is such a filter; anything else is left where it is, and the traversal keeps
  * descending into it looking for the filters deeper down
  */
-export function isAssertionFilter(
-  c: TransformationContext,
-  op: Algebra.Operation,
-  enclosingVariables: ReadonlySet<string> = new Set(),
-): op is AssertionFilter {
+export function isAssertionFilter(c: TransformationContext, op: Algebra.Operation): op is AssertionFilter {
   if (op.type !== Algebra.Types.FILTER) {
     return false;
   }
-  const { assertions } = withAssertionConjunction(c, op, enclosingVariables).metadata;
+  const { assertions } = withAssertionConjunction(c, op).metadata;
   return assertions.contradictory || assertions.assertions.size > 0;
 }
 
@@ -1553,8 +1536,6 @@ export function isAssertionFilter(
  * @param known - The assertions already known to hold there
  * @param cVars - The variables the filtered operation certainly binds, which is what the substitution folds
  * `sameTerm(?x, ?x)` against; leaving it empty only means fewer residuals fold
- * @param enclosingVariables - The variables the solution an enclosing `EXISTS` is evaluated against may
- * bind: a conjunct reading one tests that solution rather than asserting anything, and stays residual
  * @returns the conjunction and the residual, or `undefined` when the condition is contradictory, which
  * makes the filter empty
  */
@@ -1563,7 +1544,6 @@ export function collectAssertions(
   expression: Algebra.Expression,
   known: AssertionConjunction = new AssertionConjunction(),
   cVars: ReadonlySet<string> = new Set(),
-  enclosingVariables: ReadonlySet<string> = new Set(),
 ): AssertionConjunctionMeta | undefined {
   // Make copy and perform substitution
   const assertions = known.clone();
@@ -1590,10 +1570,6 @@ export function collectAssertions(
       }
       if (constant === true) {
         // Conjunct does not add anything
-        continue;
-      }
-      if ([ ...collectVariableNames(c.astTransformer, conjunct) ].some(name => enclosingVariables.has(name))) {
-        residual.push(conjunct);
         continue;
       }
       // Each form has its own top level shape, so at most one of these recognizes a conjunct.

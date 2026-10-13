@@ -1569,28 +1569,6 @@ GROUP BY ?x ( ?x AS ?y )`,
       );
     });
 
-    it('keeps a condition on a variable of the enclosing solution inside an EXISTS', ({ expect }) => {
-      // Nothing in the pattern binds ?s, but the solution the EXISTS is evaluated against does: the condition
-      // tests that solution, and is no assertion the pattern can be emptied or rewritten by.
-      expectTransform(
-        expect,
-        'SELECT * WHERE { ?s :p ?o FILTER EXISTS { ?o :q ?w FILTER(sameTerm(?s, :c) && sameTerm(?w, :d)) } }',
-        `SELECT ?o ?s WHERE {
-  ?s <ex://p> ?o .
-  FILTER ( EXISTS {
-    {
-      {
-        ?o <ex://q> <ex://d> .
-        BIND( <ex://d> AS ?w )
-      }
-      FILTER ( SAMETERM( ?s , <ex://c> ) )
-    }
-  }
-  )
-}`,
-      );
-    });
-
     it('re-serialises to valid SPARQL, never emitting BOUND of a term', ({ expect }) => {
       // What may not happen is substituting the term into the `BOUND` - `BOUND(<ex://c>)` does not parse -
       // so it folds to `true` instead, and that is what takes the whole `BOUND(?z) || BOUND(?x)` conjunct
@@ -1598,13 +1576,13 @@ GROUP BY ?x ( ?x AS ?y )`,
       // matter here; the fold is licensed by the *sibling* conjunct `sameTerm(?x, :c)`, since a solution
       // this filter keeps has to satisfy that one too, and it implies `bound(?x)`. The test below shows
       // the disjunction surviving where no assertion decides one of its sides.
-      // The `FILTER(BOUND(?w))` inside the EXISTS is a bound assertion of its own, met by the traversal
-      // in the pattern it stands in: the BGP there binds ?w certainly, so it holds of every solution and
+      // The `FILTER(BOUND(?x))` inside the EXISTS is a bound assertion of its own, met by the traversal
+      // in the pattern it stands in: the BGP there binds ?x certainly, so it holds of every solution and
       // disappears. The assertion on ?x outside says nothing about it - EXISTS is scoped separately.
       const result = transform(`SELECT * WHERE {
         ?x :p ?y
         OPTIONAL { ?y :q ?z }
-        FILTER(sameTerm(?x, :c) && (BOUND(?z) || BOUND(?x)) && EXISTS { ?w :r ?x FILTER(BOUND(?w)) })
+        FILTER(sameTerm(?x, :c) && (BOUND(?z) || BOUND(?x)) && EXISTS { ?w :r ?x FILTER(BOUND(?x)) })
       }`);
       expect(result).toBe(`SELECT ?x ?y ?z WHERE {
   {

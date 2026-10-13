@@ -3,8 +3,6 @@ import type { PreOrderMappingReturn } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
-import type { EnclosingScope } from '../utils/existenceScope.js';
-import { mapExistenceExpressions, topLevelScope } from '../utils/existenceScope.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 
 /**
@@ -43,39 +41,13 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // After:  the GRAPH replaced by FILTER(false), since no graph is named by a literal.
  */
 export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
+  const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
+    Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => nullifyIfProvenEmpty(c, copy) ]),
+  );
   // Starting from a copy without metadata gives us both a tree of our own to rewrite and the guarantee
   // that what `withCpVars` hands us describes the plan as it is now - and clearing it again on the way
   // out, since what the traversal cached describes the plan as this pass found it.
-  return withoutCpVars(nullifyUnbindableVarsWithin(c, withoutCpVars(op), topLevelScope));
-}
-
-/**
- * Nullifies what an operation evaluated in the given scope proves empty, and what each `EXISTS` pattern in
- * it does in the scope that pattern is evaluated in. A variable the enclosing solution may bind proves
- * nothing: a condition on it, `FILTER(bound(?x))` among them, reads that solution.
- * @param c - The transformation context
- * @param op - The operation
- * @param enclosing - The scope it is evaluated in
- * @returns the operation with every provably empty subtree nullified
- */
-function nullifyUnbindableVarsWithin<T extends Algebra.Operation>(
-  c: TransformationContext,
-  op: T,
-  enclosing: EnclosingScope,
-): T {
-  const withExistenceNullified = mapExistenceExpressions(op, enclosing, (existence, scope) =>
-    c.AF.createExistenceExpression(existence.not, nullifyUnbindableVarsWithin(c, existence.input, scope)));
-  const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
-    Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) =>
-      nullifyIfProvenEmpty(c, copy, enclosing.possiblyBound) ]),
-  );
-  // An EXISTS pattern was nullified in its own scope above.
-  callbacks[Algebra.Types.EXPRESSION] = (expression: Algebra.Expression) => ({
-    ...keepMetadata,
-    newValue: expression,
-    continue: expression.subType !== Algebra.ExpressionTypes.EXISTENCE,
-  });
-  return algebraUtils.mapOperationPreOrder<'unsafe', T>(withExistenceNullified, callbacks);
+  return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(op), callbacks));
 }
 
 /**
@@ -83,18 +55,13 @@ function nullifyUnbindableVarsWithin<T extends Algebra.Operation>(
  * take no term.
  * @param c - The transformation context
  * @param op - The operation to check
- * @param enclosingVariables - The variables the solution an enclosing `EXISTS` is evaluated against may bind
  * @returns the traversal's instruction; it stops descending once it has replaced something, nothing under
  * an operation without solutions being able to contribute any
  */
-function nullifyIfProvenEmpty(
-  c: TransformationContext,
-  op: Algebra.Operation,
-  enclosingVariables: ReadonlySet<string>,
-): PreOrderMappingReturn {
+function nullifyIfProvenEmpty(c: TransformationContext, op: Algebra.Operation): PreOrderMappingReturn {
   const { cVars, vRanges } = withCpVars(op).metadata;
   for (const name of cVars) {
-    if (vRanges.neverBinds(name) && !enclosingVariables.has(name)) {
+    if (vRanges.neverBinds(name)) {
       return { ...keepMetadata, newValue: createFilterFalse(c, op), continue: false };
     }
   }

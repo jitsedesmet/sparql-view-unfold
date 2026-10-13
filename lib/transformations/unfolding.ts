@@ -2,7 +2,6 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { withDeduplicatedBody } from '../mapping.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, QueryTransformation } from '../types.js';
-import { correlateExistencePatterns } from './correlateExists.js';
 import { rewriteSinglePattern } from './rewriteSinglePattern.js';
 
 /**
@@ -23,10 +22,6 @@ import { rewriteSinglePattern } from './rewriteSinglePattern.js';
  *
  * **A `SERVICE` is left as it stands.** Its endpoint evaluates the pattern over its own data, which the mapping
  * does not describe, and that answer does not depend on the data the rest of the query is unfolded over.
- *
- * **An `EXISTS` stays correlated.** A pattern's `BIND` may not bind a variable the solution an `EXISTS` is
- * evaluated against binds already, so {@link correlateExistencePatterns} first moves such a variable out of
- * the patterns and into a condition.
  */
 
 /** What an unfolding may be configured with. */
@@ -82,6 +77,6 @@ export function unfoldingTransformation(mapping: Mapping, options: UnfoldingOpti
   return (context, operation) => unfoldTriplePatternsAgainstMapping(
     context,
     options.preserveCardinality === true ? withDeduplicatedBody(context, mapping) : mapping,
-    correlateExistencePatterns(context, operation),
+    operation,
   );
 }

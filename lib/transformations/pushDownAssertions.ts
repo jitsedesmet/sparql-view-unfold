@@ -29,8 +29,6 @@ import {
   asWeakenedConjunct,
 } from '../utils/assertions.js';
 import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
-import type { EnclosingScope } from '../utils/existenceScope.js';
-import { mapExistenceExpressions, topLevelScope } from '../utils/existenceScope.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
@@ -118,48 +116,20 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // After:  SELECT * WHERE { ?o ?p ?o . BIND(?o AS ?s) }
  */
 export function pushDownAssertions<T extends Algebra.Operation>(c: TransformationContext, rootOp: T): T {
+  const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
+    Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]),
+  );
   // One namer for the whole pass, over every variable of the query as it stands *before* anything is
   // rewritten (D4). Both halves of that matter: a materialised position has to get the same name
   // wherever it is written, and a name coined against a part of the tree would collide with a variable
   // in the part that has not been met yet - which is also why this takes the root, see above.
   const namer = derivedVarNamer(collectVariableNames(c.astTransformer, rootOp));
+  callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(c, namer, filter);
   // Starting from a copy without metadata gives both a tree of our own to rewrite and the guarantee that
   // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out
   // for the same reason, the rewrites having since changed what the traversal cached. Not *inside*
   // `mapOperationPreOrder`: `keepMetadata` is how a filter hands its conjunction to the next `pushFilter`.
-  return withoutCpVars(pushDownAssertionsWithin(c, namer, withoutCpVars(rootOp), topLevelScope));
-}
-
-/**
- * Pushes the assertion filters of an operation down, and those of each `EXISTS` pattern in it within the
- * scope that pattern is evaluated in.
- *
- * A variable the enclosing solution may bind is not the pattern's own: that nothing in the pattern binds
- * it does not make it unbound, and a term asserted of it may not be substituted into the pattern, the
- * `BIND` restoring it binding a variable that already is. So a condition reading one stays where it is.
- * @param c - The transformation context
- * @param namer - Coins the variables a materialised shape needs
- * @param op - The operation
- * @param enclosing - The scope it is evaluated in
- * @returns the rewritten operation
- */
-function pushDownAssertionsWithin<T extends Algebra.Operation>(
-  c: TransformationContext,
-  namer: DerivedVarNamer,
-  op: T,
-  enclosing: EnclosingScope,
-): T {
-  const withExistencePushed = mapExistenceExpressions(op, enclosing, (existence, scope) =>
-    c.AF.createExistenceExpression(existence.not, pushDownAssertionsWithin(c, namer, existence.input, scope)));
-  const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
-    Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]),
-  );
-  callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) =>
-    pushFilter(c, namer, enclosing.possiblyBound, filter);
-  // An EXISTS pattern was rewritten in its own scope above.
-  callbacks[Algebra.Types.EXPRESSION] = (expression: Algebra.Expression) =>
-    ({ ...keep(expression), continue: expression.subType !== Algebra.ExpressionTypes.EXISTENCE });
-  return algebraUtils.mapOperationPreOrder<'unsafe', T>(withExistencePushed, callbacks);
+  return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(rootOp), callbacks));
 }
 
 /**
@@ -168,17 +138,11 @@ function pushDownAssertionsWithin<T extends Algebra.Operation>(
  * substituted into it (FReord).
  * @param c - The transformation context
  * @param namer - Coins the variables a materialised shape needs
- * @param enclosingVariables - The variables the solution an enclosing `EXISTS` is evaluated against may bind
  * @param filter - The filter met by the traversal
  * @returns what the traversal should put in its place
  */
-function pushFilter(
-  c: TransformationContext,
-  namer: DerivedVarNamer,
-  enclosingVariables: ReadonlySet<string>,
-  filter: Algebra.Filter,
-): PreOrderMappingReturn {
-  if (!isAssertionFilter(c, filter, enclosingVariables)) {
+function pushFilter(c: TransformationContext, namer: DerivedVarNamer, filter: Algebra.Filter): PreOrderMappingReturn {
+  if (!isAssertionFilter(c, filter)) {
     return keep(filter);
   }
   const { assertions, residual, contradictory } = filter.metadata.assertions;
@@ -190,14 +154,13 @@ function pushFilter(
     // Leave behind the residual, we continue with remaining
     return keep(c.AF.createFilter(assertionFilter(c, filter.input, assertions), residual));
   }
-  return pushAssertions(c, namer, enclosingVariables, assertions, filter.input);
+  return pushAssertions(c, namer, assertions, filter.input);
 }
 
 /**
  * Swaps an assertion filter carrying Θ with the operation `op` right below it, per Figure 2.
  * @param c - The transformation context
  * @param namer - Coins the variables a materialised shape needs
- * @param enclosingVariables - The variables the solution an enclosing `EXISTS` is evaluated against may bind
  * @param assertions - The conjunction to push
  * @param op - The operation the filter sits on
  * @returns what the traversal should put in its place
@@ -205,7 +168,6 @@ function pushFilter(
 function pushAssertions(
   c: TransformationContext,
   namer: DerivedVarNamer,
-  enclosingVariables: ReadonlySet<string>,
   assertions: AssertionConjunction,
   op: Algebra.Operation,
 ): PreOrderMappingReturn {
@@ -216,7 +178,7 @@ function pushAssertions(
   if (normalised.size === 0) {
     return keep(op);
   }
-  return swapWith(c, namer, enclosingVariables, normalised, op);
+  return swapWith(c, namer, normalised, op);
 }
 
 /**
@@ -229,7 +191,6 @@ function pushAssertions(
  * themselves or stay.
  * @param c - The transformation context
  * @param namer - Coins the variables a materialised shape needs
- * @param enclosingVariables - The variables the solution an enclosing `EXISTS` is evaluated against may bind
  * @param assertions - The conjunction to place
  * @param op - The operation the filter sits on
  * @returns what the traversal should put in its place
@@ -237,7 +198,6 @@ function pushAssertions(
 function swapWith(
   c: TransformationContext,
   namer: DerivedVarNamer,
-  enclosingVariables: ReadonlySet<string>,
   assertions: AssertionConjunction,
   op: Algebra.Operation,
 ): PreOrderMappingReturn {
@@ -271,13 +231,7 @@ function swapWith(
     }
     case Algebra.Types.FILTER: {
       // The conjunction we manage absorbs the assertions of the filter we pass (SDecompI),
-      const collected = collectAssertions(
-        c,
-        op.expression,
-        assertions,
-        cpMetaOf(op.input).cVars,
-        enclosingVariables,
-      );
+      const collected = collectAssertions(c, op.expression, assertions, cpMetaOf(op.input).cVars);
       if (collected === undefined) {
         return empty(c, op);
       }
