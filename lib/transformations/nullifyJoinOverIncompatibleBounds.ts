@@ -97,11 +97,11 @@ function restrictOperations(
 }
 
 function variableExtensionsOverJoin(join: Algebra.Join): Record<string, VariableSet> {
-  const head = join.input[0];
-  // Not knowing the variable makes it be noFixed, and that is identity of disjuntion
-  const varSets: Record<string, VariableSet> = directExtensionOverUnionsAndMore(head);
+  // Not knowing the variable makes it be noFixed, and that is identity of disjunction: a join of no operands
+  // knows nothing.
+  const varSets: Record<string, VariableSet> = {};
 
-  for (const op of join.input.slice(1)) {
+  for (const op of join.input) {
     for (const [ var_, varSet ] of Object.entries(directExtensionOverUnionsAndMore(op))) {
       if (varSets[var_]) {
         varSets[var_] = varSets[var_].disjunct(varSet);

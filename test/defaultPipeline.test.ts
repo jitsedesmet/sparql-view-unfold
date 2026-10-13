@@ -1,6 +1,9 @@
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import type { QueryRewriter } from '../lib/queryRewriter.js';
+import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
+import { createTransformationContext } from '../lib/transformContext.js';
 
 /**
  * `nullifyJoinOverIncompatibleBounds` reads each join operand's top-level `EXTEND` chain and its recursion
@@ -105,20 +108,31 @@ describe('the default pipeline over a mapping that types its head', () => {
   BIND( ?v_0 AS ?uq_b )
 }`);
   });
+});
 
-  it('writes no type test for a generalized RDF view', async({ expect }) => {
-    // The view keeps the triples with a literal subject, so the body is read as it stands, and a user isLITERAL is
-    // a condition on it rather than a contradiction.
-    const generalized = createQueryRewriter(createDefaultTransformationPipeline(
+describe('the default pipeline over a generalized RDF view', () => {
+  /**
+   * The rewriter of the default pipeline over the generalized RDF view one CONSTRUCT query denotes.
+   * @param construct - The CONSTRUCT query of the mapping
+   * @returns the rewriter
+   */
+  function generalizedRdfViewRewriter(construct: string): QueryRewriter {
+    return createQueryRewriter(createDefaultTransformationPipeline(
       mappingFromConstructQueries([ construct ], { generalizedRdfView: true }),
     ));
-    expect((await generalized.rewriteQuery('SELECT * { ?a <ex://p> ?b }')).trim())
+  }
+
+  it('writes no type test for a position of the triple itself', async({ expect }) => {
+    // The view keeps the triples with a literal subject, so the body is read as it stands, and a user isLITERAL is
+    // a condition on it rather than a contradiction.
+    const rewriter = generalizedRdfViewRewriter('CONSTRUCT { ?o <ex://p> ?s } WHERE { ?s <ex://q> ?o }');
+    expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b }')).trim())
       .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
   ?v_0 <ex://q> ?v_1 .
   BIND( ?v_1 AS ?uq_a )
   BIND( ?v_0 AS ?uq_b )
 }`);
-    expect((await generalized.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isLITERAL(?a)) }')).trim())
+    expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isLITERAL(?a)) }')).trim())
       .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
   {
     ?v_0 <ex://q> ?v_1 .
@@ -127,5 +141,83 @@ describe('the default pipeline over a mapping that types its head', () => {
   BIND( ?v_1 AS ?uq_a )
   BIND( ?v_0 AS ?uq_b )
 }`);
+  });
+
+  it('unifies a variable in two positions with the literal the head writes', async({ expect }) => {
+    // The view holds `"lit" <ex://p> "lit"`: a rewrite holding `?x` to the subjects RDF admits empties the query.
+    const rewriter = generalizedRdfViewRewriter('CONSTRUCT { ?o <ex://p> "lit" } WHERE { ?s <ex://q> ?o }');
+    expect((await rewriter.rewriteQuery('SELECT * { ?x <ex://p> ?x }')).trim())
+      .toEqual(`SELECT ( ?uq_x AS ?x ) WHERE {
+  ?v_0 <ex://q> "lit" .
+  BIND( "lit" AS ?uq_x )
+}`);
+  });
+
+  it('writes no type test inside a triple term the head writes', async({ expect }) => {
+    const rewriter = generalizedRdfViewRewriter(
+      'CONSTRUCT { ?s <ex://p> <<( ?o <ex://q> ?s )>> } WHERE { ?s <ex://q> ?o }',
+    );
+    expect((await rewriter.rewriteQuery('SELECT * { ?s <ex://p> ?t }')).trim())
+      .toEqual(`SELECT ( ?uq_s AS ?s ) ( ?uq_t AS ?t ) WHERE {
+  ?v_0 <ex://q> ?v_1 .
+  BIND( ?v_0 AS ?uq_s )
+  BIND( <<( ?v_1 <ex://q> ?v_0 )>> AS ?uq_t )
+}`);
+  });
+});
+
+describe('the default pipeline over an empty group', () => {
+  // The empty BGP has one empty solution. The zero length half of a `?` path is one, and so is the input of a BIND
+  // opening a group.
+  const mapping = mappingFromConstructQueries([ 'CONSTRUCT WHERE { ?s <ex://knows> ?o }' ]);
+  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mapping));
+
+  it('keeps the zero length match of a ? path', async({ expect }) => {
+    expect((await rewriter.rewriteQuery('SELECT * { <ex://alice> <ex://knows>? ?o }')).trim())
+      .toEqual(`SELECT ( ?uq_o AS ?o ) WHERE {
+  SELECT DISTINCT ?uq_o WHERE {
+    {
+      {
+        <ex://alice> <ex://knows> ?v_0 .
+        BIND( ?v_0 AS ?uq_o )
+      }
+    }
+    UNION {
+      BIND( <ex://alice> AS ?uq_o )
+    }
+  }
+}`);
+  });
+
+  it('keeps a ? path from a term to itself as the empty group', async({ expect }) => {
+    expect((await rewriter.rewriteQuery('SELECT * { <ex://alice> <ex://knows>? <ex://alice> }')).trim())
+      .toEqual(`SELECT * WHERE {
+}`);
+  });
+
+  it('joins a BIND opening the group with the pattern after it', async({ expect }) => {
+    expect((await rewriter.rewriteQuery('SELECT * { BIND(<ex://alice> AS ?s) ?s ?p ?o }')).trim())
+      .toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  {
+    BIND( <ex://alice> AS ?uq_s )
+  }
+  {
+    ?v_0 <ex://knows> ?v_1 .
+    BIND( ?v_1 AS ?uq_o )
+    BIND( ?v_0 AS ?uq_s )
+  }
+  BIND( <ex://knows> AS ?uq_p )
+}`);
+  });
+
+  it('unfolds the empty BGP into itself', async({ expect }) => {
+    const { AF } = createTransformationContext();
+    await expect(createQueryRewriter([ unfoldingTransformation(mapping) ]).rewriteOperation(AF.createBgp([])))
+      .resolves.toEqual(AF.createBgp([]));
+  });
+
+  it('leaves a join of no operands handed over as algebra alone', async({ expect }) => {
+    const { AF } = createTransformationContext();
+    await expect(rewriter.rewriteOperation(AF.createJoin([]))).resolves.toEqual(AF.createJoin([]));
   });
 });

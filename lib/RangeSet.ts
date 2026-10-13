@@ -41,7 +41,7 @@ export const objectRange = new RangeSet([ 'Quad', 'NamedNode', 'BlankNode', 'Lit
  */
 export const graphRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
 
-/** Valid term types for a triple term, which only ever occupies an object position. */
+/** Valid term types for a triple term. */
 export const tripleTermRange = new RangeSet([ 'Quad' ]);
 
 /**
@@ -78,4 +78,17 @@ export function rangeOfPosition(position: 'object' | 'predicate' | 'subject'): R
       return objectRange;
     }
   }
+}
+
+/**
+ * The term types a position of a mapping head admits: any term in a generalized RDF view, what RDF admits otherwise.
+ * @param position - The position to read
+ * @param generalizedRdf - Whether the view is a generalized RDF view
+ * @returns the term types it admits
+ */
+export function rangeOfAssertedPosition(
+  position: 'object' | 'predicate' | 'subject',
+  generalizedRdf: boolean,
+): RangeSet {
+  return generalizedRdf ? objectRange : rangeOfPosition(position);
 }

@@ -5,7 +5,7 @@ import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_MAPPING, VAR_PREFIX_MERGED_HEAD } from './consts.js';
 import { triplePositions } from './datastructures/TermClusterSet.js';
 import type { RangeSet } from './RangeSet.js';
-import { rangeOfPosition } from './RangeSet.js';
+import { rangeOfAssertedPosition } from './RangeSet.js';
 import type { TransformationContext } from './transformContext.js';
 import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
 import type { Mapping, MappingHead } from './types.js';
@@ -40,11 +40,11 @@ import { collectVariableNames } from './utils.js';
  *   per user pattern it is unfolded into, so a function that answers differently on two evaluations makes
  *   the unfolded query disagree with the mapped graph it stands for. `NOW` is deliberately allowed, SPARQL
  *   1.1 §17.4.5.1 fixing it per query execution.
- * - **Only the head positions RDF admits**, checked per triple of the template. A constant a position
- *   cannot hold is rejected outright; a variable the body could bind to such a term is filtered out
- *   instead, since a CONSTRUCT instantiates no triple for a solution that would make an illegal one
- *   (SPARQL 1.1 §16.2) - the same sentence the `FILTER(bound(?x))` below comes from. A view that means
- *   to present generalized RDF says so with {@link MappingOptions.generalizedRdfView} and keeps them.
+ * - **Only the terms a head position admits** ({@link rangeOfAssertedPosition}), checked per triple of the
+ *   template. A constant a position cannot hold is rejected outright; a variable the body could bind to such
+ *   a term is filtered out instead, since a CONSTRUCT instantiates no triple for a solution that would make
+ *   an illegal one (SPARQL 1.1 §16.2) - the same sentence the `FILTER(bound(?x))` below comes from. A
+ *   generalized RDF view ({@link MappingOptions.generalizedRdfView}) admits any term in any position.
  *
  * Both checks belong to the *template triple*, which is why they happen here rather than at the unfolding:
  * once several mappings are merged the head is three plain variables and a triple term one of them is a
@@ -54,13 +54,8 @@ import { collectVariableNames } from './utils.js';
 /** What building a mapping may be configured with. */
 export interface MappingOptions {
   /**
-   * Whether the graph the mapping denotes is a *generalized* RDF graph, one that admits a literal as a
-   * subject and a blank node as a predicate.
-   *
-   * Off by default, and a head variable the body could bind outside the range its position admits then
-   * costs a type test, since a CONSTRUCT instantiates no triple for a solution that would make an illegal
-   * one (SPARQL 1.1 §16.2). Turn it on where the source is read as generalized RDF and those solutions
-   * keep their triples; the tests are cheap, but they are wrong for a view that wants them.
+   * Whether the view the mapping defines is generalized RDF, admitting any term in any position, triple terms
+   * included. The source is RDF either way.
    */
   generalizedRdfView?: boolean;
 }
@@ -68,56 +63,40 @@ export interface MappingOptions {
 /** The factories building a mapping needs; the solver and the generator of a full context play no part. */
 type MappingConstructionTools = Pick<TransformationContext, 'parser' | 'AF' | 'DF' | 'astTransformer'>;
 
-/** The term types each position of a mapping head admits, in subject / predicate / object order. */
-const admissibleHeadTermTypes: [
-  MappingHead['subject']['termType'][],
-  MappingHead['predicate']['termType'][],
-  MappingHead['object']['termType'][],
-] = [
-  [ 'Variable', 'NamedNode' ],
-  [ 'Variable', 'NamedNode' ],
-  [ 'NamedNode', 'Variable', 'Literal', 'Quad' ],
-];
-
 /**
- * Asserts that every position of a template triple holds a term that position admits, recursing into a
- * triple term the object writes.
- * @param templateTriple - The template triple to check
- * @throws Error naming the position and the term type it cannot hold
- */
-function assertTemplateTriplePositionsAreAdmissible(templateTriple: RDF.BaseQuad): void {
-  const positionTerms = [ templateTriple.subject, templateTriple.predicate, templateTriple.object ];
-  for (const [ positionIndex, positionTerm ] of positionTerms.entries()) {
-    if (!(<string[]> admissibleHeadTermTypes[positionIndex]).includes(positionTerm.termType)) {
-      throw new Error(`Invalid Template, cannot use ${positionTerm.termType} in this position.`);
-    }
-    if (positionTerm.termType === 'Quad') {
-      assertTemplateTriplePositionsAreAdmissible(positionTerm);
-    }
-  }
-}
-
-/**
- * The type tests a head position needs of the body, one term of the template at a time. A variable needs one exactly
- * when the body could bind it outside the range its position admits.
+ * The type tests making a template term one its position admits, recursing into a triple term.
  * @param templateTerm - The term the position holds
  * @param admissibleRange - The term types that position admits
  * @param bodyRanges - What the body can bind each of its variables to
- * @returns T⟨?x : R⟩ per variable needing one, recursing into a triple term
+ * @param generalizedRdfView - Whether the view is a generalized RDF view
+ * @returns T⟨?x : R⟩ per variable the body could bind outside its position
+ * @throws Error for an inadmissible constant or a blank node
  */
-function headPositionTypeTests(
+function admissibilityTypeTests(
   templateTerm: RDF.Term,
   admissibleRange: RangeSet,
   bodyRanges: VRanges,
+  generalizedRdfView: boolean,
 ): AssertionConjunct[] {
+  if (templateTerm.termType === 'Variable') {
+    if (isSubsetOf(bodyRanges.rangeOf(templateTerm.value), admissibleRange)) {
+      return [];
+    }
+    return [{ access: access(templateTerm.value), assertion: assertTermType(admissibleRange) }];
+  }
+  if (templateTerm.termType === 'BlankNode' || !admissibleRange.has(templateTerm.termType)) {
+    throw new Error(`Invalid Template, cannot use ${templateTerm.termType} in this position.`);
+  }
   if (templateTerm.termType === 'Quad') {
     return triplePositions.flatMap(position =>
-      headPositionTypeTests(templateTerm[position], rangeOfPosition(position), bodyRanges));
+      admissibilityTypeTests(
+        templateTerm[position],
+        rangeOfAssertedPosition(position, generalizedRdfView),
+        bodyRanges,
+        generalizedRdfView,
+      ));
   }
-  if (templateTerm.termType !== 'Variable' || isSubsetOf(bodyRanges.rangeOf(templateTerm.value), admissibleRange)) {
-    return [];
-  }
-  return [{ access: access(templateTerm.value), assertion: assertTermType(admissibleRange) }];
+  return [];
 }
 
 /**
@@ -152,7 +131,7 @@ function mappingOfSingleTemplateTriple(
   constructBody: Algebra.Operation,
 ): Mapping {
   const { AF, DF, astTransformer } = tools;
-  assertTemplateTriplePositionsAreAdmissible(templateTriple);
+  const generalizedRdfView = options.generalizedRdfView === true;
   const head: MappingHead = <MappingHead> AF
     .createPattern(templateTriple.subject, templateTriple.predicate, templateTriple.object);
 
@@ -161,13 +140,19 @@ function mappingOfSingleTemplateTriple(
   // is one its position can hold, so the solutions failing either do not belong to the mapping. Variables
   // that are certainly bound, or certainly of a term type the position admits, already need no condition.
   const { cVars: certainlyBoundVariableNames, vRanges: bodyRanges } = withCpVars(constructBody).metadata;
-  const conditions: AssertionConjunct[] = headVariableNames
-    .filter(name => !certainlyBoundVariableNames.has(name))
-    .map(name => ({ access: access(name), assertion: assertBound() }));
-  if (options.generalizedRdfView !== true) {
-    conditions.push(...triplePositions.flatMap(position =>
-      headPositionTypeTests(head[position], rangeOfPosition(position), bodyRanges)));
-  }
+  const typeTests = triplePositions.flatMap(position =>
+    admissibilityTypeTests(
+      head[position],
+      rangeOfAssertedPosition(position, generalizedRdfView),
+      bodyRanges,
+      generalizedRdfView,
+    ));
+  const conditions: AssertionConjunct[] = [
+    ...headVariableNames
+      .filter(name => !certainlyBoundVariableNames.has(name))
+      .map(name => ({ access: access(name), assertion: assertBound() })),
+    ...typeTests,
+  ];
   let body: Algebra.Operation = constructBody;
   if (conditions.length > 0) {
     body = AF.createFilter(body, conjunctionOf(tools, conditions
@@ -176,6 +161,7 @@ function mappingOfSingleTemplateTriple(
   return {
     head,
     body: AF.createProject(body, headVariableNames.map(name => DF.variable(name))),
+    generalizedRdfView,
   };
 }
 
@@ -232,6 +218,7 @@ function mergeMappingsOverGenericHead(
   return {
     head: <MappingHead> AF.createPattern(genericSubject, genericPredicate, genericObject),
     body: AF.createProject(AF.createUnion(bodiesBindingTheGenericHead), genericHeadVariables),
+    generalizedRdfView: mappings.some(mapping => mapping.generalizedRdfView),
   };
 }
 
@@ -295,12 +282,12 @@ export function withDeduplicatedBody(
     // own variables and so does not deduplicate at all.
     const existenceOfBody = projectSolutionExistence(c, mapping.body.input);
     return {
-      head: mapping.head,
+      ...mapping,
       body: AF.createProject(AF.createDistinct(existenceOfBody), existenceOfBody.variables),
     };
   }
   return {
-    head: mapping.head,
+    ...mapping,
     // By construction,
     //  the selected variables of mapping.body.variables coincides with the vars used in the mapping head.
     body: AF.createProject(AF.createDistinct(mapping.body), mapping.body.variables),

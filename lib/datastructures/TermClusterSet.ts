@@ -81,8 +81,8 @@ export function meetShapes<Term>(left: TriplePin, right: TriplePin): PinMeet<Ter
  * {@link meetPins}.
  *
  * **Ranges** live here rather than only in the solver, since the same question is asked on both sides: a
- * group in a subject position holds no Literal and no triple term, which is what confines the nesting of
- * shapes to the `object` chain.
+ * group in a subject position of a triple term holds no Literal and no triple term, which is what confines
+ * the nesting of shapes to the `object` chain.
  *
  * A pin makes the child DAG a real graph, and two invariants keep it well founded:
  *
