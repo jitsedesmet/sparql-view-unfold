@@ -8,6 +8,7 @@ import { describe, it } from 'vitest';
 import type { MappingOptions } from '../lib/mapping.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import { rdfVariantKey } from './permissiveTriple.js';
 import {
   nonSingletonTripleConstruct,
   nonTripleTermConstruct,
@@ -143,13 +144,15 @@ describe('integration tests', () => {
     options: MappingOptions = {},
   ): Promise<{ resOnMappedData: string[]; resUsingRewriter: string[] }> {
     const store12 = await storeTo12Store(store11, mappers, options);
+    // A generalized RDF view is evaluated on an engine whose TRIPLE() builds generalized triple terms.
+    const rdfVariant = options.generalizedRdfView === true ? { [rdfVariantKey.name]: 'generalizedRDF' } : {};
     const mappedBindings: RDF.Bindings[] = await arrayifyStream(
-      await engine.queryBindings(userQuery, { sources: [ store12 ]}),
+      await engine.queryBindings(userQuery, { sources: [ store12 ], ...rdfVariant }),
     );
 
     const rewrittenQuery = await rewriterFor(mappers, options).rewriteQuery(userQuery);
     const rewrittenBindings: RDF.Bindings[] = await arrayifyStream(
-      await engine.queryBindings(rewrittenQuery, { sources: [ store11 ]}),
+      await engine.queryBindings(rewrittenQuery, { sources: [ store11 ], ...rdfVariant }),
     );
 
     return {
@@ -926,6 +929,45 @@ describe('integration tests', () => {
         [
           '{o=<<ex://alice ex://knows ex://bob>>,s=ex://carol}',
           '{o=ex://carol,s=ex://carol}',
+        ],
+        { generalizedRdfView: true },
+      );
+    });
+
+    it('builds a generalized triple term a generalized RDF view holds', async({ expect }) => {
+      // The triple term the head writes has "Bob", 42 or a triple term as subject for some rows.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :claims ?t }',
+        [
+          '{s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
+          '{s=ex://alice,t=<<"Bob" ex://knownBy ex://alice>>}',
+          '{s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
+          '{s=ex://bob,t=<<"42"^^http://www.w3.org/2001/XMLSchema#integer ex://knownBy ex://bob>>}',
+          '{s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
+          '{s=ex://carol,t=<<<<ex://alice ex://knows ex://bob>> ex://knownBy ex://carol>>}',
+          '{s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
+          '{s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
+        ],
+        { generalizedRdfView: true },
+      );
+    });
+
+    it('builds the generalized triple term a generalized RDF head writes', async({ expect }) => {
+      await expectRowsOverPermutedPositions(
+        expect,
+        [ `${prefix}CONSTRUCT { ?s :claims <<( ?o :knownBy ?s )>> } WHERE { ?s :knows ?o }` ],
+        'SELECT * WHERE { ?s :claims ?t }',
+        [
+          '{s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
+          '{s=ex://alice,t=<<"Bob" ex://knownBy ex://alice>>}',
+          '{s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
+          '{s=ex://bob,t=<<"42"^^http://www.w3.org/2001/XMLSchema#integer ex://knownBy ex://bob>>}',
+          '{s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
+          '{s=ex://carol,t=<<<<ex://alice ex://knows ex://bob>> ex://knownBy ex://carol>>}',
+          '{s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
+          '{s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
         ],
         { generalizedRdfView: true },
       );
