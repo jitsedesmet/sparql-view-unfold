@@ -56,30 +56,6 @@ export interface QueryRewriter {
   rewriteOperation: (operation: Algebra.Operation) => Promise<Algebra.Operation>;
 }
 
-/**
- * Whether a GROUP node sits at the top of the operation's Extend / Filter / OrderBy chain.
- *
- * This matters for the projection rebuilding below: the extra outer EXTEND nodes it adds for variable
- * renaming must not be visible to `toAst`'s `translateAlgProject`, which flattens all Extend nodes, replaces
- * intermediate aggregate variables by their aggregate expressions, and pushes any unused one into the WHERE
- * clause - producing invalid SPARQL such as `BIND(COUNT(?o) AS ?count)`.
- * @param op - The operation to inspect
- * @returns whether the query groups, in which case the grouped sub-tree is wrapped in a subSELECT first
- */
-function hasGroupInTopLevelChain(op: Algebra.Operation): boolean {
-  if (op.type === Algebra.Types.GROUP) {
-    return true;
-  }
-  if (
-    op.type === Algebra.Types.EXTEND ||
-    op.type === Algebra.Types.FILTER ||
-    op.type === Algebra.Types.ORDER_BY
-  ) {
-    return hasGroupInTopLevelChain((<{ input: Algebra.Operation }>op).input);
-  }
-  return false;
-}
-
 /** The updates that write without reading, so that the pipeline has nothing to run over. */
 const updateTypesWithoutQueryPart = new Set<string>([
   Algebra.Types.LOAD,
@@ -111,12 +87,6 @@ function rebuildProjection(
   rewritten: Algebra.Operation,
 ): Algebra.Operation {
   let rebuilt = rewritten;
-  // Because of the variable renaming, when we group,
-  // we need to group as part of a subquery and then rename afterwards.
-  if (hasGroupInTopLevelChain(rebuilt)) {
-    rebuilt = c.AF.createProject(rebuilt, project.variables
-      .map(variable => c.DF.variable(`${VAR_PREFIX_USER_QUERY}${variable.value}`)));
-  }
   for (const variable of project.variables) {
     rebuilt = c.AF.createExtend(
       rebuilt,
