@@ -134,6 +134,37 @@ always give the same identity. Add `internalBnodeAsSpecialLiteralTransformation(
 `internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed
 literal or as a prefixed IRI respectively.
 
+### Provenance
+
+Which source triples does an answer rest on? A *derivation* is one solution of a mapping body.
+`provenanceMappingFromConstructQueries` builds the view of them: each derivation is `provenance:derivationOf` the
+view triples it produces and `provenance:derivedFrom` the source triples it matched, with `provenance:` for
+`https://sparql-extension.knows.idlab.ugent.be/provenance#`. `provenanceCapturingQuery` rewrites a SELECT over the
+view so that it also selects, per triple pattern, the derivation that pattern matched (`?derivation0`,
+`?derivation1`, …). Unfold the one against the other:
+
+```typescript
+const rewriter = createQueryRewriter([
+  ...createDefaultTransformationPipeline(provenanceMappingFromConstructQueries(constructs)),
+  internalBnodeAsSpecialIriTransformation(),
+]);
+const rewrittenQuery = await rewriter.rewriteQuery(provenanceCapturingQuery(
+  'PREFIX : <ex://> SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }',
+));
+```
+
+It answers one row per combination of derivations an answer has; querying `derivedFrom` of a derivation gives
+the source triples behind it. A derivation is identified by the position of its CONSTRUCT and the values of its
+body's variables. Beyond that:
+
+- A pattern under a `MINUS` or an `EXISTS` is only tested for, and selects no derivation.
+- Under a `GROUP BY`, `LIMIT` or `OFFSET`, the answers are computed as without provenance and then joined with
+  the derivations of every solution with the same values, including those a `LIMIT` or `OFFSET` leaves out.
+  The order of an `ORDER BY` is lost.
+- `derivedFrom` lists the body's triple patterns every solution matches: none under a `UNION`, the right side
+  of an `OPTIONAL` or `MINUS`, a sub-SELECT, `GROUP`, `GRAPH` or `SERVICE`, nor a property path.
+- Only a `SELECT` is supported.
+
 ## Restrictions
 
 | Restriction | What happens when you break it |
@@ -170,6 +201,9 @@ The tables below are the short version; the generated
 | `createDefaultTransformationPipeline(mapping, options?)` | The pipeline to use when you have no reason to build your own. |
 | `rewriter.rewriteQuery(query)` | Rewrites a SPARQL query string, asynchronously. |
 | `rewriter.rewriteOperation(operation)` | The same over SPARQL algebra, for callers already holding some. |
+| `provenanceMappingFromConstructQueries(constructQueries, options?)` | Builds the mapping of the provenance view the CONSTRUCT queries define. |
+| `provenanceCapturingQuery(query)` | Rewrites a SELECT over the view to also select the derivation every triple pattern matched. |
+| `provenanceCapturingOperation(operation)` | The same over SPARQL algebra. |
 
 | Transformation | Description |
 |---|---|

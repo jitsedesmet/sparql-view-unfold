@@ -105,6 +105,26 @@ An RDF 1.1 dataset cannot reference a blank node consistently across queries, so
 same identity. Two transformations materialise it — `internalBnodeAsSpecialLiteral` as a typed literal,
 `internalBnodeAsSpecialIri` as a prefixed IRI whose length SHA-1 keeps manageable.
 
+## Provenance
+
+`lib/provenance.ts`, in two halves that meet in an ordinary unfolding.
+
+- **The mapping** (`provenanceMappingFromConstructQueries`) rewrites every CONSTRUCT into one over the same body,
+  extended with `BIND(<internal://blank>(<construct IRI>, <the body's variables>) AS ?derivation)`, a variable
+  the body may leave unbound passed as `COALESCE(?x, <unbound>)`. Its template links that derivation by
+  `derivationOf` to every template triple and by `derivedFrom` to every body triple pattern each solution
+  matches. The result goes through `mappingFromConstructs` like any other.
+- **The query** (`provenanceCapturingQuery`) is a query-to-query rewrite over the view, run *before* the
+  rewriter: it changes the projection, which the runner rebuilds as the user wrote it. Each triple pattern
+  becomes `?derivationN derivationOf <<( s p o )>>`. The derivations an operation selects are the derivation
+  variables in its scope, so only a PROJECT needs a rule to keep selecting them, and those under a MINUS or
+  an EXISTS never leave it.
+
+A GROUP or SLICE counts solutions rather than derivations, so its answers are computed with the lookups
+projected away and then joined with the derivations of the solutions they agree with. A join lets an unbound
+variable match any value, so a variable that may be unbound is joined on a `COALESCE(?x, <unbound>)` key
+instead, which also keeps the join one Comunica can evaluate.
+
 ## SPARQL quirks worth knowing
 
 There is a [working draft for RDF 1.2 interoperability](https://w3c.github.io/rdf-interop/spec/) describing
@@ -130,3 +150,8 @@ So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
   run after `removeProjections`.
 - **Merging SERVICE calls.** A service can absorb a variable amount of computation, so there is a
   composition to choose; `transformServiceCallPushUp` makes one choice.
+- **Pruning a derivation lookup.** Every provenance mapping head has the predicate `derivationOf` or
+  `derivedFrom`, so a provenance mapping is nearly always several merged behind the generic head, whose triple term is a `BIND` nothing
+  re-reads. A lookup then unfolds against every mapping, the mismatch of a constant inside the triple term
+  only caught at run time by `sameTerm(c, PREDICATE(?m_o))`. Folding `SUBJECT`/`PREDICATE`/`OBJECT` of a bound
+  triple term into the term it reads would prune those branches and leave plain SPARQL 1.1.

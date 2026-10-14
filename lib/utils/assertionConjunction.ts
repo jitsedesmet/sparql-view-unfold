@@ -42,7 +42,7 @@ import { withCpVars } from './certainlyBoundVars.js';
 import { booleanConstantOf, conjunctionOf, splitConjunction } from './expressionHelpers.js';
 import type { AssertionView } from './partialExpressionEvaluation.js';
 import { substituteInExpression } from './partialExpressionEvaluation.js';
-import { DF } from './rdfDatatypes.js';
+import { DF, tripleTerm } from './rdfDatatypes.js';
 import { isSubsetOf } from './setUtils.js';
 
 /**
@@ -1210,7 +1210,7 @@ export class AssertionConjunction {
         // other undecided one is - which for the caller that has no reading is the `undefined` above.
         return valueForUndecidedGroup?.(reached);
       }
-      return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
+      return tripleTerm(subject, predicate, object);
     };
     return recurse(group);
   }
