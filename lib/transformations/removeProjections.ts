@@ -2,6 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
+import { groupProjectedBy } from '../utils/operationhelpers.js';
 import { collectVariableNames, freshVarGenerator, renameVariables } from '../utils.js';
 
 /**
@@ -25,6 +26,9 @@ import { collectVariableNames, freshVarGenerator, renameVariables } from '../uti
  * without a DISTINCT preserves multiplicity, so the same rows fall in the window either way - but SPARQL
  * has no way to *write* a LIMIT or OFFSET that is not on a SELECT, and `toAst` rejects the `Slice` it
  * would be left holding.
+ *
+ * A projection over a GROUP is kept for that same reason: a GROUP BY is only written on a SELECT, and without
+ * one the grouping would be printed on the enclosing query.
  *
  * @param c - The transformation context
  * @param op - The operation to transform
@@ -54,7 +58,7 @@ export function removeProjections<T extends Algebra.Operation>(c: Transformation
     [Algebra.Types.REDUCED]: { preVisitor: keepProjectedInput },
     [Algebra.Types.SLICE]: { preVisitor: keepProjectedInput },
     [Algebra.Types.PROJECT]: { transform: (project, original) => {
-      if (keptProjections.has(original)) {
+      if (keptProjections.has(original) || groupProjectedBy(original) !== undefined) {
         return project;
       }
       const projected = new Set(project.variables.map(variable => variable.value));

@@ -53,3 +53,18 @@ export function projectSolutionExistence(
 ): Algebra.Project {
   return c.AF.createProject(operation, [ c.coinExistenceVariable() ]);
 }
+
+/**
+ * The GROUP a projection writes its GROUP BY on: its input, below the binds of its aggregates, its HAVING and
+ * its ORDER BY.
+ * @param project - The projection to read
+ * @returns the GROUP, or `undefined` when the projection groups nothing
+ */
+export function groupProjectedBy(project: Algebra.Project): Algebra.Group | undefined {
+  let input = project.input;
+  while (input.type === Algebra.Types.EXTEND || input.type === Algebra.Types.FILTER ||
+    input.type === Algebra.Types.ORDER_BY) {
+    input = input.input;
+  }
+  return input.type === Algebra.Types.GROUP ? input : undefined;
+}

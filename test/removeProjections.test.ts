@@ -80,4 +80,20 @@ describe('removeProjections', () => {
       await assertEquivalent(expect, 'SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } LIMIT 1 } }');
     });
   });
+
+  describe('a GROUP below a projection', () => {
+    // SPARQL cannot write a GROUP BY that is not on a SELECT, so dropping the projection would group the
+    // enclosing query instead.
+    it('keeps the projection of a grouped sub-SELECT', async({ expect }) => {
+      expect(await transform('SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s } OPTIONAL { ?s ?q ?r } }'))
+        .toContain('SELECT ?uq_s WHERE');
+    });
+
+    it('a grouped sub-SELECT returns the same results', async({ expect }) => {
+      await assertEquivalent(
+        expect,
+        'SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s } OPTIONAL { ?s ?q ?r } }',
+      );
+    });
+  });
 });
