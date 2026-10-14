@@ -2,7 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import { describe, it } from 'vitest';
 import type { Pin, PinChildren, PinMeet, TriplePin } from '../lib/datastructures/TermClusterSet.js';
 import { TermClusterSet, triplePositions } from '../lib/datastructures/TermClusterSet.js';
-import { predicateRange, subjectRange } from '../lib/RangeSet.js';
+import { predicateRange, rangeOfPosition, subjectRange } from '../lib/RangeSet.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
 
 /**
@@ -37,7 +37,7 @@ function decomposed(shape: TriplePin, ground: RDF.Term): PinMeet<RDF.Term> | fal
 }
 
 function newSet(): TermClusterSet<string, RDF.Term> {
-  return new TermClusterSet<string, RDF.Term>(name => name, meetPins);
+  return new TermClusterSet<string, RDF.Term>(name => name, meetPins, rangeOfPosition);
 }
 
 const termA = DF.namedNode('ex://a');

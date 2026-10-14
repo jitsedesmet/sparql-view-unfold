@@ -68,15 +68,18 @@ export function unfoldTriplePatternsAgainstMapping(
 
 /**
  * The pipeline step replacing every triple pattern of the user query outside a `SERVICE` by the mapping body
- * producing the triples it could match.
+ * producing the triples it could match. It also tells later passes whether the view is generalized RDF.
  * @param mapping - The mapping to unfold, from {@link mapping!mappingFromConstructQueries}
  * @param options - What to configure the unfolding with
  * @returns the transformation
  */
 export function unfoldingTransformation(mapping: Mapping, options: UnfoldingOptions = {}): QueryTransformation {
-  return (context, operation) => unfoldTriplePatternsAgainstMapping(
-    context,
-    options.preserveCardinality === true ? withDeduplicatedBody(context, mapping) : mapping,
-    operation,
-  );
+  return (context, operation) => {
+    context.generalizedRdf = mapping.generalizedRdfView;
+    return unfoldTriplePatternsAgainstMapping(
+      context,
+      options.preserveCardinality === true ? withDeduplicatedBody(context, mapping) : mapping,
+      operation,
+    );
+  };
 }

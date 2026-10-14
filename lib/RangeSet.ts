@@ -62,11 +62,15 @@ export const serviceNameRange = new RangeSet([ 'NamedNode' ]);
 export const emptyRange = new RangeSet([]);
 
 /**
- * The range of the position a triple term holds its component in.
+ * The term types a position of a triple admits: any term in generalized RDF, what RDF admits otherwise.
  * @param position - The position to read
+ * @param generalizedRdf - Whether the triple may be a generalized one
  * @returns the term types it admits
  */
-export function rangeOfPosition(position: 'object' | 'predicate' | 'subject'): RangeSet {
+export function rangeOfPosition(position: 'object' | 'predicate' | 'subject', generalizedRdf = false): RangeSet {
+  if (generalizedRdf) {
+    return objectRange;
+  }
   switch (position) {
     case 'subject': {
       return subjectRange;
@@ -78,17 +82,4 @@ export function rangeOfPosition(position: 'object' | 'predicate' | 'subject'): R
       return objectRange;
     }
   }
-}
-
-/**
- * The term types a position of a mapping head admits: any term in a generalized RDF view, what RDF admits otherwise.
- * @param position - The position to read
- * @param generalizedRdf - Whether the view is a generalized RDF view
- * @returns the term types it admits
- */
-export function rangeOfAssertedPosition(
-  position: 'object' | 'predicate' | 'subject',
-  generalizedRdf: boolean,
-): RangeSet {
-  return generalizedRdf ? objectRange : rangeOfPosition(position);
 }

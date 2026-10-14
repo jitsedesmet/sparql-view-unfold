@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import { AssertionClusterSet } from '../lib/datastructures/AssertionClusterSet.js';
-import { objectRange, tripleTermRange } from '../lib/RangeSet.js';
+import { objectRange, rangeOfPosition, tripleTermRange } from '../lib/RangeSet.js';
 
 describe('assertionClusterSet', () => {
   describe('liveness', () => {
@@ -9,7 +9,7 @@ describe('assertionClusterSet', () => {
     // once, `?x` leaving the group it just put `?y` in. Dropping it there would discard the whole
     // condition from Θ, and so from the rewritten query.
     it('keeps a group an asserted range narrowed when its last member leaves', ({ expect }) => {
-      const set = new AssertionClusterSet();
+      const set = new AssertionClusterSet(rangeOfPosition);
       set.mergeGroups('x', 'y');
       const group = set.getGroup('x');
       set.assertTermTypeRange(group, tripleTermRange);
@@ -24,7 +24,7 @@ describe('assertionClusterSet', () => {
     // The other side: a group at the top range - nothing asserted of it - carries nothing its last member
     // is still constrained by, so it drops as before.
     it('still drops a group nothing narrowed when its last member leaves', ({ expect }) => {
-      const set = new AssertionClusterSet();
+      const set = new AssertionClusterSet(rangeOfPosition);
       set.mergeGroups('x', 'y');
       const group = set.getGroup('x');
       expect(set.assertedRangeOf(group)).toEqual(objectRange);

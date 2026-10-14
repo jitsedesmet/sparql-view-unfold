@@ -1,5 +1,6 @@
+import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
-import { Algebra } from '@traqula/algebra-transformations-1-2';
+import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_USER_QUERY } from './consts.js';
 import { filterFalseTransformation } from './transformations/filterFalse.js';
 import {
@@ -78,6 +79,43 @@ function hasGroupInTopLevelChain(op: Algebra.Operation): boolean {
     return hasGroupInTopLevelChain((<{ input: Algebra.Operation }>op).input);
   }
   return false;
+}
+
+/**
+ * Whether a triple term is an RDF one, which `<<( … )>>` can spell.
+ * @param term - The triple term to check
+ * @returns whether it is
+ */
+function isRdfTripleTerm(term: RDF.BaseQuad): boolean {
+  return [ 'NamedNode', 'BlankNode', 'Variable' ].includes(term.subject.termType) &&
+    [ 'NamedNode', 'Variable' ].includes(term.predicate.termType) &&
+    [ term.subject, term.object ].every(component => component.termType !== 'Quad' || isRdfTripleTerm(component));
+}
+
+/**
+ * Writes a generalized triple term as the `TRIPLE()` building it, `<<( … )>>` spelling RDF triple terms only.
+ * @param c - The transformation context
+ * @param term - The term to write
+ * @returns the expression building it
+ */
+function tripleTermExpression(c: TransformationContext, term: RDF.Term): Algebra.Expression {
+  if (term.termType !== 'Quad' || isRdfTripleTerm(term)) {
+    return c.AF.createTermExpression(term);
+  }
+  return c.AF.createOperatorExpression('triple', [ term.subject, term.predicate, term.object ]
+    .map(component => tripleTermExpression(c, component)));
+}
+
+/**
+ * Rewrites every generalized triple term an expression holds into a `TRIPLE()`, so the query can be printed.
+ * @param c - The transformation context
+ * @param operation - The operation to rewrite
+ * @returns the rewritten operation
+ */
+function spellGeneralizedTripleTerms(c: TransformationContext, operation: Algebra.Operation): Algebra.Operation {
+  return algebraUtils.mapOperationSub<'unsafe', typeof operation>(operation, {}, { expression: { term: {
+    transform: expression => tripleTermExpression(c, expression.term),
+  }}});
 }
 
 /** The updates that write without reading, so that the pipeline has nothing to run over. */
@@ -281,7 +319,10 @@ export function createQueryRewriter(transformations: readonly QueryTransformatio
   return {
     async rewriteQuery(query: string): Promise<string> {
       const c = createTransformationContext();
-      const rewritten = await rewriteParsedQuery(c, transformations, parseQuery(c, query));
+      let rewritten = await rewriteParsedQuery(c, transformations, parseQuery(c, query));
+      if (c.generalizedRdf) {
+        rewritten = spellGeneralizedTripleTerms(c, rewritten);
+      }
       return c.generator.generate(toAst(rewritten));
     },
     async rewriteOperation(operation: Algebra.Operation): Promise<Algebra.Operation> {

@@ -711,8 +711,8 @@ function pushIntoGraph(
   }]);
   return keep(assertionFilter(
     c,
-    AF.createGraph(assertionFilter(c, graph.input, AssertionConjunction.of(placed.intoTarget[0])), graphName),
-    AssertionConjunction.of(placed.kept),
+    AF.createGraph(assertionFilter(c, graph.input, AssertionConjunction.of(c, placed.intoTarget[0])), graphName),
+    AssertionConjunction.of(c, placed.kept),
   ));
 }
 
@@ -763,8 +763,8 @@ function pushIntoJoin(
   return keep(assertionFilter(
     c,
     c.AF.createJoin(join.input.map((operand, index) =>
-      assertionFilter(c, operand, AssertionConjunction.of(placed.intoTarget[index]))), false),
-    AssertionConjunction.of(placed.kept),
+      assertionFilter(c, operand, AssertionConjunction.of(c, placed.intoTarget[index]))), false),
+    AssertionConjunction.of(c, placed.kept),
   ));
 }
 
@@ -857,7 +857,7 @@ function pushIntoLeftJoin(
   const [ intoLeft, intoRight ] = placed.intoTarget;
   const kept = placed.kept;
 
-  const leftAssertions = AssertionConjunction.of(intoLeft);
+  const leftAssertions = AssertionConjunction.of(c, intoLeft);
   // Every candidate μ₁ binds the variables strongly asserted in intoLeft to their term once those are
   // pushed into A₁, so substituting them into the left join condition is sound.
   // The condition is only ever evaluated on a merged `μ₁ ∪ μ₂` - the anti-join half keeps a `μ₁` exactly
@@ -875,10 +875,10 @@ function pushIntoLeftJoin(
     c,
     AF.createLeftJoin(
       assertionFilter(c, left, leftAssertions),
-      assertionFilter(c, right, AssertionConjunction.of(intoRight)),
+      assertionFilter(c, right, AssertionConjunction.of(c, intoRight)),
       expression,
     ),
-    AssertionConjunction.of(kept),
+    AssertionConjunction.of(c, kept),
   ));
 }
 
@@ -1085,7 +1085,7 @@ function unification(reading: Access, representative: Access): AssertionConjunct
  */
 function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjunction {
   const { unaryConjuncts, equatedGroups } = assertions.unaryConjunctsAndEquatedGroups();
-  return AssertionConjunction.of([
+  return AssertionConjunction.of(assertions, [
     ...unaryConjuncts,
     ...equatedGroups.flatMap(group => termTypesOfReadings(group)),
   ]

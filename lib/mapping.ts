@@ -5,7 +5,7 @@ import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_MAPPING, VAR_PREFIX_MERGED_HEAD } from './consts.js';
 import { triplePositions } from './datastructures/TermClusterSet.js';
 import type { RangeSet } from './RangeSet.js';
-import { rangeOfAssertedPosition } from './RangeSet.js';
+import { rangeOfPosition } from './RangeSet.js';
 import type { TransformationContext } from './transformContext.js';
 import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
 import type { Mapping, MappingHead } from './types.js';
@@ -40,7 +40,7 @@ import { collectVariableNames } from './utils.js';
  *   per user pattern it is unfolded into, so a function that answers differently on two evaluations makes
  *   the unfolded query disagree with the mapped graph it stands for. `NOW` is deliberately allowed, SPARQL
  *   1.1 §17.4.5.1 fixing it per query execution.
- * - **Only the terms a head position admits** ({@link rangeOfAssertedPosition}), checked per triple of the
+ * - **Only the terms a head position admits** ({@link rangeOfPosition}), checked per triple of the
  *   template. A constant a position cannot hold is rejected outright; a variable the body could bind to such
  *   a term is filtered out instead, since a CONSTRUCT instantiates no triple for a solution that would make
  *   an illegal one (SPARQL 1.1 §16.2) - the same sentence the `FILTER(bound(?x))` below comes from. A
@@ -91,7 +91,7 @@ function admissibilityTypeTests(
     return triplePositions.flatMap(position =>
       admissibilityTypeTests(
         templateTerm[position],
-        rangeOfAssertedPosition(position, generalizedRdfView),
+        rangeOfPosition(position, generalizedRdfView),
         bodyRanges,
         generalizedRdfView,
       ));
@@ -143,7 +143,7 @@ function mappingOfSingleTemplateTriple(
   const typeTests = triplePositions.flatMap(position =>
     admissibilityTypeTests(
       head[position],
-      rangeOfAssertedPosition(position, generalizedRdfView),
+      rangeOfPosition(position, generalizedRdfView),
       bodyRanges,
       generalizedRdfView,
     ));

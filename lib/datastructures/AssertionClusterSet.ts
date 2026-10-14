@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { objectRange } from '../RangeSet.js';
 import type { RangeSet } from '../RangeSet.js';
-import type { Pin, PinMeet, TriplePin } from './TermClusterSet.js';
+import type { Pin, PinMeet, TriplePin, TriplePosition } from './TermClusterSet.js';
 import { meetShapes, TermClusterSet, triplePositions } from './TermClusterSet.js';
 
 /**
@@ -22,8 +22,11 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
   /** Maps group ID to the part of its range a condition asserted, rather than the set working it out */
   protected groupToAssertedRange: Record<number, RangeSet>;
 
-  public constructor() {
-    super(name => name, meetTermPins);
+  /**
+   * @param positionRange - The term types a position of a triple term admits
+   */
+  public constructor(positionRange: (position: TriplePosition) => RangeSet) {
+    super(name => name, meetTermPins, positionRange);
     this.clear();
   }
 
@@ -40,7 +43,7 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
    * @returns the copy
    */
   public override clone(): AssertionClusterSet {
-    const copy = new AssertionClusterSet();
+    const copy = new AssertionClusterSet(this.positionRange);
     this.copyInto(copy);
     return copy;
   }

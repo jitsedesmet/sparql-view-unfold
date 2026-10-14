@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_USER_QUERY } from './consts.js';
-import type { Pin, PinMeet } from './datastructures/TermClusterSet.js';
+import type { Pin, PinMeet, TriplePosition } from './datastructures/TermClusterSet.js';
 import { meetShapes, TermClusterSet, triplePositions } from './datastructures/TermClusterSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
 import { RewriteNoMatchError } from './RewriteNoMatchError.js';
@@ -74,8 +74,11 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    */
   protected staticExpressionValidation: { expression: Algebra.Expression; term: RawTerm }[];
 
-  public constructor() {
-    super(variable => variable.value, meetSolverPins);
+  /**
+   * @param positionRange - The term types a position of a triple term admits
+   */
+  public constructor(positionRange: (position: TriplePosition) => RangeSet) {
+    super(variable => variable.value, meetSolverPins, positionRange);
     this.clear();
   }
 

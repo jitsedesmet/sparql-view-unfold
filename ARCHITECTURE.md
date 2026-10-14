@@ -22,9 +22,11 @@ RDF 1.2 pattern and its RDF 1.1 representation. `mappingFromConstructQueries`
 
 The body also gets what SPARQL 1.1 §16.2 asks of a CONSTRUCT: a `FILTER(bound(?x))` per head variable the
 body does not certainly bind, and a type test per head variable whose `vRanges` range exceeds what its head
-position admits (`rangeOfAssertedPosition`: any term in a `generalizedRdfView`). Both read one template
+position admits (`rangeOfPosition`: any term in a `generalizedRdfView`). Both read one template
 triple, so both happen *before* the merge — after it the head is three plain variables and a triple term is a
 BIND whose interior nothing re-reads, which is exactly the case the type tests are for.
+The unfolding of a generalized RDF view also sets `TransformationContext.generalizedRdf`, so the later passes
+read a triple term the query builds as a generalized one (`rangeOfPosition(position, c.generalizedRdf)`).
 
 ## The rewriting, step by step
 

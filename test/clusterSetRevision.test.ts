@@ -3,7 +3,7 @@ import { describe, it } from 'vitest';
 import { ClusterSolver } from '../lib/ClusterSolver.js';
 import { AssertionClusterSet } from '../lib/datastructures/AssertionClusterSet.js';
 import type { PinChildren } from '../lib/datastructures/TermClusterSet.js';
-import { predicateRange, subjectRange, tripleTermRange } from '../lib/RangeSet.js';
+import { predicateRange, rangeOfPosition, subjectRange, tripleTermRange } from '../lib/RangeSet.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
 
 /**
@@ -62,7 +62,7 @@ describe('cluster set revision', () => {
 
   /** A set holding `x` and `y` in groups of their own. */
   function twoGroups(): AssertionClusterSet {
-    const set = new AssertionClusterSet();
+    const set = new AssertionClusterSet(rangeOfPosition);
     set.getGroup('x');
     set.getGroup('y');
     return set;
@@ -87,14 +87,14 @@ describe('cluster set revision', () => {
     });
 
     it('getGroup, where it creates the group', ({ expect }) => {
-      const set = new AssertionClusterSet();
+      const set = new AssertionClusterSet(rangeOfPosition);
       expect(moves(set, () => set.getGroup('x'))).toBe(true);
     });
 
     it('remove, where the group survives it', ({ expect }) => {
       // Three members, so that removing one leaves a live group and `dropGroup` does not run - which is
       // what makes this the `touch` of `remove` alone rather than of either.
-      const set = new AssertionClusterSet();
+      const set = new AssertionClusterSet(rangeOfPosition);
       set.mergeGroups('x', 'y');
       set.mergeGroups('y', 'z');
       expect(moves(set, () => set.remove('x'))).toBe(true);
@@ -127,23 +127,23 @@ describe('cluster set revision', () => {
     });
 
     it('dropGroup', ({ expect }) => {
-      const set = <OpenedSet> new AssertionClusterSet();
+      const set = <OpenedSet> new AssertionClusterSet(rangeOfPosition);
       const group = set.getGroup('x');
       expect(moves(set, () => set.dropGroup(group))).toBe(true);
       expect(set.hasGroup(group)).toBe(false);
     });
 
     it('mergeGroupIds', ({ expect }) => {
-      const set = <OpenedSet> new AssertionClusterSet();
+      const set = <OpenedSet> new AssertionClusterSet(rangeOfPosition);
       const left = set.getGroup('x');
       const right = set.getGroup('y');
       expect(moves(set, () => void set.mergeGroupIds(left, right))).toBe(true);
     });
 
     it('copyInto, which stamps the set it writes rather than the one it reads', ({ expect }) => {
-      const source = <OpenedSet> new AssertionClusterSet();
+      const source = <OpenedSet> new AssertionClusterSet(rangeOfPosition);
       source.mergeGroups('x', 'y');
-      const target = new AssertionClusterSet();
+      const target = new AssertionClusterSet(rangeOfPosition);
       const sourceStamp = source.revision;
       expect(moves(target, () => source.copyInto(target))).toBe(true);
       // The set being read is not written, so its own stamp stands still.
@@ -164,14 +164,14 @@ describe('cluster set revision', () => {
     });
 
     it('the solver unifying two variables', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       solver.getGroup(DF.variable('mi_x'));
       solver.getGroup(DF.variable('mi_y'));
       expect(moves(solver, () => solver.register(DF.variable('mi_x'), DF.variable('mi_y')))).toBe(true);
     });
 
     it('the solver registering an expression onto a group', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       const variable = DF.variable('mi_x');
       solver.getGroup(variable);
       const expression = AF.createTermExpression(termA);
@@ -180,7 +180,7 @@ describe('cluster set revision', () => {
     });
 
     it('the solver registering an expression against a term, which writes no group at all', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       solver.getGroup(DF.variable('mi_x'));
       const expression = AF.createTermExpression(termA);
       expect(moves(solver, () => solver.register(expression, termB))).toBe(true);
@@ -188,7 +188,7 @@ describe('cluster set revision', () => {
     });
 
     it('sortClusters, which reorders a group in place rather than changing what is in it', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       // The user query variable is met first, so it lands first and the sort has something to move.
       solver.register(DF.variable('uq_x'), DF.variable('mi_a'));
       const group = solver.getGroup(DF.variable('uq_x'));
@@ -237,7 +237,7 @@ describe('cluster set revision', () => {
     it('so two sets built the same way never collide', ({ expect }) => {
       const stamps = new Set<number>();
       for (let index = 0; index < 8; index++) {
-        const set = new AssertionClusterSet();
+        const set = new AssertionClusterSet(rangeOfPosition);
         stamps.add(set.revision);
         set.getGroup('x');
         stamps.add(set.revision);

@@ -164,6 +164,19 @@ describe('the default pipeline over a generalized RDF view', () => {
   BIND( <<( ?v_1 <ex://q> ?v_0 )>> AS ?uq_t )
 }`);
   });
+
+  it('writes a generalized triple term as the TRIPLE() building it', async({ expect }) => {
+    // `<<( "lit" … )>>` is no SPARQL, so the term the pushdown pins `?t` to is printed as a TRIPLE().
+    const rewriter = generalizedRdfViewRewriter(
+      'CONSTRUCT { ?s <ex://p> <<( ?o <ex://q> ?s )>> } WHERE { ?s <ex://q> ?o }',
+    );
+    expect((await rewriter.rewriteQuery('SELECT * { ?s <ex://p> ?t FILTER(sameTerm(SUBJECT(?t), "lit")) }')).trim())
+      .toEqual(`SELECT ( ?uq_s AS ?s ) ( ?uq_t AS ?t ) WHERE {
+  ?v_0 <ex://q> "lit" .
+  BIND( ?v_0 AS ?uq_s )
+  BIND( TRIPLE( "lit" , <ex://q> , ?v_0 ) AS ?uq_t )
+}`);
+  });
 });
 
 describe('the default pipeline over an empty group', () => {

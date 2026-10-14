@@ -5,7 +5,7 @@ import type { ClusterSolver } from '../ClusterSolver.js';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
 import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import type { RangeSet } from '../RangeSet.js';
-import { rangeOfAssertedPosition, rangeOfPosition } from '../RangeSet.js';
+import { rangeOfPosition } from '../RangeSet.js';
 import { RewriteNoMatchError } from '../RewriteNoMatchError.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
@@ -47,7 +47,7 @@ function registerPatternQuadAgainstExpression(
     } else {
       if (isRdfVar(patternTerm)) {
         tPVars[patternTerm.value] = patternTerm;
-        patternTerm.range = rangeOfPosition(position);
+        patternTerm.range = rangeOfPosition(position, c.generalizedRdf);
       }
       c.clusterSolver.register(positionExpression, patternTerm);
     }
@@ -298,7 +298,7 @@ function unfoldMappingWithinPattern(
   // Set of variables in the triple pattern
   const triplePatternVars: Record<string, RDF.Variable> = {};
   iterateMappingHead(c, mappingHeadVars, triplePatternVars, mapping.head, pattern, position =>
-    rangeOfAssertedPosition(position, mapping.generalizedRdfView));
+    rangeOfPosition(position, mapping.generalizedRdfView));
 
   clusterSolver.sortClusters();
 

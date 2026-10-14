@@ -1,5 +1,5 @@
 import type * as RDF from '@rdfjs/types';
-import { objectRange, RangeSet, rangeOfPosition, tripleTermRange } from '../RangeSet.js';
+import { objectRange, RangeSet, tripleTermRange } from '../RangeSet.js';
 import { ClusterSet } from './ClusterSet.js';
 
 /** The position a triple term holds one of its three components in. */
@@ -80,9 +80,9 @@ export function meetShapes<Term>(left: TriplePin, right: TriplePin): PinMeet<Ter
  * pin may hold, hence the second type parameter, and in what meeting two pins comes to, hence
  * {@link meetPins}.
  *
- * **Ranges** live here rather than only in the solver, since the same question is asked on both sides: a
- * group in a subject position of a triple term holds no Literal and no triple term, which is what confines
- * the nesting of shapes to the `object` chain.
+ * **Ranges** live here rather than only in the solver, since the same question is asked on both sides: in
+ * RDF, a group in a subject position of a triple term holds no Literal and no triple term, which is what
+ * confines the nesting of shapes to the `object` chain.
  *
  * A pin makes the child DAG a real graph, and two invariants keep it well founded:
  *
@@ -129,10 +129,12 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    * @param toId - How to transform a value into its string key
    * @param meetPins - Meets the two pins a group is asked to carry at once, reporting `false` when no value
    * satisfies both
+   * @param positionRange - The term types a position of a triple term admits
    */
   public constructor(
     toId: (value: T) => string,
     protected readonly meetPins: (a: Pin<Term>, b: Pin<Term>) => PinMeet<Term> | false,
+    protected readonly positionRange: (position: TriplePosition) => RangeSet,
   ) {
     super(toId);
     this.clear();
@@ -148,7 +150,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   }
 
   public override clone(): TermClusterSet<T, Term> {
-    const copy = new TermClusterSet<T, Term>(this.toId, this.meetPins);
+    const copy = new TermClusterSet<T, Term>(this.toId, this.meetPins, this.positionRange);
     this.copyInto(copy);
     return copy;
   }
@@ -526,7 +528,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    */
   private createPositionGroup(position: TriplePosition): number {
     const group = this.createEmptyGroup();
-    this.groupToRange[group] = rangeOfPosition(position);
+    this.groupToRange[group] = this.positionRange(position);
     return group;
   }
 

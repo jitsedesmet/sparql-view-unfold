@@ -9,6 +9,7 @@ import { AstFactory, AstTransformer } from '@traqula/rules-sparql-1-2';
 import { DataFactory } from 'rdf-data-factory';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
+import { rangeOfPosition } from './RangeSet.js';
 import { isRdfTerm } from './utils/typeGuards.js';
 
 /**
@@ -25,6 +26,11 @@ export interface TransformationContext {
   generator: Generator;
   /** Factory for creating AST nodes */
   astFactory: AstFactory;
+  /**
+   * Whether the rewritten query runs on an engine whose `TRIPLE()` builds generalized triple terms, which the
+   * unfolding of a generalized RDF view assumes.
+   */
+  generalizedRdf: boolean;
   /** Factory for creating algebra operations and expressions */
   AF: AlgebraFactory;
   /** RDF data factory for creating terms */
@@ -97,15 +103,17 @@ export function prefixVarsInOperation<T extends object>(
 export function createTransformationContext(): TransformationContext {
   const DF = new DataFactory();
   let existenceVariablesCoined = 0;
-  return {
+  const context: TransformationContext = {
     parser: new Parser(),
     generator: new MyGenerator(),
     astFactory: new AstFactory(),
+    generalizedRdf: false,
     AF: new AlgebraFactory(),
     DF,
     astTransformer: new AstTransformer(),
-    clusterSolver: new ClusterSolver(),
+    clusterSolver: new ClusterSolver(position => rangeOfPosition(position, context.generalizedRdf)),
     // Since we prefix with `m` we know it will not name-clash
     coinExistenceVariable: () => DF.variable(`mExists${existenceVariablesCoined++}`),
   };
+  return context;
 }

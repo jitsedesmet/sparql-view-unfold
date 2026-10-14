@@ -973,6 +973,35 @@ describe('integration tests', () => {
       );
     });
 
+    // The passes after the unfolding read a triple term the query builds as a generalized one, so none of these
+    // loses a row of a non-RDF triple term.
+    it.for([
+      'SELECT * WHERE { ?s :claims ?t FILTER(isLITERAL(SUBJECT(?t))) }',
+      'SELECT * WHERE { ?s :claims ?t BIND(SUBJECT(?t) AS ?x) FILTER(isLITERAL(?x)) }',
+      'SELECT * WHERE { ?s :claims <<( ?x :knownBy ?y )>> FILTER(isLITERAL(?x)) }',
+      'SELECT * WHERE { ?s :claims ?t FILTER(isTRIPLE(SUBJECT(?t))) }',
+      'SELECT * WHERE { ?s :claims ?t FILTER(?t = TRIPLE("Bob", :knownBy, :alice)) }',
+      'SELECT * WHERE { ?s :claims ?t FILTER(sameTerm(SUBJECT(?t), "Bob")) }',
+      'SELECT * WHERE { ?s :claims ?t BIND(TRIPLE(?s, :p, ?t) AS ?u) FILTER(isLITERAL(SUBJECT(OBJECT(?u)))) }',
+      'SELECT * WHERE { ?s :claims ?t . ?t2 ?p ?o FILTER(?t2 = SUBJECT(?t)) }',
+      'SELECT * WHERE { ?s :claims ?t BIND(TRIPLE(SUBJECT(?t), :p, ?s) AS ?u) }',
+      'SELECT * WHERE { ?s :claims ?t BIND(TRIPLE(?t, :p, ?s) AS ?u) FILTER(BOUND(?u)) }',
+      'SELECT * WHERE { ?s :claims ?t VALUES ?x { "Bob" 42 } FILTER(SUBJECT(?t) = ?x) }',
+      'SELECT * WHERE { ?s :claims ?t . ?s2 :claims ?t }',
+      'SELECT * WHERE { ?s :claims ?t OPTIONAL { ?s :claims ?t2 FILTER(isLITERAL(SUBJECT(?t2))) } }',
+      'SELECT ?x (COUNT(*) AS ?n) WHERE { ?s :claims ?t BIND(SUBJECT(?t) AS ?x) } GROUP BY ?x',
+      'SELECT * WHERE { ?s :claims ?t MINUS { ?s :claims ?t2 FILTER(isIRI(SUBJECT(?t2))) } }',
+    ])('agrees with a generalized RDF view inside its triple terms: %s', async(userQuery, { expect }) => {
+      const store11 = await sourceToStore([ './test/statics/permutedPositions.ttl' ]);
+      const headWritingTripleTerm = `${prefix}CONSTRUCT { ?s :claims <<( ?o :knownBy ?s )>> } WHERE { ?s :knows ?o }`;
+      for (const view of [ mappers, [ headWritingTripleTerm ]]) {
+        const { resOnMappedData, resUsingRewriter } =
+          await compareSelectRewrittenToMapped(store11, view, `${prefix}${userQuery}`, { generalizedRdfView: true });
+        expect(resUsingRewriter).toEqual(resOnMappedData);
+        expect(resOnMappedData).not.toHaveLength(0);
+      }
+    });
+
     it('matches a triple term pattern of a generalized RDF head whatever its subject', async({ expect }) => {
       // Unifying the two triple terms builds none, so "Bob", 42 and a triple term come back as `?x`.
       await expectRowsOverPermutedPositions(
