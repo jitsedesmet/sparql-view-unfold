@@ -121,9 +121,9 @@ function expressionForConsistentConstruction(
   // In case no vars are provided, we always make a new one (you likely never want this though....)
   let value = AF.createOperatorExpression('struuid', []);
   if (expression.args.length > 0) {
-    // Make a big concat of conditionals
+    // In the order the arguments are written: the unfolding renames variables per pattern, so an order read
+    // off their names would differ between two patterns constructing the same node.
     value = AF.createOperatorExpression('concat', (<Algebra.TermExpression[]>expression.args)
-      .sort((a, b) => (<RDF.Variable> a.term).value.localeCompare((<RDF.Variable> b.term).value))
       .map(expression => mapVariable(<RDF.Variable> expression.term)));
   }
 
