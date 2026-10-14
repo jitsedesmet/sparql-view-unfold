@@ -1,0 +1,73 @@
+cff-version: 1.2.0
+title: sparql-view-unfold
+message: 'If you use this software, please cite the article.'
+type: software
+authors:
+  - family-names: De Smet
+    given-names: Jitse
+    orcid: 'https://orcid.org/0009-0002-6513-5013'
+repository-code: 'https://github.com/jitsedesmet/sparql-view-unfold'
+url: 'https://github.com/jitsedesmet/sparql-view-unfold'
+abstract: >-
+  With the finalization of RDF 1.2 and SPARQL 1.2, the new
+  triple-term construct brings native reification to RDF.
+  Native support, however, does not imply uniform adoption:
+  existing datasets continue to model statement-level
+  metadata through established reification patterns, so
+  federated queries must mediate between these patterns and
+  the new syntax. We address this by rewriting queries
+  written against triple terms into queries over the
+  reification pattern actually used by each source,
+  expressing the relationship as a SPARQL CONSTRUCT query
+  that is unfolded into the user's query. This paper
+  demonstrates the approach through a web interface in which
+  users author their own mappings, select sources, and
+  observe how their queries are rewritten and executed
+  across federated endpoints. Reification translation is one
+  application of a more general framework for SPARQL query
+  answering under declarative RDF-to-RDF mappings, which we
+  plan to formalize and optimize. The language gaps it
+  exposes also give us concrete input for the upcoming
+  SPARQL maintenance-mode standardization.
+keywords:
+  - SPARQL 1.2
+  - RDF 1.2
+  - reification
+  - query rewriting
+  - view unfolding
+  - data integration
+license: MIT
+preferred-citation:
+  type: conference-paper
+  authors:
+    - family-names: De Smet
+      given-names: Jitse
+      orcid: 'https://orcid.org/0009-0002-6513-5013'
+    - family-names: Jakubowski
+      given-names: Maxime
+      orcid: 'https://orcid.org/0000-0002-7420-1337'
+  title: >-
+    Demonstration of RDF and SPARQL 1.2 Interoperability through Query
+    Rewriting
+  collection-title: >-
+    Companion Volume of the 22nd International Conference on Semantic
+    Systems (SEMANTiCS-C 2026)
+  collection-type: proceedings
+  conference:
+    name: 22nd International Conference on Semantic Systems (SEMANTiCS 2026)
+    city: Ghent
+    country: BE
+    date-start: "2026-09-15"
+    date-end: "2026-09-17"
+  publisher:
+    name: CEUR-WS.org
+  volume: 4293
+  issn: 1613-0073
+  date-published: "2026-10-13"
+  year: 2026
+  month: 9
+  url: https://2026-semantics-rewriting.jitsedesmet.be/
+  identifiers:
+    - type: url
+      value: https://ceur-ws.org/Vol-4293/paper4.pdf
+      description: CEUR-WS.org version
