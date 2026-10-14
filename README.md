@@ -14,7 +14,7 @@ Running SPARQL 1.2 queries — triple terms and all — against RDF 1.1 data is 
 the one the examples below use: a view says how your RDF 1.1 data represents RDF 1.2, and the rewrite hands
 you plain SPARQL 1.1.
 
-The idea is explained in our [demo paper accepted at SEMANTiCS](https://2026-semantics-rewriting.jitsedesmet.be/).
+The idea is explained in our [demo paper published at SEMANTiCS 2026](https://2026-semantics-rewriting.jitsedesmet.be/).
 [View that demo live](https://2026-query-rewriting.demo.jitsedesmet.be/). [ARCHITECTURE.md](ARCHITECTURE.md) maps the code.
 
 ## Installation
@@ -204,6 +204,26 @@ resolution and so imports `node:module` and `node:path`. Bundlers resolve every 
 before they tree-shake it, so re-exporting this step from the main entry point would make the whole package
 unresolvable for the browser — even in a build that never calls the step. The main entry point stays
 platform-neutral; reach for this subpath from Node.
+
+## Cite
+
+If you are using or extending sparql-view-unfold as part of a scientific publication,
+we would appreciate a citation of our [article](https://2026-semantics-rewriting.jitsedesmet.be/).
+
+```bibtex
+@inproceedings{De_Smet_Demonstration_of_RDF_2026,
+    address = {Ghent, BE},
+    author = {De Smet, Jitse and Jakubowski, Maxime},
+    booktitle = {Companion Volume of the 22nd International Conference on Semantic Systems (SEMANTiCS-C 2026)},
+    month = sep,
+    publisher = {CEUR-WS.org},
+    series = {CEUR Workshop Proceedings},
+    title = {{Demonstration of RDF and SPARQL 1.2 Interoperability through Query Rewriting}},
+    url = {https://2026-semantics-rewriting.jitsedesmet.be/},
+    volume = {4293},
+    year = {2026}
+}
+```
 
 ## License
 
