@@ -28,7 +28,8 @@ const alternativeLiteralGenerator: typeof literalRule = {
     )) {
       c.astFactory.printFilter(ast, () => $.PRINT_WORD(value));
     } else if (typeof type === 'object' && type.value === datatypeString.value) {
-      c.astFactory.printFilter(ast, () => $.PRINT_WORD('"', ast.value, '"'));
+      // Printed as a plain literal, so Traqula escapes its quotes and backslashes.
+      literalRule.gImpl($)({ ...ast, langOrIri: undefined }, c);
     } else {
       literalRule.gImpl($)(ast, c);
     }
