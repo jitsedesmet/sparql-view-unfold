@@ -83,3 +83,20 @@ export function rangeOfPosition(position: 'object' | 'predicate' | 'subject', ge
     }
   }
 }
+
+/**
+ * {@link rangeOfPosition} for RDF or for generalized RDF, as one function of the position.
+ * @param generalizedRdf - Whether triples may be generalized ones
+ * @returns the term types each position admits
+ */
+export function positionRangeOf(generalizedRdf: boolean): (position: 'object' | 'predicate' | 'subject') => RangeSet {
+  return generalizedRdf ? generalizedPositionRange : rdfPositionRange;
+}
+
+function rdfPositionRange(position: 'object' | 'predicate' | 'subject'): RangeSet {
+  return rangeOfPosition(position);
+}
+
+function generalizedPositionRange(): RangeSet {
+  return objectRange;
+}

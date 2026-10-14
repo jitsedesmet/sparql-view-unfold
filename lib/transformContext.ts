@@ -27,8 +27,8 @@ export interface TransformationContext {
   /** Factory for creating AST nodes */
   astFactory: AstFactory;
   /**
-   * Whether the rewritten query runs on an engine whose `TRIPLE()` builds generalized triple terms, which the
-   * unfolding of a generalized RDF view assumes.
+   * Whether the rewritten query runs on an engine whose `TRIPLE()` builds generalized triple terms. The unfolding
+   * sets it from the mapping, so a pass before it reads RDF.
    */
   generalizedRdf: boolean;
   /** Factory for creating algebra operations and expressions */

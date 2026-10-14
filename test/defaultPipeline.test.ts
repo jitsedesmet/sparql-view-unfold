@@ -177,6 +177,31 @@ describe('the default pipeline over a generalized RDF view', () => {
   BIND( TRIPLE( "lit" , <ex://q> , ?v_0 ) AS ?uq_t )
 }`);
   });
+
+  it('empties a source pattern a generalized triple term would land in', async({ expect }) => {
+    // The source is RDF, so no triple of it holds `<<( "lit" … )>>`.
+    const rewriter = generalizedRdfViewRewriter('CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }');
+    expect((await rewriter.rewriteQuery('SELECT * { ?s <ex://p> ?t FILTER(sameTerm(SUBJECT(?t), "lit")) }')).trim())
+      .toEqual(`SELECT ( ?uq_s AS ?s ) ( ?uq_t AS ?t ) WHERE {
+  FILTER ( FALSE )
+}`);
+  });
+});
+
+describe('the default pipeline over an RDF view', () => {
+  it('writes a non-RDF triple term it substitutes as the TRIPLE() raising for it', async({ expect }) => {
+    const rewriter = createQueryRewriter(createDefaultTransformationPipeline(
+      mappingFromConstructQueries([ 'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }' ]),
+    ));
+    expect((await rewriter.rewriteQuery(
+      'SELECT * { ?a <ex://p> ?o BIND(<<( ?o <ex://p> ?a )>> AS ?t) FILTER(sameTerm(?o, "lit")) }',
+    )).trim()).toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_o AS ?o ) ( ?uq_t AS ?t ) WHERE {
+  ?v_0 <ex://q> "lit" .
+  BIND( ?v_0 AS ?uq_a )
+  BIND( "lit" AS ?uq_o )
+  BIND( TRIPLE( "lit" , <ex://p> , ?uq_a ) AS ?uq_t )
+}`);
+  });
 });
 
 describe('the default pipeline over an empty group', () => {

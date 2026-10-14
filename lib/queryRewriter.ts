@@ -2,6 +2,8 @@ import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_USER_QUERY } from './consts.js';
+import { triplePositions } from './datastructures/TermClusterSet.js';
+import { rangeOfPosition } from './RangeSet.js';
 import { filterFalseTransformation } from './transformations/filterFalse.js';
 import {
   nullifyJoinOverIncompatibleBoundsTransformation,
@@ -87,13 +89,13 @@ function hasGroupInTopLevelChain(op: Algebra.Operation): boolean {
  * @returns whether it is
  */
 function isRdfTripleTerm(term: RDF.BaseQuad): boolean {
-  return [ 'NamedNode', 'BlankNode', 'Variable' ].includes(term.subject.termType) &&
-    [ 'NamedNode', 'Variable' ].includes(term.predicate.termType) &&
-    [ term.subject, term.object ].every(component => component.termType !== 'Quad' || isRdfTripleTerm(component));
+  return triplePositions.every(position => term[position].termType === 'Variable' ||
+    (rangeOfPosition(position).has(term[position].termType) &&
+      (term[position].termType !== 'Quad' || isRdfTripleTerm(term[position]))));
 }
 
 /**
- * Writes a generalized triple term as the `TRIPLE()` building it, `<<( … )>>` spelling RDF triple terms only.
+ * Writes a non-RDF triple term as the `TRIPLE()` building it, `<<( … )>>` spelling RDF triple terms only.
  * @param c - The transformation context
  * @param term - The term to write
  * @returns the expression building it
@@ -107,12 +109,13 @@ function tripleTermExpression(c: TransformationContext, term: RDF.Term): Algebra
 }
 
 /**
- * Rewrites every generalized triple term an expression holds into a `TRIPLE()`, so the query can be printed.
+ * Rewrites every non-RDF triple term an expression holds into a `TRIPLE()`, so the query can be printed. In RDF
+ * that `TRIPLE()` raises, as the construction the term was substituted into did.
  * @param c - The transformation context
  * @param operation - The operation to rewrite
  * @returns the rewritten operation
  */
-function spellGeneralizedTripleTerms(c: TransformationContext, operation: Algebra.Operation): Algebra.Operation {
+function spellNonRdfTripleTerms(c: TransformationContext, operation: Algebra.Operation): Algebra.Operation {
   return algebraUtils.mapOperationSub<'unsafe', typeof operation>(operation, {}, { expression: { term: {
     transform: expression => tripleTermExpression(c, expression.term),
   }}});
@@ -319,14 +322,12 @@ export function createQueryRewriter(transformations: readonly QueryTransformatio
   return {
     async rewriteQuery(query: string): Promise<string> {
       const c = createTransformationContext();
-      let rewritten = await rewriteParsedQuery(c, transformations, parseQuery(c, query));
-      if (c.generalizedRdf) {
-        rewritten = spellGeneralizedTripleTerms(c, rewritten);
-      }
-      return c.generator.generate(toAst(rewritten));
+      const rewritten = await rewriteParsedQuery(c, transformations, parseQuery(c, query));
+      return c.generator.generate(toAst(spellNonRdfTripleTerms(c, rewritten)));
     },
     async rewriteOperation(operation: Algebra.Operation): Promise<Algebra.Operation> {
-      return rewriteParsedQuery(createTransformationContext(), transformations, operation);
+      const c = createTransformationContext();
+      return spellNonRdfTripleTerms(c, await rewriteParsedQuery(c, transformations, operation));
     },
   };
 }

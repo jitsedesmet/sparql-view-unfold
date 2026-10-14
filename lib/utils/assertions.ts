@@ -799,15 +799,17 @@ export function asWeakenedConjunct(conjunct: AssertionConjunct): AssertionConjun
 type TermPosition = 'graph' | 'object' | 'predicate' | 'subject';
 
 /**
- * Whether a triple with this term in this position can exist at all: no triple has a literal or a triple
- * term as its subject, predicate or graph name, and none has anything but an IRI as its predicate.
+ * Whether a triple of the RDF source can hold this term in this position, recursing into a triple term.
  * @param term - The term to place
  * @param position - The position it lands in
  * @returns whether some triple holds it there, `true` for a variable, which may occupy any position
  */
 function canOccupy(term: RDF.Term, position: TermPosition): boolean {
-  if (position === 'object' || term.termType === 'Variable') {
+  if (term.termType === 'Variable') {
     return true;
+  }
+  if (position === 'object') {
+    return term.termType !== 'Quad' || triplePositions.every(inner => canOccupy(term[inner], inner));
   }
   if (position === 'predicate') {
     return term.termType === 'NamedNode';

@@ -38,7 +38,7 @@ export interface UnfoldingOptions {
 
 /**
  * Rewrites every non-empty BGP of an operation outside a `SERVICE` into a join of its patterns unfolded
- * against the mapping.
+ * against the mapping, and marks the context generalized RDF where the mapping is.
  * @param c - The transformation context
  * @param mapping - The mapping to unfold
  * @param input - The operation to rewrite
@@ -49,6 +49,7 @@ export function unfoldTriplePatternsAgainstMapping(
   mapping: Mapping,
   input: Algebra.Operation,
 ): Algebra.Operation {
+  c.generalizedRdf = mapping.generalizedRdfView;
   return algebraUtils.mapOperation<'unsafe', typeof input>(
     input,
     {
@@ -68,18 +69,15 @@ export function unfoldTriplePatternsAgainstMapping(
 
 /**
  * The pipeline step replacing every triple pattern of the user query outside a `SERVICE` by the mapping body
- * producing the triples it could match. It also tells later passes whether the view is generalized RDF.
+ * producing the triples it could match.
  * @param mapping - The mapping to unfold, from {@link mapping!mappingFromConstructQueries}
  * @param options - What to configure the unfolding with
  * @returns the transformation
  */
 export function unfoldingTransformation(mapping: Mapping, options: UnfoldingOptions = {}): QueryTransformation {
-  return (context, operation) => {
-    context.generalizedRdf = mapping.generalizedRdfView;
-    return unfoldTriplePatternsAgainstMapping(
-      context,
-      options.preserveCardinality === true ? withDeduplicatedBody(context, mapping) : mapping,
-      operation,
-    );
-  };
+  return (context, operation) => unfoldTriplePatternsAgainstMapping(
+    context,
+    options.preserveCardinality === true ? withDeduplicatedBody(context, mapping) : mapping,
+    operation,
+  );
 }

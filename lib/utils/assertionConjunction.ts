@@ -4,7 +4,7 @@ import { AssertionClusterSet } from '../datastructures/AssertionClusterSet.js';
 import type { PinChildren, TriplePosition } from '../datastructures/TermClusterSet.js';
 import { childGroupsOf, triplePositions } from '../datastructures/TermClusterSet.js';
 import type { RangeSet } from '../RangeSet.js';
-import { objectRange, rangeOfPosition, tripleTermRange } from '../RangeSet.js';
+import { objectRange, positionRangeOf, rangeOfPosition, tripleTermRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { DerivedVarNamer } from '../utils.js';
 import type {
@@ -153,7 +153,7 @@ export class AssertionConjunction {
   public constructor(variant: Pick<TransformationContext, 'generalizedRdf'>) {
     const { generalizedRdf } = variant;
     this.generalizedRdf = generalizedRdf;
-    this.clusters = new AssertionClusterSet(position => rangeOfPosition(position, generalizedRdf));
+    this.clusters = new AssertionClusterSet(positionRangeOf(generalizedRdf));
     this.strength = new Map();
     this.unbound = new Set();
     this.bound = new Set();

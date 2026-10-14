@@ -2,9 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import type { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { ClusterSolver } from '../ClusterSolver.js';
-import type { TriplePosition } from '../datastructures/TermClusterSet.js';
 import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
-import type { RangeSet } from '../RangeSet.js';
 import { rangeOfPosition } from '../RangeSet.js';
 import { RewriteNoMatchError } from '../RewriteNoMatchError.js';
 import type { TransformationContext } from '../transformContext.js';
@@ -62,7 +60,6 @@ function registerPatternQuadAgainstExpression(
  * @param tPVars - Set of variables in the triple pattern, added to as they are found
  * @param head - The mapping head to iterate
  * @param pattern - The triple pattern to iterate
- * @param rangeOfHeadPosition - The term types the head can write in each of its positions
  */
 function iterateMappingHead(
   c: TransformationContext,
@@ -70,16 +67,15 @@ function iterateMappingHead(
   tPVars: Record<string, RDF.Variable>,
   head: MappingHead,
   pattern: Alg.Pattern | RDF.BaseQuad,
-  rangeOfHeadPosition: (position: TriplePosition) => RangeSet,
 ): void {
   for (const position of triplePositions) {
     const headTerm = head[position];
     const patternTerm = pattern[position];
     // What the head can write in a position is the range a variable written there can take.
-    const variablePosRange = rangeOfHeadPosition(position);
+    const variablePosRange = rangeOfPosition(position, c.generalizedRdf);
     if (isRdfQuad(headTerm) && isRdfQuad(patternTerm)) {
       // Recursion in triple term
-      iterateMappingHead(c, mHVars, tPVars, headTerm, patternTerm, rangeOfHeadPosition);
+      iterateMappingHead(c, mHVars, tPVars, headTerm, patternTerm);
     } else if (isRdfQuad(patternTerm) && isRdfVar(headTerm)) {
       // The pattern writes a triple term where the head writes a variable: anything else the head could
       // write there - a triple term, a term of its own - was taken by a branch above, or fails to unify.
@@ -297,8 +293,7 @@ function unfoldMappingWithinPattern(
   const mappingHeadVars: Record<string, RDF.Variable> = {};
   // Set of variables in the triple pattern
   const triplePatternVars: Record<string, RDF.Variable> = {};
-  iterateMappingHead(c, mappingHeadVars, triplePatternVars, mapping.head, pattern, position =>
-    rangeOfPosition(position, mapping.generalizedRdfView));
+  iterateMappingHead(c, mappingHeadVars, triplePatternVars, mapping.head, pattern);
 
   clusterSolver.sortClusters();
 
@@ -348,6 +343,7 @@ export function rewriteSinglePattern(
   pattern: Alg.Pattern,
   mapping: Mapping,
 ): Alg.Operation {
+  c.generalizedRdf = mapping.generalizedRdfView;
   try {
     return unfoldMappingWithinPattern(c, pattern, mapping);
   } catch (error: unknown) {

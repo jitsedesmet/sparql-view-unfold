@@ -3,8 +3,8 @@ import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_MAPPING, VAR_PREFIX_MERGED_HEAD } from './consts.js';
+import type { TriplePosition } from './datastructures/TermClusterSet.js';
 import { triplePositions } from './datastructures/TermClusterSet.js';
-import type { RangeSet } from './RangeSet.js';
 import { rangeOfPosition } from './RangeSet.js';
 import type { TransformationContext } from './transformContext.js';
 import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
@@ -66,7 +66,7 @@ type MappingConstructionTools = Pick<TransformationContext, 'parser' | 'AF' | 'D
 /**
  * The type tests making a template term one its position admits, recursing into a triple term.
  * @param templateTerm - The term the position holds
- * @param admissibleRange - The term types that position admits
+ * @param position - The position it holds the term in
  * @param bodyRanges - What the body can bind each of its variables to
  * @param generalizedRdfView - Whether the view is a generalized RDF view
  * @returns T⟨?x : R⟩ per variable the body could bind outside its position
@@ -74,10 +74,11 @@ type MappingConstructionTools = Pick<TransformationContext, 'parser' | 'AF' | 'D
  */
 function admissibilityTypeTests(
   templateTerm: RDF.Term,
-  admissibleRange: RangeSet,
+  position: TriplePosition,
   bodyRanges: VRanges,
   generalizedRdfView: boolean,
 ): AssertionConjunct[] {
+  const admissibleRange = rangeOfPosition(position, generalizedRdfView);
   if (templateTerm.termType === 'Variable') {
     if (isSubsetOf(bodyRanges.rangeOf(templateTerm.value), admissibleRange)) {
       return [];
@@ -88,13 +89,8 @@ function admissibilityTypeTests(
     throw new Error(`Invalid Template, cannot use ${templateTerm.termType} in this position.`);
   }
   if (templateTerm.termType === 'Quad') {
-    return triplePositions.flatMap(position =>
-      admissibilityTypeTests(
-        templateTerm[position],
-        rangeOfPosition(position, generalizedRdfView),
-        bodyRanges,
-        generalizedRdfView,
-      ));
+    return triplePositions.flatMap(inner =>
+      admissibilityTypeTests(templateTerm[inner], inner, bodyRanges, generalizedRdfView));
   }
   return [];
 }
@@ -141,12 +137,7 @@ function mappingOfSingleTemplateTriple(
   // that are certainly bound, or certainly of a term type the position admits, already need no condition.
   const { cVars: certainlyBoundVariableNames, vRanges: bodyRanges } = withCpVars(constructBody).metadata;
   const typeTests = triplePositions.flatMap(position =>
-    admissibilityTypeTests(
-      head[position],
-      rangeOfPosition(position, generalizedRdfView),
-      bodyRanges,
-      generalizedRdfView,
-    ));
+    admissibilityTypeTests(head[position], position, bodyRanges, generalizedRdfView));
   const conditions: AssertionConjunct[] = [
     ...headVariableNames
       .filter(name => !certainlyBoundVariableNames.has(name))
