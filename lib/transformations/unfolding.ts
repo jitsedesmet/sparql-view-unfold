@@ -42,8 +42,8 @@ export interface UnfoldingOptions {
 }
 
 /**
- * Rewrites every BGP of an operation outside a `SERVICE` into a join of its patterns unfolded against the
- * mapping.
+ * Rewrites every non-empty BGP of an operation outside a `SERVICE` into a join of its patterns unfolded against
+ * the mapping.
  * @param c - The transformation context
  * @param mapping - The mapping to unfold, its variables named apart from the operation's
  * @param input - The operation to rewrite
@@ -57,7 +57,7 @@ function unfoldTriplePatternsAgainstMapping(
   return algebraUtils.mapOperation<'unsafe', typeof input>(
     input,
     {
-      // An empty BGP matches no triple, so it has nothing to unfold; a join of no operands would trip later passes.
+      // An empty BGP has no pattern to unfold and is already the join identity.
       [Algebra.Types.BGP]: { transform: input => input.patterns.length === 0 ?
         input :
         c.AF.createJoin(
