@@ -9,7 +9,6 @@ import { AstFactory, AstTransformer } from '@traqula/rules-sparql-1-2';
 import { DataFactory } from 'rdf-data-factory';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
-import { isRdfTerm } from './utils/typeGuards.js';
 
 /**
  * The factories and the solver every transformation works through.
@@ -34,9 +33,14 @@ export interface TransformationContext {
   /** Solver for variable clustering and unification during rewriting */
   clusterSolver: ClusterSolver;
   /**
+   * Marks variable names as used in this rewrite, so that {@link coinExistenceVariable} never coins one of
+   * them. The pipeline runner reserves those of the user query, the unfolding those of the mapping.
+   */
+  reserveVariableNames: (names: Iterable<string>) => void;
+  /**
    * Coins the variable a pattern that binds nothing projects, SPARQL having no sub-ASK and no empty
    * projection. It is the one variable the unfolding lets out of a pattern's sub-SELECT, so every call
-   * hands back a name no other pattern of this rewrite uses.
+   * hands back a name no other pattern of this rewrite uses, and none that was reserved.
    */
   coinExistenceVariable: () => RDF.Variable;
 }
@@ -64,38 +68,12 @@ export function parseQuery(
 }
 
 /**
- * Prefixes all variable names in an operation, so that patterns combined later cannot collide.
- * @param context - Object containing astTransformer and DF
- * @param obj - The object to transform
- * @param prefix - The prefix to add to all variable names
- * @returns the object with all variables prefixed
- */
-export function prefixVarsInOperation<T extends object>(
-  { astTransformer, DF }: Pick<TransformationContext, 'astTransformer' | 'DF'>,
-  obj: T,
-  prefix: string,
-): T {
-  return <T> astTransformer.transformObject(obj, (obj) => {
-    if (isRdfTerm(obj) && obj.termType === 'Variable') {
-      return DF.variable(prefix + (obj).value);
-    }
-    // Values.bindings uses string keys for variable names — rename those too.
-    if ('type' in obj && obj.type === 'values' && 'bindings' in obj) {
-      const valuesOp = <Algebra.Values> obj;
-      valuesOp.bindings = valuesOp.bindings.map(binding => Object.fromEntries(
-        Object.entries(binding).map(([ key, value ]) => [ prefix + key, value ]),
-      ));
-    }
-    return obj;
-  });
-}
-
-/**
  * Creates a {@link TransformationContext} with a solver of its own, one rewrite's worth of state.
  * @returns the context
  */
 export function createTransformationContext(): TransformationContext {
   const DF = new DataFactory();
+  const reservedVariableNames = new Set<string>();
   let existenceVariablesCoined = 0;
   return {
     parser: new Parser(),
@@ -105,7 +83,17 @@ export function createTransformationContext(): TransformationContext {
     DF,
     astTransformer: new AstTransformer(),
     clusterSolver: new ClusterSolver(),
-    // Since we prefix with `m` we know it will not name-clash
-    coinExistenceVariable: () => DF.variable(`mExists${existenceVariablesCoined++}`),
+    reserveVariableNames(names) {
+      for (const name of names) {
+        reservedVariableNames.add(name);
+      }
+    },
+    coinExistenceVariable() {
+      let name: string;
+      do {
+        name = `mExists${existenceVariablesCoined++}`;
+      } while (reservedVariableNames.has(name));
+      return DF.variable(name);
+    },
   };
 }

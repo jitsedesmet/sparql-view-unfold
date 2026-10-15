@@ -1,6 +1,5 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import { VAR_PREFIX_USER_QUERY } from '../consts.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import { termVars } from '../utils/certainlyBoundVars.js';
@@ -25,7 +24,8 @@ import { collectVariableNames, freshVarGenerator } from '../utils.js';
  * - **NPS** (`!(<p1>|<p2>)`): Negated property set (FILTER NOT IN), DISTINCT over subject and object
  * - **ZeroOrOne** (`path?`): UNION with empty match case, DISTINCT over subject and object
  *
- * Coined variables carry {@link VAR_PREFIX_USER_QUERY}, so the unfolding treats them as user query variables.
+ * Coined variables are named apart from every variable of the query, and the unfolding treats them as user query
+ * variables like any other variable of a pattern.
  * A path inside a `SERVICE` is left to its endpoint, the unfolding leaving that pattern as it stands.
  *
  * ## Not Fully Supported:
@@ -38,7 +38,7 @@ import { collectVariableNames, freshVarGenerator } from '../utils.js';
  *
  * @example
  * // ex:knows/ex:name becomes:
- * // ?s ex:knows ?uq_path_0 . ?uq_path_0 ex:name ?o
+ * // ?s ex:knows ?path_0 . ?path_0 ex:name ?o
  *
  * @example
  * // ex:knows|ex:worksWith becomes:
@@ -46,7 +46,7 @@ import { collectVariableNames, freshVarGenerator } from '../utils.js';
  */
 export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   const { AF, DF } = c;
-  const fresh = freshVarGenerator(collectVariableNames(c.astTransformer, op), `${VAR_PREFIX_USER_QUERY}path_`);
+  const fresh = freshVarGenerator(collectVariableNames(c.astTransformer, op), 'path_');
 
   /**
    * Gives an expanded path set semantics: a DISTINCT projection onto the variables of its subject, object and graph.

@@ -9,6 +9,7 @@ import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
 import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
 import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
+import { collectVariableNames } from '../utils.js';
 
 /**
  * @fileoverview Core pattern rewriting logic: rewriting a single triple pattern against a mapping.
@@ -289,6 +290,7 @@ function unfoldMappingWithinPattern(
 ): Alg.Project | Alg.Extend {
   const { clusterSolver, coinExistenceVariable, AF, DF } = c;
   clusterSolver.clear();
+  clusterSolver.declareUserQueryVariables(collectVariableNames(c.astTransformer, pattern));
   // Set of variables in the mapping head
   const mappingHeadVars: Record<string, RDF.Variable> = {};
   // Set of variables in the triple pattern

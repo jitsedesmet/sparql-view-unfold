@@ -54,8 +54,9 @@ export class ClusterSet<T> {
    * point of this class covers it. Those are `narrowRange` and `resolveAllConstraints` on
    * {@link datastructures/TermClusterSet!TermClusterSet}, `assertTermTypeRange` on
    * {@link datastructures/AssertionClusterSet!AssertionClusterSet}, and `sortClusters`,
-   * `registerExpressionToGroup` and the static-validation branch of `register` on {@link ClusterSolver!ClusterSolver}
-   * - the last three of which write no group at all, which is exactly why they are easy to miss.
+   * `declareUserQueryVariables`, `registerExpressionToGroup` and the static-validation branch of `register`
+   * on {@link ClusterSolver!ClusterSolver} - the last four of which write no group at all, which is exactly
+   * why they are easy to miss.
    */
   protected touch(): void {
     revisions++;

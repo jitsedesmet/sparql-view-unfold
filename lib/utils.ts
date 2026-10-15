@@ -21,7 +21,9 @@ export function renameVariables<T extends object>(
 ): T {
   return <T> c.astTransformer.transformObject(obj, (object) => {
     if (isRdfVar(object) && object.value in renames) {
-      return renames[object.value];
+      // A variable per occurrence, as the parser hands out: the unfolding writes a range onto the variables
+      // of a mapping head, which must not reach the occurrences in the body through a shared object.
+      return DF.variable(renames[object.value].value);
     }
     if ('type' in object && object.type === 'values' && 'bindings' in object) {
       const valuesOp = <Algebra.Values> object;
@@ -57,6 +59,22 @@ export function freshVarGenerator(existing: Iterable<string>, prefix = 'v_'): ()
     index += 1;
     return DF.variable(name);
   };
+}
+
+/**
+ * Claims the name a variable wants: that very name where it is free, or else the first free numeric suffix
+ * of it (`wanted0`, `wanted1`, ...).
+ * @param wanted - The name the variable would like to have
+ * @param taken - The names already in use, to which the claimed name is added
+ * @returns the claimed name
+ */
+export function claimVariableName(wanted: string, taken: Set<string>): string {
+  let name = wanted;
+  for (let index = 0; taken.has(name); index += 1) {
+    name = `${wanted}${index}`;
+  }
+  taken.add(name);
+  return name;
 }
 
 /** Names a variable a rewrite coins for one position of a triple term it writes into a pattern. */

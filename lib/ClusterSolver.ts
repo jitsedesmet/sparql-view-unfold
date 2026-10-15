@@ -1,6 +1,5 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { VAR_PREFIX_USER_QUERY } from './consts.js';
 import type { Pin, PinMeet } from './datastructures/TermClusterSet.js';
 import { meetShapes, TermClusterSet, triplePositions } from './datastructures/TermClusterSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
@@ -37,19 +36,6 @@ function meetSolverPins(left: Pin<RawBasicTerm>, right: Pin<RawBasicTerm>): PinM
 }
 
 /**
- * Whether the variable came from the user query, as against from the mapping being unfolded into it.
- *
- * The user query is renamed under {@link VAR_PREFIX_USER_QUERY} before any rewriting happens, so carrying
- * that prefix is what the two sides are told apart by - the whole prefix, a variable named `?uqx` being a
- * mapping variable like any other.
- * @param variable - The variable to classify
- * @returns whether it is a user query variable
- */
-function isUserQueryVar(variable: RangedVar): boolean {
-  return variable.value.startsWith(VAR_PREFIX_USER_QUERY);
-}
-
-/**
  * Solver for determining variable equality clusters during query rewriting.
  *
  * When rewriting a triple pattern against a mapping head, variables from both sides may need to be unified.
@@ -73,6 +59,11 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * equal a concrete term.
    */
   protected staticExpressionValidation: { expression: Algebra.Expression; term: RawTerm }[];
+  /**
+   * The names of the user query's variables, as against the mapping's - read through
+   * {@link isUserQueryVar}, written through {@link declareUserQueryVariables}.
+   */
+  protected userQueryVariableNames: Set<string>;
 
   public constructor() {
     super(variable => variable.value, meetSolverPins);
@@ -84,6 +75,30 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     super.clear();
     this.groupToExpressions = {};
     this.staticExpressionValidation = [];
+    this.userQueryVariableNames = new Set();
+  }
+
+  /**
+   * Tells the solver which variables come from the user query, every other variable belonging to the
+   * mapping being unfolded. Call after {@link clear}, before registering anything.
+   *
+   * The solver keys a variable by its name, so the two sides have to name their variables apart, which the
+   * unfolding sees to by renaming a mapping variable whose name the user query takes. What side a variable
+   * is on is still not read off its name: the unfolding knows it, the pattern being the user query's.
+   * @param names - The names of the variables of the pattern being unified with the mapping head
+   */
+  public declareUserQueryVariables(names: Iterable<string>): void {
+    this.touch();
+    this.userQueryVariableNames = new Set(names);
+  }
+
+  /**
+   * Whether the variable came from the user query, as against from the mapping being unfolded into it.
+   * @param variable - The variable to classify
+   * @returns whether it is a user query variable
+   */
+  protected isUserQueryVar(variable: RangedVar): boolean {
+    return this.userQueryVariableNames.has(variable.value);
   }
 
   /**
@@ -242,7 +257,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * The term every value of the group equals, reading a *shape* back as the triple term it stands for.
    *
    * Every position is whatever fixes it, or else the mapping variable naming it - the same variable the
-   * mapping body binds, which is what lets the `BIND(<<( ?mi_s ?mi_p ?mi_o )>> AS ?uq_o)` this feeds name
+   * mapping body binds, which is what lets the `BIND(<<( ?s ?p ?o )>> AS ?y)` this feeds name
    * values the subselect really projects.
    * @param group - The group to look up
    * @returns the term, or `undefined` when nothing fixes the group, or when a position of its shape is fixed
@@ -274,7 +289,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * rewrite names the group by
    */
   public mappingVarsOf(group: number): readonly RangedVar[] {
-    return this.valuesOf(this.resolveGroup(group)).filter(value => !isUserQueryVar(value));
+    return this.valuesOf(this.resolveGroup(group)).filter(value => !this.isUserQueryVar(value));
   }
 
   /**
@@ -310,8 +325,8 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    *
    * The mapping variables coming first is what {@link resolvedTermOf} and the rewriting read a cluster by:
    * the first variable of a cluster is the one the subselect really projects, so a user query variable
-   * landing there would name a variable nothing binds. It is ordered on `isUserQueryVar` rather than
-   * left to the names, which only happen to sort that way while the prefixes both start where they do.
+   * landing there would name a variable nothing binds. It is ordered on {@link isUserQueryVar} rather than
+   * left to the names, which carry no sign of the side they are on.
    *
    * Sorts the lists in place, which is a write like any other: what a group's first value is decides what
    * every read of it names, so the stamp has to move on even though the members themselves do not change.
@@ -320,7 +335,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     this.touch();
     for (const groupVars of Object.values(this.groupToValues)) {
       groupVars.sort((a, b) =>
-        (isUserQueryVar(a) ? 1 : 0) - (isUserQueryVar(b) ? 1 : 0) ||
+        (this.isUserQueryVar(a) ? 1 : 0) - (this.isUserQueryVar(b) ? 1 : 0) ||
         a.value.localeCompare(b.value));
     }
   }

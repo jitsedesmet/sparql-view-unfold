@@ -1,6 +1,5 @@
 import { describe, it } from 'vitest';
 import { ClusterSolver } from '../lib/ClusterSolver.js';
-import { VAR_PREFIX_USER_QUERY } from '../lib/consts.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
 
 /**
@@ -86,33 +85,43 @@ describe('clusterSolver', () => {
 
   describe('telling the mapping side of a cluster from the user query side', () => {
     /**
-     * The two sides are told apart by the whole `uq_` prefix of {@link VAR_PREFIX_USER_QUERY}, not by the
-     * two letters it starts with: `?uqx` names no user query variable - the user's `?uqx` arrives here as
-     * `?uq_uqx` - so it is a mapping variable like any other.
+     * The two sides are told apart by what the unfolding declares, not by the names: a variable whose name
+     * looks like the user query's is a mapping variable like any other when it is not declared.
      */
-    it('counts a variable merely starting with the letters of the prefix as a mapping variable', ({ expect }) => {
+    it('counts every undeclared variable as a mapping variable, whatever its name', ({ expect }) => {
       const solver = new ClusterSolver();
-      const mappingVar = DF.variable('uqx');
-      solver.register(mappingVar, DF.variable(`${VAR_PREFIX_USER_QUERY}x`));
+      solver.declareUserQueryVariables([ 'x' ]);
+      const mappingVar = DF.variable('uq_x');
+      solver.register(mappingVar, DF.variable('x'));
       expect(solver.mappingVarsOf(solver.getGroup(mappingVar)).map(value => value.value))
-        .toEqual([ 'uqx' ]);
+        .toEqual([ 'uq_x' ]);
+    });
+
+    it('forgets the declared variables when cleared', ({ expect }) => {
+      const solver = new ClusterSolver();
+      solver.declareUserQueryVariables([ 'x' ]);
+      solver.clear();
+      solver.register(DF.variable('y'), DF.variable('x'));
+      expect(solver.mappingVarsOf(solver.getGroup(DF.variable('x'))).map(value => value.value).sort())
+        .toEqual([ 'x', 'y' ]);
     });
 
     /**
      * What the rewriting reads off a cluster is its *first* variable, so the ordering is the classification
-     * rather than a lexicographic accident of the two prefixes: a mapping variable sorting after `uq_` by
-     * name still comes first.
+     * rather than a lexicographic accident of the names: a mapping variable sorting after the user query's
+     * by name still comes first.
      */
     it('orders the mapping variables first however their names compare', ({ expect }) => {
       const solver = new ClusterSolver();
-      const userQueryVar = DF.variable(`${VAR_PREFIX_USER_QUERY}a`);
+      solver.declareUserQueryVariables([ 'a', 'b' ]);
+      const userQueryVar = DF.variable('a');
       const mappingVar = DF.variable('zz_x');
       solver.register(mappingVar, userQueryVar);
-      solver.register(mappingVar, DF.variable(`${VAR_PREFIX_USER_QUERY}b`));
+      solver.register(mappingVar, DF.variable('b'));
       solver.sortClusters();
-      // The variable a bind on `?uq_a` names, which has to be one the mapping body projects.
+      // The variable a bind on `?a` names, which has to be one the mapping body projects.
       expect(solver.getCluster(userQueryVar).vars.map(value => value.value))
-        .toEqual([ 'zz_x', `${VAR_PREFIX_USER_QUERY}b` ]);
+        .toEqual([ 'zz_x', 'b' ]);
     });
   });
 

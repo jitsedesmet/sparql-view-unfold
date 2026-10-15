@@ -2,12 +2,12 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils } from '@traqula/algebra-transformations-1-2';
-import { VAR_PREFIX_MAPPING, VAR_PREFIX_MERGED_HEAD } from './consts.js';
+import { VAR_PREFIX_MERGED_HEAD } from './consts.js';
 import { triplePositions } from './datastructures/TermClusterSet.js';
 import type { RangeSet } from './RangeSet.js';
 import { rangeOfPosition } from './RangeSet.js';
 import type { TransformationContext } from './transformContext.js';
-import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
+import { createTransformationContext, parseQuery } from './transformContext.js';
 import type { Mapping, MappingHead } from './types.js';
 import type { AssertionConjunct } from './utils/assertions.js';
 import { access, assertBound, assertTermType, conjunctAsExpression } from './utils/assertions.js';
@@ -16,7 +16,7 @@ import { withCpVars } from './utils/certainlyBoundVars.js';
 import { conjunctionOf, unstableOperators } from './utils/expressionHelpers.js';
 import { projectSolutionExistence } from './utils/operationhelpers.js';
 import { isSubsetOf } from './utils/setUtils.js';
-import { collectVariableNames } from './utils.js';
+import { claimVariableName, collectVariableNames } from './utils.js';
 
 /**
  * @fileoverview Building the {@link Mapping} the unfolding runs on, out of SPARQL CONSTRUCT queries.
@@ -195,10 +195,13 @@ function mappingsOfConstructQuery(
   const construct = <Algebra.Construct> parseQuery(tools, constructQuery);
   const body = construct.input;
   assertBodyCallsNoUnstableFunction(body);
-  // The mappings share this body object, which is safe because `prefixVarsInOperation` copies what it
-  // renames, so every mapping leaving `mappingFromConstructQueries` owns its own tree.
+  // Copied per mapping, so that every mapping leaving `mappingFromConstructQueries` owns its own tree
+  // rather than sharing this body with the other triples of the template.
   return construct.template
-    .map(templateTriple => mappingOfSingleTemplateTriple(tools, options, templateTriple, body));
+    .map(templateTriple => <Mapping> tools.astTransformer.transformObject(
+      mappingOfSingleTemplateTriple(tools, options, templateTriple, body),
+      object => object,
+    ));
 }
 
 /**
@@ -206,14 +209,15 @@ function mappingsOfConstructQuery(
  * variables to the head it came from.
  * @param tools - The factories to build with
  * @param mappings - The mappings to merge, at least two
- * @returns the merged mapping
+ * @returns the merged mapping, its generic head named apart from every variable of the mappings
  */
 function mergeMappingsOverGenericHead(
-  { AF, DF }: MappingConstructionTools,
+  { AF, DF, astTransformer }: MappingConstructionTools,
   mappings: readonly Mapping[],
 ): Mapping {
+  const taken = new Set(mappings.flatMap(mapping => [ ...collectVariableNames(astTransformer, mapping) ]));
   const genericHeadVariables = [ 's', 'p', 'o' ]
-    .map(position => DF.variable(`${VAR_PREFIX_MERGED_HEAD}${position}`));
+    .map(position => DF.variable(claimVariableName(`${VAR_PREFIX_MERGED_HEAD}${position}`, taken)));
   const [ genericSubject, genericPredicate, genericObject ] = genericHeadVariables;
 
   const bodiesBindingTheGenericHead = mappings.map(({ head, body }) => {
@@ -256,8 +260,7 @@ export function mappingFromConstructQueries(
 ): Mapping {
   const tools = createTransformationContext();
   const mappings = constructQueries
-    .flatMap(constructQuery => mappingsOfConstructQuery(tools, options, constructQuery))
-    .map(mapping => prefixVarsInOperation(tools, mapping, VAR_PREFIX_MAPPING));
+    .flatMap(constructQuery => mappingsOfConstructQuery(tools, options, constructQuery));
 
   if (mappings.length === 0) {
     throw new Error('A mapping needs at least one CONSTRUCT query with at least one template triple.');

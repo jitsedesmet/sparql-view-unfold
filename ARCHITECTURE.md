@@ -82,23 +82,27 @@ steps are equivalences over any data and may still rewrite inside it.
 `pullUpExtends` is the mirror of step 5: it floats the BINDs the pushdown left at the leaves back up the
 plan and deletes the ones nothing above reads.
 
-## Variable prefixes
+## Variable names
 
-Three prefixes, in `lib/consts.ts`, and two of them are load-bearing:
+Nothing is told apart by its name. The user query keeps the names it was written with, and the mapping keeps
+its own wherever they are free:
 
-- `uq_` — every variable of the user query, renamed before anything runs. This is the **only** prefix the
-  rewriting classifies on: a variable in a cluster carries it exactly when it came from the user query, and
-  every other variable in that cluster belongs to the mapping.
-- `mi_` — every variable of a mapping, head and body alike, so a mapping cannot collide with the query it
-  is unfolded into.
-- `m_` — the three variables of the generic head several mappings are merged into.
+- **Which side a variable is on** matters to the `ClusterSolver` alone, which unifies a mapping head with
+  one pattern. The unfolding knows the pattern is the user query's and declares its variables
+  (`declareUserQueryVariables`); every other variable in a cluster belongs to the mapping.
+- **The names still have to differ**, since the mapping body and the binds of a pattern's variables share
+  one scope, and the solver keys a variable by its name. So the unfolding renames a mapping variable whose
+  name the user query also uses, under `mi_` (`lib/consts.ts`), once per rewrite.
+- `m_` names the three variables of the generic head several mappings are merged into, where no variable of
+  the mappings already takes the name.
 
 Nothing namespaces the *patterns* apart: each is unfolded into a sub-SELECT projecting only its own (user
-query) variables, so the mapping variables of two patterns are in two scopes already. Only the `uq_`
+query) variables, so the mapping variables of two patterns are in two scopes already. Only the user query
 variables are meant to be shared between patterns, being the natural join keys. The one exception is the
 existence variable a pattern binding nothing projects in place of an empty projection — that one leaves the
-sub-SELECT, so the context coins it (`mExists0`, `mExists1`, …), holding the count for the whole rewrite.
-It is never bound; coining it keeps it apart from the variables the pattern does bind.
+sub-SELECT, so the context coins it (`mExists0`, `mExists1`, …), holding the count for the whole rewrite and
+skipping every name the user query and the mapping use. It is never bound; coining it keeps it apart from
+the variables the pattern does bind.
 
 ## Blank nodes
 
