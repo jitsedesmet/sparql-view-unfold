@@ -9,6 +9,7 @@ import { AstFactory, AstTransformer } from '@traqula/rules-sparql-1-2';
 import { DataFactory } from 'rdf-data-factory';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
+import { freshVarGenerator } from './utils.js';
 
 /**
  * The factories and the solver every transformation works through.
@@ -32,15 +33,11 @@ export interface TransformationContext {
   astTransformer: AstTransformer;
   /** Solver for variable clustering and unification during rewriting */
   clusterSolver: ClusterSolver;
-  /**
-   * Marks variable names as used in this rewrite, so that {@link coinExistenceVariable} never coins one of
-   * them. The pipeline runner reserves those of the user query, the unfolding those of the mapping.
-   */
-  reserveVariableNames: (names: Iterable<string>) => void;
+  /** Every variable name in use in this rewrite, which every coined name is claimed against. */
+  usedVariableNames: Set<string>;
   /**
    * Coins the variable a pattern that binds nothing projects, SPARQL having no sub-ASK and no empty
-   * projection. It is the one variable the unfolding lets out of a pattern's sub-SELECT, so every call
-   * hands back a name no other pattern of this rewrite uses, and none that was reserved.
+   * projection.
    */
   coinExistenceVariable: () => RDF.Variable;
 }
@@ -73,8 +70,7 @@ export function parseQuery(
  */
 export function createTransformationContext(): TransformationContext {
   const DF = new DataFactory();
-  const reservedVariableNames = new Set<string>();
-  let existenceVariablesCoined = 0;
+  const usedVariableNames = new Set<string>();
   return {
     parser: new Parser(),
     generator: new MyGenerator(),
@@ -83,17 +79,7 @@ export function createTransformationContext(): TransformationContext {
     DF,
     astTransformer: new AstTransformer(),
     clusterSolver: new ClusterSolver(),
-    reserveVariableNames(names) {
-      for (const name of names) {
-        reservedVariableNames.add(name);
-      }
-    },
-    coinExistenceVariable() {
-      let name: string;
-      do {
-        name = `mExists${existenceVariablesCoined++}`;
-      } while (reservedVariableNames.has(name));
-      return DF.variable(name);
-    },
+    usedVariableNames,
+    coinExistenceVariable: freshVarGenerator(usedVariableNames, 'mExists'),
   };
 }

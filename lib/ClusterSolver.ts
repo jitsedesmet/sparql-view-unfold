@@ -59,11 +59,8 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * equal a concrete term.
    */
   protected staticExpressionValidation: { expression: Algebra.Expression; term: RawTerm }[];
-  /**
-   * The names of the user query's variables, as against the mapping's - read through
-   * {@link isUserQueryVar}, written through {@link declareUserQueryVariables}.
-   */
-  protected userQueryVariableNames: Set<string>;
+  /** The names of the user query's variables: those {@link register} met on its user query side. */
+  private userQueryVariableNames: Set<string>;
 
   public constructor() {
     super(variable => variable.value, meetSolverPins);
@@ -79,25 +76,11 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   }
 
   /**
-   * Tells the solver which variables come from the user query, every other variable belonging to the
-   * mapping being unfolded. Call after {@link clear}, before registering anything.
-   *
-   * The solver keys a variable by its name, so the two sides have to name their variables apart, which the
-   * unfolding sees to by renaming a mapping variable whose name the user query takes. What side a variable
-   * is on is still not read off its name: the unfolding knows it, the pattern being the user query's.
-   * @param names - The names of the variables of the pattern being unified with the mapping head
-   */
-  public declareUserQueryVariables(names: Iterable<string>): void {
-    this.touch();
-    this.userQueryVariableNames = new Set(names);
-  }
-
-  /**
-   * Whether the variable came from the user query, as against from the mapping being unfolded into it.
+   * Whether the variable came from the user query rather than from the mapping.
    * @param variable - The variable to classify
    * @returns whether it is a user query variable
    */
-  protected isUserQueryVar(variable: RangedVar): boolean {
+  private isUserQueryVar(variable: RangedVar): boolean {
     return this.userQueryVariableNames.has(variable.value);
   }
 
@@ -116,46 +99,50 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   }
 
   /**
-   * Registers an equality constraint between two terms, variables or expressions - the main entry point for
-   * adding constraints.
-   * @param from - Term, variable, or expression (typically from the mapping head)
-   * @param to - Term or variable (typically from the triple pattern)
+   * Registers that a term or expression of the mapping head equals a term of the user query's pattern. A
+   * variable on the user query side is classified as the user query's, every other one as the mapping's.
+   * @param mappingSide - Term, variable, or expression of the mapping head
+   * @param userQuerySide - Term or variable of the triple pattern
    * @throws RewriteNoMatchError if the terms do not match, or the constraints conflict
    */
-  public register(from: RDF.Term | Algebra.Expression, to: RDF.Term): void {
-    if (isRdfTerm(from) && !isRdfVar(from) && isRdfTerm(to) && !isRdfVar(to)) {
+  public register(mappingSide: RDF.Term | Algebra.Expression, userQuerySide: RDF.Term): void {
+    if (isRdfVar(userQuerySide) && !this.userQueryVariableNames.has(userQuerySide.value)) {
+      this.touch();
+      this.userQueryVariableNames.add(userQuerySide.value);
+    }
+    if (isRdfTerm(mappingSide) && !isRdfVar(mappingSide) && isRdfTerm(userQuerySide) && !isRdfVar(userQuerySide)) {
       // Two terms, neither are vars. Two *triple* terms never reach here - the unfolding recurses into a
       // pair of them rather than registering it - so what the equality compares is a pair of values.
-      if (from.equals(to)) {
+      if (mappingSide.equals(userQuerySide)) {
         return;
       }
-      throw new RewriteNoMatchError(`Cannot match Term ${JSON.stringify(from)} with term ${JSON.stringify(to)}`);
-    } else if (isRdfVar(from) && isRdfVar(to)) {
+      throw new RewriteNoMatchError(`Cannot match Term ${JSON.stringify(mappingSide)} with term ${JSON.stringify(userQuerySide)}`);
+    } else if (isRdfVar(mappingSide) && isRdfVar(userQuerySide)) {
       // Two vars
-      this.mergeGroups(from, to);
-    } else if (isRdfVar(from)) {
-      // `from` is var - `to` is not
-      const varGroup = this.getGroup(from);
-      this.registerTermToGroup(varGroup, to);
-    } else if (isRdfVar(to)) {
-      // `to` is var, `from` is not
-      const varGroup = this.getGroup(to);
-      if (isRdfTerm(from)) {
-        this.registerTermToGroup(varGroup, from);
+      this.mergeGroups(mappingSide, userQuerySide);
+    } else if (isRdfVar(mappingSide)) {
+      // `mappingSide` is var - `userQuerySide` is not
+      const varGroup = this.getGroup(mappingSide);
+      this.registerTermToGroup(varGroup, userQuerySide);
+    } else if (isRdfVar(userQuerySide)) {
+      // `userQuerySide` is var, `mappingSide` is not
+      const varGroup = this.getGroup(userQuerySide);
+      if (isRdfTerm(mappingSide)) {
+        this.registerTermToGroup(varGroup, mappingSide);
       } else {
         // It is an expression
-        this.registerExpressionToGroup(varGroup, from);
+        this.registerExpressionToGroup(varGroup, mappingSide);
       }
     } else {
-      // Neither `from` nor `to` is a var. First condition would have checked this in case `from` is a term.
-      const expression = <Exclude<typeof from, RDF.Term>> from;
+      // Neither side is a var. The first condition would have caught a `mappingSide` that is a term.
+      const expression = <Exclude<typeof mappingSide, RDF.Term>> mappingSide;
       // The one branch that writes without going through a group, so the only one with a `touch` of its own.
       this.touch();
       // TODO: decide statically whether the expression can produce this term at all, rather than leaving
       //   every such pair to the `sameTerm` the rewriting emits.
       this.staticExpressionValidation.push({
         expression,
-        term: to,
+        term: userQuerySide,
       });
     }
   }

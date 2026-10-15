@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createQueryRewriter } from '../lib/queryRewriter.js';
+import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 
@@ -44,6 +44,19 @@ describe('variable names', () => {
 }`);
   });
 
+  for (const name of [ 'toString', '__proto__' ]) {
+    it(`rewrites a variable named ${name} as it rewrites any other`, async({ expect }) => {
+      /** Rewrites a join of two patterns, user query and mapping both naming a variable `name`. */
+      async function rewriteNaming(variableName: string): Promise<string> {
+        return createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+          `CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://p> ?o . ?o <ex://q> ?${variableName} }`,
+        ]))).rewriteQuery(`SELECT * { ?${variableName} <ex://p> ?x . ?x <ex://p> ?${variableName} }`);
+      }
+      const rewritten = await rewriteNaming(name);
+      expect(rewritten.replaceAll(name, `${name}Q`)).toBe(await rewriteNaming(`${name}Q`));
+    });
+  }
+
   it('coins the existence variable apart from the names of the user query', async({ expect }) => {
     await expect(unfold(
       'SELECT * { <ex://a> <ex://p> <ex://b> . ?mExists0 <ex://p> ?o }',
@@ -58,6 +71,15 @@ describe('variable names', () => {
     ]);
     expect([ mapping.head.subject.value, mapping.head.predicate.value, mapping.head.object.value ])
       .toEqual([ 'm_s0', 'm_p', 'm_o' ]);
+  });
+
+  it('coins no name a CONSTRUCT template uses', async({ expect }) => {
+    // Had `removeProjections` coined `?v_0` for the hidden `?o`, the template would read a bound `?v_0`.
+    const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+      'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://p> ?o . ?o <ex://q> ?z }',
+    ])));
+    await expect(rewriter.rewriteQuery('CONSTRUCT { ?s <ex://r> ?v_0 } WHERE { ?s <ex://p> ?x }'))
+      .resolves.not.toMatch(/WHERE[^]*\?v_0\b/u);
   });
 
   it('leaves the operation handed to rewriteOperation as it was', async({ expect }) => {

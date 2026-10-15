@@ -84,42 +84,31 @@ describe('clusterSolver', () => {
   });
 
   describe('telling the mapping side of a cluster from the user query side', () => {
-    /**
-     * The two sides are told apart by what the unfolding declares, not by the names: a variable whose name
-     * looks like the user query's is a mapping variable like any other when it is not declared.
-     */
-    it('counts every undeclared variable as a mapping variable, whatever its name', ({ expect }) => {
+    it('classifies a variable by the side register meets it on, whatever its name', ({ expect }) => {
       const solver = new ClusterSolver();
-      solver.declareUserQueryVariables([ 'x' ]);
       const mappingVar = DF.variable('uq_x');
       solver.register(mappingVar, DF.variable('x'));
       expect(solver.mappingVarsOf(solver.getGroup(mappingVar)).map(value => value.value))
         .toEqual([ 'uq_x' ]);
     });
 
-    it('forgets the declared variables when cleared', ({ expect }) => {
+    it('forgets the user query side when cleared', ({ expect }) => {
       const solver = new ClusterSolver();
-      solver.declareUserQueryVariables([ 'x' ]);
-      solver.clear();
       solver.register(DF.variable('y'), DF.variable('x'));
-      expect(solver.mappingVarsOf(solver.getGroup(DF.variable('x'))).map(value => value.value).sort())
-        .toEqual([ 'x', 'y' ]);
+      solver.clear();
+      solver.register(DF.variable('x'), DF.variable('z'));
+      expect(solver.mappingVarsOf(solver.getGroup(DF.variable('x'))).map(value => value.value))
+        .toEqual([ 'x' ]);
     });
 
-    /**
-     * What the rewriting reads off a cluster is its *first* variable, so the ordering is the classification
-     * rather than a lexicographic accident of the names: a mapping variable sorting after the user query's
-     * by name still comes first.
-     */
+    /** What the rewriting reads off a cluster is its first variable, so the mapping's has to come first. */
     it('orders the mapping variables first however their names compare', ({ expect }) => {
       const solver = new ClusterSolver();
-      solver.declareUserQueryVariables([ 'a', 'b' ]);
       const userQueryVar = DF.variable('a');
       const mappingVar = DF.variable('zz_x');
       solver.register(mappingVar, userQueryVar);
       solver.register(mappingVar, DF.variable('b'));
       solver.sortClusters();
-      // The variable a bind on `?a` names, which has to be one the mapping body projects.
       expect(solver.getCluster(userQueryVar).vars.map(value => value.value))
         .toEqual([ 'zz_x', 'b' ]);
     });

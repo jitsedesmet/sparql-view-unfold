@@ -1346,10 +1346,10 @@ describe('assertionConjunction', () => {
       // asserted equal to, and the two positions nothing says anything about get a variable named after
       // the value they are read from.
       const assertions = <AssertionConjunction> structuralConjunctionOf([ access('s'), assertStrong(subjectOfO) ]);
-      expect(substitutionOf(assertions.intoPattern(derivedVarNamer([])).substitution))
+      expect(substitutionOf(assertions.intoPattern(derivedVarNamer(new Set())).substitution))
         .toEqual([ 'o=<<( ?s ?o_p ?o_o )>>' ]);
       // Nothing is left over: writing the pattern *is* stating the equality.
-      expect(conjunctsOf(assertions.intoPattern(derivedVarNamer([])).residual)).toEqual([]);
+      expect(conjunctsOf(assertions.intoPattern(derivedVarNamer(new Set())).residual)).toEqual([]);
     });
 
     it('writes a named position as its name rather than as a coined one', ({ expect }) => {
@@ -1359,7 +1359,7 @@ describe('assertionConjunction', () => {
         [ access('x'), assertStrong(objectOfO) ],
         [ subjectOfO, assertStrong(termC) ],
       );
-      expect(substitutionOf(assertions.intoPattern(derivedVarNamer([])).substitution))
+      expect(substitutionOf(assertions.intoPattern(derivedVarNamer(new Set())).substitution))
         .toEqual([ 'o=<<( ex://c ?o_p ?x )>>' ]);
     });
 
@@ -1370,8 +1370,8 @@ describe('assertionConjunction', () => {
         [ access('o'), assertTermType(tripleTermRange) ],
         [ subjectOfO, assertStrong(subjectOfO) ],
       );
-      expect(substitutionOf(assertions.intoPattern(derivedVarNamer([])).substitution)).toEqual([]);
-      expect(conjunctsOf(assertions.intoPattern(derivedVarNamer([])).residual)).toEqual([ 'o=type(Quad)' ]);
+      expect(substitutionOf(assertions.intoPattern(derivedVarNamer(new Set())).substitution)).toEqual([]);
+      expect(conjunctsOf(assertions.intoPattern(derivedVarNamer(new Set())).residual)).toEqual([ 'o=type(Quad)' ]);
     });
 
     it('keeps what a pattern cannot state about a position it wrote', ({ expect }) => {
@@ -1381,9 +1381,9 @@ describe('assertionConjunction', () => {
         [ access('s'), assertStrong(subjectOfO) ],
         [ objectOfO, assertTermType(termTypes('NamedNode')) ],
       );
-      expect(substitutionOf(assertions.intoPattern(derivedVarNamer([])).substitution))
+      expect(substitutionOf(assertions.intoPattern(derivedVarNamer(new Set())).substitution))
         .toEqual([ 'o=<<( ?s ?o_p ?o_o )>>' ]);
-      expect(conjunctsOf(assertions.intoPattern(derivedVarNamer([])).residual))
+      expect(conjunctsOf(assertions.intoPattern(derivedVarNamer(new Set())).residual))
         .toEqual([ 'o.object=type(NamedNode)' ]);
     });
 
@@ -1391,7 +1391,7 @@ describe('assertionConjunction', () => {
       const assertions = <AssertionConjunction> structuralConjunctionOf(
         [ access('o', 'object', 'subject'), assertStrong(termC) ],
       );
-      expect(substitutionOf(assertions.intoPattern(derivedVarNamer([])).substitution))
+      expect(substitutionOf(assertions.intoPattern(derivedVarNamer(new Set())).substitution))
         .toEqual([ 'o=<<( ?o_s ?o_p <<( ex://c ?o_o_p ?o_o_o )>> )>>' ]);
     });
 
@@ -1399,8 +1399,8 @@ describe('assertionConjunction', () => {
       const assertions = <AssertionConjunction> structuralConjunctionOf(
         [ subjectOfO, assertWeak(termC) ],
       );
-      expect(substitutionOf(assertions.intoPattern(derivedVarNamer([])).substitution)).toEqual([]);
-      expect(conjunctsOf(assertions.intoPattern(derivedVarNamer([])).residual)).toEqual([ 'o.subject=weak(ex://c)' ]);
+      expect(substitutionOf(assertions.intoPattern(derivedVarNamer(new Set())).substitution)).toEqual([]);
+      expect(conjunctsOf(assertions.intoPattern(derivedVarNamer(new Set())).residual)).toEqual([ 'o.subject=weak(ex://c)' ]);
     });
 
     it('rebuilds a shape out of what reads its positions, and coins nothing', ({ expect }) => {
@@ -1425,7 +1425,7 @@ describe('assertionConjunction', () => {
       // The memo is what makes two materialisation sites agree, and the suffix is what keeps a coined
       // name off a variable of the query - including on the second reading, which has to hand back the
       // name the first one settled on rather than coin the next free one.
-      const namer = derivedVarNamer([ 'o_p' ]);
+      const namer = derivedVarNamer(new Set([ 'o_p' ]));
       expect(namer('o', 'predicate').value).toBe('o_p0');
       expect(namer('o', 'predicate').value).toBe('o_p0');
       expect(namer('o', 'object').value).toBe('o_o');

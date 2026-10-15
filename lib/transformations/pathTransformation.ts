@@ -6,7 +6,7 @@ import { termVars } from '../utils/certainlyBoundVars.js';
 import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
 
 import { isRdfVar } from '../utils/typeGuards.js';
-import { collectVariableNames, freshVarGenerator } from '../utils.js';
+import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
 
 /**
  * Transformation that rewrites non-recursive property paths into equivalent BGPs and UNIONs.
@@ -24,8 +24,7 @@ import { collectVariableNames, freshVarGenerator } from '../utils.js';
  * - **NPS** (`!(<p1>|<p2>)`): Negated property set (FILTER NOT IN), DISTINCT over subject and object
  * - **ZeroOrOne** (`path?`): UNION with empty match case, DISTINCT over subject and object
  *
- * Coined variables are named apart from every variable of the query, and the unfolding treats them as user query
- * variables like any other variable of a pattern.
+ * Coined variables are claimed against the names in use, and unfold as any other user query variable.
  * A path inside a `SERVICE` is left to its endpoint, the unfolding leaving that pattern as it stands.
  *
  * ## Not Fully Supported:
@@ -46,7 +45,7 @@ import { collectVariableNames, freshVarGenerator } from '../utils.js';
  */
 export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   const { AF, DF } = c;
-  const fresh = freshVarGenerator(collectVariableNames(c.astTransformer, op), 'path_');
+  const fresh = freshVarGenerator(markVariableNamesUsed(c, op), 'path_');
 
   /**
    * Gives an expanded path set semantics: a DISTINCT projection onto the variables of its subject, object and graph.

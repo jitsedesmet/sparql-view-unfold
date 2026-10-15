@@ -15,7 +15,7 @@ import type { TransformationContext } from './transformContext.js';
 import type { Mapping, QueryTransformation } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
 import { queryFormTypes, solutionModifierTypes } from './utils/solutionModifierChain.js';
-import { collectVariableNames } from './utils.js';
+import { deepCopy, markVariableNamesUsed } from './utils.js';
 
 /**
  * @fileoverview The pipeline runner: a list of {@link QueryTransformation}s applied to a query in order.
@@ -23,9 +23,8 @@ import { collectVariableNames } from './utils.js';
  * Around that list sits the bookkeeping every rewrite needs and no single pass should have to know about.
  * The pipeline runs over the *query part* of what it is handed - the pattern below a query's solution
  * modifiers, the `WHERE` of an update - and everything standing over that part is rebuilt on top of the
- * result, one rule per operation. The user query keeps the variable names it was written with: it is the
- * mapping that the unfolding renames apart from it, where the two collide. The names of the whole query
- * are reserved in the context up front, so that no variable a pass coins takes one of them.
+ * result, one rule per operation. The names of the whole query, modifiers and templates included, are
+ * marked as used up front, so that no variable a pass coins takes one of them.
  *
  * **An update's templates are left as they stand.** Its `WHERE` reads the RDF 1.2 graph the mapping
  * denotes and so is rewritten, but that graph is virtual and nothing can be written to it: what the update
@@ -115,8 +114,7 @@ async function rewriteQueryPart(
   queryPart: Algebra.Operation,
 ): Promise<Algebra.Operation> {
   assertUserQueryIsSupported(queryPart);
-  // A copy: passes may rewrite in place, and the operation handed to `rewriteOperation` is the caller's.
-  let rewritten = <Algebra.Operation> c.astTransformer.transformObject(queryPart, object => object);
+  let rewritten = queryPart;
   for (const transformation of transformations) {
     rewritten = await transformation(c, rewritten);
   }
@@ -192,18 +190,6 @@ async function rewriteParsedQuery(
 }
 
 /**
- * Reserves the variable names of the whole query or update in the context, solution modifiers and
- * templates included, so that no variable a pass coins takes one of them.
- * @param c - The transformation context of this rewrite
- * @param operation - The parsed user query or update
- * @returns the operation, unchanged
- */
-function withReservedNames(c: TransformationContext, operation: Algebra.Operation): Algebra.Operation {
-  c.reserveVariableNames(collectVariableNames(c.astTransformer, operation));
-  return operation;
-}
-
-/**
  * Creates a rewriter applying the given transformations, in order, to every query handed to it.
  * @param transformations - The pipeline, for instance the one
  * {@link createDefaultTransformationPipeline} builds
@@ -220,12 +206,15 @@ export function createQueryRewriter(transformations: readonly QueryTransformatio
   return {
     async rewriteQuery(query: string): Promise<string> {
       const c = createTransformationContext();
-      const rewritten = await rewriteParsedQuery(c, transformations, withReservedNames(c, parseQuery(c, query)));
-      return c.generator.generate(toAst(rewritten));
+      const operation = parseQuery(c, query);
+      markVariableNamesUsed(c, operation);
+      return c.generator.generate(toAst(await rewriteParsedQuery(c, transformations, operation)));
     },
     async rewriteOperation(operation: Algebra.Operation): Promise<Algebra.Operation> {
       const c = createTransformationContext();
-      return rewriteParsedQuery(c, transformations, withReservedNames(c, operation));
+      markVariableNamesUsed(c, operation);
+      // A copy, since passes may rewrite in place and the operation is the caller's.
+      return rewriteParsedQuery(c, transformations, deepCopy(c, operation));
     },
   };
 }

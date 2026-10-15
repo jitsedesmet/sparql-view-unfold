@@ -84,25 +84,19 @@ plan and deletes the ones nothing above reads.
 
 ## Variable names
 
-Nothing is told apart by its name. The user query keeps the names it was written with, and the mapping keeps
-its own wherever they are free:
+Nothing is told apart by its name. The `ClusterSolver` learns which variables are the user query's from the
+side of `register` they arrive on; every other variable in a cluster is the mapping's. Names still have to
+differ, since the solver keys variables by name and a mapping body shares a scope with the binds of its
+pattern.
 
-- **Which side a variable is on** matters to the `ClusterSolver` alone, which unifies a mapping head with
-  one pattern. The unfolding knows the pattern is the user query's and declares its variables
-  (`declareUserQueryVariables`); every other variable in a cluster belongs to the mapping.
-- **The names still have to differ**, since the mapping body and the binds of a pattern's variables share
-  one scope, and the solver keys a variable by its name. So the unfolding renames a mapping variable whose
-  name the user query also uses, under `mi_` (`lib/consts.ts`), once per rewrite.
-- `m_` names the three variables of the generic head several mappings are merged into, where no variable of
-  the mappings already takes the name.
+The context holds every variable name in use in the rewrite (`usedVariableNames`), seeded with the whole
+query, and every pass coining a name claims it there. The unfolding renames a mapping variable whose name is
+in use under `mi_`; the generic head of merged mappings is `?m_s ?m_p ?m_o` (`lib/consts.ts`).
 
 Nothing namespaces the *patterns* apart: each is unfolded into a sub-SELECT projecting only its own (user
-query) variables, so the mapping variables of two patterns are in two scopes already. Only the user query
-variables are meant to be shared between patterns, being the natural join keys. The one exception is the
-existence variable a pattern binding nothing projects in place of an empty projection — that one leaves the
-sub-SELECT, so the context coins it (`mExists0`, `mExists1`, …), holding the count for the whole rewrite and
-skipping every name the user query and the mapping use. It is never bound; coining it keeps it apart from
-the variables the pattern does bind.
+query) variables, so the mapping variables of two patterns are in two scopes already. The one variable
+leaving a sub-SELECT is the existence variable a pattern binding nothing projects in place of an empty
+projection (`mExists0`, `mExists1`, …), which is never bound.
 
 ## Blank nodes
 

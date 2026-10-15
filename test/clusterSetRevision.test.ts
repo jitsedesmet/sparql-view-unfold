@@ -189,19 +189,21 @@ describe('cluster set revision', () => {
 
     it('sortClusters, which reorders a group in place rather than changing what is in it', ({ expect }) => {
       const solver = new ClusterSolver();
-      solver.declareUserQueryVariables([ 'a' ]);
-      // The user query variable is met first, so it lands first and the sort has something to move.
-      solver.register(DF.variable('a'), DF.variable('x'));
+      // The user query variable `?a` lands first, so the sort has something to move.
+      solver.getGroup(DF.variable('a'));
+      solver.register(DF.variable('x'), DF.variable('a'));
       const group = solver.getGroup(DF.variable('a'));
       expect(solver.valuesOf(group).map(value => value.value)).toEqual([ 'a', 'x' ]);
       expect(moves(solver, () => solver.sortClusters())).toBe(true);
       expect(solver.valuesOf(group).map(value => value.value)).toEqual([ 'x', 'a' ]);
     });
 
-    it('the solver being told which variables are the user query\'s, which writes no group at all', ({ expect }) => {
+    it('the solver classifying a variable as the user query\'s, which writes no group at all', ({ expect }) => {
       const solver = new ClusterSolver();
-      solver.getGroup(DF.variable('x'));
-      expect(moves(solver, () => solver.declareUserQueryVariables([ 'x' ]))).toBe(true);
+      solver.register(DF.variable('x'), DF.variable('a'));
+      // `?x` already shares the group of `?a`, so only the classification changes.
+      expect(moves(solver, () => solver.register(DF.variable('a'), DF.variable('x')))).toBe(true);
+      expect(solver.mappingVarsOf(solver.getGroup(DF.variable('x')))).toEqual([]);
     });
   });
 

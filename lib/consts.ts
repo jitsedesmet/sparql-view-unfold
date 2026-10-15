@@ -16,19 +16,8 @@ export const EXTENSION_FUNCTION_BNODE = 'internal://blank';
  */
 export const IRI_PREFIX_BNODE = 'https://myInternalBnode.example.org/';
 
-/**
- * Prefix a mapping variable is renamed with when the user query it is unfolded into already uses its name,
- * by {@link transformations/unfolding!unfoldingTransformation}. A mapping variable whose name is free keeps
- * it.
- *
- * Not load-bearing: nothing classifies a variable on its name. The unfolding tells the two sides apart by
- * which side of the unification a variable was registered on, so all the prefix does is keep the renamed
- * variables readable.
- */
+/** Prefix of a mapping variable renamed because its name is already in use in the rewrite. */
 export const VAR_PREFIX_MAPPING = 'mi_';
 
-/**
- * Prefix of the three variables `?m_s ?m_p ?m_o` of the generic head several mappings are merged into,
- * where no variable of the mappings already takes the name.
- */
+/** Prefix of the variables `?m_s ?m_p ?m_o` of the generic head several mappings are merged into. */
 export const VAR_PREFIX_MERGED_HEAD = 'm_';

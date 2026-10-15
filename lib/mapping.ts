@@ -15,8 +15,8 @@ import type { VRanges } from './utils/certainlyBoundVars.js';
 import { withCpVars } from './utils/certainlyBoundVars.js';
 import { conjunctionOf, unstableOperators } from './utils/expressionHelpers.js';
 import { projectSolutionExistence } from './utils/operationhelpers.js';
-import { isSubsetOf } from './utils/setUtils.js';
-import { claimVariableName, collectVariableNames } from './utils.js';
+import { isSubsetOf, unionSets } from './utils/setUtils.js';
+import { claimVariableName, collectVariableNames, deepCopy } from './utils.js';
 
 /**
  * @fileoverview Building the {@link Mapping} the unfolding runs on, out of SPARQL CONSTRUCT queries.
@@ -195,13 +195,9 @@ function mappingsOfConstructQuery(
   const construct = <Algebra.Construct> parseQuery(tools, constructQuery);
   const body = construct.input;
   assertBodyCallsNoUnstableFunction(body);
-  // Copied per mapping, so that every mapping leaving `mappingFromConstructQueries` owns its own tree
-  // rather than sharing this body with the other triples of the template.
+  // Copied per template triple, so that no two mappings share a body.
   return construct.template
-    .map(templateTriple => <Mapping> tools.astTransformer.transformObject(
-      mappingOfSingleTemplateTriple(tools, options, templateTriple, body),
-      object => object,
-    ));
+    .map(templateTriple => mappingOfSingleTemplateTriple(tools, options, templateTriple, deepCopy(tools, body)));
 }
 
 /**
@@ -209,15 +205,15 @@ function mappingsOfConstructQuery(
  * variables to the head it came from.
  * @param tools - The factories to build with
  * @param mappings - The mappings to merge, at least two
- * @returns the merged mapping, its generic head named apart from every variable of the mappings
+ * @returns the merged mapping
  */
 function mergeMappingsOverGenericHead(
   { AF, DF, astTransformer }: MappingConstructionTools,
   mappings: readonly Mapping[],
 ): Mapping {
-  const taken = new Set(mappings.flatMap(mapping => [ ...collectVariableNames(astTransformer, mapping) ]));
+  const usedNames = unionSets(mappings.map(mapping => collectVariableNames(astTransformer, mapping)));
   const genericHeadVariables = [ 's', 'p', 'o' ]
-    .map(position => DF.variable(claimVariableName(`${VAR_PREFIX_MERGED_HEAD}${position}`, taken)));
+    .map(position => DF.variable(claimVariableName(`${VAR_PREFIX_MERGED_HEAD}${position}`, usedNames)));
   const [ genericSubject, genericPredicate, genericObject ] = genericHeadVariables;
 
   const bodiesBindingTheGenericHead = mappings.map(({ head, body }) => {
