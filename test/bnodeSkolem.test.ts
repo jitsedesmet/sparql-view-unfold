@@ -1,6 +1,12 @@
+import { QueryEngine } from '@comunica/query-sparql-file';
 import { describe, it } from 'vitest';
 import { DT_INTERNAL_BNODE } from '../lib/consts.js';
-import { internalBnodeAsSpecialLiteral } from '../lib/transformations/bnodeMapAsLiteral.js';
+import { mappingFromConstructQueries } from '../lib/mapping.js';
+import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import {
+  internalBnodeAsSpecialIriTransformation,
+  internalBnodeAsSpecialLiteral,
+} from '../lib/transformations/bnodeMapAsLiteral.js';
 import { createTransformationContext } from '../lib/transformContext.js';
 
 describe('bnode skolem', () => {
@@ -28,18 +34,16 @@ describe('bnode skolem', () => {
       ]));
   });
 
-  it('skolem to literal two vars param', async({ expect }) => {
-    const bnodeNoParams = AF.createNamedExpression(DF.namedNode('internal://blank'), [
-      AF.createTermExpression(DF.variable('myVarA')),
-      AF.createTermExpression(DF.variable('myVarB')),
-    ]);
-    const bnodeNoParams2 = AF.createNamedExpression(DF.namedNode('internal://blank'), [
-      AF.createTermExpression(DF.variable('myVarB')),
-      AF.createTermExpression(DF.variable('myVarA')),
-    ]);
+  it('constructs the same node in every pattern it is unfolded into', async({ expect }) => {
+    const rewriter = createQueryRewriter([ ...createDefaultTransformationPipeline(mappingFromConstructQueries([
+      `CONSTRUCT { ?node <ex://first> ?first . ?node <ex://second> ?second } WHERE {
+        ?subject <ex://p1> ?first . ?subject <ex://p2> ?second .
+        BIND(<internal://blank>(?subject, ?first, ?second) AS ?node)
+      }`,
+    ])), internalBnodeAsSpecialIriTransformation() ]);
+    const query = await rewriter.rewriteQuery('SELECT * WHERE { ?node <ex://first> ?first . ?node <ex://second> ?second }');
+    const bindings = await new QueryEngine().queryBindings(query, { sources: [ './test/statics/data01.ttl' ]});
 
-    const res1 = internalBnodeAsSpecialLiteral(c, bnodeNoParams);
-    const res2 = internalBnodeAsSpecialLiteral(c, bnodeNoParams2);
-    expect(res1).toEqual(res2);
+    await expect(bindings.toArray()).resolves.toHaveLength(1);
   });
 });
