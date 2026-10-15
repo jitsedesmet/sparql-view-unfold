@@ -136,7 +136,7 @@ function triplePatternsEverySolutionMatches(operation: Algebra.Operation): Algeb
  * @param constructIdentifier - The IRI telling this CONSTRUCT's derivations apart from those of another
  * @returns the CONSTRUCT linking each derivation to the triples it produces and matched
  */
-function provenanceConstructOf(
+export function provenanceConstructOf(
   tools: MappingConstructionTools,
   construct: Algebra.Construct,
   constructIdentifier: RDF.NamedNode,
