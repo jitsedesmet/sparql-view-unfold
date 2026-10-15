@@ -42,7 +42,7 @@ import { collectVariableNames, freshVarGenerator } from './utils.js';
  * u3 ⊗ (u1 ⊕ u2), to be incorrect, as it does not commute with homomorphisms.
  */
 
-/** Stands in for an unbound variable where a term is needed: in a derivation's identity and in a join key. */
+/** Stands in for an unbound variable in a join key, where a term is needed. */
 const unboundMarker = DF.namedNode(`${PROVENANCE_NAMESPACE}unbound`);
 
 /** The transformation context, with the variable coiners provenance capture needs. */
@@ -144,26 +144,15 @@ export function provenanceConstructOf(
   const { AF } = tools;
   const body = construct.input;
   const coinVariable = freshVarGenerator(collectVariableNames(tools.astTransformer, construct), 'derivation');
-  const { cVars: certainlyBound, vRanges: scope } = cpMetaOf(withoutCpVars(body));
-  // A variable the body may leave unbound enters the identity as its value or the marker, an unbound argument
-  // making the identity itself unbound.
-  let identifiedBody = body;
-  const identifyingVariables = [ ...scope.keys() ].map((name) => {
-    if (certainlyBound.has(name)) {
-      return DF.variable(name);
-    }
-    const valueOrMarker = coinVariable();
-    identifiedBody = AF.createExtend(identifiedBody, valueOrMarker, valueOrUnboundMarker(AF, DF.variable(name)));
-    return valueOrMarker;
-  });
   const derivation = coinVariable();
+  // A variable the body leaves unbound is an argument of its own, so it still tells the derivations apart.
   const derivationIdentity = AF.createNamedExpression(DF.namedNode(EXTENSION_FUNCTION_BNODE), [
     AF.createTermExpression(constructIdentifier),
-    ...identifyingVariables.map(variable => AF.createTermExpression(variable)),
+    ...algebraUtils.inScopeVariables(body).map(variable => AF.createTermExpression(variable)),
   ]);
   const derivationLink = (predicate: string, triple: RDF.BaseQuad): Algebra.Pattern =>
     AF.createPattern(derivation, DF.namedNode(predicate), tripleTermOf(triple));
-  return AF.createConstruct(AF.createExtend(identifiedBody, derivation, derivationIdentity), [
+  return AF.createConstruct(AF.createExtend(body, derivation, derivationIdentity), [
     ...construct.template.map(triple => derivationLink(PREDICATE_DERIVATION_OF, triple)),
     ...triplePatternsEverySolutionMatches(body).map(pattern => derivationLink(PREDICATE_DERIVED_FROM, pattern)),
   ]);

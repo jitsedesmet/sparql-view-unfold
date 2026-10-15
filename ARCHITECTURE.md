@@ -111,8 +111,8 @@ typed literal, `internalBnodeAsSpecialIri` as a prefixed IRI whose length SHA-1 
 `lib/provenance.ts`, in two halves that meet in an ordinary unfolding.
 
 - **The mapping** (`provenanceMappingFromConstructQueries`) rewrites every CONSTRUCT into one over the same body,
-  extended with `BIND(<internal://blank>(<construct IRI>, <the body's variables>) AS ?derivation)`, a variable
-  the body may leave unbound passed as `COALESCE(?x, <unbound>)`. Its template links that derivation by
+  extended with `BIND(<internal://blank>(<construct IRI>, <the body's variables>) AS ?derivation)`, an unbound
+  variable still telling derivations apart as an argument of its own. Its template links that derivation by
   `derivationOf` to every template triple and by `derivedFrom` to every body triple pattern each solution
   matches. The result goes through `mappingFromConstructs` like any other.
 - **The query** (`provenanceCapturingQuery`) is a query-to-query rewrite over the view, run *before* the

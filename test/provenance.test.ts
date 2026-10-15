@@ -124,40 +124,20 @@ WHERE {
     );
   });
 
-  it('identifies a derivation by the value, or the unbound marker, of a variable a BIND may leave unbound', (
-    { expect },
-  ) => {
-    expectProvenanceConstruct(
-      expect,
-      'CONSTRUCT { ?x :name ?n } WHERE { ?x :firstName ?f BIND(CONCAT(?f, "!") AS ?n) }',
-      `CONSTRUCT {
-  ?derivation1 ${derivationOf} <<( ?x <ex://name> ?n )>> .
-  ?derivation1 ${derivedFrom} <<( ?x <ex://firstName> ?f )>> .
-}
-WHERE {
-  ?x <ex://firstName> ?f .
-  BIND( CONCAT( ?f , "!" ) AS ?n )
-  BIND( COALESCE( ?n , ${unbound} ) AS ?derivation0 )
-  BIND( <internal://blank> ( ${construct0} , ?x , ?f , ?derivation0 ) AS ?derivation1 )
-}`,
-    );
-  });
-
   it('identifies a derivation by an OPTIONAL variable, but links it only to the patterns outside', ({ expect }) => {
     expectProvenanceConstruct(
       expect,
       'CONSTRUCT { ?x :employed true } WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?y } }',
       `CONSTRUCT {
-  ?derivation1 ${derivationOf} <<( ?x <ex://employed> TRUE )>> .
-  ?derivation1 ${derivedFrom} <<( ?x <ex://worksAt> <ex://ugent> )>> .
+  ?derivation0 ${derivationOf} <<( ?x <ex://employed> TRUE )>> .
+  ?derivation0 ${derivedFrom} <<( ?x <ex://worksAt> <ex://ugent> )>> .
 }
 WHERE {
   ?x <ex://worksAt> <ex://ugent> .
   OPTIONAL {
     ?x <ex://knows> ?y .
   }
-  BIND( COALESCE( ?y , ${unbound} ) AS ?derivation0 )
-  BIND( <internal://blank> ( ${construct0} , ?x , ?derivation0 ) AS ?derivation1 )
+  BIND( <internal://blank> ( ${construct0} , ?x , ?y ) AS ?derivation0 )
 }`,
     );
   });
