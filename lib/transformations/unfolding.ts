@@ -57,7 +57,9 @@ function unfoldTriplePatternsAgainstMapping(
   return algebraUtils.mapOperation<'unsafe', typeof input>(
     input,
     {
-      [Algebra.Types.BGP]: { transform: input =>
+      // An empty BGP matches no triple, so it has nothing to unfold; a join of no operands would trip later passes.
+      [Algebra.Types.BGP]: { transform: input => input.patterns.length === 0 ?
+        input :
         c.AF.createJoin(
           input.patterns.map(pattern => rewriteSinglePattern(c, pattern, mapping)),
           true,

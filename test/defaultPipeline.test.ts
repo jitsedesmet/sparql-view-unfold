@@ -127,3 +127,32 @@ describe('the default pipeline over a mapping that types its head', () => {
 }`);
   });
 });
+
+describe('the default pipeline over an empty group', () => {
+  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+    'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }',
+  ])));
+
+  it('keeps an empty group as it stands', async({ expect }) => {
+    // A zero-length path between equal terms expands to an empty group as well.
+    for (const query of [ 'SELECT * {}', 'SELECT * { <ex://a> <ex://p>? <ex://a> }' ]) {
+      expect((await rewriter.rewriteQuery(query)).trim()).toEqual(`SELECT * WHERE {
+}`);
+    }
+  });
+
+  it('keeps an empty group beside an unfolded pattern', async({ expect }) => {
+    expect((await rewriter.rewriteQuery('SELECT * { { } UNION { ?s <ex://p> ?o } }')).trim())
+      .toEqual(`SELECT ?o ?s WHERE {
+  {
+  }
+  UNION {
+    {
+      ?v_0 <ex://q> ?v_1 .
+      BIND( ?v_1 AS ?o )
+      BIND( ?v_0 AS ?s )
+    }
+  }
+}`);
+  });
+});
