@@ -3,7 +3,7 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { DataFactory } from 'rdf-data-factory';
 import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE, IRI_PREFIX_BNODE } from '../consts.js';
 import { triplePositions } from '../datastructures/TermClusterSet.js';
-import { objectRange, RangeSet, rangeOfPosition, tripleTermRange } from '../RangeSet.js';
+import { literalRange, objectRange, RangeSet, rangeOfPosition, subjectRange, tripleTermRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
@@ -22,12 +22,6 @@ import { isSubsetOf } from '../utils/setUtils.js';
  * Both approaches allow blank nodes to be consistently identified across
  * query results while maintaining the semantics of "same inputs = same node".
  */
-
-/** The term types encoded as an IRI, blank nodes being disallowed. */
-const iriEncodedRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
-
-/** The term types encoded as a literal. */
-const literalEncodedRange = new RangeSet([ 'Literal' ]);
 
 /**
  * Whether a named expression constructs an internal blank node.
@@ -81,8 +75,8 @@ function encodeInternalBnode(
       expressionLiteral(',iri,'),
       escapeUserInput(AF.createOperatorExpression('str', [ termExpression ])),
     ]);
-    // We assume the term is never a bnode since we explicitly disallow BNODES.
-    if (isSubsetOf(range, iriEncodedRange)) {
+    // An IRI or a blank node, which is disallowed, so an IRI.
+    if (isSubsetOf(range, subjectRange)) {
       return iriEncoding;
     }
     const literalEncoding = AF.createOperatorExpression('if', [
@@ -113,7 +107,7 @@ function encodeInternalBnode(
         ]),
       ]),
     ]);
-    if (isSubsetOf(range, literalEncodedRange)) {
+    if (isSubsetOf(range, literalRange)) {
       return literalEncoding;
     }
     // A triple term left in the range is nested too deeply: the literal branch errors on it.
