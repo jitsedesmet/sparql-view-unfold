@@ -14,6 +14,9 @@ import { createTransformationContext } from '../lib/transformContext.js';
 
 const engine = new QueryEngine();
 
+// The data holds `<a> <p1> <o1>` and two triples differing from it in one position.
+const tripleTermData = './test/statics/tripleTermArguments.ttl';
+
 // Every solution of the rewritten query over the source.
 async function solutions(rewriter: QueryRewriter, query: string, source: string): Promise<RDF.Bindings[]> {
   const bindings = await engine.queryBindings(await rewriter.rewriteQuery(query), { sources: [ source ]});
@@ -39,22 +42,12 @@ function skolemisingRewriter(construct: string): QueryRewriter {
 
 describe('bnode skolem', () => {
   const c = createTransformationContext();
+  const iriRewriter = createQueryRewriter([ internalBnodeAsSpecialIriTransformation() ]);
   const AF = c.AF;
   const DF = c.DF;
 
   it('skolem to literal no params', async({ expect }) => {
     const bnodeNoParams = AF.createNamedExpression(DF.namedNode('internal://blank'), []);
-    expect(internalBnodeAsSpecialLiteral(c, bnodeNoParams))
-      .toEqual(AF.createOperatorExpression('strdt', [
-        AF.createOperatorExpression('struuid', []),
-        AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
-      ]));
-  });
-
-  it.skip('skolem to literal one var param', async({ expect }) => {
-    const bnodeNoParams = AF.createNamedExpression(DF.namedNode('internal://blank'), [
-      AF.createTermExpression(DF.variable('myVar')),
-    ]);
     expect(internalBnodeAsSpecialLiteral(c, bnodeNoParams))
       .toEqual(AF.createOperatorExpression('strdt', [
         AF.createOperatorExpression('struuid', []),
@@ -97,14 +90,13 @@ describe('bnode skolem', () => {
   });
 
   describe('with an argument bound to a triple term', () => {
-    // The data holds `<a> <p1> <o1>` and two triples differing from it in one position.
     function nodesFrom(tripleTerm: string, query: string): Promise<(string | undefined)[]> {
       const rewriter = skolemisingRewriter(`CONSTRUCT { ?node <ex://subject> ?s . ?node <ex://object> ?o } WHERE {
         ?s ?p ?o .
         BIND(${tripleTerm} AS ?t)
         BIND(<internal://blank>(?t) AS ?node)
       }`);
-      return constructedNodes(rewriter, query, './test/statics/tripleTermArguments.ttl');
+      return constructedNodes(rewriter, query, tripleTermData);
     }
 
     // The second nests a triple term in the object of one.
@@ -134,11 +126,11 @@ describe('bnode skolem', () => {
       tripleTerm,
       constructsNode,
     ], { expect }) => {
-      const [ binding ] = await solutions(createQueryRewriter([ internalBnodeAsSpecialIriTransformation() ]), `SELECT * {
+      const [ binding ] = await solutions(iriRewriter, `SELECT * {
         BIND(${tripleTerm} AS ?t)
         BIND(<internal://blank>(?t) AS ?fromVariable)
         BIND(<internal://blank>(${tripleTerm}) AS ?fromConstant)
-      }`, './test/statics/tripleTermArguments.ttl');
+      }`, tripleTermData);
       expect(binding.has('fromVariable')).toBe(constructsNode);
       expect(binding.get('fromConstant')?.value).toBe(binding.get('fromVariable')?.value);
     });
@@ -155,13 +147,13 @@ describe('bnode skolem', () => {
   ])(
     'constructs the same node for the argument %s as for a variable bound to it',
     async(argument, { expect }) => {
-      const nodes = await solutions(createQueryRewriter([ internalBnodeAsSpecialIriTransformation() ]), `SELECT * {
+      const nodes = await solutions(iriRewriter, `SELECT * {
         ?s ?p ?o .
         BIND(<internal://blank>(?s) AS ?node)
         BIND(${argument} AS ?bound)
         BIND(<internal://blank>(?bound) AS ?fromVariable)
         BIND(<internal://blank>(${argument}) AS ?fromExpression)
-      }`, './test/statics/tripleTermArguments.ttl');
+      }`, tripleTermData);
       expect(nodes).toHaveLength(3);
       for (const binding of nodes) {
         expect(binding.get('fromExpression')).toBeDefined();
@@ -178,25 +170,25 @@ describe('bnode skolem', () => {
     await expect(constructedNodes(
       rewriter,
       'SELECT ?node WHERE { ?s ?p ?o . BIND(<internal://blank>(?s) AS ?node) FILTER(ISBLANK(?node)) }',
-      './test/statics/tripleTermArguments.ttl',
+      tripleTermData,
     )).resolves.toHaveLength(3);
     await expect(constructedNodes(
       rewriter,
       'SELECT ?node WHERE { ?node ?p ?o . FILTER(ISBLANK(?node)) }',
-      './test/statics/tripleTermArguments.ttl',
+      tripleTermData,
     )).resolves.toHaveLength(0);
   });
 
   it('constructs a node per solution for an unstable argument', async({ expect }) => {
     const nodes = await constructedNodes(
-      createQueryRewriter([ internalBnodeAsSpecialIriTransformation() ]),
+      iriRewriter,
       'SELECT ?node WHERE { ?s ?p ?o . BIND(<internal://blank>(STR(RAND())) AS ?node) }',
-      './test/statics/tripleTermArguments.ttl',
+      tripleTermData,
     );
     expect(new Set(nodes).size).toBe(3);
   });
 
-  it('refuses a triple term argument depth that is not a non-negative integer', async({ expect }) => {
+  it('refuses a triple term argument depth that is not a non-negative integer', ({ expect }) => {
     expect(() => createTransformationContext({ tripleTermArgumentDepth: -1 })).toThrow('non-negative integer');
     expect(() => createQueryRewriter([], { tripleTermArgumentDepth: 1.5 })).toThrow('non-negative integer');
   });
@@ -340,10 +332,17 @@ describe('bnode skolem', () => {
       expect(query).not.toContain('internal://blank');
     });
 
+    // Evaluating an EXISTS again on the same solution gives the same answer.
+    it('accepts an EXISTS argument it cannot bind to a variable', async({ expect }) => {
+      await expect(rewriter.rewriteQuery(`SELECT * WHERE {
+        ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(<internal://blank>(EXISTS { ?x ?y ?z }) = ?o) }
+      }`)).resolves.not.toContain('internal://blank');
+    });
+
     it('refuses an unstable argument it cannot bind to a variable', async({ expect }) => {
       await expect(rewriter.rewriteQuery(`SELECT * WHERE {
         ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(<internal://blank>(STR(RAND())) = ?o) }
-      }`)).rejects.toThrow('unstable');
+      }`)).rejects.toThrow('like RAND()');
     });
 
     it('rewrites an ISBLANK in an argument', async({ expect }) => {

@@ -138,36 +138,43 @@ const stableNamedFunctions = new Set<string>([ EXTENSION_FUNCTION_BNODE ]);
  * @returns whether it is stable
  */
 export function isStableExpression(c: TransformationContext, expression: Algebra.Expression): boolean {
-  let isStable = true;
-  const neverStable = { preVisitor: () => {
-    isStable = false;
-    return { shortcut: true };
-  } };
-  algebraUtils.visitOperationSub(expression, {}, { expression: {
-    operator: { preVisitor: (operator) => {
-      if (unstableOperators.has(operator.operator)) {
-        isStable = false;
-        return { shortcut: true };
-      }
-      return {};
-    } },
-    named: { preVisitor: (named) => {
-      if (!stableNamedFunctions.has(named.name.value)) {
-        isStable = false;
-        return { shortcut: true };
-      }
-      return {};
-    } },
+  return !holdsExpression(expression, (held) => {
+    if (held.subType === Algebra.ExpressionTypes.OPERATOR) {
+      return unstableOperators.has(held.operator);
+    }
+    if (held.subType === Algebra.ExpressionTypes.NAMED) {
+      return !stableNamedFunctions.has(held.name.value);
+    }
     // An EXISTS is stable per solution, but it reads `vars(P)` of a nested pattern rather than anything
     // visible in the expression tree, and it is evaluated against the active graph. Nothing holding one
     // moves until that is worked out - the pushdown carries the same TODO.
     // TODO(phase 4): give EXISTENCE a reads-set and let it be stable where the active graph does not change.
-    existence: neverStable,
-    // Neither can occur in a BIND, and neither is a function of one solution mapping.
-    aggregate: neverStable,
-    wildcard: neverStable,
-  }});
-  return isStable;
+    // An aggregate or a wildcard cannot occur in a BIND, and neither is a function of one solution mapping.
+    return held.subType === Algebra.ExpressionTypes.EXISTENCE ||
+      held.subType === Algebra.ExpressionTypes.AGGREGATE ||
+      held.subType === Algebra.ExpressionTypes.WILDCARD;
+  });
+}
+
+/**
+ * Whether a node holds an expression a test accepts anywhere inside it, the pattern of an EXISTS included.
+ * @param node - The expression or operation to read
+ * @param accepts - The test an expression has to pass
+ * @returns whether it holds one
+ */
+export function holdsExpression(
+  node: Algebra.Operation,
+  accepts: (expression: Algebra.Expression) => boolean,
+): boolean {
+  let found = false;
+  const test = { preVisitor: (expression: Algebra.Expression) => {
+    found = accepts(expression);
+    return { shortcut: found };
+  } };
+  algebraUtils.visitOperationSub(node, {}, {
+    expression: Object.fromEntries(Object.values(Algebra.ExpressionTypes).map(subType => [ subType, test ])),
+  });
+  return found;
 }
 
 /**
@@ -250,12 +257,7 @@ function argumentsEqual(left: readonly Algebra.Expression[], right: readonly Alg
  * @returns whether it holds one
  */
 export function containsExistenceExpression(expression: Algebra.Expression): boolean {
-  let found = false;
-  algebraUtils.visitOperationSub(expression, {}, { expression: { existence: { preVisitor: () => {
-    found = true;
-    return { shortcut: true };
-  } }}});
-  return found;
+  return holdsExpression(expression, held => held.subType === Algebra.ExpressionTypes.EXISTENCE);
 }
 
 /**
@@ -267,19 +269,11 @@ export function containsExistenceExpression(expression: Algebra.Expression): boo
  * @returns whether it is asked about
  */
 export function asksBoundOfVariable(expression: Algebra.Expression, name: string): boolean {
-  let found = false;
-  algebraUtils.visitOperationSub(expression, {}, { expression: {
-    operator: { preVisitor: (operator) => {
-      if (operator.operator === 'bound' && operator.args.some(argument =>
-        argument.subType === Algebra.ExpressionTypes.TERM &&
-        argument.term.termType === 'Variable' &&
-        argument.term.value === name)) {
-        found = true;
-      }
-      return {};
-    } },
-  }});
-  return found;
+  return holdsExpression(expression, held => held.subType === Algebra.ExpressionTypes.OPERATOR &&
+    held.operator === 'bound' && held.args.some(argument =>
+    argument.subType === Algebra.ExpressionTypes.TERM &&
+    argument.term.termType === 'Variable' &&
+    argument.term.value === name));
 }
 
 /** The term types each position of a triple term admits, in the order `TRIPLE()` takes its arguments. */

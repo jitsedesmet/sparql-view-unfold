@@ -240,15 +240,12 @@ function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
 
 /**
  * Whether a term as written evaluates in every solution of an operation: its variables are certainly bound, and a
- * triple term in it cannot fail to construct.
+ * triple term in it cannot fail to construct, which it does where a component is no term its position admits.
  * @param term - The term, like `?v`, `<ex://c>` or `<<( ?s ?p ?o )>>`
  * @param input - The metadata of the operation it is evaluated over
  * @returns whether it certainly evaluates
  */
 export function termCertainlyEvaluates(term: RDF.Term, input: CPMeta): boolean {
-  // A triple-term construction is the one term expression that can *fail*: it raises an evaluation error when a
-  // component is not a term the position it lands in admits. Where the ranges of the components rule that out, and
-  // a ground one rules it out by itself, the construction is as certain as any other term.
   return isSubsetOf(termVars(term), input.cVars) &&
     (term.termType !== 'Quad' || constructionCannotFail(term, input.vRanges));
 }

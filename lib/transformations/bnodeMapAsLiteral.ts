@@ -7,6 +7,7 @@ import { triplePositions } from '../datastructures/TermClusterSet.js';
 import { literalRange, objectRange, RangeSet, rangeOfPosition, subjectRange, tripleTermRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
+import { componentOf } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import {
   cpMetaOf,
@@ -15,8 +16,14 @@ import {
   VRanges,
   withoutCpVars,
 } from '../utils/certainlyBoundVars.js';
-import { constructedTermOf, createBooleanExpression, isStableExpression } from '../utils/expressionHelpers.js';
+import {
+  constructedTermOf,
+  createBooleanExpression,
+  holdsExpression,
+  unstableOperators,
+} from '../utils/expressionHelpers.js';
 import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
+import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
 
 /**
  * @fileoverview Blank node transformation utilities.
@@ -37,24 +44,6 @@ import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
  */
 function createUnknownScope(): CPMeta {
   return { cVars: new Set(), vRanges: new VRanges() };
-}
-
-/**
- * Whether an operation holds anything this transformation rewrites.
- * @param op - The operation to check.
- * @returns Whether it holds an internal blank node or an `ISBLANK`, an EXISTS included.
- */
-function holdsInternalBnodeOrIsBlank(op: Algebra.Operation): boolean {
-  let found = false;
-  const foundIt = (): { shortcut: boolean } => {
-    found = true;
-    return { shortcut: true };
-  };
-  algebraUtils.visitOperationSub(op, {}, { expression: {
-    named: { preVisitor: named => isInternalBnode(named) ? foundIt() : {}},
-    operator: { preVisitor: operator => operator.operator === 'isblank' ? foundIt() : {}},
-  }});
-  return found;
 }
 
 /**
@@ -150,15 +139,6 @@ function encodeInternalBnode(
   }
 
   /**
-   * Encodes a triple term from the encodings of its components.
-   * @param componentEncodings - The encodings of its subject, predicate and object.
-   * @returns The encoding.
-   */
-  function encodeTripleTerm(componentEncodings: Algebra.Expression[]): Algebra.Expression {
-    return AF.createOperatorExpression('concat', [ expressionLiteral(',triple'), ...componentEncodings ]);
-  }
-
-  /**
    * The term types a term as written can be: its own, or what the scope admits for a variable.
    * @param term - The term, like `?v` or `<ex://c>`.
    * @returns Its range, every term type for a variable out of scope in case an engine binds what the ranges miss.
@@ -175,10 +155,15 @@ function encodeInternalBnode(
    * @param position - The component to give.
    * @returns The expression giving the component, and the term types it can be.
    */
-  function componentOf(termExpression: Algebra.Expression, position: TriplePosition): [Algebra.Expression, RangeSet] {
-    if (termExpression.subType === Algebra.ExpressionTypes.TERM && termExpression.term.termType === 'Quad') {
+  function componentExpressionOf(
+    termExpression: Algebra.Expression,
+    position: TriplePosition,
+  ): [Algebra.Expression, RangeSet] {
+    const component = termExpression.subType === Algebra.ExpressionTypes.TERM ?
+      componentOf(termExpression.term, position) :
+      undefined;
+    if (component !== undefined) {
       // Only encoded once constructed, so the component is a term its position admits.
-      const component = termExpression.term[position];
       return [ AF.createTermExpression(component), rangeOfWritten(component).meet(rangeOfPosition(position)) ];
     }
     return [ AF.createOperatorExpression(position, [ termExpression ]), rangeOfPosition(position) ];
@@ -195,8 +180,10 @@ function encodeInternalBnode(
     if (!(depth > 0) || !range.has('Quad')) {
       return encodeIriOrLiteral(termExpression, range);
     }
-    const tripleTermEncoding = encodeTripleTerm(triplePositions.map(position =>
-      encodeTerm(...componentOf(termExpression, position), depth - 1)));
+    const tripleTermEncoding = AF.createOperatorExpression('concat', [
+      expressionLiteral(',triple'),
+      ...triplePositions.map(position => encodeTerm(...componentExpressionOf(termExpression, position), depth - 1)),
+    ]);
     if (isSubsetOf(range, tripleTermRange)) {
       return tripleTermEncoding;
     }
@@ -208,36 +195,44 @@ function encodeInternalBnode(
   }
 
   /**
-   * Encodes one argument, which can be any expression, as a BIND to a variable followed by the variable would be.
-   * @param argument - The argument, like `?v`, `<<( ?s ?p ?o )>>` or `STR(?v)`.
-   * @returns The encoding, `,unbound` when the argument errors.
-   * @throws Error if the argument is no term and unstable, since its encoding evaluates it more than once
+   * Gives `,unbound` where an argument errors instead of its encoding, which would error the whole identity.
+   * @param argument - The argument, like `?v` or `STR(?v)`.
+   * @param encoding - Its encoding.
+   * @returns The encoding, or `,unbound` when the argument errors.
    */
-  function encodeArgument(argument: Algebra.Expression): Algebra.Expression {
-    const term = constructedTermOf(argument);
-    if (term === undefined && !isStableExpression(c, argument)) {
-      throw new Error('An unstable argument of <internal://blank>, like RAND(), is only supported in a BIND or FILTER.');
-    }
-    const termExpression = term === undefined ? argument : AF.createTermExpression(term);
-    const encoding = encodeTerm(
-      termExpression,
-      term === undefined ? expressionRange(argument, scope) : rangeOfWritten(term),
-      c.tripleTermArgumentDepth,
-    );
-    if (term !== undefined && termCertainlyEvaluates(term, scope)) {
-      return encoding;
-    }
-    // An argument that errors counts as a value of its own instead of erroring the whole identity, like COALESCE
-    // handles an error of its arguments. Not COALESCE(<encoding>, ...): that would also count an error encoding a
-    // value, like a triple term nested too deeply, as one of the argument. SAMETERM of a term and itself only errors
-    // when the argument does, as BOUND of a variable is false only when it is unbound.
-    const evaluates = term?.termType === 'Variable' ?
-      AF.createOperatorExpression('bound', [ termExpression ]) :
+  function orUnbound(argument: Algebra.Expression, encoding: Algebra.Expression): Algebra.Expression {
+    // Not COALESCE(<encoding>, ...): that would also take an error encoding a value, like a triple term nested too
+    // deeply, for one of the argument. BOUND is false exactly when a variable is unbound, and SAMETERM of an
+    // expression and itself only errors when the expression does.
+    const evaluates = argument.subType === Algebra.ExpressionTypes.TERM && argument.term.termType === 'Variable' ?
+      AF.createOperatorExpression('bound', [ argument ]) :
       AF.createOperatorExpression('coalesce', [
-        AF.createOperatorExpression('sameterm', [ termExpression, termExpression ]),
+        AF.createOperatorExpression('sameterm', [ argument, argument ]),
         createBooleanExpression(c, false),
       ]);
     return AF.createOperatorExpression('if', [ evaluates, encoding, expressionLiteral(',unbound') ]);
+  }
+
+  /**
+   * Encodes one argument, which can be any expression, as a BIND to a variable followed by the variable would be.
+   * @param argument - The argument, like `?v`, `<<( ?s ?p ?o )>>` or `STR(?v)`.
+   * @returns The encoding, `,unbound` when the argument errors.
+   * @throws Error if the argument is no term and differs each time it is evaluated, as its encoding evaluates it
+   * more than once
+   */
+  function encodeArgument(argument: Algebra.Expression): Algebra.Expression {
+    const depth = c.tripleTermArgumentDepth;
+    const term = constructedTermOf(argument);
+    if (term === undefined) {
+      if (holdsExpression(argument, held =>
+        held.subType === Algebra.ExpressionTypes.OPERATOR && unstableOperators.has(held.operator))) {
+        throw new Error('An argument of <internal://blank> like RAND() is only supported in a BIND or FILTER.');
+      }
+      return orUnbound(argument, encodeTerm(argument, expressionRange(argument, scope), depth));
+    }
+    const termExpression = AF.createTermExpression(term);
+    const encoding = encodeTerm(termExpression, rangeOfWritten(term), depth);
+    return termCertainlyEvaluates(term, scope) ? encoding : orUnbound(termExpression, encoding);
   }
 
   /**
@@ -286,52 +281,60 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   materialiseEncoding: (encoding: Algebra.Expression) => Algebra.Expression,
   isMaterialisedBnode: (args: Algebra.Expression[]) => Algebra.Expression,
 ): T {
-  const { AF } = c;
-  const expressionKey = new Set([ 'expression' ]);
-  function rewriteIsBlank(operator: Algebra.OperatorExpression): Algebra.Expression {
-    return operator.operator === 'isblank' ? isMaterialisedBnode(operator.args) : operator;
+  if (!holdsExpression(op, held => (held.subType === Algebra.ExpressionTypes.NAMED && isInternalBnode(held)) ||
+    (held.subType === Algebra.ExpressionTypes.OPERATOR && held.operator === 'isblank'))) {
+    return op;
   }
-  const materialiseInExistence = {
-    preVisitor: () => ({ continue: false }),
-    transform: (existence: Algebra.ExistenceExpression) => {
-      existence.input = materialiseAll(existence.input, false);
-      return existence;
-    },
-  };
+  const { AF } = c;
+  const coinArgumentVariable = freshVarGenerator(markVariableNamesUsed(c, op), 'mBnodeArgument');
+  const expressionKey = new Set([ 'expression' ]);
+
+  /**
+   * Materialises the internal blank nodes in an expression and rewrites its `ISBLANK`s.
+   * @param expression - The expression to transform.
+   * @param materialise - Materialises one internal blank node, whose arguments are transformed already.
+   * @returns The transformed expression.
+   */
+  function materialiseInExpression(
+    expression: Algebra.Expression,
+    materialise: (named: Algebra.NamedExpression) => Algebra.Expression,
+  ): Algebra.Expression {
+    return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: {
+      existence: { preVisitor: () => ({ continue: false }), transform: (existence) => {
+        existence.input = materialiseAll(existence.input, false);
+        return existence;
+      } },
+      named: { transform: named => isInternalBnode(named) ? materialise(named) : named },
+      operator: { transform: operator =>
+        operator.operator === 'isblank' ? isMaterialisedBnode(operator.args) : operator },
+    }});
+  }
 
   /**
    * Materialises the internal blank nodes in the expression of an EXTEND or FILTER, binding each argument that is no
    * term to a fresh variable of its input first, so it is evaluated once rather than in every branch of its encoding.
    * @param operation - The EXTEND or FILTER, a copy of its own that is changed in place.
-   * @param scopeInput - Its input as it was, to read the ranges off; absent where they do not hold.
+   * @param rangesInput - Its input as it was, to read the ranges off; absent where they do not hold.
+   * @returns The operation.
    */
-  function materialiseIn(operation: Algebra.Extend | Algebra.Filter, scopeInput?: Algebra.Operation): void {
-    let scope: CPMeta | undefined;
-    operation.expression = algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(operation.expression, {}, {
-      expression: {
-        existence: materialiseInExistence,
-        named: { transform: (named) => {
-          if (!isInternalBnode(named)) {
-            return named;
-          }
-          const args = named.args.map((argument) => {
-            if (constructedTermOf(argument) !== undefined) {
-              return argument;
-            }
-            const variable = c.coinBnodeArgumentVariable();
-            operation.input = AF.createExtend(operation.input, variable, argument);
-            if (scopeInput) {
-              scopeInput = AF.createExtend(scopeInput, variable, argument);
-              scope = undefined;
-            }
-            return AF.createTermExpression(variable);
-          });
-          scope ??= scopeInput && cpMetaOf(scopeInput);
-          return materialiseEncoding(encodeInternalBnode(c, AF.createNamedExpression(named.name, args), scope));
-        } },
-        operator: { transform: rewriteIsBlank },
-      },
+  function materialiseExpressionOf(
+    operation: Algebra.Extend | Algebra.Filter,
+    rangesInput?: Algebra.Operation,
+  ): Algebra.Extend | Algebra.Filter {
+    operation.expression = materialiseInExpression(operation.expression, (named) => {
+      const args = named.args.map((argument) => {
+        if (constructedTermOf(argument) !== undefined) {
+          return argument;
+        }
+        const variable = coinArgumentVariable();
+        operation.input = AF.createExtend(operation.input, variable, argument);
+        rangesInput &&= AF.createExtend(rangesInput, variable, argument);
+        return AF.createTermExpression(variable);
+      });
+      const scope = rangesInput && cpMetaOf(rangesInput);
+      return materialiseEncoding(encodeInternalBnode(c, AF.createNamedExpression(named.name, args), scope));
     });
+    return operation;
   }
 
   /**
@@ -341,36 +344,26 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
    * @returns The transformed operation.
    */
   function materialiseAll<O extends Algebra.Operation>(operation: O, withRanges: boolean): O {
-    // The ranges are read off the original input, which the post-order traversal already copied: reading caches
-    // metadata on an operation, which a traversal cannot copy.
-    const extendsAndFiltersMaterialised = algebraUtils.mapOperation<'unsafe', O>(
-      withRanges ? withoutCpVars(operation) : operation,
-      {
-        [Algebra.Types.EXTEND]: { transform: (extend, original) => {
-          materialiseIn(extend, withRanges ? original.input : undefined);
-          return extend;
-        } },
-        [Algebra.Types.FILTER]: { transform: (filter, original) => {
-          materialiseIn(filter, withRanges ? original.input : undefined);
-          return filter;
-        } },
-        // Only an EXISTS holds an operation, and the expression holding it materialises it.
-        [Algebra.Types.EXPRESSION]: { preVisitor: () => ({ continue: false }) },
+    // The ranges are read off the original input, a copy without metadata the post-order traversal is done with, so
+    // the metadata reading them caches never lands on the result.
+    const ofExtendOrFilter = {
+      preVisitor: () => ({ ignoreKeys: expressionKey }),
+      transform: (copy: Algebra.Extend | Algebra.Filter, original: Algebra.Extend | Algebra.Filter) =>
+        materialiseExpressionOf(copy, withRanges ? original.input : undefined),
+    };
+    return algebraUtils.mapOperation<'unsafe', O>(withRanges ? withoutCpVars(operation) : operation, {
+      [Algebra.Types.EXTEND]: ofExtendOrFilter,
+      [Algebra.Types.FILTER]: ofExtendOrFilter,
+      // Any other expression, like the condition of an OPTIONAL, gets every branch.
+      [Algebra.Types.EXPRESSION]: {
+        preVisitor: () => ({ continue: false }),
+        transform: expression =>
+          materialiseInExpression(expression, named => materialiseEncoding(encodeInternalBnode(c, named))),
       },
-    );
-    // What is left gets every branch.
-    return algebraUtils.mapOperationSub<'unsafe', O>(extendsAndFiltersMaterialised, {
-      [Algebra.Types.EXTEND]: { preVisitor: () => ({ ignoreKeys: expressionKey }) },
-      [Algebra.Types.FILTER]: { preVisitor: () => ({ ignoreKeys: expressionKey }) },
-    }, { expression: {
-      existence: materialiseInExistence,
-      named: { transform: named =>
-        isInternalBnode(named) ? materialiseEncoding(encodeInternalBnode(c, named)) : named },
-      operator: { transform: rewriteIsBlank },
-    }});
+    });
   }
 
-  return holdsInternalBnodeOrIsBlank(op) ? materialiseAll(op, true) : op;
+  return materialiseAll(op, true);
 }
 
 /**

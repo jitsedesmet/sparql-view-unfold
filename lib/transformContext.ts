@@ -40,8 +40,6 @@ export interface TransformationContext {
    * projection.
    */
   coinExistenceVariable: () => RDF.Variable;
-  /** Coins the variable an argument of `<internal://blank>` that is no term is bound to, so it is evaluated once. */
-  coinBnodeArgumentVariable: () => RDF.Variable;
   /**
    * How many triple terms deep an argument of `<internal://blank>` is encoded, since an expression cannot recurse.
    * A more deeply nested one leaves the node unbound, and the encoding grows quadratically with it.
@@ -109,7 +107,6 @@ export function createTransformationContext(options: TransformationContextOption
     clusterSolver: new ClusterSolver(),
     usedVariableNames,
     coinExistenceVariable: freshVarGenerator(usedVariableNames, 'mExists'),
-    coinBnodeArgumentVariable: freshVarGenerator(usedVariableNames, 'mBnodeArgument'),
     tripleTermArgumentDepth,
   };
 }
