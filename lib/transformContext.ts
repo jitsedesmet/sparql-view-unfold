@@ -41,8 +41,8 @@ export interface TransformationContext {
    */
   coinExistenceVariable: () => RDF.Variable;
   /**
-   * How deeply a triple term argument of `<internal://blank>` is encoded, since an expression cannot recurse.
-   * A more deeply nested triple term leaves the node unbound, and each level adds three encodings to the argument.
+   * How many triple terms deep a variable argument of `<internal://blank>` is unrolled, since an expression cannot
+   * recurse. A more deeply nested one leaves the node unbound.
    */
   tripleTermArgumentDepth: number;
 }

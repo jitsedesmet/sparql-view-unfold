@@ -2,7 +2,8 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { DataFactory } from 'rdf-data-factory';
 import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE, IRI_PREFIX_BNODE } from '../consts.js';
-import { objectRange, RangeSet, tripleTermRange } from '../RangeSet.js';
+import { triplePositions } from '../datastructures/TermClusterSet.js';
+import { objectRange, RangeSet, rangeOfPosition, tripleTermRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
@@ -22,40 +23,44 @@ import { isSubsetOf } from '../utils/setUtils.js';
  * query results while maintaining the semantics of "same inputs = same node".
  */
 
+/** The term types encoded as an IRI, blank nodes being disallowed. */
+const iriEncodedRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
+
+/** The term types encoded as a literal. */
+const literalEncodedRange = new RangeSet([ 'Literal' ]);
+
 /**
- * Transforms an internal blank node expression into a deterministic expression.
+ * Whether a named expression constructs an internal blank node.
+ * @param expression - The named expression to check.
+ * @returns Whether it calls `<internal://blank>`.
+ */
+function isInternalBnode(expression: Algebra.NamedExpression): boolean {
+  return expression.name.value === EXTENSION_FUNCTION_BNODE;
+}
+
+/**
+ * Encodes the arguments of an internal blank node into a string that is equal exactly when the arguments are.
  *
- * The expression `<internal://blank>(?var1, ?var2, ...)` is converted to an
- * expression that consistently produces the same value for the same variable bindings.
- *
- * The output encodes each variable's value with its type information:
+ * The output encodes each argument's value with its type information:
  * - IRIs: `,iri,<escaped-value>`
  * - Literals with lang+dir: `,literal@D,<value>,<lang>,<dir>`
  * - Literals with lang: `,literal@,<value>,<lang>`
  * - Plain/typed literals: `,literal,<value>,<datatype>`
- * - Triple terms: `,triple` followed by the encodings of its subject, predicate and object,
- *   nested up to the `tripleTermArgumentDepth` of the context
+ * - Triple terms: `,triple` followed by the encodings of its subject, predicate and object
  * - Unbound variables: `,unbound`, which no bound value gives
  *
- * The result is unambiguous: every part starts with its tag, values have their commas escaped,
- * and `,triple` is followed by exactly three parts.
- *
- * A term only gets the branches its range admits: no `,triple` branch where it cannot be a triple term, no
- * `ISTRIPLE` test where it can only be one, and no `BOUND` test for a variable bound in every solution. Either way
- * the same value gives the same encoding.
+ * Every part starts with its tag and values have their commas escaped, so the result is unambiguous. A term only
+ * gets the branches its range admits, which leaves the encoding of a value the same.
  *
  * @param c - The transformation context
  * @param expression - The internal blank node expression
- * @param scope - What the solutions the expression is evaluated over bind, if known. Without it, a variable can
- * be any term and may be unbound.
- * @param hashFunc - Optional hash function to shorten the output
- * @returns The transformed expression
+ * @param scope - What the solutions the expression is evaluated over bind; unknown when absent.
+ * @returns The encoding, or `STRUUID()` when there are no arguments
  */
-function expressionForConsistentConstruction(
+function encodeInternalBnode(
   c: TransformationContext,
   expression: Algebra.NamedExpression,
-  scope: CPMeta | undefined,
-  hashFunc?: 'md5' | 'sha1' | 'sha256' | 'sha384' | 'sha512',
+  scope?: CPMeta,
 ): Algebra.Expression {
   const { AF, DF } = c;
 
@@ -66,99 +71,120 @@ function expressionForConsistentConstruction(
   }
 
   /**
-   * Encodes a term that is an IRI or a literal: a big if on which kind it is.
+   * Encodes a term that is an IRI or a literal, testing which one only where its range admits both.
    * @param termExpression - An expression giving the term, like `?v` or `OBJECT(?t)`.
-   * @returns The encoding, which errors when the term is a triple term or unbound.
+   * @param range - The term types the term can be.
+   * @returns The encoding, which errors when the term is unbound or a triple term.
    */
-  function encodeIriOrLiteral(termExpression: Algebra.Expression): Algebra.Expression {
+  function encodeIriOrLiteral(termExpression: Algebra.Expression, range: RangeSet): Algebra.Expression {
+    const iriEncoding = AF.createOperatorExpression('concat', [
+      expressionLiteral(',iri,'),
+      escapeUserInput(AF.createOperatorExpression('str', [ termExpression ])),
+    ]);
     // We assume the term is never a bnode since we explicitly disallow BNODES.
-    return AF.createOperatorExpression('if', [
-      AF.createOperatorExpression('isiri', [ termExpression ]),
+    if (isSubsetOf(range, iriEncodedRange)) {
+      return iriEncoding;
+    }
+    const literalEncoding = AF.createOperatorExpression('if', [
+      AF.createOperatorExpression('haslangdir', [ termExpression ]),
       AF.createOperatorExpression('concat', [
-        expressionLiteral(',iri,'),
+        expressionLiteral(',literal@D,'),
         escapeUserInput(AF.createOperatorExpression('str', [ termExpression ])),
+        expressionLiteral(','),
+        escapeUserInput(AF.createOperatorExpression('lang', [ termExpression ])),
+        expressionLiteral(','),
+        escapeUserInput(AF.createOperatorExpression('langdir', [ termExpression ])),
       ]),
       AF.createOperatorExpression('if', [
-        // We now know it is a literal
-        AF.createOperatorExpression('haslangdir', [ termExpression ]),
+        AF.createOperatorExpression('haslang', [ termExpression ]),
         AF.createOperatorExpression('concat', [
-          expressionLiteral(',literal@D,'),
+          expressionLiteral(',literal@,'),
           escapeUserInput(AF.createOperatorExpression('str', [ termExpression ])),
           expressionLiteral(','),
           escapeUserInput(AF.createOperatorExpression('lang', [ termExpression ])),
-          expressionLiteral(','),
-          escapeUserInput(AF.createOperatorExpression('langdir', [ termExpression ])),
         ]),
-        AF.createOperatorExpression('if', [
-          // We now know it is a literal
-          AF.createOperatorExpression('haslang', [ termExpression ]),
-          AF.createOperatorExpression('concat', [
-            expressionLiteral(',literal@,'),
-            escapeUserInput(AF.createOperatorExpression('str', [ termExpression ])),
-            expressionLiteral(','),
-            escapeUserInput(AF.createOperatorExpression('lang', [ termExpression ])),
-          ]),
-          AF.createOperatorExpression('concat', [
-            expressionLiteral(',literal,'),
-            escapeUserInput(AF.createOperatorExpression('str', [ termExpression ])),
-            expressionLiteral(','),
-            escapeUserInput(AF.createOperatorExpression('str', [
-              AF.createOperatorExpression('datatype', [ termExpression ]),
-            ])),
-          ]),
+        AF.createOperatorExpression('concat', [
+          expressionLiteral(',literal,'),
+          escapeUserInput(AF.createOperatorExpression('str', [ termExpression ])),
+          expressionLiteral(','),
+          escapeUserInput(AF.createOperatorExpression('str', [
+            AF.createOperatorExpression('datatype', [ termExpression ]),
+          ])),
         ]),
       ]),
+    ]);
+    if (isSubsetOf(range, literalEncodedRange)) {
+      return literalEncoding;
+    }
+    // A triple term left in the range is nested too deeply: the literal branch errors on it.
+    return AF.createOperatorExpression('if', [
+      AF.createOperatorExpression('isiri', [ termExpression ]),
+      iriEncoding,
+      literalEncoding,
     ]);
   }
 
   /**
-   * Encodes a term that can also be a triple term, through the encodings of its subject, predicate and object.
-   * @param termExpression - An expression giving the term, like `?v` or `OBJECT(?t)`.
-   * @param range - The term types the term can be, deciding which branches the encoding needs.
-   * @param tripleTermDepth - How deeply nested a triple term is encoded; a more deeply nested one errors.
-   * @returns The encoding, which errors when the term is unbound or outside its range.
+   * Encodes a triple term from the encodings of its components.
+   * @param componentEncodings - The encodings of its subject, predicate and object.
+   * @returns The encoding.
    */
-  function encodeTerm(termExpression: Algebra.Expression, range: RangeSet, tripleTermDepth: number):
-  Algebra.Expression {
-    if (tripleTermDepth === 0 || !range.has('Quad')) {
-      return encodeIriOrLiteral(termExpression);
+  function encodeTripleTerm(componentEncodings: Algebra.Expression[]): Algebra.Expression {
+    return AF.createOperatorExpression('concat', [ expressionLiteral(',triple'), ...componentEncodings ]);
+  }
+
+  /**
+   * Encodes a term whose structure is unknown, a triple term through its accessors, unrolled `depth` deep.
+   * @param termExpression - An expression giving the term, like `?v` or `OBJECT(?t)`.
+   * @param range - The term types the term can be.
+   * @param depth - How many nested triple terms are still unrolled; a deeper one errors.
+   * @returns The encoding, which errors when the term is unbound.
+   */
+  function encodeTerm(termExpression: Algebra.Expression, range: RangeSet, depth: number): Algebra.Expression {
+    if (depth === 0 || !range.has('Quad')) {
+      return encodeIriOrLiteral(termExpression, range);
     }
-    // In RDF 1.2 only the object of a triple term can itself be a triple term.
-    const tripleTermEncoding = AF.createOperatorExpression('concat', [
-      expressionLiteral(',triple'),
-      encodeIriOrLiteral(AF.createOperatorExpression('subject', [ termExpression ])),
-      encodeIriOrLiteral(AF.createOperatorExpression('predicate', [ termExpression ])),
-      encodeTerm(AF.createOperatorExpression('object', [ termExpression ]), objectRange, tripleTermDepth - 1),
-    ]);
+    const tripleTermEncoding = encodeTripleTerm(triplePositions.map(position => encodeTerm(
+      AF.createOperatorExpression(position, [ termExpression ]),
+      rangeOfPosition(position),
+      depth - 1,
+    )));
     if (isSubsetOf(range, tripleTermRange)) {
       return tripleTermEncoding;
     }
     return AF.createOperatorExpression('if', [
       AF.createOperatorExpression('istriple', [ termExpression ]),
       tripleTermEncoding,
-      encodeIriOrLiteral(termExpression),
+      encodeIriOrLiteral(termExpression, range),
     ]);
   }
 
-  function mapArgument(argument: RDF.Term): Algebra.Expression {
-    const argumentExpression = AF.createTermExpression(argument);
-    // A constant is always bound, and BOUND only accepts a variable. Its range is its own term type.
-    if (argument.termType !== 'Variable') {
-      return encodeTerm(argumentExpression, new RangeSet([ argument.termType ]), c.tripleTermArgumentDepth);
+  /**
+   * Encodes a term as written, a triple term through its written components and any other through its range.
+   * @param term - The term, like `?v`, `<ex://c>` or `<<( ?s ?p ?o )>>`.
+   * @returns The encoding, which errors when a variable in it is unbound.
+   */
+  function encodeWrittenTerm(term: RDF.Term): Algebra.Expression {
+    if (term.termType === 'Quad') {
+      return encodeTripleTerm(triplePositions.map(position => encodeWrittenTerm(term[position])));
     }
-    const encoding = encodeTerm(
-      argumentExpression,
-      scope?.vRanges.rangeOf(argument.value) ?? objectRange,
-      c.tripleTermArgumentDepth,
-    );
-    if (scope?.cVars.has(argument.value)) {
+    const range = term.termType === 'Variable' ?
+      scope?.vRanges.rangeOf(term.value) ?? objectRange :
+      new RangeSet([ term.termType ]);
+    return encodeTerm(AF.createTermExpression(term), range, c.tripleTermArgumentDepth);
+  }
+
+  function encodeArgument(argument: RDF.Term): Algebra.Expression {
+    const encoding = encodeWrittenTerm(argument);
+    // BOUND only accepts a variable, and a triple term with an unbound variable errors, as constructing it does.
+    if (argument.termType !== 'Variable' || scope?.cVars.has(argument.value)) {
       return encoding;
     }
     // An unbound variable counts as a value of its own instead of erroring the whole identity, like COALESCE handles
     // an error of its arguments. Not COALESCE(<encoding>, ...): that would also take an error of a bound value,
     // like a triple term nested too deeply, for unbound.
     return AF.createOperatorExpression('if', [
-      AF.createOperatorExpression('bound', [ argumentExpression ]),
+      AF.createOperatorExpression('bound', [ AF.createTermExpression(argument) ]),
       encoding,
       expressionLiteral(',unbound'),
     ]);
@@ -185,73 +211,67 @@ function expressionForConsistentConstruction(
 
   // ====================== Implementation ========================
 
-  // Ignore non matching
-  if (expression.name.value !== EXTENSION_FUNCTION_BNODE) {
-    return expression;
-  }
-
   // In case no vars are provided, we always make a new one (you likely never want this though....)
-  let value = AF.createOperatorExpression('struuid', []);
-  if (expression.args.length > 0) {
-    // In the order the arguments are written: removeProjections gives hidden variables fresh names per pattern,
-    // so an order read off their names would differ between two patterns constructing the same node.
-    value = AF.createOperatorExpression('concat', (<Algebra.TermExpression[]>expression.args)
-      .map(expression => mapArgument(expression.term)));
+  if (expression.args.length === 0) {
+    return AF.createOperatorExpression('struuid', []);
   }
-
-  if (!hashFunc) {
-    return value;
-  }
-  return AF.createOperatorExpression(hashFunc, [ value ]);
+  // In the order the arguments are written: removeProjections gives hidden variables fresh names per pattern,
+  // so an order read off their names would differ between two patterns constructing the same node.
+  return AF.createOperatorExpression('concat', (<Algebra.TermExpression[]>expression.args)
+    .map(argument => encodeArgument(argument.term)));
 }
 
 /**
- * Materialises the internal blank nodes in the expression of every EXTEND and FILTER, knowing what the input of
- * that operation binds.
+ * Materialises every internal blank node in an operation and rewrites `ISBLANK` to recognise what they became.
  *
- * An EXISTS is not entered: it substitutes the solution it is asked for into its pattern, binding variables that
- * pattern's ranges do not cover.
+ * One in the expression of an EXTEND or FILTER is encoded knowing what the input of that operation binds, outside
+ * an EXISTS: that substitutes the solution it is asked for into its pattern, binding variables its ranges miss.
  * @param c - The transformation context
  * @param op - The operation to transform
- * @param materialise - Materialises one internal blank node, given what the solutions it is evaluated over bind.
- * @returns The transformed operation, its other internal blank nodes left for a pass without ranges.
+ * @param materialiseEncoding - Turns the encoding of an internal blank node into the term it becomes.
+ * @param isMaterialisedBnode - Turns the arguments of an `ISBLANK` into the test for such a term.
+ * @returns The transformed operation
  */
-function materialiseWithInputRanges<T extends Algebra.Operation>(
+function materialiseInternalBnodes<T extends Algebra.Operation>(
   c: TransformationContext,
   op: T,
-  materialise: (expression: Algebra.NamedExpression, scope: CPMeta) => Algebra.Expression,
+  materialiseEncoding: (encoding: Algebra.Expression) => Algebra.Expression,
+  isMaterialisedBnode: (args: Algebra.Expression[]) => Algebra.Expression,
 ): T {
   const { AF } = c;
-
-  /**
-   * Materialises the internal blank nodes of one expression, outside any EXISTS in it.
-   * @param expression - The expression of the EXTEND or FILTER.
-   * @param input - The operation the expression is evaluated over.
-   * @returns The expression with those blank nodes materialised.
-   */
-  function inExpression(expression: Algebra.Expression, input: Algebra.Operation): Algebra.Expression {
+  // What is materialised holds no internal blank node or ISBLANK, so the second traversal skips it.
+  const materialised = new WeakSet<Algebra.Expression>();
+  function materialise(expression: Algebra.NamedExpression, scope?: CPMeta): Algebra.Expression {
+    const term = materialiseEncoding(encodeInternalBnode(c, expression, scope));
+    materialised.add(term);
+    return term;
+  }
+  function materialiseOver(expression: Algebra.Expression, input: Algebra.Operation): Algebra.Expression {
     let scope: CPMeta | undefined;
     return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: {
       existence: { preVisitor: () => ({ continue: false }) },
-      named: { transform: (named) => {
-        if (named.name.value !== EXTENSION_FUNCTION_BNODE) {
-          return named;
-        }
-        // Read off a copy: reading caches metadata on the operation, which a traversal cannot copy.
-        scope ??= cpMetaOf(withoutCpVars(input));
-        return materialise(named, scope);
-      } },
+      named: { transform: named => isInternalBnode(named) ? materialise(named, scope ??= cpMetaOf(input)) : named },
     }});
   }
 
-  return algebraUtils.mapOperation<'unsafe', T>(op, {
-    [Algebra.Types.EXTEND]: { transform: extend =>
-      AF.createExtend(extend.input, extend.variable, inExpression(extend.expression, extend.input)) },
-    [Algebra.Types.FILTER]: { transform: filter =>
-      AF.createFilter(filter.input, inExpression(filter.expression, filter.input)) },
+  // The ranges are read off the original input, which the post-order traversal already copied: reading caches
+  // metadata on an operation, which a traversal cannot copy.
+  const materialisedWithRanges = algebraUtils.mapOperation<'unsafe', T>(withoutCpVars(op), {
+    [Algebra.Types.EXTEND]: { transform: (extend, original) =>
+      AF.createExtend(extend.input, extend.variable, materialiseOver(extend.expression, original.input)) },
+    [Algebra.Types.FILTER]: { transform: (filter, original) =>
+      AF.createFilter(filter.input, materialiseOver(filter.expression, original.input)) },
     // Only an EXISTS holds an operation, and it is not entered.
     [Algebra.Types.EXPRESSION]: { preVisitor: () => ({ continue: false }) },
   });
+  return algebraUtils.mapOperationSub<'unsafe', T>(materialisedWithRanges, {}, { expression: {
+    // What is left is materialised without ranges, like one in an EXISTS or in the condition of an OPTIONAL.
+    named: { transform: named => isInternalBnode(named) ? materialise(named) : named },
+    operator: {
+      preVisitor: operator => materialised.has(operator) ? { continue: false } : {},
+      transform: operator => operator.operator === 'isblank' ? isMaterialisedBnode(operator.args) : operator,
+    },
+  }});
 }
 
 /**
@@ -271,34 +291,17 @@ function materialiseWithInputRanges<T extends Algebra.Operation>(
  */
 export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   const { AF, DF } = c;
-  function materialise(expression: Algebra.NamedExpression, scope?: CPMeta): Algebra.Expression {
-    const value = expressionForConsistentConstruction(c, expression, scope);
-    if (expression === value) {
-      return expression;
-    }
-    return AF.createOperatorExpression('strdt', [
-      value,
+  return materialiseInternalBnodes(
+    c,
+    op,
+    encoding => AF.createOperatorExpression('strdt', [
+      encoding,
       AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
-    ]);
-  }
-  return algebraUtils.mapOperationSub<'unsafe', typeof op>(
-    materialiseWithInputRanges(c, op, materialise),
-    {},
-    { expression: { named: {
-      // What is left has no ranges at hand, like one in an EXISTS or in the condition of an OPTIONAL.
-      transform: expression => materialise(expression),
-    }, operator: {
-      transform: (expression) => {
-        if (expression.operator !== 'isblank') {
-          return expression;
-        }
-
-        return AF.createOperatorExpression('=', [
-          AF.createOperatorExpression('datatype', expression.args),
-          AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
-        ]);
-      },
-    }}},
+    ]),
+    args => AF.createOperatorExpression('=', [
+      AF.createOperatorExpression('datatype', args),
+      AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
+    ]),
   );
 }
 
@@ -321,40 +324,22 @@ export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: Tr
  */
 export function internalBnodeAsSpecialIri<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   const { AF, DF } = c;
-  function materialise(expression: Algebra.NamedExpression, scope?: CPMeta): Algebra.Expression {
-    const value = expressionForConsistentConstruction(c, expression, scope, 'sha1');
-    if (expression === value) {
-      return expression;
-    }
-    return AF.createOperatorExpression('iri', [
+  return materialiseInternalBnodes(
+    c,
+    op,
+    encoding => AF.createOperatorExpression('iri', [
       AF.createOperatorExpression('concat', [
         AF.createTermExpression(DF.literal(IRI_PREFIX_BNODE)),
-        value,
+        AF.createOperatorExpression('sha1', [ encoding ]),
       ]),
-    ]);
-  }
-  return algebraUtils.mapOperationSub<'unsafe', typeof op>(
-    materialiseWithInputRanges(c, op, materialise),
-    {},
-    { expression: { named: {
-      // What is left has no ranges at hand, like one in an EXISTS or in the condition of an OPTIONAL.
-      transform: expression => materialise(expression),
-    }, operator: {
-      transform: (expression) => {
-        if (expression.operator !== 'isblank') {
-          return expression;
-        }
-
-        return AF.createOperatorExpression('&&', [
-          AF.createOperatorExpression('isiri', expression.args),
-
-          AF.createOperatorExpression('strstarts', [
-            AF.createOperatorExpression('str', expression.args),
-            AF.createTermExpression(DF.literal(IRI_PREFIX_BNODE)),
-          ]),
-        ]);
-      },
-    }}},
+    ]),
+    args => AF.createOperatorExpression('&&', [
+      AF.createOperatorExpression('isiri', args),
+      AF.createOperatorExpression('strstarts', [
+        AF.createOperatorExpression('str', args),
+        AF.createTermExpression(DF.literal(IRI_PREFIX_BNODE)),
+      ]),
+    ]),
   );
 }
 

@@ -2,6 +2,7 @@ import { QueryEngine } from '@comunica/query-sparql-file';
 import { describe, it } from 'vitest';
 import { DT_INTERNAL_BNODE } from '../lib/consts.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
+import type { QueryRewriter } from '../lib/queryRewriter.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import {
   internalBnodeAsSpecialIriTransformation,
@@ -9,6 +10,16 @@ import {
   internalBnodeAsSpecialLiteralTransformation,
 } from '../lib/transformations/bnodeMapAsLiteral.js';
 import { createTransformationContext } from '../lib/transformContext.js';
+
+// The value of `?node` in every solution of the rewritten query.
+async function constructedNodes(
+  rewriter: QueryRewriter,
+  query: string,
+  source: string,
+): Promise<(string | undefined)[]> {
+  const bindings = await new QueryEngine().queryBindings(await rewriter.rewriteQuery(query), { sources: [ source ]});
+  return (await bindings.toArray()).map(binding => binding.get('node')?.value);
+}
 
 describe('bnode skolem', () => {
   const c = createTransformationContext();
@@ -42,10 +53,11 @@ describe('bnode skolem', () => {
         BIND(<internal://blank>(?subject, ?first, ?second) AS ?node)
       }`,
     ])), internalBnodeAsSpecialIriTransformation() ]);
-    const query = await rewriter.rewriteQuery('SELECT * WHERE { ?node <ex://first> ?first . ?node <ex://second> ?second }');
-    const bindings = await new QueryEngine().queryBindings(query, { sources: [ './test/statics/data01.ttl' ]});
-
-    await expect(bindings.toArray()).resolves.toHaveLength(1);
+    await expect(constructedNodes(
+      rewriter,
+      'SELECT * WHERE { ?node <ex://first> ?first . ?node <ex://second> ?second }',
+      './test/statics/data01.ttl',
+    )).resolves.toHaveLength(1);
   });
 
   describe('with an argument an OPTIONAL leaves unbound', () => {
@@ -58,26 +70,23 @@ describe('bnode skolem', () => {
       }`,
     ])), internalBnodeAsSpecialIriTransformation() ]);
 
-    async function constructedNodes(): Promise<(string | undefined)[]> {
-      const query = await rewriter.rewriteQuery('SELECT ?node WHERE { ?node <ex://object> ?o }');
-      const bindings = await new QueryEngine().queryBindings(query, { sources: [ './test/statics/data01.ttl' ]});
-      return (await bindings.toArray()).map(binding => binding.get('node')?.value);
-    }
+    const nodes = (): Promise<(string | undefined)[]> =>
+      constructedNodes(rewriter, 'SELECT ?node WHERE { ?node <ex://object> ?o }', './test/statics/data01.ttl');
 
     it('still constructs a node for the solution leaving it unbound', async({ expect }) => {
-      const nodes = await constructedNodes();
-      expect(nodes).toHaveLength(2);
-      expect(nodes).not.toContain(undefined);
+      const constructed = await nodes();
+      expect(constructed).toHaveLength(2);
+      expect(constructed).not.toContain(undefined);
     });
 
     it('constructs a different node than for the solution binding it', async({ expect }) => {
-      expect(new Set(await constructedNodes()).size).toBe(2);
+      expect(new Set(await nodes()).size).toBe(2);
     });
   });
 
   describe('with an argument bound to a triple term', () => {
     // The data holds `<a> <p1> <o1>` and two triples differing from it in one position.
-    async function constructedNodes(tripleTerm: string, query: string): Promise<(string | undefined)[]> {
+    function nodesFrom(tripleTerm: string, query: string): Promise<(string | undefined)[]> {
       const rewriter = createQueryRewriter([ ...createDefaultTransformationPipeline(mappingFromConstructQueries([
         `CONSTRUCT { ?node <ex://subject> ?s . ?node <ex://object> ?o } WHERE {
           ?s ?p ?o .
@@ -85,33 +94,26 @@ describe('bnode skolem', () => {
           BIND(<internal://blank>(?t) AS ?node)
         }`,
       ])), internalBnodeAsSpecialIriTransformation() ]);
-      const bindings = await new QueryEngine().queryBindings(await rewriter.rewriteQuery(query), {
-        sources: [ './test/statics/tripleTermArguments.ttl' ],
-      });
-      return (await bindings.toArray()).map(binding => binding.get('node')?.value);
+      return constructedNodes(rewriter, query, './test/statics/tripleTermArguments.ttl');
     }
 
-    it('constructs a node', async({ expect }) => {
-      const nodes = await constructedNodes('<<( ?s ?p ?o )>>', 'SELECT ?node WHERE { ?node <ex://subject> ?s }');
+    it('constructs a different node for each triple term', async({ expect }) => {
+      const nodes = await nodesFrom('<<( ?s ?p ?o )>>', 'SELECT ?node WHERE { ?node <ex://subject> ?s }');
       expect(nodes).toHaveLength(3);
       expect(nodes).not.toContain(undefined);
-    });
-
-    it('constructs a different node for each triple term', async({ expect }) => {
-      const nodes = await constructedNodes('<<( ?s ?p ?o )>>', 'SELECT ?node WHERE { ?node <ex://subject> ?s }');
       expect(new Set(nodes).size).toBe(3);
     });
 
     // The join on `?node` keeps a solution only when both patterns constructed the same node.
     it('constructs the same node for the same triple term in every pattern', async({ expect }) => {
-      await expect(constructedNodes(
+      await expect(nodesFrom(
         '<<( ?s ?p ?o )>>',
         'SELECT ?node WHERE { ?node <ex://subject> ?s . ?node <ex://object> ?o }',
       )).resolves.toHaveLength(3);
     });
 
     it('constructs a node for a triple term nested in the object of one', async({ expect }) => {
-      const nodes = await constructedNodes(
+      const nodes = await nodesFrom(
         '<<( ?s ?p <<( ?s ?p ?o )>> )>>',
         'SELECT ?node WHERE { ?node <ex://subject> ?s }',
       );
@@ -138,23 +140,30 @@ describe('bnode skolem', () => {
   describe('as a special literal', () => {
     const rewriter = createQueryRewriter([ internalBnodeAsSpecialLiteralTransformation() ]);
 
-    // The encoding of a term that is an IRI or a literal, as the rewritten query writes it.
+    // The encodings below are the ones the rewritten query writes for `term`.
+    function escaped(value: string): string {
+      return String.raw`REPLACE( REPLACE( ${value} , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," )`;
+    }
+
+    function iriEncoding(term: string): string {
+      return `CONCAT( ",iri," , ${escaped(`STR( ${term} )`)} )`;
+    }
+
     function iriOrLiteralEncoding(term: string): string {
-      const escaped = (value: string): string =>
-        String.raw`REPLACE( REPLACE( ${value} , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," )`;
-      return `IF( ISIRI( ${term} ) , CONCAT( ",iri," , ${escaped(`STR( ${term} )`)} ) , IF( HASLANGDIR( ${term} ) , CONCAT( ",literal@D," , ${escaped(`STR( ${term} )`)} , "," , ${escaped(`LANG( ${term} )`)} , "," , ${escaped(`LANGDIR( ${term} )`)} ) , IF( HASLANG( ${term} ) , CONCAT( ",literal@," , ${escaped(`STR( ${term} )`)} , "," , ${escaped(`LANG( ${term} )`)} ) , CONCAT( ",literal," , ${escaped(`STR( ${term} )`)} , "," , ${escaped(`STR( DATATYPE( ${term} ) )`)} ) ) ) )`;
+      return `IF( ISIRI( ${term} ) , ${iriEncoding(term)} , IF( HASLANGDIR( ${term} ) , CONCAT( ",literal@D," , ${escaped(`STR( ${term} )`)} , "," , ${escaped(`LANG( ${term} )`)} , "," , ${escaped(`LANGDIR( ${term} )`)} ) , IF( HASLANG( ${term} ) , CONCAT( ",literal@," , ${escaped(`STR( ${term} )`)} , "," , ${escaped(`LANG( ${term} )`)} ) , CONCAT( ",literal," , ${escaped(`STR( ${term} )`)} , "," , ${escaped(`STR( DATATYPE( ${term} ) )`)} ) ) ) )`;
     }
 
-    // The encoding of a term that is a triple term, nested two deep, as the rewritten query writes it.
-    function tripleTermEncoding(term: string): string {
-      const object = `OBJECT( ${term} )`;
-      const objectEncoding = `IF( ISTRIPLE( ${object} ) , CONCAT( ",triple" , ${iriOrLiteralEncoding(`SUBJECT( ${object} )`)} , ${iriOrLiteralEncoding(`PREDICATE( ${object} )`)} , ${iriOrLiteralEncoding(`OBJECT( ${object} )`)} ) , ${iriOrLiteralEncoding(object)} )`;
-      return `CONCAT( ",triple" , ${iriOrLiteralEncoding(`SUBJECT( ${term} )`)} , ${iriOrLiteralEncoding(`PREDICATE( ${term} )`)} , ${objectEncoding} )`;
+    // A term that is a triple term, unrolled `depth` triple terms deep.
+    function tripleTermEncoding(term: string, depth = 2): string {
+      return `CONCAT( ",triple" , ${iriEncoding(`SUBJECT( ${term} )`)} , ${iriEncoding(`PREDICATE( ${term} )`)} , ${termEncoding(`OBJECT( ${term} )`, depth - 1)} )`;
     }
 
-    // The encoding of a term that can also be a triple term, as the rewritten query writes it.
-    function termEncoding(term: string): string {
-      return `IF( ISTRIPLE( ${term} ) , ${tripleTermEncoding(term)} , ${iriOrLiteralEncoding(term)} )`;
+    // A term that can be any term, unrolled `depth` triple terms deep.
+    function termEncoding(term: string, depth = 2): string {
+      if (depth === 0) {
+        return iriOrLiteralEncoding(term);
+      }
+      return `IF( ISTRIPLE( ${term} ) , ${tripleTermEncoding(term, depth)} , ${iriOrLiteralEncoding(term)} )`;
     }
 
     it('encodes an argument an OPTIONAL leaves unbound as a value of its own', async({ expect }) => {
@@ -170,12 +179,12 @@ describe('bnode skolem', () => {
 }`);
     });
 
-    // A subject is never a triple term, and the pattern binds `?s` in every solution.
-    it('encodes a variable that cannot be a triple term as an IRI or a literal only', async({ expect }) => {
+    // A subject is never a literal or a triple term, and the pattern binds `?s` in every solution.
+    it('encodes a subject variable as an IRI only', async({ expect }) => {
       expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
         ?s ?p ?o .
         BIND(<internal://blank>(?s) AS ?node)
-      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( ${iriOrLiteralEncoding('?s')} ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( ${iriEncoding('?s')} ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
   ?s ?p ?o .
 }`);
     });
@@ -209,16 +218,25 @@ describe('bnode skolem', () => {
         ?s ?p ?o .
         BIND(<<( ?s ?p ?o )>> AS ?t)
         BIND(<internal://blank>(?t) AS ?node)
-      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( CONCAT( ",triple" , ${iriOrLiteralEncoding('SUBJECT( ?t )')} , ${iriOrLiteralEncoding('PREDICATE( ?t )')} , ${iriOrLiteralEncoding('OBJECT( ?t )')} ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( ${tripleTermEncoding('?t', 1)} ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
   ?s ?p ?o .
   BIND( <<( ?s ?p ?o )>> AS ?t )
 }`);
     });
 
-    // BOUND only accepts a variable, and a constant is bound anyway. A constant IRI is no triple term either.
-    it('encodes a constant argument without asking whether it is bound or a triple term', async({ expect }) => {
+    it('encodes a triple term written in the argument through its components', async({ expect }) => {
+      expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
+        ?s ?p ?o .
+        BIND(<internal://blank>(<<( ?s ?p ?o )>>) AS ?node)
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( CONCAT( ",triple" , ${iriEncoding('?s')} , ${iriEncoding('?p')} , ${termEncoding('?o')} ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+  ?s ?p ?o .
+}`);
+    });
+
+    // BOUND only accepts a variable, and a constant is bound anyway.
+    it('encodes a constant argument as its own term type only', async({ expect }) => {
       expect((await rewriter.rewriteQuery('SELECT * WHERE { BIND(<internal://blank>(<ex://c>) AS ?node) }')).trim())
-        .toEqual(`SELECT ( STRDT( CONCAT( ${iriOrLiteralEncoding('<ex://c>')} ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+        .toEqual(`SELECT ( STRDT( CONCAT( ${iriEncoding('<ex://c>')} ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
 }`);
     });
   });
