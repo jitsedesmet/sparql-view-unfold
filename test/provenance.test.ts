@@ -124,6 +124,24 @@ WHERE {
     );
   });
 
+  it('identifies a derivation by the value, or the unbound marker, of a variable a BIND may leave unbound', (
+    { expect },
+  ) => {
+    expectProvenanceConstruct(
+      expect,
+      'CONSTRUCT { ?x :name ?n } WHERE { ?x :firstName ?f BIND(CONCAT(?f, "!") AS ?n) }',
+      `CONSTRUCT {
+  ?derivation0 <https://sparql-extension.knows.idlab.ugent.be/provenance#derivationOf> <<( ?x <ex://name> ?n )>> .
+  ?derivation0 <https://sparql-extension.knows.idlab.ugent.be/provenance#derivedFrom> <<( ?x <ex://firstName> ?f )>> .
+}
+WHERE {
+  ?x <ex://firstName> ?f .
+  BIND( CONCAT( ?f , "!" ) AS ?n )
+  BIND( <internal://blank> ( <https://sparql-extension.knows.idlab.ugent.be/provenance#construct0> , ?x , ?f , ?n ) AS ?derivation0 )
+}`,
+    );
+  });
+
   it('identifies a derivation by an OPTIONAL variable, but links it only to the patterns outside', ({ expect }) => {
     expectProvenanceConstruct(
       expect,
