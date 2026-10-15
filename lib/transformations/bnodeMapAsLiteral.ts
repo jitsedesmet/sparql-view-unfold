@@ -8,7 +8,15 @@ import { literalRange, objectRange, RangeSet, rangeOfPosition, subjectRange, tri
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
-import { constructionCannotFail, cpMetaOf, VRanges, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import {
+  constructionCannotFail,
+  cpMetaOf,
+  expressionRange,
+  termVars,
+  VRanges,
+  withoutCpVars,
+} from '../utils/certainlyBoundVars.js';
+import { constructedTermOf, createBooleanExpression } from '../utils/expressionHelpers.js';
 import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
 
 /**
@@ -46,7 +54,7 @@ function isInternalBnode(expression: Algebra.NamedExpression): boolean {
  * - Literals with lang: `,literal@,<value>,<lang>`
  * - Plain/typed literals: `,literal,<value>,<datatype>`
  * - Triple terms: `,triple` followed by the encodings of its subject, predicate and object
- * - Unbound variables: `,unbound`, which no bound value gives
+ * - Arguments that are unbound or error, as a BIND would leave them unbound: `,unbound`, which no value gives
  *
  * @param c - The transformation context
  * @param expression - The internal blank node expression
@@ -140,17 +148,16 @@ function encodeInternalBnode(
   }
 
   /**
-   * A component of a triple term: as written when the triple term is written and cannot fail to construct, else read
-   * through its accessor.
+   * A component of a triple term: as written for a written triple term, else read through its accessor.
    * @param termExpression - An expression giving the triple term, like `?t` or `<<( ?s ?p ?o )>>`.
    * @param position - The component to give.
    * @returns The expression giving the component, and the term types it can be.
    */
   function componentOf(termExpression: Algebra.Expression, position: TriplePosition): [Algebra.Expression, RangeSet] {
-    if (termExpression.subType === Algebra.ExpressionTypes.TERM && termExpression.term.termType === 'Quad' &&
-      constructionCannotFail(termExpression.term, scope.vRanges)) {
+    if (termExpression.subType === Algebra.ExpressionTypes.TERM && termExpression.term.termType === 'Quad') {
+      // Only encoded once constructed, so the component is a term its position admits.
       const component = termExpression.term[position];
-      return [ AF.createTermExpression(component), rangeOfWritten(component) ];
+      return [ AF.createTermExpression(component), rangeOfWritten(component).meet(rangeOfPosition(position)) ];
     }
     return [ AF.createOperatorExpression(position, [ termExpression ]), rangeOfPosition(position) ];
   }
@@ -178,20 +185,46 @@ function encodeInternalBnode(
     ]);
   }
 
-  function encodeArgument(argument: RDF.Term): Algebra.Expression {
-    const encoding = encodeTerm(AF.createTermExpression(argument), rangeOfWritten(argument), c.tripleTermArgumentDepth);
-    // BOUND only accepts a variable, and a triple term with an unbound variable errors, as constructing it does.
-    if (argument.termType !== 'Variable' || scope.cVars.has(argument.value)) {
+  /**
+   * Whether a term as written evaluates in every solution: a constant, a variable bound in each, or a triple term
+   * of those that cannot fail to construct.
+   * @param term - The term, like `?v`, `<ex://c>` or `<<( ?s ?p ?o )>>`.
+   * @returns Whether it certainly evaluates.
+   */
+  function certainlyEvaluates(term: RDF.Term): boolean {
+    if (term.termType === 'Quad') {
+      return constructionCannotFail(term, scope.vRanges) && isSubsetOf(termVars(term), scope.cVars);
+    }
+    return term.termType !== 'Variable' || scope.cVars.has(term.value);
+  }
+
+  /**
+   * Encodes one argument, which can be any expression, as a BIND to a variable followed by the variable would be.
+   * @param argument - The argument, like `?v`, `<<( ?s ?p ?o )>>` or `STR(?v)`.
+   * @returns The encoding, `,unbound` when the argument errors.
+   */
+  function encodeArgument(argument: Algebra.Expression): Algebra.Expression {
+    const term = constructedTermOf(argument);
+    const termExpression = term === undefined ? argument : AF.createTermExpression(term);
+    const encoding = encodeTerm(
+      termExpression,
+      term === undefined ? expressionRange(argument, scope) : rangeOfWritten(term),
+      c.tripleTermArgumentDepth,
+    );
+    if (term !== undefined && certainlyEvaluates(term)) {
       return encoding;
     }
-    // An unbound variable counts as a value of its own instead of erroring the whole identity, like COALESCE handles
-    // an error of its arguments. Not COALESCE(<encoding>, ...): that would also take an error of a bound value,
-    // like a triple term nested too deeply, for unbound.
-    return AF.createOperatorExpression('if', [
-      AF.createOperatorExpression('bound', [ AF.createTermExpression(argument) ]),
-      encoding,
-      expressionLiteral(',unbound'),
-    ]);
+    // An argument that errors counts as a value of its own instead of erroring the whole identity, like COALESCE
+    // handles an error of its arguments. Not COALESCE(<encoding>, ...): that would also count an error encoding a
+    // value, like a triple term nested too deeply, as one of the argument. SAMETERM of a term and itself only errors
+    // when the argument does, as BOUND of a variable is false only when it is unbound.
+    const evaluates = term?.termType === 'Variable' ?
+      AF.createOperatorExpression('bound', [ termExpression ]) :
+      AF.createOperatorExpression('coalesce', [
+        AF.createOperatorExpression('sameterm', [ termExpression, termExpression ]),
+        createBooleanExpression(c, false),
+      ]);
+    return AF.createOperatorExpression('if', [ evaluates, encoding, expressionLiteral(',unbound') ]);
   }
 
   /**
@@ -221,8 +254,7 @@ function encodeInternalBnode(
   }
   // In the order the arguments are written: removeProjections gives hidden variables fresh names per pattern,
   // so an order read off their names would differ between two patterns constructing the same node.
-  return AF.createOperatorExpression('concat', (<Algebra.TermExpression[]>expression.args)
-    .map(argument => encodeArgument(argument.term)));
+  return AF.createOperatorExpression('concat', expression.args.map(encodeArgument));
 }
 
 /**
@@ -241,8 +273,12 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   materialiseEncoding: (encoding: Algebra.Expression) => Algebra.Expression,
   isMaterialisedBnode: (args: Algebra.Expression[]) => Algebra.Expression,
 ): T {
-  // What is materialised holds no internal blank node or ISBLANK, so the second traversal skips it.
+  // What is materialised holds no internal blank node or ISBLANK, its arguments being rewritten before it, so the
+  // second traversal skips it.
   const materialised = new WeakSet<Algebra.Expression>();
+  function rewriteIsBlank(operator: Algebra.OperatorExpression): Algebra.Expression {
+    return operator.operator === 'isblank' ? isMaterialisedBnode(operator.args) : operator;
+  }
   function materialise(expression: Algebra.NamedExpression, scope?: CPMeta): Algebra.Expression {
     const term = materialiseEncoding(encodeInternalBnode(c, expression, scope));
     materialised.add(term);
@@ -253,6 +289,7 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
     return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: {
       existence: { preVisitor: () => ({ continue: false }) },
       named: { transform: named => isInternalBnode(named) ? materialise(named, scope ??= cpMetaOf(input)) : named },
+      operator: { transform: rewriteIsBlank },
     }});
   }
 
@@ -275,7 +312,7 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
     named: { transform: named => isInternalBnode(named) ? materialise(named) : named },
     operator: {
       preVisitor: operator => materialised.has(operator) ? { continue: false } : {},
-      transform: operator => operator.operator === 'isblank' ? isMaterialisedBnode(operator.args) : operator,
+      transform: rewriteIsBlank,
     },
   }});
 }

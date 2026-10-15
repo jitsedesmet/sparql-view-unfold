@@ -144,6 +144,24 @@ describe('bnode skolem', () => {
     });
   });
 
+  // `?o + 1` errors on every solution, and constructing `<<( ?o ?p ?s )>>` fails where `?o` is a literal.
+  it.for([ 'STR(?o)', '?o + 1', 'TRIPLE(?s, ?p, ?o)', '<<( ?o ?p ?s )>>' ])(
+    'constructs the same node for the argument %s as for a variable bound to it',
+    async(argument, { expect }) => {
+      const nodes = await solutions(createQueryRewriter([ internalBnodeAsSpecialIriTransformation() ]), `SELECT * {
+        ?s ?p ?o .
+        BIND(${argument} AS ?bound)
+        BIND(<internal://blank>(?bound) AS ?fromVariable)
+        BIND(<internal://blank>(${argument}) AS ?fromExpression)
+      }`, './test/statics/tripleTermArguments.ttl');
+      expect(nodes).toHaveLength(3);
+      for (const binding of nodes) {
+        expect(binding.get('fromExpression')).toBeDefined();
+        expect(binding.get('fromExpression')?.value).toBe(binding.get('fromVariable')?.value);
+      }
+    },
+  );
+
   it.for(<const> [
     [ 'a typed literal', internalBnodeAsSpecialLiteralTransformation() ],
     [ 'a prefixed IRI', internalBnodeAsSpecialIriTransformation() ],
@@ -186,6 +204,11 @@ describe('bnode skolem', () => {
     // A term that is a triple term, unrolled `depth` triple terms deep.
     function tripleTermEncoding(term: string, depth = 2): string {
       return `CONCAT( ",triple" , ${iriEncoding(`SUBJECT( ${term} )`)} , ${iriEncoding(`PREDICATE( ${term} )`)} , ${termEncoding(`OBJECT( ${term} )`, depth - 1)} )`;
+    }
+
+    // Whether `term` evaluates rather than errors.
+    function evaluates(term: string): string {
+      return `COALESCE( SAMETERM( ${term} , ${term} ) , FALSE )`;
     }
 
     // A term that can be any term, unrolled `depth` triple terms deep.
@@ -263,14 +286,28 @@ describe('bnode skolem', () => {
 }`);
     });
 
-    // `?o` may be a literal, which a subject does not admit: the construction may fail, so it is read through.
-    it('encodes a written triple term that may fail to construct through its accessors', async({ expect }) => {
+    // `?o` may be a literal, which a subject does not admit, so constructing the triple term may fail.
+    it('encodes a written triple term that may fail to construct as unbound when it does', async({ expect }) => {
       expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
         ?s ?p ?o .
         BIND(<internal://blank>(<<( ?o ?p ?s )>>) AS ?node)
-      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( ${tripleTermEncoding('<<( ?o ?p ?s )>>')} ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( IF( ${evaluates('<<( ?o ?p ?s )>>')} , CONCAT( ",triple" , ${iriEncoding('?o')} , ${iriEncoding('?p')} , ${iriEncoding('?s')} ) , ",unbound" ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
   ?s ?p ?o .
 }`);
+    });
+
+    it('encodes an expression argument as unbound when it errors', async({ expect }) => {
+      expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
+        ?s ?p ?o .
+        BIND(<internal://blank>(STR(?o)) AS ?node)
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( IF( ${evaluates('STR( ?o )')} , ${termEncoding('STR( ?o )')} , ",unbound" ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+  ?s ?p ?o .
+}`);
+    });
+
+    it('rewrites an ISBLANK in an argument', async({ expect }) => {
+      await expect(rewriter.rewriteQuery('SELECT * WHERE { ?s ?p ?o . BIND(<internal://blank>(STR(ISBLANK(?s))) AS ?node) }'))
+        .resolves.not.toContain('ISBLANK');
     });
 
     // An EXISTS substitutes the solution it is asked for, so the ranges of its own pattern do not hold.
