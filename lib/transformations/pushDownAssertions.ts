@@ -34,7 +34,7 @@ import { createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import { unionSets } from '../utils/setUtils.js';
 import type { DerivedVarNamer } from '../utils.js';
-import { collectVariableNames, derivedVarNamer } from '../utils.js';
+import { derivedVarNamer, markVariableNamesUsed } from '../utils.js';
 
 /**
  * @fileoverview Assertion filter pushdown.
@@ -123,7 +123,7 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: Transformatio
   // rewritten (D4). Both halves of that matter: a materialised position has to get the same name
   // wherever it is written, and a name coined against a part of the tree would collide with a variable
   // in the part that has not been met yet - which is also why this takes the root, see above.
-  const namer = derivedVarNamer(collectVariableNames(c.astTransformer, rootOp));
+  const namer = derivedVarNamer(markVariableNamesUsed(c, rootOp));
   callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(c, namer, filter);
   // Starting from a copy without metadata gives both a tree of our own to rewrite and the guarantee that
   // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out

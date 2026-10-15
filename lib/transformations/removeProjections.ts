@@ -1,8 +1,7 @@
-import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import { collectVariableNames, freshVarGenerator, renameVariables } from '../utils.js';
+import { collectVariableNames, freshVarGenerator, markVariableNamesUsed, renameVariables } from '../utils.js';
 
 /**
  * Transformation that removes all PROJECT operations from an algebra tree.
@@ -26,6 +25,9 @@ import { collectVariableNames, freshVarGenerator, renameVariables } from '../uti
  * has no way to *write* a LIMIT or OFFSET that is not on a SELECT, and `toAst` rejects the `Slice` it
  * would be left holding.
  *
+ * A projection over a GROUP is kept for that same reason: a GROUP BY is only written on a SELECT, and without
+ * one the grouping would be printed on the enclosing query.
+ *
  * @param c - The transformation context
  * @param op - The operation to transform
  * @returns The transformed operation without any PROJECT operations
@@ -35,9 +37,8 @@ import { collectVariableNames, freshVarGenerator, renameVariables } from '../uti
  * // After:  ?x ?v_0 ?v_1                  (projection removed, hidden vars anonymized)
  */
 export function removeProjections<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  // Seed the generator with every variable in the tree so fresh names never collide.
-  // We cannot collide in the top level context
-  const nextVar = freshVarGenerator(collectVariableNames(c.astTransformer, op));
+  // Coined against every name in use, so fresh names never collide.
+  const nextVar = freshVarGenerator(markVariableNamesUsed(c, op));
 
   // Filled top-down (preVisitor) before the projection itself is transformed bottom-up.
   const keptProjections = new Set<Algebra.Operation>();
@@ -47,23 +48,45 @@ export function removeProjections<T extends Algebra.Operation>(c: Transformation
     }
     return {};
   };
+  // The projection an operation sits below, through the binds of its aggregates, its HAVING and its ORDER BY.
+  const projectionAbove = new Map<Algebra.Operation, Algebra.Project>();
+  const passProjectionDown = (operation: Algebra.Extend | Algebra.Filter | Algebra.OrderBy): object => {
+    const project = projectionAbove.get(operation);
+    if (project) {
+      projectionAbove.set(operation.input, project);
+    }
+    return {};
+  };
 
   // TODO: this renames even if it has already renamed so could be optimized, but that's not a priority now.
   return algebraUtils.mapOperation<'unsafe', typeof op>(op, {
     [Algebra.Types.DISTINCT]: { preVisitor: keepProjectedInput },
     [Algebra.Types.REDUCED]: { preVisitor: keepProjectedInput },
     [Algebra.Types.SLICE]: { preVisitor: keepProjectedInput },
-    [Algebra.Types.PROJECT]: { transform: (project, original) => {
+    [Algebra.Types.EXTEND]: { preVisitor: passProjectionDown },
+    [Algebra.Types.FILTER]: { preVisitor: passProjectionDown },
+    [Algebra.Types.ORDER_BY]: { preVisitor: passProjectionDown },
+    [Algebra.Types.GROUP]: { preVisitor: (group) => {
+      const project = projectionAbove.get(group);
+      if (project) {
+        keptProjections.add(project);
+      }
+      return {};
+    } },
+    [Algebra.Types.PROJECT]: { preVisitor: (project) => {
+      projectionAbove.set(project.input, project);
+      return {};
+    }, transform: (project, original) => {
       if (keptProjections.has(original)) {
         return project;
       }
       const projected = new Set(project.variables.map(variable => variable.value));
-      const renames: Record<string, RDF.Variable> = {};
+      const renames = new Map<string, string>();
       // For all variables in the current subquery (which you know contains no other subqueries)
       for (const name of collectVariableNames(c.astTransformer, project.input)) {
         // If that var is not projected, rename it
         if (!projected.has(name)) {
-          renames[name] = nextVar();
+          renames.set(name, nextVar().value);
         }
       }
       return renameVariables(c, project.input, renames);

@@ -17,7 +17,7 @@ describe('the default pipeline', () => {
   it('collapses a join of two patterns that pin one variable to different terms', async({ expect }) => {
     // `?s` would have to be <ex://a> for the first pattern and <ex://b> for the second.
     expect((await rewriter.rewriteQuery('SELECT * { ?s <ex://p> ?o1 . ?s <ex://q> ?o2 }')).trim())
-      .toEqual(`SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_o2 AS ?o2 ) ( ?uq_s AS ?s ) WHERE {
+      .toEqual(`SELECT ?o1 ?o2 ?s WHERE {
   FILTER ( FALSE )
 }`);
   });
@@ -40,10 +40,9 @@ describe('the default pipeline over an OPTIONAL', () => {
     // The outer filter pins `?o` to "1", which substituted into the OPTIONAL's condition asks "1" to be "2".
     expect((await rewriter.rewriteQuery(
       'SELECT * { ?s <ex://p> ?o FILTER(SAMETERM(?o, "1")) OPTIONAL { ?s <ex://r> ?x FILTER(SAMETERM(?o, "2")) } }',
-    )).trim()).toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) ( ?uq_x AS ?x ) WHERE {
+    )).trim()).toEqual(`SELECT ( "1" AS ?o ) ?s ?x WHERE {
   ?v_1 <ex://q> ?v_2 .
-  BIND( ?v_1 AS ?uq_s )
-  BIND( "1" AS ?uq_o )
+  BIND( ?v_1 AS ?s )
 }`);
   });
 
@@ -64,13 +63,13 @@ describe('the default pipeline over a mapping that types its head', () => {
   it('keeps the type test where nothing guarantees it', async({ expect }) => {
     // `?v_1` is read from an object position, which holds literals and triple terms as well.
     expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b }')).trim())
-      .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+      .toEqual(`SELECT ?a ?b WHERE {
   {
     ?v_0 <ex://q> ?v_1 .
     FILTER ( ( ISIRI( ?v_1 ) || ISBLANK( ?v_1 ) ) )
   }
-  BIND( ?v_1 AS ?uq_a )
-  BIND( ?v_0 AS ?uq_b )
+  BIND( ?v_1 AS ?a )
+  BIND( ?v_0 AS ?b )
 }`);
   });
 
@@ -78,17 +77,16 @@ describe('the default pipeline over a mapping that types its head', () => {
     // `sameTerm(?a, ?b)` equates the body's object with its subject, and a pattern binds its subject to an IRI or
     // a blank node only: the pattern decides the test.
     expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(sameTerm(?a, ?b)) }')).trim())
-      .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+      .toEqual(`SELECT ?a ( ?a AS ?b ) WHERE {
   ?v_0 <ex://q> ?v_0 .
-  BIND( ?v_0 AS ?uq_a )
-  BIND( ?v_0 AS ?uq_b )
+  BIND( ?v_0 AS ?a )
 }`);
   });
 
   it('empties the query when a user type test contradicts the mapping\'s', async({ expect }) => {
     // No triple of the view has a literal subject.
     expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isLITERAL(?a)) }')).trim())
-      .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+      .toEqual(`SELECT ?a ?b WHERE {
   FILTER ( FALSE )
 }`);
   });
@@ -96,13 +94,13 @@ describe('the default pipeline over a mapping that types its head', () => {
   it('narrows the mapping\'s type test to a narrower one of the user', async({ expect }) => {
     // The two tests are one assertion about `?v_1`, holding the term types both of them admit.
     expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isIRI(?a)) }')).trim())
-      .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+      .toEqual(`SELECT ?a ?b WHERE {
   {
     ?v_0 <ex://q> ?v_1 .
     FILTER ( ISIRI( ?v_1 ) )
   }
-  BIND( ?v_1 AS ?uq_a )
-  BIND( ?v_0 AS ?uq_b )
+  BIND( ?v_1 AS ?a )
+  BIND( ?v_0 AS ?b )
 }`);
   });
 
@@ -113,19 +111,19 @@ describe('the default pipeline over a mapping that types its head', () => {
       mappingFromConstructQueries([ construct ], { generalizedRdfView: true }),
     ));
     expect((await generalized.rewriteQuery('SELECT * { ?a <ex://p> ?b }')).trim())
-      .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+      .toEqual(`SELECT ?a ?b WHERE {
   ?v_0 <ex://q> ?v_1 .
-  BIND( ?v_1 AS ?uq_a )
-  BIND( ?v_0 AS ?uq_b )
+  BIND( ?v_1 AS ?a )
+  BIND( ?v_0 AS ?b )
 }`);
     expect((await generalized.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isLITERAL(?a)) }')).trim())
-      .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+      .toEqual(`SELECT ?a ?b WHERE {
   {
     ?v_0 <ex://q> ?v_1 .
     FILTER ( ISLITERAL( ?v_1 ) )
   }
-  BIND( ?v_1 AS ?uq_a )
-  BIND( ?v_0 AS ?uq_b )
+  BIND( ?v_1 AS ?a )
+  BIND( ?v_0 AS ?b )
 }`);
   });
 });

@@ -22,14 +22,19 @@ describe('pushDownAssertions', () => {
   // mapping, so a mapping-less partial context is sufficient here.
   const c = createTransformationContext();
 
+  /** A context for a new rewrite: the shared factories, with no variable name in use yet. */
+  function newRewriteContext(): typeof c {
+    return { ...c, usedVariableNames: new Set() };
+  }
+
   function transform(query: string): string {
-    const transformed = pushDownAssertions(c, parseQuery(c, prefixes + query));
+    const transformed = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query));
     return c.generator.generate(toAst(transformed)).trim();
   }
 
   /** Runs the FILTER(FALSE) normalisation of the design's normalisation pass on top of the pushdown. */
   function transformAndNormalise(query: string): string {
-    const pushed = pushDownAssertions(c, parseQuery(c, prefixes + query));
+    const pushed = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query));
     return c.generator.generate(toAst(transformFilterFalse(c, pushed))).trim();
   }
 
@@ -45,7 +50,8 @@ describe('pushDownAssertions', () => {
    */
   function expectIdempotent(expect: typeof Expect, query: string): void {
     const once = transform(query);
-    const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
+    const rewrite = newRewriteContext();
+    const twice = pushDownAssertions(rewrite, pushDownAssertions(rewrite, parseQuery(c, prefixes + query)));
     expect(c.generator.generate(toAst(twice)).trim()).toEqual(once);
     expect(transform(once)).toEqual(once);
   }
@@ -68,7 +74,8 @@ describe('pushDownAssertions', () => {
    * about.
    */
   function transformOverQuads(query: string): string {
-    return c.generator.generate(toAst(pushDownAssertions(c, parseQuery(c, prefixes + query, { quads: true })))).trim();
+    const pushed = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query, { quads: true }));
+    return c.generator.generate(toAst(pushed)).trim();
   }
 
   function expectTransformOverQuads(expect: typeof Expect, query: string, expected: string): void {
@@ -497,7 +504,8 @@ GROUP BY ( <ex://c> AS ?x )`,
           false,
         ) ],
       );
-      const pushed = pushDownAssertions(c, AF.createFilter(group, AF.createOperatorExpression('sameterm', [
+      const rewrite = newRewriteContext();
+      const pushed = pushDownAssertions(rewrite, AF.createFilter(group, AF.createOperatorExpression('sameterm', [
         AF.createTermExpression(DF.variable('total')),
         AF.createTermExpression(DF.namedNode('ex://c')),
       ])));
@@ -1375,7 +1383,7 @@ GROUP BY ?x ( ?x AS ?y )`,
         FILTER(sameTerm(?w, ?x) && sameTerm(?x, ?y) && sameTerm(?y, ?z))
       }`);
       const before = JSON.stringify(algebra);
-      pushDownAssertions(c, algebra);
+      pushDownAssertions(newRewriteContext(), algebra);
       expect(JSON.stringify(algebra)).toEqual(before);
     });
 
@@ -1431,8 +1439,9 @@ GROUP BY ?x ( ?x AS ?y )`,
         // which it only does where the first one left the rows saying everything the condition said.
         'SELECT * WHERE { VALUES (?o ?s) { (<<( :a :b :c )>> :a) } FILTER(sameTerm(subject(?o), ?s)) }',
       ]) {
-        const once = pushDownAssertions(c, parseQuery(c, prefixes + query));
-        const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
+        const once = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query));
+        const rewrite = newRewriteContext();
+        const twice = pushDownAssertions(rewrite, pushDownAssertions(rewrite, parseQuery(c, prefixes + query)));
         expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
       }
     });
@@ -1742,8 +1751,9 @@ GROUP BY ?x ( ?x AS ?y )`,
         { SELECT ?x ?d WHERE { ?x :r ?d } }
         FILTER(sameTerm(?x, :c))
       }`;
-      const once = pushDownAssertions(c, parseQuery(c, query));
-      const twice = pushDownAssertions(c, once);
+      const rewrite = newRewriteContext();
+      const once = pushDownAssertions(rewrite, parseQuery(c, query));
+      const twice = pushDownAssertions(rewrite, once);
       expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
     });
 
@@ -1971,7 +1981,7 @@ GROUP BY ?x ( ?x AS ?y )`,
         FILTER(sameTerm(?x, :c))
       }`);
       const before = JSON.stringify(algebra);
-      pushDownAssertions(c, algebra);
+      pushDownAssertions(newRewriteContext(), algebra);
       expect(JSON.stringify(algebra)).toEqual(before);
     });
 
@@ -1982,8 +1992,9 @@ GROUP BY ?x ( ?x AS ?y )`,
         { SELECT ?x ?b WHERE { ?x :r ?b } LIMIT 5 }
         FILTER(sameTerm(?x, :c))
       }`;
-      const once = pushDownAssertions(c, parseQuery(c, query));
-      const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, query)));
+      const once = pushDownAssertions(newRewriteContext(), parseQuery(c, query));
+      const rewrite = newRewriteContext();
+      const twice = pushDownAssertions(rewrite, pushDownAssertions(rewrite, parseQuery(c, query)));
       expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
     });
   });
@@ -2574,7 +2585,7 @@ GROUP BY ?x ( ?x AS ?y )`,
         FILTER(sameTerm(subject(?o), ?s) && isTRIPLE(?z) && isIRI(?p))
       }`);
       const before = JSON.stringify(algebra);
-      pushDownAssertions(c, algebra);
+      pushDownAssertions(newRewriteContext(), algebra);
       expect(JSON.stringify(algebra)).toEqual(before);
     });
   });
@@ -3473,7 +3484,7 @@ HAVING SAMETERM( ?y , SAMPLE( ?x ) )`,
         FILTER(sameTerm(?b, ?d) && sameTerm(?d, ?e) && (isLITERAL(?e) || isBLANK(?e)) && (!bound(?c) || isIRI(?c)))
       }`);
       const before = JSON.stringify(algebra);
-      pushDownAssertions(c, algebra);
+      pushDownAssertions(newRewriteContext(), algebra);
       expect(JSON.stringify(algebra)).toEqual(before);
     });
 

@@ -1,6 +1,5 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { VAR_PREFIX_USER_QUERY } from './consts.js';
 import type { Pin, PinMeet } from './datastructures/TermClusterSet.js';
 import { meetShapes, TermClusterSet, triplePositions } from './datastructures/TermClusterSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
@@ -37,19 +36,6 @@ function meetSolverPins(left: Pin<RawBasicTerm>, right: Pin<RawBasicTerm>): PinM
 }
 
 /**
- * Whether the variable came from the user query, as against from the mapping being unfolded into it.
- *
- * The user query is renamed under {@link VAR_PREFIX_USER_QUERY} before any rewriting happens, so carrying
- * that prefix is what the two sides are told apart by - the whole prefix, a variable named `?uqx` being a
- * mapping variable like any other.
- * @param variable - The variable to classify
- * @returns whether it is a user query variable
- */
-function isUserQueryVar(variable: RangedVar): boolean {
-  return variable.value.startsWith(VAR_PREFIX_USER_QUERY);
-}
-
-/**
  * Solver for determining variable equality clusters during query rewriting.
  *
  * When rewriting a triple pattern against a mapping head, variables from both sides may need to be unified.
@@ -73,6 +59,8 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * equal a concrete term.
    */
   protected staticExpressionValidation: { expression: Algebra.Expression; term: RawTerm }[];
+  /** The names of the user query's variables: those {@link register} met on its user query side. */
+  private userQueryVariableNames: Set<string>;
 
   public constructor() {
     super(variable => variable.value, meetSolverPins);
@@ -84,6 +72,16 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     super.clear();
     this.groupToExpressions = {};
     this.staticExpressionValidation = [];
+    this.userQueryVariableNames = new Set();
+  }
+
+  /**
+   * Whether the variable came from the user query rather than from the mapping.
+   * @param variable - The variable to classify
+   * @returns whether it is a user query variable
+   */
+  private isUserQueryVar(variable: RangedVar): boolean {
+    return this.userQueryVariableNames.has(variable.value);
   }
 
   /**
@@ -101,46 +99,50 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   }
 
   /**
-   * Registers an equality constraint between two terms, variables or expressions - the main entry point for
-   * adding constraints.
-   * @param from - Term, variable, or expression (typically from the mapping head)
-   * @param to - Term or variable (typically from the triple pattern)
+   * Registers that a term or expression of the mapping head equals a term of the user query's pattern. A
+   * variable on the user query side is classified as the user query's, every other one as the mapping's.
+   * @param mappingSide - Term, variable, or expression of the mapping head
+   * @param userQuerySide - Term or variable of the triple pattern
    * @throws RewriteNoMatchError if the terms do not match, or the constraints conflict
    */
-  public register(from: RDF.Term | Algebra.Expression, to: RDF.Term): void {
-    if (isRdfTerm(from) && !isRdfVar(from) && isRdfTerm(to) && !isRdfVar(to)) {
+  public register(mappingSide: RDF.Term | Algebra.Expression, userQuerySide: RDF.Term): void {
+    if (isRdfVar(userQuerySide) && !this.userQueryVariableNames.has(userQuerySide.value)) {
+      this.touch();
+      this.userQueryVariableNames.add(userQuerySide.value);
+    }
+    if (isRdfTerm(mappingSide) && !isRdfVar(mappingSide) && isRdfTerm(userQuerySide) && !isRdfVar(userQuerySide)) {
       // Two terms, neither are vars. Two *triple* terms never reach here - the unfolding recurses into a
       // pair of them rather than registering it - so what the equality compares is a pair of values.
-      if (from.equals(to)) {
+      if (mappingSide.equals(userQuerySide)) {
         return;
       }
-      throw new RewriteNoMatchError(`Cannot match Term ${JSON.stringify(from)} with term ${JSON.stringify(to)}`);
-    } else if (isRdfVar(from) && isRdfVar(to)) {
+      throw new RewriteNoMatchError(`Cannot match Term ${JSON.stringify(mappingSide)} with term ${JSON.stringify(userQuerySide)}`);
+    } else if (isRdfVar(mappingSide) && isRdfVar(userQuerySide)) {
       // Two vars
-      this.mergeGroups(from, to);
-    } else if (isRdfVar(from)) {
-      // `from` is var - `to` is not
-      const varGroup = this.getGroup(from);
-      this.registerTermToGroup(varGroup, to);
-    } else if (isRdfVar(to)) {
-      // `to` is var, `from` is not
-      const varGroup = this.getGroup(to);
-      if (isRdfTerm(from)) {
-        this.registerTermToGroup(varGroup, from);
+      this.mergeGroups(mappingSide, userQuerySide);
+    } else if (isRdfVar(mappingSide)) {
+      // `mappingSide` is var - `userQuerySide` is not
+      const varGroup = this.getGroup(mappingSide);
+      this.registerTermToGroup(varGroup, userQuerySide);
+    } else if (isRdfVar(userQuerySide)) {
+      // `userQuerySide` is var, `mappingSide` is not
+      const varGroup = this.getGroup(userQuerySide);
+      if (isRdfTerm(mappingSide)) {
+        this.registerTermToGroup(varGroup, mappingSide);
       } else {
         // It is an expression
-        this.registerExpressionToGroup(varGroup, from);
+        this.registerExpressionToGroup(varGroup, mappingSide);
       }
     } else {
-      // Neither `from` nor `to` is a var. First condition would have checked this in case `from` is a term.
-      const expression = <Exclude<typeof from, RDF.Term>> from;
+      // Neither side is a var. The first condition would have caught a `mappingSide` that is a term.
+      const expression = <Exclude<typeof mappingSide, RDF.Term>> mappingSide;
       // The one branch that writes without going through a group, so the only one with a `touch` of its own.
       this.touch();
       // TODO: decide statically whether the expression can produce this term at all, rather than leaving
       //   every such pair to the `sameTerm` the rewriting emits.
       this.staticExpressionValidation.push({
         expression,
-        term: to,
+        term: userQuerySide,
       });
     }
   }
@@ -242,7 +244,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * The term every value of the group equals, reading a *shape* back as the triple term it stands for.
    *
    * Every position is whatever fixes it, or else the mapping variable naming it - the same variable the
-   * mapping body binds, which is what lets the `BIND(<<( ?mi_s ?mi_p ?mi_o )>> AS ?uq_o)` this feeds name
+   * mapping body binds, which is what lets the `BIND(<<( ?s ?p ?o )>> AS ?y)` this feeds name
    * values the subselect really projects.
    * @param group - The group to look up
    * @returns the term, or `undefined` when nothing fixes the group, or when a position of its shape is fixed
@@ -274,7 +276,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * rewrite names the group by
    */
   public mappingVarsOf(group: number): readonly RangedVar[] {
-    return this.valuesOf(this.resolveGroup(group)).filter(value => !isUserQueryVar(value));
+    return this.valuesOf(this.resolveGroup(group)).filter(value => !this.isUserQueryVar(value));
   }
 
   /**
@@ -310,8 +312,8 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    *
    * The mapping variables coming first is what {@link resolvedTermOf} and the rewriting read a cluster by:
    * the first variable of a cluster is the one the subselect really projects, so a user query variable
-   * landing there would name a variable nothing binds. It is ordered on `isUserQueryVar` rather than
-   * left to the names, which only happen to sort that way while the prefixes both start where they do.
+   * landing there would name a variable nothing binds. It is ordered on {@link isUserQueryVar} rather than
+   * left to the names, which carry no sign of the side they are on.
    *
    * Sorts the lists in place, which is a write like any other: what a group's first value is decides what
    * every read of it names, so the stamp has to move on even though the members themselves do not change.
@@ -320,7 +322,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     this.touch();
     for (const groupVars of Object.values(this.groupToValues)) {
       groupVars.sort((a, b) =>
-        (isUserQueryVar(a) ? 1 : 0) - (isUserQueryVar(b) ? 1 : 0) ||
+        (this.isUserQueryVar(a) ? 1 : 0) - (this.isUserQueryVar(b) ? 1 : 0) ||
         a.value.localeCompare(b.value));
     }
   }

@@ -82,23 +82,21 @@ steps are equivalences over any data and may still rewrite inside it.
 `pullUpExtends` is the mirror of step 5: it floats the BINDs the pushdown left at the leaves back up the
 plan and deletes the ones nothing above reads.
 
-## Variable prefixes
+## Variable names
 
-Three prefixes, in `lib/consts.ts`, and two of them are load-bearing:
+Nothing is told apart by its name. The `ClusterSolver` learns which variables are the user query's from the
+side of `register` they arrive on; every other variable in a cluster is the mapping's. Names still have to
+differ, since the solver keys variables by name and a mapping body shares a scope with the binds of its
+pattern.
 
-- `uq_` — every variable of the user query, renamed before anything runs. This is the **only** prefix the
-  rewriting classifies on: a variable in a cluster carries it exactly when it came from the user query, and
-  every other variable in that cluster belongs to the mapping.
-- `mi_` — every variable of a mapping, head and body alike, so a mapping cannot collide with the query it
-  is unfolded into.
-- `m_` — the three variables of the generic head several mappings are merged into.
+The context holds every variable name in use in the rewrite (`usedVariableNames`), seeded with the whole
+query, and every pass coining a name claims it there. The unfolding renames a mapping variable whose name is
+in use under `mi_`; the generic head of merged mappings is `?m_s ?m_p ?m_o` (`lib/consts.ts`).
 
 Nothing namespaces the *patterns* apart: each is unfolded into a sub-SELECT projecting only its own (user
-query) variables, so the mapping variables of two patterns are in two scopes already. Only the `uq_`
-variables are meant to be shared between patterns, being the natural join keys. The one exception is the
-existence variable a pattern binding nothing projects in place of an empty projection — that one leaves the
-sub-SELECT, so the context coins it (`mExists0`, `mExists1`, …), holding the count for the whole rewrite.
-It is never bound; coining it keeps it apart from the variables the pattern does bind.
+query) variables, so the mapping variables of two patterns are in two scopes already. The one variable
+leaving a sub-SELECT is the existence variable a pattern binding nothing projects in place of an empty
+projection (`mExists0`, `mExists1`, …), which is never bound.
 
 ## Blank nodes
 

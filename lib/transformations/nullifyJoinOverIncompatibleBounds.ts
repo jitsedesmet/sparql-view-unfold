@@ -77,12 +77,13 @@ export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
 function restrictOperations(
   c: TransformationContext,
   join: Algebra.Join,
-  varSets: Record<string, VariableSet>,
+  varSets: ReadonlyMap<string, VariableSet>,
 ): void {
   const recurse = (op: Algebra.Operation): Algebra.Operation => {
     if (op.type === Algebra.Types.EXTEND) {
-      if (op.expression.subType === Algebra.ExpressionTypes.TERM && varSets[op.variable.value] &&
-        !varSets[op.variable.value].termIsCompatible(op.expression.term)) {
+      const varSet = varSets.get(op.variable.value);
+      if (op.expression.subType === Algebra.ExpressionTypes.TERM && varSet &&
+        !varSet.termIsCompatible(op.expression.term)) {
         return createFilterFalse(c, op);
       }
       op.input = recurse(op.input);
@@ -96,34 +97,33 @@ function restrictOperations(
   join.input = join.input.map(x => recurse(x));
 }
 
-function variableExtensionsOverJoin(join: Algebra.Join): Record<string, VariableSet> {
+function variableExtensionsOverJoin(join: Algebra.Join): Map<string, VariableSet> {
   const head = join.input[0];
   // Not knowing the variable makes it be noFixed, and that is identity of disjuntion
-  const varSets: Record<string, VariableSet> = directExtensionOverUnionsAndMore(head);
+  const varSets = directExtensionOverUnionsAndMore(head);
 
   for (const op of join.input.slice(1)) {
-    for (const [ var_, varSet ] of Object.entries(directExtensionOverUnionsAndMore(op))) {
-      if (varSets[var_]) {
-        varSets[var_] = varSets[var_].disjunct(varSet);
-      } else {
-        varSets[var_] = varSet;
-      }
+    for (const [ var_, varSet ] of directExtensionOverUnionsAndMore(op)) {
+      const known = varSets.get(var_);
+      varSets.set(var_, known ? known.disjunct(varSet) : varSet);
     }
   }
 
   return varSets;
 }
 
-function directExtensionOverUnionsAndMore(op: Algebra.Operation): Record<string, VariableSet> {
-  const varSets: Record<string, VariableSet> = {};
+function directExtensionOverUnionsAndMore(op: Algebra.Operation): Map<string, VariableSet> {
+  const varSets = new Map<string, VariableSet>();
   const traverse = (op: Algebra.Operation): void => {
     if (op.type === Algebra.Types.EXTEND) {
       if (op.expression.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(op.expression.term)) {
-        varSets[op.variable.value] = new VariableSet(op.expression.term);
+        varSets.set(op.variable.value, new VariableSet(op.expression.term));
       }
       traverse(op.input);
     } else if (op.type === Algebra.Types.UNION) {
-      Object.assign(varSets, directExtensionOverUnions(op));
+      for (const [ var_, varSet ] of directExtensionOverUnions(op)) {
+        varSets.set(var_, varSet);
+      }
     }
   };
 
@@ -131,25 +131,21 @@ function directExtensionOverUnionsAndMore(op: Algebra.Operation): Record<string,
   return varSets;
 }
 
-function directExtensionOverUnions(union: Algebra.Union): Record<string, VariableSet> {
+function directExtensionOverUnions(union: Algebra.Union): Map<string, VariableSet> {
   const head = union.input[0];
   // Not knowing the variable makes it be noFixed, which is absorbing element under union
-  const varSets: Record<string, VariableSet> = Object.fromEntries(Object.entries(directExtensions(head))
-    .map(([ var_, term ]) => [ var_, new VariableSet((term)) ]));
+  const varSets = new Map([ ...directExtensions(head) ].map(([ var_, term ]) => [ var_, new VariableSet(term) ]));
   for (const op of union.input.slice(1)) {
-    let trackedVars = Object.keys(varSets);
-    for (const [ var_, term ] of Object.entries(directExtensions(op))) {
+    let trackedVars = [ ...varSets.keys() ];
+    for (const [ var_, term ] of directExtensions(op)) {
       // Register you saw this var
       trackedVars = trackedVars.filter(x => x !== var_);
-      if (varSets[var_]) {
-        varSets[var_] = varSets[var_].union(new VariableSet(term));
-      } else {
-        varSets[var_] = VariableSet.createNoFixed();
-      }
+      const known = varSets.get(var_);
+      varSets.set(var_, known ? known.union(new VariableSet(term)) : VariableSet.createNoFixed());
     }
     // All vars not visited are noFixed:
     for (const var_ of trackedVars) {
-      varSets[var_] = VariableSet.createNoFixed();
+      varSets.set(var_, VariableSet.createNoFixed());
     }
   }
   return varSets;

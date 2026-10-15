@@ -50,16 +50,16 @@ describe('dummy', () => {
   it('chain of unification through triple pattern', ({ expect }) => testConstructMappers(
     expect,
     'SELECT * { ?s <ex://p> <<(?s a "b")>> }',
-    `SELECT ( ?uq_s AS ?s ) WHERE {
-  SELECT ( <ex://x> AS ?uq_s ) WHERE {
+    `SELECT ?s WHERE {
+  SELECT ( <ex://x> AS ?s ) WHERE {
     {
       {
-        ?mi_y ?mi_y ?mi_y .
-        FILTER ( SAMETERM( <ex://x> , SUBJECT( ?mi_y ) ) )
+        ?y ?y ?y .
+        FILTER ( SAMETERM( <ex://x> , SUBJECT( ?y ) ) )
       }
-      FILTER ( SAMETERM( <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> , PREDICATE( ?mi_y ) ) )
+      FILTER ( SAMETERM( <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> , PREDICATE( ?y ) ) )
     }
-    FILTER ( SAMETERM( "b" , OBJECT( ?mi_y ) ) )
+    FILTER ( SAMETERM( "b" , OBJECT( ?y ) ) )
   }
 }`,
     [ 'CONSTRUCT { <ex://x> <ex://p> ?y } WHERE { ?y ?y ?y }' ],
@@ -70,13 +70,13 @@ describe('dummy', () => {
   it('mapping head triple term bound to a pattern variable', ({ expect }) => testConstructMappers(
     expect,
     'PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT * { ?x rdf:reifies ?y }',
-    `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
-  SELECT ( ?mi_t AS ?uq_x ) ( <<( ?mi_s ?mi_p ?mi_o )>> AS ?uq_y ) WHERE {
-    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
-    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
-    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
-    FILTER ( ( ( ISIRI( ?mi_s ) || ISBLANK( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
+    `SELECT ?x ?y WHERE {
+  SELECT ( ?t AS ?x ) ( <<( ?s ?p ?o )>> AS ?y ) WHERE {
+    ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+    ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?s .
+    ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p .
+    ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?o .
+    FILTER ( ( ( ISIRI( ?s ) || ISBLANK( ?s ) ) && ISIRI( ?p ) ) )
   }
 }`,
     [ tripleTermConstruct ],
@@ -89,10 +89,10 @@ describe('dummy', () => {
     `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
      PREFIX : <ex://>
      SELECT * { :knows rdf:reifies ?y }`,
-    `SELECT ( ?uq_y AS ?y ) WHERE {
-  SELECT ( <<( ?mi_s <ex://knows> ?mi_o )>> AS ?uq_y ) WHERE {
-    ?mi_s ?mi_p ?mi_o .
-    FILTER ( SAMETERM( ?mi_p , <ex://knows> ) )
+    `SELECT ?y WHERE {
+  SELECT ( <<( ?s <ex://knows> ?o )>> AS ?y ) WHERE {
+    ?s ?p ?o .
+    FILTER ( SAMETERM( ?p , <ex://knows> ) )
   }
 }`,
     [ predicateReifierConstruct ],
@@ -101,8 +101,8 @@ describe('dummy', () => {
   it('simple pass through', ({ expect }) => testConstructMappers(
     expect,
     'SELECT * { ?s <ex://p> ?o }',
-    `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
-  SELECT ( ?mi_o AS ?uq_o ) ( ?mi_s AS ?uq_s ) WHERE {
+    `SELECT ?o ?s WHERE {
+  SELECT ( ?mi_o AS ?o ) ( ?mi_s AS ?s ) WHERE {
     ?mi_s <ex://p> ?mi_o .
   }
 }`,
@@ -110,13 +110,12 @@ describe('dummy', () => {
   ));
 
   // A SLICE (LIMIT/OFFSET) wraps the Project in the algebra, so it must be peeled to reach the
-  // Project for variable renaming and re-applied afterwards - otherwise the outer projection is
-  // skipped and columns keep their internal `uq_` names.
+  // pattern below the Project and re-applied afterwards.
   it('pass through with LIMIT/OFFSET', ({ expect }) => testConstructMappers(
     expect,
     'SELECT * { ?s <ex://p> ?o } LIMIT 10 OFFSET 5',
-    `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
-  SELECT ( ?mi_o AS ?uq_o ) ( ?mi_s AS ?uq_s ) WHERE {
+    `SELECT ?o ?s WHERE {
+  SELECT ( ?mi_o AS ?o ) ( ?mi_s AS ?s ) WHERE {
     ?mi_s <ex://p> ?mi_o .
   }
 }
@@ -128,8 +127,8 @@ LIMIT 10 OFFSET 5`,
   it('pass through with DISTINCT and LIMIT', ({ expect }) => testConstructMappers(
     expect,
     'SELECT DISTINCT * { ?s <ex://p> ?o } LIMIT 10',
-    `SELECT DISTINCT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
-  SELECT ( ?mi_o AS ?uq_o ) ( ?mi_s AS ?uq_s ) WHERE {
+    `SELECT DISTINCT ?o ?s WHERE {
+  SELECT ( ?mi_o AS ?o ) ( ?mi_s AS ?s ) WHERE {
     ?mi_s <ex://p> ?mi_o .
   }
 }
@@ -167,14 +166,14 @@ LIMIT 10`,
       it('only its subject and object leave it, each pair once', ({ expect }) => testPath(
         expect,
         'SELECT * { ?s !<ex://r> ?o }',
-        `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
-  SELECT DISTINCT ?uq_s ?uq_o WHERE {
+        `SELECT ?o ?s WHERE {
+  SELECT DISTINCT ?s ?o WHERE {
     {
-      SELECT ( ?mi_o AS ?uq_o ) ( ?mi_p AS ?uq_path_0 ) ( ?mi_s AS ?uq_s ) WHERE {
-        ?mi_s ?mi_p ?mi_o .
+      SELECT ( ?mi_o AS ?o ) ( ?p AS ?path_0 ) ( ?mi_s AS ?s ) WHERE {
+        ?mi_s ?p ?mi_o .
       }
     }
-    FILTER ( ( ?uq_path_0 NOT IN ( <ex://r> ) ) )
+    FILTER ( ( ?path_0 NOT IN ( <ex://r> ) ) )
   }
 }`,
       ));
@@ -185,15 +184,15 @@ LIMIT 10`,
         `SELECT * WHERE {
   SELECT DISTINCT ?mExists0 WHERE {
     {
-      SELECT ( ?mi_p AS ?uq_path_0 ) WHERE {
+      SELECT ( ?p AS ?path_0 ) WHERE {
         {
-          ?mi_s ?mi_p ?mi_o .
-          FILTER ( SAMETERM( ?mi_s , <ex://a> ) )
+          ?s ?p ?o .
+          FILTER ( SAMETERM( ?s , <ex://a> ) )
         }
-        FILTER ( SAMETERM( ?mi_o , <ex://b> ) )
+        FILTER ( SAMETERM( ?o , <ex://b> ) )
       }
     }
-    FILTER ( ( ?uq_path_0 NOT IN ( <ex://r> ) ) )
+    FILTER ( ( ?path_0 NOT IN ( <ex://r> ) ) )
   }
 }`,
       ));
@@ -203,36 +202,36 @@ LIMIT 10`,
       it('only its subject and object leave it, each pair once', ({ expect }) => testPath(
         expect,
         'SELECT * { ?x <ex://p>? ?y }',
-        `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
-  SELECT DISTINCT ?uq_x ?uq_y WHERE {
+        `SELECT ?x ?y WHERE {
+  SELECT DISTINCT ?x ?y WHERE {
     {
       {
-        SELECT ( ?mi_s AS ?uq_x ) ( ?mi_o AS ?uq_y ) WHERE {
-          ?mi_s ?mi_p ?mi_o .
-          FILTER ( SAMETERM( ?mi_p , <ex://p> ) )
+        SELECT ( ?s AS ?x ) ( ?o AS ?y ) WHERE {
+          ?s ?p ?o .
+          FILTER ( SAMETERM( ?p , <ex://p> ) )
         }
       }
     }
     UNION {
       {
-        SELECT DISTINCT ?uq_x WHERE {
+        SELECT DISTINCT ?x WHERE {
           {
             {
-              SELECT ( ?mi_p AS ?uq_path_0 ) ( ?mi_o AS ?uq_path_1 ) ( ?mi_s AS ?uq_x ) WHERE {
-                ?mi_s ?mi_p ?mi_o .
+              SELECT ( ?p AS ?path_0 ) ( ?o AS ?path_1 ) ( ?s AS ?x ) WHERE {
+                ?s ?p ?o .
               }
             }
           }
           UNION {
             {
-              SELECT ( ?mi_p AS ?uq_path_0 ) ( ?mi_s AS ?uq_path_1 ) ( ?mi_o AS ?uq_x ) WHERE {
-                ?mi_s ?mi_p ?mi_o .
+              SELECT ( ?p AS ?path_0 ) ( ?s AS ?path_1 ) ( ?o AS ?x ) WHERE {
+                ?s ?p ?o .
               }
             }
           }
         }
       }
-      BIND( ?uq_x AS ?uq_y )
+      BIND( ?x AS ?y )
     }
   }
 }`,
@@ -242,32 +241,32 @@ LIMIT 10`,
       it('takes every node as a zero length match when subject and object are one variable', ({ expect }) => testPath(
         expect,
         'SELECT * { ?x <ex://p>? ?x }',
-        `SELECT ( ?uq_x AS ?x ) WHERE {
-  SELECT DISTINCT ?uq_x WHERE {
+        `SELECT ?x WHERE {
+  SELECT DISTINCT ?x WHERE {
     {
       {
-        SELECT ( ?mi_o AS ?uq_x ) WHERE {
+        SELECT ( ?o AS ?x ) WHERE {
           {
-            ?mi_s ?mi_p ?mi_o .
-            FILTER ( SAMETERM( ?mi_p , <ex://p> ) )
+            ?s ?p ?o .
+            FILTER ( SAMETERM( ?p , <ex://p> ) )
           }
-          FILTER ( SAMETERM( ?mi_o , ?mi_s ) )
+          FILTER ( SAMETERM( ?o , ?s ) )
         }
       }
     }
     UNION {
-      SELECT DISTINCT ?uq_x WHERE {
+      SELECT DISTINCT ?x WHERE {
         {
           {
-            SELECT ( ?mi_p AS ?uq_path_0 ) ( ?mi_o AS ?uq_path_1 ) ( ?mi_s AS ?uq_x ) WHERE {
-              ?mi_s ?mi_p ?mi_o .
+            SELECT ( ?p AS ?path_0 ) ( ?o AS ?path_1 ) ( ?s AS ?x ) WHERE {
+              ?s ?p ?o .
             }
           }
         }
         UNION {
           {
-            SELECT ( ?mi_p AS ?uq_path_0 ) ( ?mi_s AS ?uq_path_1 ) ( ?mi_o AS ?uq_x ) WHERE {
-              ?mi_s ?mi_p ?mi_o .
+            SELECT ( ?p AS ?path_0 ) ( ?s AS ?path_1 ) ( ?o AS ?x ) WHERE {
+              ?s ?p ?o .
             }
           }
         }
@@ -287,12 +286,12 @@ LIMIT 10`,
         SELECT ?mExists1 WHERE {
           {
             {
-              ?mi_s ?mi_p ?mi_o .
-              FILTER ( SAMETERM( ?mi_s , <ex://a> ) )
+              ?s ?p ?o .
+              FILTER ( SAMETERM( ?s , <ex://a> ) )
             }
-            FILTER ( SAMETERM( ?mi_p , <ex://q> ) )
+            FILTER ( SAMETERM( ?p , <ex://q> ) )
           }
-          FILTER ( SAMETERM( ?mi_o , <ex://b> ) )
+          FILTER ( SAMETERM( ?o , <ex://b> ) )
         }
       }
     }
@@ -301,12 +300,12 @@ LIMIT 10`,
         SELECT ?mExists2 WHERE {
           {
             {
-              ?mi_s ?mi_p ?mi_o .
-              FILTER ( SAMETERM( ?mi_s , <ex://a> ) )
+              ?s ?p ?o .
+              FILTER ( SAMETERM( ?s , <ex://a> ) )
             }
-            FILTER ( SAMETERM( ?mi_p , <ex://r> ) )
+            FILTER ( SAMETERM( ?p , <ex://r> ) )
           }
-          FILTER ( SAMETERM( ?mi_o , <ex://b> ) )
+          FILTER ( SAMETERM( ?o , <ex://b> ) )
         }
       }
     }
@@ -333,14 +332,14 @@ LIMIT 10`,
     it('is left as it stands while the patterns beside it are unfolded', ({ expect }) => testService(
       expect,
       'SELECT * { ?s <ex://q> ?o SERVICE <ex://endpoint> { ?o <ex://q> ?x } }',
-      `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) ( ?uq_x AS ?x ) WHERE {
+      `SELECT ?o ?s ?x WHERE {
   {
-    SELECT ( ?mi_o AS ?uq_o ) ( ?mi_s AS ?uq_s ) WHERE {
+    SELECT ( ?mi_o AS ?o ) ( ?mi_s AS ?s ) WHERE {
       ?mi_s <ex://p> ?mi_o .
     }
   }
   SERVICE <ex://endpoint> {
-    ?uq_o <ex://q> ?uq_x .
+    ?o <ex://q> ?x .
   }
 }`,
     ));
@@ -348,15 +347,15 @@ LIMIT 10`,
     it('is left as it stands inside an EXISTS', ({ expect }) => testService(
       expect,
       'SELECT * { ?s <ex://q> ?o FILTER EXISTS { SERVICE <ex://endpoint> { ?o <ex://q> ?x } } }',
-      `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
+      `SELECT ?o ?s WHERE {
   {
-    SELECT ( ?mi_o AS ?uq_o ) ( ?mi_s AS ?uq_s ) WHERE {
+    SELECT ( ?mi_o AS ?o ) ( ?mi_s AS ?s ) WHERE {
       ?mi_s <ex://p> ?mi_o .
     }
   }
   FILTER ( EXISTS {
     SERVICE <ex://endpoint> {
-      ?uq_o <ex://q> ?uq_x .
+      ?o <ex://q> ?x .
     }
   }
   )
@@ -366,10 +365,10 @@ LIMIT 10`,
     it('keeps its property paths, recursive ones included, for the endpoint to evaluate', ({ expect }) => testService(
       expect,
       'SELECT * { SERVICE <ex://endpoint> { ?s <ex://q>? ?o . ?o <ex://q>+ ?x } }',
-      `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) ( ?uq_x AS ?x ) WHERE {
+      `SELECT ?o ?s ?x WHERE {
   SERVICE <ex://endpoint> {
-    ?uq_s (<ex://q>?) ?uq_o .
-    ?uq_o (<ex://q>+) ?uq_x .
+    ?s (<ex://q>?) ?o .
+    ?o (<ex://q>+) ?x .
   }
 }`,
     ));

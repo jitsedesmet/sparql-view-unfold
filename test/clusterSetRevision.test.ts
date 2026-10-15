@@ -165,14 +165,14 @@ describe('cluster set revision', () => {
 
     it('the solver unifying two variables', ({ expect }) => {
       const solver = new ClusterSolver();
-      solver.getGroup(DF.variable('mi_x'));
-      solver.getGroup(DF.variable('mi_y'));
-      expect(moves(solver, () => solver.register(DF.variable('mi_x'), DF.variable('mi_y')))).toBe(true);
+      solver.getGroup(DF.variable('x'));
+      solver.getGroup(DF.variable('y'));
+      expect(moves(solver, () => solver.register(DF.variable('x'), DF.variable('y')))).toBe(true);
     });
 
     it('the solver registering an expression onto a group', ({ expect }) => {
       const solver = new ClusterSolver();
-      const variable = DF.variable('mi_x');
+      const variable = DF.variable('x');
       solver.getGroup(variable);
       const expression = AF.createTermExpression(termA);
       expect(moves(solver, () => solver.register(expression, variable))).toBe(true);
@@ -181,7 +181,7 @@ describe('cluster set revision', () => {
 
     it('the solver registering an expression against a term, which writes no group at all', ({ expect }) => {
       const solver = new ClusterSolver();
-      solver.getGroup(DF.variable('mi_x'));
+      solver.getGroup(DF.variable('x'));
       const expression = AF.createTermExpression(termA);
       expect(moves(solver, () => solver.register(expression, termB))).toBe(true);
       expect(solver.getStaticExpressionValidation()).toHaveLength(1);
@@ -189,12 +189,21 @@ describe('cluster set revision', () => {
 
     it('sortClusters, which reorders a group in place rather than changing what is in it', ({ expect }) => {
       const solver = new ClusterSolver();
-      // The user query variable is met first, so it lands first and the sort has something to move.
-      solver.register(DF.variable('uq_x'), DF.variable('mi_a'));
-      const group = solver.getGroup(DF.variable('uq_x'));
-      expect(solver.valuesOf(group).map(value => value.value)).toEqual([ 'uq_x', 'mi_a' ]);
+      // The user query variable `?a` lands first, so the sort has something to move.
+      solver.getGroup(DF.variable('a'));
+      solver.register(DF.variable('x'), DF.variable('a'));
+      const group = solver.getGroup(DF.variable('a'));
+      expect(solver.valuesOf(group).map(value => value.value)).toEqual([ 'a', 'x' ]);
       expect(moves(solver, () => solver.sortClusters())).toBe(true);
-      expect(solver.valuesOf(group).map(value => value.value)).toEqual([ 'mi_a', 'uq_x' ]);
+      expect(solver.valuesOf(group).map(value => value.value)).toEqual([ 'x', 'a' ]);
+    });
+
+    it('the solver classifying a variable as the user query\'s, which writes no group at all', ({ expect }) => {
+      const solver = new ClusterSolver();
+      solver.register(DF.variable('x'), DF.variable('a'));
+      // `?x` already shares the group of `?a`, so only the classification changes.
+      expect(moves(solver, () => solver.register(DF.variable('a'), DF.variable('x')))).toBe(true);
+      expect(solver.mappingVarsOf(solver.getGroup(DF.variable('x')))).toEqual([]);
     });
   });
 
