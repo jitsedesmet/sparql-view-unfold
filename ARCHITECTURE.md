@@ -103,8 +103,10 @@ projection (`mExists0`, `mExists1`, …), which is never bound.
 An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to
 *construct* a blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: same inputs,
 same identity. An unbound argument counts as a value of its own, so a node is still built, one that differs from
-every node built from a bound value. Two transformations materialise it — `internalBnodeAsSpecialLiteral` as a
-typed literal, `internalBnodeAsSpecialIri` as a prefixed IRI whose length SHA-1 keeps manageable.
+every node built from a bound value. A triple term argument is encoded through its components, nested up to
+`TRIPLE_TERM_ARGUMENT_DEPTH` (2) deep since an expression cannot recurse; a deeper one still leaves the node
+unbound. Two transformations materialise it — `internalBnodeAsSpecialLiteral` as a typed literal,
+`internalBnodeAsSpecialIri` as a prefixed IRI whose length SHA-1 keeps manageable.
 
 ## SPARQL quirks worth knowing
 

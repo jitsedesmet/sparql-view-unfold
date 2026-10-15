@@ -20,6 +20,14 @@ import type { QueryTransformation } from '../types.js';
  */
 
 /**
+ * How deeply nested a triple term argument of `<internal://blank>` is encoded, since a SPARQL expression cannot
+ * recurse. Only the object of a triple term can itself be one, so 2 encodes a triple term whose object may itself be
+ * a triple term whose object is not. A more deeply nested triple term errors the identity, leaving the node unbound.
+ * Each level adds three encodings to the expression of every variable argument.
+ */
+const TRIPLE_TERM_ARGUMENT_DEPTH = 2;
+
+/**
  * Transforms an internal blank node expression into a deterministic expression.
  *
  * The expression `<internal://blank>(?var1, ?var2, ...)` is converted to an
@@ -30,7 +38,12 @@ import type { QueryTransformation } from '../types.js';
  * - Literals with lang+dir: `,literal@D,<value>,<lang>,<dir>`
  * - Literals with lang: `,literal@,<value>,<lang>`
  * - Plain/typed literals: `,literal,<value>,<datatype>`
+ * - Triple terms: `,triple` followed by the encodings of its subject, predicate and object,
+ *   nested up to {@link TRIPLE_TERM_ARGUMENT_DEPTH}
  * - Unbound variables: `,unbound`, which no bound value gives
+ *
+ * The result is unambiguous: every part starts with its tag, values have their commas escaped,
+ * and `,triple` is followed by exactly three parts.
  *
  * @param c - The transformation context
  * @param expression - The internal blank node expression
@@ -50,57 +63,89 @@ function expressionForConsistentConstruction(
     return AF.createTermExpression(DF.literal(...args));
   }
 
-  // Return a big if
-  function mapArgument(argument: RDF.Term): Algebra.Expression {
-    const varAsExpr = AF.createTermExpression(argument);
-    // We assume the var is never bound to a bnode since we explicitly disallow BNODES.
-    const boundEncoding = AF.createOperatorExpression('if', [
-      AF.createOperatorExpression('isiri', [ varAsExpr ]),
+  /**
+   * Encodes a term that is an IRI or a literal: a big if on which kind it is.
+   * @param termExpression - An expression giving the term, like `?v` or `OBJECT(?t)`.
+   * @returns The encoding, which errors when the term is a triple term or unbound.
+   */
+  function encodeIriOrLiteral(termExpression: Algebra.Expression): Algebra.Expression {
+    // We assume the term is never a bnode since we explicitly disallow BNODES.
+    return AF.createOperatorExpression('if', [
+      AF.createOperatorExpression('isiri', [ termExpression ]),
       AF.createOperatorExpression('concat', [
         expressionLiteral(',iri,'),
-        escapeUserInput(AF.createOperatorExpression('str', [ varAsExpr ])),
+        escapeUserInput(AF.createOperatorExpression('str', [ termExpression ])),
       ]),
       AF.createOperatorExpression('if', [
         // We now know it is a literal
-        AF.createOperatorExpression('haslangdir', [ varAsExpr ]),
+        AF.createOperatorExpression('haslangdir', [ termExpression ]),
         AF.createOperatorExpression('concat', [
           expressionLiteral(',literal@D,'),
-          escapeUserInput(AF.createOperatorExpression('str', [ varAsExpr ])),
+          escapeUserInput(AF.createOperatorExpression('str', [ termExpression ])),
           expressionLiteral(','),
-          escapeUserInput(AF.createOperatorExpression('lang', [ varAsExpr ])),
+          escapeUserInput(AF.createOperatorExpression('lang', [ termExpression ])),
           expressionLiteral(','),
-          escapeUserInput(AF.createOperatorExpression('langdir', [ varAsExpr ])),
+          escapeUserInput(AF.createOperatorExpression('langdir', [ termExpression ])),
         ]),
         AF.createOperatorExpression('if', [
           // We now know it is a literal
-          AF.createOperatorExpression('haslang', [ varAsExpr ]),
+          AF.createOperatorExpression('haslang', [ termExpression ]),
           AF.createOperatorExpression('concat', [
             expressionLiteral(',literal@,'),
-            escapeUserInput(AF.createOperatorExpression('str', [ varAsExpr ])),
+            escapeUserInput(AF.createOperatorExpression('str', [ termExpression ])),
             expressionLiteral(','),
-            escapeUserInput(AF.createOperatorExpression('lang', [ varAsExpr ])),
+            escapeUserInput(AF.createOperatorExpression('lang', [ termExpression ])),
           ]),
           AF.createOperatorExpression('concat', [
             expressionLiteral(',literal,'),
-            escapeUserInput(AF.createOperatorExpression('str', [ varAsExpr ])),
+            escapeUserInput(AF.createOperatorExpression('str', [ termExpression ])),
             expressionLiteral(','),
             escapeUserInput(AF.createOperatorExpression('str', [
-              AF.createOperatorExpression('datatype', [ varAsExpr ]),
+              AF.createOperatorExpression('datatype', [ termExpression ]),
             ])),
           ]),
         ]),
       ]),
     ]);
-    // A constant is always bound, and BOUND only accepts a variable.
+  }
+
+  /**
+   * Encodes a term that can also be a triple term, through the encodings of its subject, predicate and object.
+   * @param termExpression - An expression giving the term, like `?v` or `OBJECT(?t)`.
+   * @param tripleTermDepth - How deeply nested a triple term is encoded; a more deeply nested one errors.
+   * @returns The encoding, which errors when the term is unbound.
+   */
+  function encodeTerm(termExpression: Algebra.Expression, tripleTermDepth: number): Algebra.Expression {
+    if (tripleTermDepth === 0) {
+      return encodeIriOrLiteral(termExpression);
+    }
+    // In RDF 1.2 only the object of a triple term can itself be a triple term.
+    return AF.createOperatorExpression('if', [
+      AF.createOperatorExpression('istriple', [ termExpression ]),
+      AF.createOperatorExpression('concat', [
+        expressionLiteral(',triple'),
+        encodeIriOrLiteral(AF.createOperatorExpression('subject', [ termExpression ])),
+        encodeIriOrLiteral(AF.createOperatorExpression('predicate', [ termExpression ])),
+        encodeTerm(AF.createOperatorExpression('object', [ termExpression ]), tripleTermDepth - 1),
+      ]),
+      encodeIriOrLiteral(termExpression),
+    ]);
+  }
+
+  function mapArgument(argument: RDF.Term): Algebra.Expression {
+    const argumentExpression = AF.createTermExpression(argument);
+    // A constant is always bound, and BOUND only accepts a variable. Only a triple term constant needs ISTRIPLE.
     if (argument.termType !== 'Variable') {
-      return boundEncoding;
+      return argument.termType === 'Quad' ?
+        encodeTerm(argumentExpression, TRIPLE_TERM_ARGUMENT_DEPTH) :
+        encodeIriOrLiteral(argumentExpression);
     }
     // An unbound variable counts as a value of its own instead of erroring the whole identity, like COALESCE handles
-    // an error of its arguments. Not COALESCE(boundEncoding, ...): that would also take an error of a bound value,
-    // like STR of a triple term, for unbound.
+    // an error of its arguments. Not COALESCE(<encoding>, ...): that would also take an error of a bound value,
+    // like a triple term nested too deeply, for unbound.
     return AF.createOperatorExpression('if', [
-      AF.createOperatorExpression('bound', [ varAsExpr ]),
-      boundEncoding,
+      AF.createOperatorExpression('bound', [ argumentExpression ]),
+      encodeTerm(argumentExpression, TRIPLE_TERM_ARGUMENT_DEPTH),
       expressionLiteral(',unbound'),
     ]);
   }
