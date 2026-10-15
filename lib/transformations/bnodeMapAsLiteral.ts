@@ -121,8 +121,8 @@ function expressionForConsistentConstruction(
   // In case no vars are provided, we always make a new one (you likely never want this though....)
   let value = AF.createOperatorExpression('struuid', []);
   if (expression.args.length > 0) {
-    // In the order the arguments are written: the unfolding renames variables per pattern, so an order read
-    // off their names would differ between two patterns constructing the same node.
+    // In the order the arguments are written: removeProjections gives hidden variables fresh names per pattern,
+    // so an order read off their names would differ between two patterns constructing the same node.
     value = AF.createOperatorExpression('concat', (<Algebra.TermExpression[]>expression.args)
       .map(expression => mapVariable(<RDF.Variable> expression.term)));
   }
