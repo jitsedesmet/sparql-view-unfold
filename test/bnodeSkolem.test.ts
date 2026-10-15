@@ -1,4 +1,5 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
+import type * as RDF from '@rdfjs/types';
 import { describe, it } from 'vitest';
 import { DT_INTERNAL_BNODE } from '../lib/consts.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
@@ -11,14 +12,29 @@ import {
 } from '../lib/transformations/bnodeMapAsLiteral.js';
 import { createTransformationContext } from '../lib/transformContext.js';
 
+const engine = new QueryEngine();
+
+// Every solution of the rewritten query over the source.
+async function solutions(rewriter: QueryRewriter, query: string, source: string): Promise<RDF.Bindings[]> {
+  const bindings = await engine.queryBindings(await rewriter.rewriteQuery(query), { sources: [ source ]});
+  return bindings.toArray();
+}
+
 // The value of `?node` in every solution of the rewritten query.
 async function constructedNodes(
   rewriter: QueryRewriter,
   query: string,
   source: string,
 ): Promise<(string | undefined)[]> {
-  const bindings = await new QueryEngine().queryBindings(await rewriter.rewriteQuery(query), { sources: [ source ]});
-  return (await bindings.toArray()).map(binding => binding.get('node')?.value);
+  return (await solutions(rewriter, query, source)).map(binding => binding.get('node')?.value);
+}
+
+// A rewriter unfolding the CONSTRUCT and materialising its blank nodes as prefixed IRIs.
+function skolemisingRewriter(construct: string): QueryRewriter {
+  return createQueryRewriter([
+    ...createDefaultTransformationPipeline(mappingFromConstructQueries([ construct ])),
+    internalBnodeAsSpecialIriTransformation(),
+  ]);
 }
 
 describe('bnode skolem', () => {
@@ -47,12 +63,10 @@ describe('bnode skolem', () => {
   });
 
   it('constructs the same node in every pattern it is unfolded into', async({ expect }) => {
-    const rewriter = createQueryRewriter([ ...createDefaultTransformationPipeline(mappingFromConstructQueries([
-      `CONSTRUCT { ?node <ex://first> ?first . ?node <ex://second> ?second } WHERE {
-        ?subject <ex://p1> ?first . ?subject <ex://p2> ?second .
-        BIND(<internal://blank>(?subject, ?first, ?second) AS ?node)
-      }`,
-    ])), internalBnodeAsSpecialIriTransformation() ]);
+    const rewriter = skolemisingRewriter(`CONSTRUCT { ?node <ex://first> ?first . ?node <ex://second> ?second } WHERE {
+      ?subject <ex://p1> ?first . ?subject <ex://p2> ?second .
+      BIND(<internal://blank>(?subject, ?first, ?second) AS ?node)
+    }`);
     await expect(constructedNodes(
       rewriter,
       'SELECT * WHERE { ?node <ex://first> ?first . ?node <ex://second> ?second }',
@@ -62,13 +76,11 @@ describe('bnode skolem', () => {
 
   describe('with an argument an OPTIONAL leaves unbound', () => {
     // `?x` is bound for the `<ex://o1>` solution only, and both solutions share `?s`.
-    const rewriter = createQueryRewriter([ ...createDefaultTransformationPipeline(mappingFromConstructQueries([
-      `CONSTRUCT { ?node <ex://object> ?o } WHERE {
-        ?s ?p ?o .
-        OPTIONAL { ?x <ex://p1> ?o }
-        BIND(<internal://blank>(?s, ?x) AS ?node)
-      }`,
-    ])), internalBnodeAsSpecialIriTransformation() ]);
+    const rewriter = skolemisingRewriter(`CONSTRUCT { ?node <ex://object> ?o } WHERE {
+      ?s ?p ?o .
+      OPTIONAL { ?x <ex://p1> ?o }
+      BIND(<internal://blank>(?s, ?x) AS ?node)
+    }`);
 
     const nodes = (): Promise<(string | undefined)[]> =>
       constructedNodes(rewriter, 'SELECT ?node WHERE { ?node <ex://object> ?o }', './test/statics/data01.ttl');
@@ -87,22 +99,24 @@ describe('bnode skolem', () => {
   describe('with an argument bound to a triple term', () => {
     // The data holds `<a> <p1> <o1>` and two triples differing from it in one position.
     function nodesFrom(tripleTerm: string, query: string): Promise<(string | undefined)[]> {
-      const rewriter = createQueryRewriter([ ...createDefaultTransformationPipeline(mappingFromConstructQueries([
-        `CONSTRUCT { ?node <ex://subject> ?s . ?node <ex://object> ?o } WHERE {
-          ?s ?p ?o .
-          BIND(${tripleTerm} AS ?t)
-          BIND(<internal://blank>(?t) AS ?node)
-        }`,
-      ])), internalBnodeAsSpecialIriTransformation() ]);
+      const rewriter = skolemisingRewriter(`CONSTRUCT { ?node <ex://subject> ?s . ?node <ex://object> ?o } WHERE {
+        ?s ?p ?o .
+        BIND(${tripleTerm} AS ?t)
+        BIND(<internal://blank>(?t) AS ?node)
+      }`);
       return constructedNodes(rewriter, query, './test/statics/tripleTermArguments.ttl');
     }
 
-    it('constructs a different node for each triple term', async({ expect }) => {
-      const nodes = await nodesFrom('<<( ?s ?p ?o )>>', 'SELECT ?node WHERE { ?node <ex://subject> ?s }');
-      expect(nodes).toHaveLength(3);
-      expect(nodes).not.toContain(undefined);
-      expect(new Set(nodes).size).toBe(3);
-    });
+    // The second nests a triple term in the object of one.
+    it.for([ '<<( ?s ?p ?o )>>', '<<( ?s ?p <<( ?s ?p ?o )>> )>>' ])(
+      'constructs a different node for each triple term %s',
+      async(tripleTerm, { expect }) => {
+        const nodes = await nodesFrom(tripleTerm, 'SELECT ?node WHERE { ?node <ex://subject> ?s }');
+        expect(nodes).toHaveLength(3);
+        expect(nodes).not.toContain(undefined);
+        expect(new Set(nodes).size).toBe(3);
+      },
+    );
 
     // The join on `?node` keeps a solution only when both patterns constructed the same node.
     it('constructs the same node for the same triple term in every pattern', async({ expect }) => {
@@ -110,16 +124,6 @@ describe('bnode skolem', () => {
         '<<( ?s ?p ?o )>>',
         'SELECT ?node WHERE { ?node <ex://subject> ?s . ?node <ex://object> ?o }',
       )).resolves.toHaveLength(3);
-    });
-
-    it('constructs a node for a triple term nested in the object of one', async({ expect }) => {
-      const nodes = await nodesFrom(
-        '<<( ?s ?p <<( ?s ?p ?o )>> )>>',
-        'SELECT ?node WHERE { ?node <ex://subject> ?s }',
-      );
-      expect(nodes).toHaveLength(3);
-      expect(nodes).not.toContain(undefined);
-      expect(new Set(nodes).size).toBe(3);
     });
 
     // The second is nested three deep, one more than the default depth, so neither form constructs a node.
@@ -130,15 +134,11 @@ describe('bnode skolem', () => {
       tripleTerm,
       constructsNode,
     ], { expect }) => {
-      const query = await createQueryRewriter([ internalBnodeAsSpecialIriTransformation() ]).rewriteQuery(`SELECT * {
+      const [ binding ] = await solutions(createQueryRewriter([ internalBnodeAsSpecialIriTransformation() ]), `SELECT * {
         BIND(${tripleTerm} AS ?t)
         BIND(<internal://blank>(?t) AS ?fromVariable)
         BIND(<internal://blank>(${tripleTerm}) AS ?fromConstant)
-      }`);
-      const bindings = await new QueryEngine().queryBindings(query, {
-        sources: [ './test/statics/tripleTermArguments.ttl' ],
-      });
-      const [ binding ] = await bindings.toArray();
+      }`, './test/statics/tripleTermArguments.ttl');
       expect(binding.has('fromVariable')).toBe(constructsNode);
       expect(binding.get('fromConstant')?.value).toBe(binding.get('fromVariable')?.value);
     });

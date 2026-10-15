@@ -55,8 +55,8 @@ export function intersectSets(sets: SSet[]): SSet {
  * @param remove - The set to take away
  * @returns a new set holding the difference
  */
-export function differenceSets(set: SSet, remove: SSet): SSet {
-  const agg = new Set<string>();
+export function differenceSets<T>(set: ReadonlySet<T>, remove: ReadonlySet<T>): Set<T> {
+  const agg = new Set<T>();
   for (const value of set) {
     if (!remove.has(value)) {
       agg.add(value);
