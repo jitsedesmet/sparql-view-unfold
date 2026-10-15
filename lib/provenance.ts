@@ -29,6 +29,17 @@ import { collectVariableNames, freshVarGenerator } from './utils.js';
  * source triples it matched. {@link provenanceCapturingQuery} makes a SELECT over the view also select, per
  * triple pattern, the derivation that pattern matched. Unfolded against the provenance mapping, it answers
  * one row per combination of derivations an answer has.
+ *
+ * The query side is the semiring query rewriting of Hernández et al., "Computing How-Provenance for SPARQL
+ * Queries via Query Rewriting" (https://doi.org/10.14778/3484224.3484235), Def. 4.3: every triple pattern
+ * becomes Reify(p(s, o), ?Σi) and the new variables are projected, so a row is one monomial and the rows of an
+ * answer are its sum. Here the reification is `?derivationN derivationOf <<( s p o )>>`, its reifiers
+ * derivations.
+ *
+ * OPTIONAL, MINUS and EXISTS get positive provenance only. That paper (Def. 4.12) and Asma et al., "NPCS:
+ * Native Provenance Computation for SPARQL" (https://doi.org/10.1145/3589334.3645557) annotate them with ⊖ in
+ * spm-semirings instead; the former (p. 3400) shows the positive annotation of an OPTIONAL query,
+ * u3 ⊗ (u1 ⊕ u2), to be incorrect, as it does not commute with homomorphisms.
  */
 
 /** Stands in for an unbound variable where a term is needed: in a derivation's identity and in a join key. */
@@ -232,6 +243,12 @@ function withDerivationsHidden<T extends object>(c: ProvenanceCaptureContext, ob
 /**
  * Attaches to every answer the derivations of the solutions agreeing with it on the join variables, where an
  * unbound variable only agrees with an unbound one.
+ *
+ * The shape of the aggregate rewrite of Hernández et al., "Computing How-Provenance for SPARQL Queries via
+ * Query Rewriting" (https://doi.org/10.14778/3484224.3484235), Def. 4.17: answers computed apart, joined with
+ * the provenance under cautious compatibility, which skips strongly bound variables as this joins certainly
+ * bound ones directly. A COALESCE key replaces their renaming and filter. LIMIT and OFFSET are in neither that
+ * paper nor NPCS.
  * @param c - The provenance capture context
  * @param answers - The answers, selecting the join and answer variables but no derivation
  * @param solutions - The solutions the answers are computed from, selecting their derivations

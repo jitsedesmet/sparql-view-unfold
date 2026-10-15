@@ -136,12 +136,20 @@ literal or as a prefixed IRI respectively.
 
 ### Provenance
 
-Which source triples does an answer rest on? A *derivation* is one solution of a mapping body.
-`provenanceMappingFromConstructQueries` builds the view of them: each derivation is `provenance:derivationOf` the
-view triples it produces and `provenance:derivedFrom` the source triples it matched, with `provenance:` for
-`https://sparql-extension.knows.idlab.ugent.be/provenance#`. `provenanceCapturingQuery` rewrites a SELECT over the
-view so that it also selects, per triple pattern, the derivation that pattern matched (`?derivation0`,
-`?derivation1`, …). Unfold the one against the other:
+Which source triples does an answer rest on? Hernández et al.,
+["Computing How-Provenance for SPARQL Queries via Query Rewriting"](https://doi.org/10.14778/3484224.3484235)
+(SPARQLprov) answer that by rewriting the query, and Asma et al.,
+["NPCS: Native Provenance Computation for SPARQL"](https://doi.org/10.1145/3589334.3645557) (NPCS) natively, both
+over data stored reified; NPCS (p. 2092) leaves non-reified data and CONSTRUCT as future work. Here the
+provenance mapping supplies the reification virtually, and a derivation points back through the mapping to the
+source triples it matched. That is no general answer to non-reified data: over one plain graph, a triple can be
+its own identifier.
+
+A *derivation* is one solution of a mapping body. `provenanceMappingFromConstructQueries` builds the view of them:
+each derivation is `provenance:derivationOf` the view triples it produces and `provenance:derivedFrom` the source
+triples it matched, with `provenance:` for `https://sparql-extension.knows.idlab.ugent.be/provenance#`.
+`provenanceCapturingQuery` rewrites a SELECT over the view so that it also selects, per triple pattern, the
+derivation that pattern matched (`?derivation0`, `?derivation1`, …). Unfold the one against the other:
 
 ```typescript
 const rewriter = createQueryRewriter([
@@ -157,7 +165,10 @@ It answers one row per combination of derivations an answer has; querying `deriv
 the source triples behind it. A derivation is identified by the position of its CONSTRUCT and the values of its
 body's variables. Beyond that:
 
-- A pattern under a `MINUS` or an `EXISTS` is only tested for, and selects no derivation.
+- `OPTIONAL`, `MINUS` and `EXISTS` get positive provenance only: an `OPTIONAL` selects its derivations where it
+  matched, and a pattern under a `MINUS` or an `EXISTS` selects none. SPARQLprov (Def. 4.12) and NPCS annotate
+  them with ⊖ instead; SPARQLprov (p. 3400) shows the positive annotation of an `OPTIONAL` query,
+  u3 ⊗ (u1 ⊕ u2), to be incorrect, as it does not commute with homomorphisms.
 - Under a `GROUP BY`, `LIMIT` or `OFFSET`, the answers are computed as without provenance and then joined with
   the derivations of every solution with the same values, including those a `LIMIT` or `OFFSET` leaves out.
   The order of an `ORDER BY` is lost.

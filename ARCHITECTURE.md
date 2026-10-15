@@ -116,14 +116,16 @@ same identity. Two transformations materialise it — `internalBnodeAsSpecialLit
   matches. The result goes through `mappingFromConstructs` like any other.
 - **The query** (`provenanceCapturingQuery`) is a query-to-query rewrite over the view, run *before* the
   rewriter: it changes the projection, which the runner rebuilds as the user wrote it. Each triple pattern
-  becomes `?derivationN derivationOf <<( s p o )>>`. The derivations an operation selects are the derivation
-  variables in its scope, so only a PROJECT needs a rule to keep selecting them, and those under a MINUS or
-  an EXISTS never leave it.
+  becomes `?derivationN derivationOf <<( s p o )>>`, the semiring rewriting of Hernández et al., "Computing
+  How-Provenance for SPARQL Queries via Query Rewriting" (https://doi.org/10.14778/3484224.3484235), Def. 4.3.
+  The derivations an operation selects are the derivation variables in its scope, so only a PROJECT needs a
+  rule to keep selecting them, and those under a MINUS or an EXISTS never leave it.
 
 A GROUP or SLICE counts solutions rather than derivations, so its answers are computed with the lookups
-projected away and then joined with the derivations of the solutions they agree with. A join lets an unbound
-variable match any value, so a variable that may be unbound is joined on a `COALESCE(?x, <unbound>)` key
-instead, which also keeps the join one Comunica can evaluate.
+projected away and then joined with the derivations of the solutions they agree with, the shape of that
+paper's aggregate rewrite (Def. 4.17). A join lets an unbound variable match any value, so a variable that may
+be unbound is joined on a `COALESCE(?x, <unbound>)` key instead, which also keeps the join one Comunica can
+evaluate.
 
 ## SPARQL quirks worth knowing
 
@@ -151,7 +153,12 @@ So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
 - **Merging SERVICE calls.** A service can absorb a variable amount of computation, so there is a
   composition to choose; `transformServiceCallPushUp` makes one choice.
 - **Pruning a derivation lookup.** Every provenance mapping head has the predicate `derivationOf` or
-  `derivedFrom`, so a provenance mapping is nearly always several merged behind the generic head, whose triple term is a `BIND` nothing
-  re-reads. A lookup then unfolds against every mapping, the mismatch of a constant inside the triple term
-  only caught at run time by `sameTerm(c, PREDICATE(?m_o))`. Folding `SUBJECT`/`PREDICATE`/`OBJECT` of a bound
-  triple term into the term it reads would prune those branches and leave plain SPARQL 1.1.
+  `derivedFrom`, so a provenance mapping is nearly always several merged behind the generic head, whose triple
+  term is a `BIND` nothing re-reads. A lookup then unfolds against every mapping, the mismatch of a constant
+  inside the triple term only caught at run time by `sameTerm(c, PREDICATE(?m_o))`. Folding
+  `SUBJECT`/`PREDICATE`/`OBJECT` of a bound triple term into the term it reads would prune those branches and
+  leave plain SPARQL 1.1.
+- **Provenance across SERVICE.** A SERVICE pattern selects no derivation, and `derivedFrom` stops at one.
+  Asma et al., "Native Provenance Computation for Federated and Non-Federated SPARQL Queries"
+  (https://doi.org/10.4230/TGDK.4.1.4), Def. 62, annotates provenance per endpoint (`y ⊛ x`) by shipping the
+  rewrite into the SERVICE: the reference for extending it.
