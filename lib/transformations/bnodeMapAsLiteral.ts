@@ -30,6 +30,7 @@ import type { QueryTransformation } from '../types.js';
  * - Literals with lang+dir: `,literal@D,<value>,<lang>,<dir>`
  * - Literals with lang: `,literal@,<value>,<lang>`
  * - Plain/typed literals: `,literal,<value>,<datatype>`
+ * - Unbound variables: `,unbound`, which no bound value gives
  *
  * @param c - The transformation context
  * @param expression - The internal blank node expression
@@ -50,10 +51,10 @@ function expressionForConsistentConstruction(
   }
 
   // Return a big if
-  function mapVariable(variable: RDF.Variable): Algebra.Expression {
-    const varAsExpr = AF.createTermExpression(variable);
+  function mapArgument(argument: RDF.Term): Algebra.Expression {
+    const varAsExpr = AF.createTermExpression(argument);
     // We assume the var is never bound to a bnode since we explicitly disallow BNODES.
-    return AF.createOperatorExpression('if', [
+    const boundEncoding = AF.createOperatorExpression('if', [
       AF.createOperatorExpression('isiri', [ varAsExpr ]),
       AF.createOperatorExpression('concat', [
         expressionLiteral(',iri,'),
@@ -90,6 +91,18 @@ function expressionForConsistentConstruction(
         ]),
       ]),
     ]);
+    // A constant is always bound, and BOUND only accepts a variable.
+    if (argument.termType !== 'Variable') {
+      return boundEncoding;
+    }
+    // An unbound variable counts as a value of its own instead of erroring the whole identity, like COALESCE handles
+    // an error of its arguments. Not COALESCE(boundEncoding, ...): that would also take an error of a bound value,
+    // like STR of a triple term, for unbound.
+    return AF.createOperatorExpression('if', [
+      AF.createOperatorExpression('bound', [ varAsExpr ]),
+      boundEncoding,
+      expressionLiteral(',unbound'),
+    ]);
   }
 
   /**
@@ -124,7 +137,7 @@ function expressionForConsistentConstruction(
     // In the order the arguments are written: removeProjections gives hidden variables fresh names per pattern,
     // so an order read off their names would differ between two patterns constructing the same node.
     value = AF.createOperatorExpression('concat', (<Algebra.TermExpression[]>expression.args)
-      .map(expression => mapVariable(<RDF.Variable> expression.term)));
+      .map(expression => mapArgument(expression.term)));
   }
 
   if (!hashFunc) {

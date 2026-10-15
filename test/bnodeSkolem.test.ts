@@ -46,4 +46,31 @@ describe('bnode skolem', () => {
 
     await expect(bindings.toArray()).resolves.toHaveLength(1);
   });
+
+  describe('with an argument an OPTIONAL leaves unbound', () => {
+    const rewriter = createQueryRewriter([ ...createDefaultTransformationPipeline(mappingFromConstructQueries([
+      `CONSTRUCT { ?node <ex://name> ?name } WHERE {
+        ?person <ex://name> ?name .
+        OPTIONAL { ?person <ex://nick> ?nick }
+        BIND(<internal://blank>(?name, ?nick) AS ?node)
+      }`,
+    ])), internalBnodeAsSpecialIriTransformation() ]);
+
+    async function constructedNodes(): Promise<(string | undefined)[]> {
+      const query = await rewriter.rewriteQuery('SELECT ?node WHERE { ?node <ex://name> "Ann" }');
+      const bindings = await new QueryEngine()
+        .queryBindings(query, { sources: [ './test/statics/optionalBlankNodeArgument.ttl' ]});
+      return (await bindings.toArray()).map(binding => binding.get('node')?.value);
+    }
+
+    it('still constructs a node for the solution leaving it unbound', async({ expect }) => {
+      const nodes = await constructedNodes();
+      expect(nodes).toHaveLength(2);
+      expect(nodes).not.toContain(undefined);
+    });
+
+    it('constructs a different node than for the solution binding it', async({ expect }) => {
+      expect(new Set(await constructedNodes()).size).toBe(2);
+    });
+  });
 });

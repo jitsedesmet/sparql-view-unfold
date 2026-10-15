@@ -1,0 +1,7 @@
+PREFIX : <ex://>
+
+# Two people sharing a name, of whom only `:nicknamed` has a `:nick`: a blank node built from the name and the
+# nickname an OPTIONAL binds has an unbound argument for `:plain`, and the same other arguments for both.
+:nicknamed :name "Ann" ;
+    :nick "Annie" .
+:plain :name "Ann" .
