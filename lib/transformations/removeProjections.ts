@@ -26,6 +26,9 @@ import { collectVariableNames, freshVarGenerator, renameVariables } from '../uti
  * has no way to *write* a LIMIT or OFFSET that is not on a SELECT, and `toAst` rejects the `Slice` it
  * would be left holding.
  *
+ * A projection over a GROUP is kept for that same reason: a GROUP BY is only written on a SELECT, and without
+ * one the grouping would be printed on the enclosing query.
+ *
  * @param c - The transformation context
  * @param op - The operation to transform
  * @returns The transformed operation without any PROJECT operations
@@ -47,13 +50,35 @@ export function removeProjections<T extends Algebra.Operation>(c: Transformation
     }
     return {};
   };
+  // The projection an operation sits below, through the binds of its aggregates, its HAVING and its ORDER BY.
+  const projectionAbove = new Map<Algebra.Operation, Algebra.Project>();
+  const passProjectionDown = (operation: Algebra.Extend | Algebra.Filter | Algebra.OrderBy): object => {
+    const project = projectionAbove.get(operation);
+    if (project) {
+      projectionAbove.set(operation.input, project);
+    }
+    return {};
+  };
 
   // TODO: this renames even if it has already renamed so could be optimized, but that's not a priority now.
   return algebraUtils.mapOperation<'unsafe', typeof op>(op, {
     [Algebra.Types.DISTINCT]: { preVisitor: keepProjectedInput },
     [Algebra.Types.REDUCED]: { preVisitor: keepProjectedInput },
     [Algebra.Types.SLICE]: { preVisitor: keepProjectedInput },
-    [Algebra.Types.PROJECT]: { transform: (project, original) => {
+    [Algebra.Types.EXTEND]: { preVisitor: passProjectionDown },
+    [Algebra.Types.FILTER]: { preVisitor: passProjectionDown },
+    [Algebra.Types.ORDER_BY]: { preVisitor: passProjectionDown },
+    [Algebra.Types.GROUP]: { preVisitor: (group) => {
+      const project = projectionAbove.get(group);
+      if (project) {
+        keptProjections.add(project);
+      }
+      return {};
+    } },
+    [Algebra.Types.PROJECT]: { preVisitor: (project) => {
+      projectionAbove.set(project.input, project);
+      return {};
+    }, transform: (project, original) => {
       if (keptProjections.has(original)) {
         return project;
       }
