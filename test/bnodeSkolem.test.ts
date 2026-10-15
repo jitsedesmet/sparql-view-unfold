@@ -145,11 +145,16 @@ describe('bnode skolem', () => {
       return `IF( ISIRI( ${term} ) , CONCAT( ",iri," , ${escaped(`STR( ${term} )`)} ) , IF( HASLANGDIR( ${term} ) , CONCAT( ",literal@D," , ${escaped(`STR( ${term} )`)} , "," , ${escaped(`LANG( ${term} )`)} , "," , ${escaped(`LANGDIR( ${term} )`)} ) , IF( HASLANG( ${term} ) , CONCAT( ",literal@," , ${escaped(`STR( ${term} )`)} , "," , ${escaped(`LANG( ${term} )`)} ) , CONCAT( ",literal," , ${escaped(`STR( ${term} )`)} , "," , ${escaped(`STR( DATATYPE( ${term} ) )`)} ) ) ) )`;
     }
 
-    // The encoding of a term that can also be a triple term, nested two deep, as the rewritten query writes it.
-    function termEncoding(term: string): string {
+    // The encoding of a term that is a triple term, nested two deep, as the rewritten query writes it.
+    function tripleTermEncoding(term: string): string {
       const object = `OBJECT( ${term} )`;
       const objectEncoding = `IF( ISTRIPLE( ${object} ) , CONCAT( ",triple" , ${iriOrLiteralEncoding(`SUBJECT( ${object} )`)} , ${iriOrLiteralEncoding(`PREDICATE( ${object} )`)} , ${iriOrLiteralEncoding(`OBJECT( ${object} )`)} ) , ${iriOrLiteralEncoding(object)} )`;
-      return `IF( ISTRIPLE( ${term} ) , CONCAT( ",triple" , ${iriOrLiteralEncoding(`SUBJECT( ${term} )`)} , ${iriOrLiteralEncoding(`PREDICATE( ${term} )`)} , ${objectEncoding} ) , ${iriOrLiteralEncoding(term)} )`;
+      return `CONCAT( ",triple" , ${iriOrLiteralEncoding(`SUBJECT( ${term} )`)} , ${iriOrLiteralEncoding(`PREDICATE( ${term} )`)} , ${objectEncoding} )`;
+    }
+
+    // The encoding of a term that can also be a triple term, as the rewritten query writes it.
+    function termEncoding(term: string): string {
+      return `IF( ISTRIPLE( ${term} ) , ${tripleTermEncoding(term)} , ${iriOrLiteralEncoding(term)} )`;
     }
 
     it('encodes an argument an OPTIONAL leaves unbound as a value of its own', async({ expect }) => {
@@ -162,6 +167,36 @@ describe('bnode skolem', () => {
   OPTIONAL {
     ?person <ex://nick> ?nick .
   }
+}`);
+    });
+
+    // A subject is never a triple term, and the pattern binds `?s` in every solution.
+    it('encodes a variable that cannot be a triple term as an IRI or a literal only', async({ expect }) => {
+      expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
+        ?s ?p ?o .
+        BIND(<internal://blank>(?s) AS ?node)
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( ${iriOrLiteralEncoding('?s')} ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+  ?s ?p ?o .
+}`);
+    });
+
+    it('encodes a variable that can be any term with every branch', async({ expect }) => {
+      expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
+        ?s ?p ?o .
+        BIND(<internal://blank>(?o) AS ?node)
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( ${termEncoding('?o')} ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+  ?s ?p ?o .
+}`);
+    });
+
+    it('encodes a variable that can only be a triple term without asking whether it is one', async({ expect }) => {
+      expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
+        ?s ?p ?o .
+        BIND(<<( ?s ?p ?o )>> AS ?t)
+        BIND(<internal://blank>(?t) AS ?node)
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( ${tripleTermEncoding('?t')} ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+  ?s ?p ?o .
+  BIND( <<( ?s ?p ?o )>> AS ?t )
 }`);
     });
 
