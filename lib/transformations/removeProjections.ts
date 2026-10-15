@@ -1,8 +1,7 @@
-import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import { collectVariableNames, freshVarGenerator, renameVariables } from '../utils.js';
+import { collectVariableNames, freshVarGenerator, markVariableNamesUsed, renameVariables } from '../utils.js';
 
 /**
  * Transformation that removes all PROJECT operations from an algebra tree.
@@ -38,9 +37,8 @@ import { collectVariableNames, freshVarGenerator, renameVariables } from '../uti
  * // After:  ?x ?v_0 ?v_1                  (projection removed, hidden vars anonymized)
  */
 export function removeProjections<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  // Seed the generator with every variable in the tree so fresh names never collide.
-  // We cannot collide in the top level context
-  const nextVar = freshVarGenerator(collectVariableNames(c.astTransformer, op));
+  // Coined against every name in use, so fresh names never collide.
+  const nextVar = freshVarGenerator(markVariableNamesUsed(c, op));
 
   // Filled top-down (preVisitor) before the projection itself is transformed bottom-up.
   const keptProjections = new Set<Algebra.Operation>();
@@ -83,12 +81,12 @@ export function removeProjections<T extends Algebra.Operation>(c: Transformation
         return project;
       }
       const projected = new Set(project.variables.map(variable => variable.value));
-      const renames: Record<string, RDF.Variable> = {};
+      const renames = new Map<string, string>();
       // For all variables in the current subquery (which you know contains no other subqueries)
       for (const name of collectVariableNames(c.astTransformer, project.input)) {
         // If that var is not projected, rename it
         if (!projected.has(name)) {
-          renames[name] = nextVar();
+          renames.set(name, nextVar().value);
         }
       }
       return renameVariables(c, project.input, renames);

@@ -75,24 +75,24 @@ SELECT * WHERE {
   ?s1 ?s1 ?o1 .
 }`;
 
-export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
+export const expectedQuery = `SELECT ?name ?o ?o1 ?p ?s ?s1 WHERE {
   {
-    SELECT ( OBJECT( ?m_o ) AS ?uq_name ) WHERE {
+    SELECT ( OBJECT( ?m_o ) AS ?name ) WHERE {
       {
         {
           {
             {
               {
                 {
-                  SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
-                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
-                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
-                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+                  SELECT ?mi_o ?mi_p ?mi_s ?t WHERE {
+                    ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+                    ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+                    ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+                    ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
                     FILTER ( ( ( ISIRI( ?mi_s ) || ISBLANK( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
                   }
                 }
-                BIND( ?mi_t AS ?m_s )
+                BIND( ?t AS ?m_s )
                 BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
                 BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
               }
@@ -123,15 +123,15 @@ export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq
         {
           {
             {
-              SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
-                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
-                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
-                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+              SELECT ?mi_o ?mi_p ?mi_s ?t WHERE {
+                ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+                ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+                ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+                ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
                 FILTER ( ( ( ISIRI( ?mi_s ) || ISBLANK( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
               }
             }
-            BIND( ?mi_t AS ?m_s )
+            BIND( ?t AS ?m_s )
             BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
             BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
           }
@@ -153,18 +153,18 @@ export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq
     }
   }
   {
-    SELECT ( ?m_o AS ?uq_o ) ( ?m_p AS ?uq_p ) ( ?m_s AS ?uq_s ) WHERE {
+    SELECT ( ?m_o AS ?o ) ( ?m_p AS ?p ) ( ?m_s AS ?s ) WHERE {
       {
         {
-          SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+          SELECT ?mi_o ?mi_p ?mi_s ?t WHERE {
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
             FILTER ( ( ( ISIRI( ?mi_s ) || ISBLANK( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
           }
         }
-        BIND( ?mi_t AS ?m_s )
+        BIND( ?t AS ?m_s )
         BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
         BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
       }
@@ -181,18 +181,18 @@ export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq
     }
   }
   {
-    SELECT ( ?m_o AS ?uq_o1 ) ( ?m_p AS ?uq_s1 ) WHERE {
+    SELECT ( ?m_o AS ?o1 ) ( ?m_p AS ?s1 ) WHERE {
       {
         {
-          SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+          SELECT ?mi_o ?mi_p ?mi_s ?t WHERE {
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
             FILTER ( ( ( ISIRI( ?mi_s ) || ISBLANK( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
           }
         }
-        BIND( ?mi_t AS ?m_s )
+        BIND( ?t AS ?m_s )
         BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
         BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
       }
@@ -211,24 +211,24 @@ export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq
   }
 }`;
 
-export const expectedQueryToValues = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
+export const expectedQueryToValues = `SELECT ?name ?o ?o1 ?p ?s ?s1 WHERE {
   {
-    SELECT ( OBJECT( ?m_o ) AS ?uq_name ) WHERE {
+    SELECT ( OBJECT( ?m_o ) AS ?name ) WHERE {
       {
         {
           {
             {
               {
                 {
-                  SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
-                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
-                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
-                    ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+                  SELECT ?mi_o ?mi_p ?mi_s ?t WHERE {
+                    ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+                    ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+                    ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+                    ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
                     FILTER ( ( ( ISIRI( ?mi_s ) || ISBLANK( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
                   }
                 }
-                BIND( ?mi_t AS ?m_s )
+                BIND( ?t AS ?m_s )
                 BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
                 BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
               }
@@ -259,15 +259,15 @@ export const expectedQueryToValues = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o
         {
           {
             {
-              SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
-                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
-                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
-                ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+              SELECT ?mi_o ?mi_p ?mi_s ?t WHERE {
+                ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+                ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+                ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+                ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
                 FILTER ( ( ( ISIRI( ?mi_s ) || ISBLANK( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
               }
             }
-            BIND( ?mi_t AS ?m_s )
+            BIND( ?t AS ?m_s )
             BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
             BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
           }
@@ -289,18 +289,18 @@ export const expectedQueryToValues = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o
     }
   }
   {
-    SELECT ( ?m_o AS ?uq_o ) ( ?m_p AS ?uq_p ) ( ?m_s AS ?uq_s ) WHERE {
+    SELECT ( ?m_o AS ?o ) ( ?m_p AS ?p ) ( ?m_s AS ?s ) WHERE {
       {
         {
-          SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+          SELECT ?mi_o ?mi_p ?mi_s ?t WHERE {
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
             FILTER ( ( ( ISIRI( ?mi_s ) || ISBLANK( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
           }
         }
-        BIND( ?mi_t AS ?m_s )
+        BIND( ?t AS ?m_s )
         BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
         BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
       }
@@ -317,18 +317,18 @@ export const expectedQueryToValues = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o
     }
   }
   {
-    SELECT ( ?m_o AS ?uq_o1 ) ( ?m_p AS ?uq_s1 ) WHERE {
+    SELECT ( ?m_o AS ?o1 ) ( ?m_p AS ?s1 ) WHERE {
       {
         {
-          SELECT ?mi_o ?mi_p ?mi_s ?mi_t WHERE {
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
-            ?mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
+          SELECT ?mi_o ?mi_p ?mi_s ?t WHERE {
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?mi_s .
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?mi_p .
+            ?t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?mi_o .
             FILTER ( ( ( ISIRI( ?mi_s ) || ISBLANK( ?mi_s ) ) && ISIRI( ?mi_p ) ) )
           }
         }
-        BIND( ?mi_t AS ?m_s )
+        BIND( ?t AS ?m_s )
         BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m_p )
         BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
       }

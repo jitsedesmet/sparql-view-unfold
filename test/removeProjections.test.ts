@@ -44,12 +44,12 @@ describe('removeProjections', () => {
     // DISTINCT consider the anonymized variables as well, turning duplicates into distinct rows.
     it('keeps the projection of a sub-SELECT DISTINCT', async({ expect }) => {
       expect(await transform('SELECT * WHERE { { SELECT DISTINCT ?s WHERE { ?s ?p ?o } } }'))
-        .toContain('SELECT DISTINCT ?uq_s WHERE');
+        .toContain('SELECT DISTINCT ?s WHERE');
     });
 
     it('keeps the projection of a sub-SELECT REDUCED', async({ expect }) => {
       expect(await transform('SELECT * WHERE { { SELECT REDUCED ?s WHERE { ?s ?p ?o } } }'))
-        .toContain('SELECT REDUCED ?uq_s WHERE');
+        .toContain('SELECT REDUCED ?s WHERE');
     });
 
     it('a sub-SELECT DISTINCT returns the same results', async({ expect }) => {
@@ -86,7 +86,7 @@ describe('removeProjections', () => {
     // enclosing query instead.
     it('keeps the projection of a grouped sub-SELECT', async({ expect }) => {
       expect(await transform('SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s } OPTIONAL { ?s ?q ?r } }'))
-        .toContain('SELECT ?uq_s WHERE');
+        .toMatch(/\{\s*SELECT \?s WHERE/u);
     });
 
     it('a grouped sub-SELECT returns the same results', async({ expect }) => {
