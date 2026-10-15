@@ -43,17 +43,19 @@
  * Engines:
  *   - `comunica`: a long-lived worker process per dataset (loaded and indexed once) —
  *     Comunica's join state can outgrow any heap, and inline that takes the sweep with it.
- *   - `oxigraph`, `jena` and `qlever`: each engine's native server over an on-disk store it bulk-loads
- *     once per data file (see `ManagedServerEngine` in engines.ts, and README.md for setup). QLever has no
- *     RDF 1.2 support, so it runs the LUBM and OAEI workloads only.
+ *   - `oxigraph`, `jena`, `qlever`, `blazegraph`, `virtuoso` and `graphdb`: each engine's native server over
+ *     an on-disk store it bulk-loads once per data file (see `ManagedServerEngine` in engines.ts, and
+ *     README.md for setup). QLever, Blazegraph, Virtuoso and GraphDB have no RDF 1.2 support, so they run
+ *     the LUBM and OAEI workloads only.
  *
  * Results are written as JSON for the plotting script (`plot.mjs`).
  *
  * Usage:
- *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena,qlever]
+ *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena,qlever,blazegraph,virtuoso,graphdb]
  *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,u50,u100,u250,u500,d100,eswc] [--reps 1]
- *     [--approaches materialized,rewriting,...] [--cases lubm/Q06,...] [--preserve-cardinality] [--timeout 60000]
- *     [--out results.json]
+ *     [--approaches materialized,rewriting,...] [--cases lubm/Q06,...] [--preserve-cardinality]
+ *     [--rdf-views generalized,standard] [--changed-only]
+ *     [--timeout 60000] [--out results.json]
  * `--scales` keeps, of each scheme's own scales, those it lists; without it StarBench runs xs,s,m and
  * the workloads run all of theirs.
  */
@@ -62,7 +64,16 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StreamParser } from 'n3';
 import { buildCases, buildWorkloadCases, PATTERNS, runsAt, WORKLOADS, workloadSources } from './config.js';
-import { BenchTimeoutError, ComunicaEngine, JenaEngine, OxigraphEngine, QLeverEngine } from './engines.js';
+import {
+  BenchTimeoutError,
+  BlazegraphEngine,
+  ComunicaEngine,
+  GraphDBEngine,
+  JenaEngine,
+  OxigraphEngine,
+  QLeverEngine,
+  VirtuosoEngine,
+} from './engines.js';
 import type { BenchEngine, EngineSource, SelectResult } from './engines.js';
 import type { BenchCase, RewriteVariant } from './runner.js';
 import { rewriteToSparql11, sameSolutions } from './runner.js';
@@ -83,10 +94,21 @@ interface RunOptions {
   cases: string[] | undefined;
   /** Whether the rewritings run with `preserveCardinality`, counting each triple of the views once. */
   preserveCardinality: boolean;
+  /**
+   * How the mappings read the views: `generalized` keeps head terms a standard graph would not admit,
+   * `standard` filters them out (`generalizedRdfView: false`). Given both, each rewriting runs under both,
+   * back to back.
+   */
+  rdfViews: RdfView[];
+  /** With both {@link rdfViews}, whether to skip the rewritings that come out the same under both. */
+  changedOnly: boolean;
   reps: number;
   timeoutMs: number;
   out: string;
 }
+
+/** How a run reads the views; see {@link RunOptions.rdfViews}. */
+type RdfView = 'generalized' | 'standard';
 
 /** One measurement row written to the results JSON. */
 interface ResultRow {
@@ -120,6 +142,8 @@ interface ResultRow {
   timeoutMs: number;
   /** Set when the rewritings ran with `preserveCardinality`; absent otherwise. */
   preserveCardinality?: true;
+  /** Set when the mappings ran as standard RDF views (`generalizedRdfView: false`); absent otherwise. */
+  generalizedRdfView?: false;
   error?: string;
 }
 
@@ -131,6 +155,8 @@ function parseArgs(argv: string[]): RunOptions {
     approaches: undefined,
     cases: undefined,
     preserveCardinality: false,
+    rdfViews: [ 'generalized' ],
+    changedOnly: false,
     reps: 1,
     timeoutMs: 60_000,
     out: join(RESULTS_DIR, 'results.json'),
@@ -161,6 +187,17 @@ function parseArgs(argv: string[]): RunOptions {
         break;
       case '--preserve-cardinality':
         opts.preserveCardinality = true;
+        break;
+      case '--rdf-views':
+        opts.rdfViews = next().split(',').map((view) => {
+          if (view !== 'generalized' && view !== 'standard') {
+            throw new Error(`Unknown RDF view '${view}'`);
+          }
+          return view;
+        });
+        break;
+      case '--changed-only':
+        opts.changedOnly = true;
         break;
       case '--reps':
         opts.reps = Number.parseInt(next(), 10);
@@ -216,6 +253,9 @@ function makeEngine(name: string): BenchEngine {
     case 'oxigraph': return new OxigraphEngine('oxigraph');
     case 'jena': return new JenaEngine('jena');
     case 'qlever': return new QLeverEngine('qlever');
+    case 'blazegraph': return new BlazegraphEngine('blazegraph');
+    case 'virtuoso': return new VirtuosoEngine('virtuoso');
+    case 'graphdb': return new GraphDBEngine('graphdb');
     default: throw new Error(`Unknown engine '${name}'`);
   }
 }
@@ -352,11 +392,23 @@ function schemePlan(scheme: string, scales: string[] | undefined): {
  */
 const rewrites = new Map<string, Promise<string>>();
 
-function rewrite(benchCase: BenchCase, variant: RewriteVariant, preserveCardinality: boolean): Promise<string> {
-  const key = `${benchCase.id}\n${variant}\n${preserveCardinality}`;
+function rewrite(
+  benchCase: BenchCase,
+  variant: RewriteVariant,
+  preserveCardinality: boolean,
+  view: RdfView,
+): Promise<string> {
+  const generalizedRdfView = view === 'generalized';
+  const key = `${benchCase.id}\n${variant}\n${preserveCardinality}\n${view}`;
   let rewritten = rewrites.get(key);
   if (!rewritten) {
-    rewritten = rewriteToSparql11(benchCase.mappers, benchCase.userQuery12, variant, { preserveCardinality });
+    rewritten = rewriteToSparql11(
+      benchCase.mappers,
+      benchCase.userQuery12,
+      variant,
+      { preserveCardinality },
+      { generalizedRdfView },
+    );
     rewrites.set(key, rewritten);
   }
   return rewritten;
@@ -408,10 +460,11 @@ async function runEngine(
         approach: ResultRow['approach'];
         query: string;
         source: EngineSource;
+        view?: RdfView;
       }
       const references: Job[] = [];
       const rewritings: Job[] = [];
-      for (const benchCase of cases) {
+      for (const [ caseIndex, benchCase ] of cases.entries()) {
         if (benchCase.baselineQuery !== undefined) {
           references.push({
             benchCase,
@@ -426,8 +479,17 @@ async function runEngine(
           [ 'rewriting+pushDownAssertions', 'pushDownAssertions' ],
           [ 'rewriting+pullUpExtends', 'pullUpExtends' ],
         ]) {
-          const query = await rewrite(benchCase, variant, opts.preserveCardinality);
-          rewritings.push({ benchCase, approach, query, source });
+          const pair: Job[] = [];
+          for (const view of opts.rdfViews) {
+            const query = await rewrite(benchCase, variant, opts.preserveCardinality, view);
+            pair.push({ benchCase, approach, query, source, view });
+          }
+          if (opts.changedOnly && pair.length > 1 && pair.every(job => job.query === pair[0].query)) {
+            continue;
+          }
+          // Every other case runs the pair the other way round, so that at every step neither view is always
+          // the one running on caches the near-identical query before it warmed.
+          rewritings.push(...caseIndex % 2 === 1 ? pair.reverse() : pair);
         }
       }
       // Where the reference runs on data of its own (the materialised views), every reference goes first
@@ -442,8 +504,8 @@ async function runEngine(
       // JSON) and are graded once the whole block is in — the reference is whichever of
       // `materialized`/`rewriting` actually produced an answer, which is not known until both have run.
       const caseRows = new Map<string, CaseRow[]>();
-      for (const { benchCase, approach, query, source: jobSource } of jobs) {
-        const cell = `${benchCase.id} ${approach}`;
+      for (const { benchCase, approach, query, source: jobSource, view } of jobs) {
+        const cell = `${benchCase.id} ${approach} ${view}`;
         // A nested scale's data contains the earlier one's, so a query that timed out there would here too.
         const earlierTimeout = nestedScales ? timedOut.get(cell) : undefined;
         const run = earlierTimeout === undefined ?
@@ -470,6 +532,7 @@ async function runEngine(
           timeoutMs: opts.timeoutMs,
           error: run.error,
           ...opts.preserveCardinality ? { preserveCardinality: <const> true } : {},
+          ...view === 'standard' ? { generalizedRdfView: <const> false } : {},
         };
         rows.push(row);
         if (!caseRows.has(benchCase.id)) {
@@ -477,7 +540,7 @@ async function runEngine(
         }
         caseRows.get(benchCase.id)!.push({ row, result });
         process.stderr.write(
-            `  ${benchCase.id.padEnd(22)} ${approach.padEnd(30)} ${run.status.padEnd(7)} ` +
+            `  ${benchCase.id.padEnd(22)} ${approach.padEnd(30)} ${view === 'standard' ? 'std ' : ''}${run.status.padEnd(7)} ` +
             `${run.durations.length > 0 ? `${Math.round(median(run.durations))}ms` : '-'} ` +
             `rows=${result?.count ?? '-'}\n`,
         );

@@ -22,7 +22,7 @@ import {
   removeProjectionsTransformation,
   unfoldingTransformation,
 } from '../../lib/index.js';
-import type { Mapping, QueryTransformation, UnfoldingOptions } from '../../lib/index.js';
+import type { Mapping, MappingOptions, QueryTransformation, UnfoldingOptions } from '../../lib/index.js';
 import type { BenchEngine, EngineSource, SelectResult } from './engines.js';
 
 /**
@@ -208,8 +208,9 @@ export async function rewriteToSparql11(
   userQuery12: string,
   variant: RewriteVariant = 'standard',
   unfoldingOptions: UnfoldingOptions = {},
+  mappingOptions: MappingOptions = MAPPING_OPTIONS,
 ): Promise<string> {
-  const mapping = mappingFromConstructQueries(mappers, MAPPING_OPTIONS);
+  const mapping = mappingFromConstructQueries(mappers, mappingOptions);
   const rewriter = createQueryRewriter(pipelineFor(variant, mapping, unfoldingOptions));
   return lowercaseBooleanLiterals(await rewriter.rewriteQuery(userQuery12));
 }

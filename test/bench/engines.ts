@@ -21,10 +21,10 @@
 import { spawn, spawnSync } from 'node:child_process';
 import type { ChildProcessByStdio, ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import type { IncomingMessage } from 'node:http';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -644,7 +644,7 @@ export function storeDir(file: string, kind: string): string {
  * Runs a command to completion, throwing with the tail of its output if it fails. For the bulk loaders,
  * whose output is progress chatter nobody reads unless they fail.
  */
-export function runTool(command: string, args: string[], cwd?: string): void {
+export function runTool(command: string, args: string[], cwd?: string): string {
   const result = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, cwd });
   if (result.error) {
     throw result.error;
@@ -653,6 +653,7 @@ export function runTool(command: string, args: string[], cwd?: string): void {
     throw new Error(`${command} ${args.join(' ')} failed (${result.status ?? result.signal}):\n${
       `${result.stdout}${result.stderr}`.slice(-2000)}`);
   }
+  return result.stdout;
 }
 
 /** Grace a server gets past a query's budget before stopping the query itself; the client gives up first. */
@@ -660,6 +661,13 @@ const SERVER_TIMEOUT_GRACE_MS = 2_000;
 
 /** How long a server may take to open its store and answer, which is not charged to any query. */
 const STARTUP_TIMEOUT_MS = 600_000;
+
+/**
+ * The start and end of an error page: Blazegraph's begins with the whole query, its cause at the very end.
+ */
+function errorExcerpt(body: string): string {
+  return body.length <= 2000 ? body : `${body.slice(0, 1000)}\n[...]\n${body.slice(-1000)}`;
+}
 
 /**
  * A native SPARQL server the harness runs itself, over an on-disk store bulk-loaded once per data file:
@@ -720,6 +728,24 @@ export abstract class ManagedServerEngine implements BenchEngine {
     return '';
   }
 
+  /** The environment the server runs in, if not the harness's own. */
+  protected serverEnvironment(): NodeJS.ProcessEnv | undefined {
+    return undefined;
+  }
+
+  /** The directory the server runs in, for a server that writes files there (Blazegraph's `rules.log`). */
+  protected serverWorkingDirectory(_dir: string): string | undefined {
+    return undefined;
+  }
+
+  /**
+   * Why an answer the server sent with a success status is not the whole answer, if it is not (Virtuoso
+   * answers a query it stopped early with what it had so far).
+   */
+  protected incompleteAnswer(_response: Response): string | undefined {
+    return undefined;
+  }
+
   /** Runs, untimed, before every measured query. */
   protected async beforeQuery(): Promise<void> {
     // Nothing by default.
@@ -761,8 +787,39 @@ export abstract class ManagedServerEngine implements BenchEngine {
         await this.stop();
         throw new BenchTimeoutError(timeoutMs ?? 0);
       }
+      // A dropped connection is most likely the server dying (GraphDB kills itself when it runs out of
+      // memory). The exit can lag the dropped connection, and a next query sent to the dying server would
+      // fail too, so wait for it and start the next query on a fresh server.
+      if (error instanceof TypeError) {
+        const exit = await this.awaitExit(10_000);
+        const outOfMemory = this.recentOutput.join('').includes('OutOfMemoryError') ? ', out of memory' : '';
+        await this.stop();
+        throw new Error(`Engine '${this.name}' dropped the connection (${exit ?? 'server still running'}${
+          outOfMemory}): ${error.message}`, { cause: error });
+      }
       throw error;
     }
+  }
+
+  /** Waits up to `ms` for the server to exit, and says how it did, if it did. */
+  private async awaitExit(ms: number): Promise<string | undefined> {
+    const child = this.child;
+    if (!child) {
+      return undefined;
+    }
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, ms);
+        child.once('exit', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    }
+    if (child.signalCode !== null) {
+      return `server killed by ${child.signalCode}`;
+    }
+    return child.exitCode === null ? undefined : `server exited with code ${child.exitCode}`;
   }
 
   /**
@@ -786,7 +843,7 @@ export abstract class ManagedServerEngine implements BenchEngine {
       for await (const chunk of response) {
         body += String(chunk);
       }
-      throw new Error(`Engine '${this.name}' returned HTTP ${response.statusCode}: ${body.slice(0, 2000)}`);
+      throw new Error(`Engine '${this.name}' returned HTTP ${response.statusCode}: ${errorExcerpt(body)}`);
     }
     // Written chunk by chunk rather than piped: a pipe would end `out`, or, told not to, leave its listeners on it.
     for await (const chunk of response) {
@@ -802,16 +859,23 @@ export abstract class ManagedServerEngine implements BenchEngine {
    */
   public async runUpdate(update: string, dir: string): Promise<void> {
     await this.ensureServer(dir, undefined, true);
-    const response = await fetch(this.updateUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/sparql-update', ...this.updateHeaders() },
-      body: update,
+    // Through `node:http` rather than `fetch`, like `constructInto`: Virtuoso sends no headers until an
+    // update is done, and inserting LUBM u50's identity view takes it over the five minutes `fetch` waits.
+    const response = await new Promise<IncomingMessage>((resolve, reject) => {
+      const req = httpRequest(this.updateUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/sparql-update', ...this.updateHeaders() },
+      }, resolve);
+      req.on('error', reject);
+      req.end(update);
     });
-    if (!response.ok) {
-      throw new Error(`Engine '${this.name}' update returned HTTP ${response.status}: ${
-        (await response.text()).slice(0, 2000)}`);
+    let body = '';
+    for await (const chunk of response) {
+      body += String(chunk);
     }
-    await response.body?.cancel();
+    if (response.statusCode === undefined || response.statusCode < 200 || response.statusCode >= 300) {
+      throw new Error(`Engine '${this.name}' update returned HTTP ${response.statusCode}: ${errorExcerpt(body)}`);
+    }
   }
 
   public async dispose(): Promise<void> {
@@ -822,6 +886,11 @@ export abstract class ManagedServerEngine implements BenchEngine {
   private async serve(source: EngineSource, timeoutMs: number | undefined): Promise<void> {
     if (!source.file) {
       throw new Error(`Engine '${this.name}' needs a 'file' for dataset '${source.name}'.`);
+    }
+    // A store is built with no server of this engine running: Virtuoso's loader runs a server of its own, on
+    // the same ports.
+    if (!existsSync(storeDir(source.file, this.storeKind))) {
+      await this.stop();
     }
     await this.ensureServer(this.storeFor(source.file), timeoutMs, false);
   }
@@ -835,7 +904,12 @@ export abstract class ManagedServerEngine implements BenchEngine {
     });
     if (!response.ok) {
       throw new Error(`Engine '${this.name}' returned HTTP ${response.status}: ${
-        (await response.text()).slice(0, 2000)}`);
+        errorExcerpt(await response.text())}`);
+    }
+    const incomplete = this.incompleteAnswer(response);
+    if (incomplete) {
+      await response.body?.cancel();
+      throw new Error(`Engine '${this.name}' returned an incomplete answer: ${incomplete}`);
     }
     return response;
   }
@@ -859,7 +933,11 @@ export abstract class ManagedServerEngine implements BenchEngine {
       timeoutMs === undefined ? undefined : timeoutMs + SERVER_TIMEOUT_GRACE_MS,
       writable,
     );
-    const child = spawn(command, args, { stdio: [ 'ignore', 'pipe', 'pipe' ]});
+    const child = spawn(command, args, {
+      stdio: [ 'ignore', 'pipe', 'pipe' ],
+      cwd: this.serverWorkingDirectory(dir),
+      env: this.serverEnvironment(),
+    });
     this.child = child;
     this.current = wanted;
     let exited = false;
@@ -1100,3 +1178,401 @@ export class QLeverEngine extends ManagedServerEngine {
     return this.binDir ? join(this.binDir, name) : name;
   }
 }
+
+/**
+ * **Blazegraph**'s NanoSparqlServer over a journal filled by its bulk loader (`DataLoader`), set up as a plain
+ * triple store: no quads, no inference, no full-text index, no statement identifiers. Blazegraph has no RDF 1.2
+ * support (its own RDF* extension, RDR, predates it), so it runs the LUBM and OAEI workloads only. Its last
+ * build is 2.1.6 RC (2020); it runs on Java 21.
+ *
+ * Needs `blazegraph.jar` (<https://github.com/blazegraph/database/releases>), named by `BLAZEGRAPH_JAR`.
+ * `BLAZEGRAPH_JAVA` sets the Java binary (default `java`), `BLAZEGRAPH_PORT` the port (default 3134) and
+ * `BLAZEGRAPH_JVM_OPTS` extra JVM arguments, space-separated. Like Jena's, the JVM picks its own heap.
+ */
+export class BlazegraphEngine extends ManagedServerEngine {
+  public readonly supportsSparql12 = false;
+  public readonly storeKind = 'blazegraph';
+  private readonly jarPath = process.env.BLAZEGRAPH_JAR ?? '';
+  private readonly javaBin = process.env.BLAZEGRAPH_JAVA ?? 'java';
+  private readonly jvmArgs = (process.env.BLAZEGRAPH_JVM_OPTS ?? '').split(/\s+/u).filter(Boolean);
+
+  public constructor(name = 'blazegraph') {
+    super(name, Number.parseInt(process.env.BLAZEGRAPH_PORT ?? '3134', 10));
+  }
+
+  public loadStore(file: string, dir: string): void {
+    mkdirSync(dir, { recursive: true });
+    const loader = [ '-cp', this.jar(), 'com.bigdata.rdf.store.DataLoader', '-namespace', 'kb' ];
+    runTool(this.javaBin, [ ...this.jvmArgs, ...loader, this.properties(dir), resolve(file) ], dir);
+  }
+
+  protected serverCommand(dir: string, _timeoutMs: number | undefined, _writable: boolean): string[] {
+    return [
+      this.javaBin,
+      ...this.jvmArgs,
+      '-server',
+      `-Dbigdata.propertyFile=${this.properties(dir)}`,
+      `-Djetty.port=${this.port}`,
+      '-jar',
+      this.jar(),
+    ];
+  }
+
+  protected override serverWorkingDirectory(dir: string): string {
+    return dir;
+  }
+
+  /** The budget goes with each query: the server has no setting for it. */
+  protected override queryParameters(timeoutMs: number | undefined): string {
+    return timeoutMs === undefined ? '' : `?maxQueryTimeMillis=${timeoutMs + SERVER_TIMEOUT_GRACE_MS}`;
+  }
+
+  protected get queryUrl(): string {
+    return `${this.baseUrl}/blazegraph/namespace/kb/sparql`;
+  }
+
+  protected get updateUrl(): string {
+    return this.queryUrl;
+  }
+
+  /**
+   * Writes the store's configuration into `dir` and returns its path. Written afresh for every use, so a copy of
+   * the store (`timeMaterialization.ts`) uses its own journal rather than the original's.
+   */
+  private properties(dir: string): string {
+    const file = join(resolve(dir), 'blazegraph.properties');
+    writeFileSync(file, [
+      `com.bigdata.journal.AbstractJournal.file=${join(resolve(dir), 'blazegraph.jnl')}`,
+      'com.bigdata.journal.AbstractJournal.bufferMode=DiskRW',
+      'com.bigdata.rdf.store.AbstractTripleStore.quads=false',
+      'com.bigdata.rdf.store.AbstractTripleStore.statementIdentifiers=false',
+      'com.bigdata.rdf.store.AbstractTripleStore.axiomsClass=com.bigdata.rdf.axioms.NoAxioms',
+      'com.bigdata.rdf.store.AbstractTripleStore.justify=false',
+      'com.bigdata.rdf.store.AbstractTripleStore.textIndex=false',
+      'com.bigdata.rdf.sail.truthMaintenance=false',
+      '',
+    ].join('\n'));
+    return file;
+  }
+
+  private jar(): string {
+    if (!this.jarPath) {
+      throw new Error('BlazegraphEngine: set BLAZEGRAPH_JAR to a blazegraph.jar (see test/bench/README.md).');
+    }
+    return this.jarPath;
+  }
+}
+
+/** The graph {@link VirtuosoEngine} loads the data into and queries. */
+const VIRTUOSO_GRAPH = 'urn:bench';
+
+/**
+ * **Virtuoso** (open-source edition) over a database filled by its bulk loader (`ld_dir` and `rdf_loader_run`).
+ * Virtuoso has no RDF 1.2 support, so it runs the LUBM and OAEI workloads only.
+ *
+ * The data goes into one named graph, and every query names it as its default graph: Virtuoso's own default
+ * graph is the union of every graph it holds, its system graphs included, which would add their triples to
+ * any view that matches every triple. A query that runs out of its budget on the server is answered with
+ * what it found so far, as `206 Partial Content`; that is reported as an error, never as an answer. Its
+ * endpoint cuts an answer off at 1,048,576 rows unless the request asks for more (`maxrows`; the ini's
+ * `ResultSetMaxRows` can only lower that), so every query asks for the harness's own cap, and an answer cut off
+ * anyway is an error too (and an answer of over 2,097,151 rows, the most Virtuoso sends, fails). The memory
+ * it may use to compile a query (`MaxMemPoolSize`) is raised from 400 MB to 16 GB: the plain rewriting's
+ * queries exceed 2 GB. For materialising the views, the largest array a vectored query may build
+ * (`MaxVectorSize`; LUBM u10's identity view needs 1.27 million) and the transaction log one update may write
+ * (`TransactionAfterImageLimit`, 50 MB by default) are raised too. Two other limits they hit, on the generated SQL's
+ * length (SP031) and on the compiled query's state (SQ156), are compiled into Virtuoso and cannot be raised.
+ *
+ * It runs with `VectorSize = 1`, not vectorised: with the default (1000), a join over UNIONs whose branches
+ * BIND the join variable is computed in some branches with another branch's values, which loses and invents
+ * rows (LUBM Q04/Q08/Q09 after pushDownAssertions; the answers change with the vector size, and only 1 gives
+ * the right ones). It makes the rewritten queries about 5x (LUBM) to 20x (OAEI) slower, and applies to every
+ * store, the views' too. A second bug no setting fixes: a `FILTER(sameTerm(?v, C))` over a UNION whose
+ * branches BIND `?v` to different constants is compiled as if every branch bound `C`, so the filter keeps them
+ * all; those answers are measured and graded wrong.
+ *
+ * Needs a binary build (<https://github.com/openlink/virtuoso-opensource/releases>, the generic Linux tarball),
+ * its directory named by `VIRTUOSO_HOME`. Its `isql` client, which the loader is driven through, needs
+ * `libncurses.so.5`; `VIRTUOSO_ISQL` names a wrapper that provides it, if the system does not. `VIRTUOSO_PORT`
+ * sets the HTTP port (default 3135), `VIRTUOSO_SQL_PORT` the SQL port (default 3136) and
+ * `VIRTUOSO_BUFFERS` the page buffers (default 1,360,000 pages of 8 KB, about 11 GB: the sample
+ * configuration's setting for 16 GB free, about what Jena's JVM and QLever get).
+ */
+export class VirtuosoEngine extends ManagedServerEngine {
+  public readonly supportsSparql12 = false;
+  public readonly storeKind = 'virtuoso';
+  private readonly home = process.env.VIRTUOSO_HOME ?? '';
+  private readonly sqlPort = Number.parseInt(process.env.VIRTUOSO_SQL_PORT ?? '3136', 10);
+  private readonly buffers = Number.parseInt(process.env.VIRTUOSO_BUFFERS ?? '1360000', 10);
+
+  public constructor(name = 'virtuoso') {
+    super(name, Number.parseInt(process.env.VIRTUOSO_PORT ?? '3135', 10));
+  }
+
+  /**
+   * Starts a server on the new database, loads `file` into it, opens it to SPARQL updates (which
+   * `timeMaterialization.ts` uses), and shuts it down with a checkpoint. `isql` reports a failing statement
+   * on its output but exits with 0, so the output is checked.
+   */
+  public loadStore(file: string, dir: string): void {
+    mkdirSync(dir, { recursive: true });
+    const ini = this.writeIni(dir, dirname(resolve(file)));
+    const script = [
+      'set -e',
+      // Else `isql` would load into whatever server holds the port, and this one would fail to start.
+      'if "$4" "$5" dba dba exec="select 1;" > /dev/null 2>&1; then echo "port $5 is in use" >&2; exit 1; fi',
+      '"$1" +foreground +configfile "$2" > "$3/load.log" 2>&1 &',
+      'pid=$!',
+      'trap \'kill $pid 2>/dev/null || true\' EXIT',
+      'for i in $(seq 600); do',
+      '  "$4" "$5" dba dba exec="select 1;" > /dev/null 2>&1 && break; kill -0 $pid; sleep 1',
+      'done',
+      'out=$("$4" "$5" dba dba VERBOSE=OFF BANNER=OFF exec="$6")',
+      'echo "$out"',
+      'case "$out" in *"*** Error"*) exit 1;; esac',
+      '"$4" "$5" dba dba exec="checkpoint; shutdown;" > /dev/null 2>&1 || true',
+      'wait $pid || true',
+      'trap - EXIT',
+    ].join('\n');
+    const statements = [
+      `ld_dir('${dirname(resolve(file))}', '${basename(file)}', '${VIRTUOSO_GRAPH}');`,
+      'rdf_loader_run();',
+      'GRANT SPARQL_UPDATE TO "SPARQL";',
+      'DB.DBA.RDF_DEFAULT_USER_PERMS_SET (\'nobody\', 7);',
+      'checkpoint;',
+      'select \'LOAD ERROR\', ll_file, ll_error from DB.DBA.LOAD_LIST where ll_error is not null;',
+    ].join(' ');
+    const args = [ this.bin('virtuoso-t'), ini, resolve(dir), this.isql(), String(this.sqlPort), statements ];
+    const output = runTool('bash', [ '-c', script, 'load', ...args ]);
+    if (output.includes('LOAD ERROR')) {
+      throw new Error(`Virtuoso could not load ${file}:\n${output.slice(-2000)}`);
+    }
+  }
+
+  protected serverCommand(dir: string, _timeoutMs: number | undefined, _writable: boolean): string[] {
+    return [ this.bin('virtuoso-t'), '+foreground', '+configfile', this.writeIni(dir) ];
+  }
+
+  protected override serverWorkingDirectory(dir: string): string {
+    return dir;
+  }
+
+  /**
+   * The data's graph as the default graph, the views' graph `timeMaterialization.ts` inserts into as the one
+   * named graph (without it, `GRAPH <urn:bench:views>` sees nothing, and `COUNT(*)` over it answers 1), and
+   * the budget, which Virtuoso takes per query.
+   */
+  protected override queryParameters(timeoutMs: number | undefined): string {
+    const parameters = new URLSearchParams({
+      'default-graph-uri': VIRTUOSO_GRAPH,
+      'named-graph-uri': `${VIRTUOSO_GRAPH}:views`,
+      maxrows: String(MAX_SERVER_ROWS),
+    });
+    if (timeoutMs !== undefined) {
+      parameters.set('timeout', String(timeoutMs + SERVER_TIMEOUT_GRACE_MS));
+    }
+    return `?${parameters.toString()}`;
+  }
+
+  protected override incompleteAnswer(response: Response): string | undefined {
+    const state = response.headers.get('x-sql-state');
+    if (response.status === 206 || state) {
+      return `HTTP ${response.status}, ${state}: ${response.headers.get('x-sql-message') ?? ''}`;
+    }
+    const maxRows = response.headers.get('x-sparql-maxrows');
+    if (maxRows) {
+      return `cut off at ${maxRows} rows`;
+    }
+    return undefined;
+  }
+
+  protected get queryUrl(): string {
+    return `${this.baseUrl}/sparql`;
+  }
+
+  /** An update's WHERE reads the data's graph only, as a query does. */
+  protected get updateUrl(): string {
+    return `${this.baseUrl}/sparql?${new URLSearchParams({ 'using-graph-uri': VIRTUOSO_GRAPH }).toString()}`;
+  }
+
+  /**
+   * Writes the database's configuration into `dir` and returns its path. Written afresh for every use, so a copy
+   * of the database (`timeMaterialization.ts`) uses its own files rather than the original's. `dataDir` is
+   * where the loader may read from.
+   */
+  private writeIni(dir: string, dataDir?: string): string {
+    const at = resolve(dir);
+    const file = join(at, 'virtuoso.ini');
+    writeFileSync(file, `[Database]
+DatabaseFile = ${at}/virtuoso.db
+ErrorLogFile = ${at}/virtuoso.log
+LockFile = ${at}/virtuoso.lck
+TransactionFile = ${at}/virtuoso.trx
+xa_persistent_file = ${at}/virtuoso.pxa
+ErrorLogLevel = 7
+FileExtend = 200
+MaxCheckpointRemap = 2000
+Striping = 0
+TempStorage = TempDatabase
+
+[TempDatabase]
+DatabaseFile = ${at}/virtuoso-temp.db
+TransactionFile = ${at}/virtuoso-temp.trx
+MaxCheckpointRemap = 2000
+Striping = 0
+
+[Parameters]
+ServerPort = ${this.sqlPort}
+LiteMode = 0
+DisableUnixSocket = 1
+DisableTcpSocket = 0
+MaxClientConnections = 10
+CheckpointInterval = 60
+O_DIRECT = 0
+CaseMode = 2
+MaxStaticCursorRows = 5000
+AllowOSCalls = 0
+DirsAllowed = .${dataDir ? `, ${dataDir}` : ''}
+VADInstallDir = ${this.home}/vad/
+MaxQueryMem = 2G
+MaxMemPoolSize = 16G
+TransactionAfterImageLimit = 20000000000
+VectorSize = 1
+MaxVectorSize = 4000000
+AdjustVectorSize = 0
+ThreadsPerQuery = 4
+AsyncQueueMaxThreads = 10
+NumberOfBuffers = ${this.buffers}
+MaxDirtyBuffers = ${Math.round(this.buffers * 0.75)}
+
+[HTTPServer]
+ServerPort = ${this.port}
+ServerRoot = ${this.home}/vsp
+MaxClientConnections = 10
+EnabledDavVSP = 0
+HTTPProxyEnabled = 0
+MaxKeepAlives = 10
+KeepAliveTimeout = 10
+HTTPThreadSize = 280000
+Charset = UTF-8
+EnabledGzipContent = 0
+
+[SPARQL]
+ResultSetMaxRows = ${MAX_SERVER_ROWS}
+MaxConstructTriples = 2000000000
+MaxQueryExecutionTime = 0
+MaxQueryCostEstimationTime = 0
+`);
+    return file;
+  }
+
+  private bin(name: string): string {
+    if (!this.home) {
+      throw new Error('VirtuosoEngine: set VIRTUOSO_HOME to a Virtuoso build (see test/bench/README.md).');
+    }
+    return join(this.home, 'bin', name);
+  }
+
+  private isql(): string {
+    return process.env.VIRTUOSO_ISQL ?? this.bin('isql');
+  }
+}
+
+/**
+ * **GraphDB** (Free edition) over a repository built by its offline bulk loader (`importrdf preload`), one
+ * GraphDB home directory per store. GraphDB 11 is built on RDF4J 5, which knows only the RDF-star syntax that
+ * RDF 1.2 replaced, so it runs the LUBM and OAEI workloads only.
+ *
+ * The repository is set up without reasoning (ruleset `empty`; GraphDB's default, RDFS-Plus, would derive the
+ * very facts the LUBM views derive) and without `owl:sameAs` handling, full-text index or context index. A query
+ * that runs out of its budget on the server fails rather than returning what it found so far.
+ *
+ * Needs a GraphDB distribution (`graphdb-<version>-dist.zip`), its directory named by `GRAPHDB_HOME`, and a
+ * licence file, named by `GRAPHDB_LICENSE`: since 11.0 even the Free edition runs only with one. `GRAPHDB_PORT`
+ * sets the port (default 3137) and `GDB_JAVA_OPTS` extra JVM arguments. The server's heap is capped at
+ * `GDB_MAX_MEM` (default 36g) rather than the JVM's default of a quarter of the machine's memory. The queries
+ * GraphDB runs out of heap on (it then kills itself) fill 40 GB as they fill 12; 36 GB leaves the harness and
+ * the OS enough on a 48 GB machine that the cap, not the kernel's OOM killer, is what stops them.
+ */
+export class GraphDBEngine extends ManagedServerEngine {
+  public readonly supportsSparql12 = false;
+  public readonly storeKind = 'graphdb';
+  private readonly home = process.env.GRAPHDB_HOME ?? '';
+  private readonly license = process.env.GRAPHDB_LICENSE ?? '';
+
+  public constructor(name = 'graphdb') {
+    super(name, Number.parseInt(process.env.GRAPHDB_PORT ?? '3137', 10));
+  }
+
+  public loadStore(file: string, dir: string): void {
+    mkdirSync(dir, { recursive: true });
+    const config = join(resolve(dir), 'repository.ttl');
+    writeFileSync(config, GRAPHDB_REPOSITORY);
+    runTool(this.bin('importrdf'), [ 'preload', `-Dgraphdb.home=${resolve(dir)}`, '-c', config, resolve(file) ], dir);
+  }
+
+  /** GraphDB's start script reads the heap cap from `GDB_MAX_MEM`. */
+  protected override serverEnvironment(): NodeJS.ProcessEnv {
+    return { ...process.env, GDB_MAX_MEM: process.env.GDB_MAX_MEM ?? '36g' };
+  }
+
+  protected serverCommand(dir: string, _timeoutMs: number | undefined, _writable: boolean): string[] {
+    if (!this.license) {
+      throw new Error('GraphDBEngine: set GRAPHDB_LICENSE to a GraphDB licence file (see test/bench/README.md).');
+    }
+    return [
+      this.bin('graphdb'),
+      '-s',
+      `-Dgraphdb.home=${resolve(dir)}`,
+      `-Dgraphdb.connector.port=${this.port}`,
+      `-Dgraphdb.license.file=${resolve(this.license)}`,
+      // GraphDB kills itself when a query runs it out of memory, after writing a heap dump the size of the
+      // heap (4-5 GB) into the store's logs, one per store.
+      '-Dgraphdb.heapdump.enable=false',
+    ];
+  }
+
+  /** The budget goes with each query, in whole seconds. */
+  protected override queryParameters(timeoutMs: number | undefined): string {
+    return timeoutMs === undefined ? '' : `?timeout=${Math.ceil((timeoutMs + SERVER_TIMEOUT_GRACE_MS) / 1000)}`;
+  }
+
+  protected get queryUrl(): string {
+    return `${this.baseUrl}/repositories/bench`;
+  }
+
+  protected get updateUrl(): string {
+    return `${this.baseUrl}/repositories/bench/statements`;
+  }
+
+  private bin(name: string): string {
+    if (!this.home) {
+      throw new Error('GraphDBEngine: set GRAPHDB_HOME to a GraphDB distribution (see test/bench/README.md).');
+    }
+    return join(this.home, 'bin', name);
+  }
+}
+
+/** The repository {@link GraphDBEngine} loads into: no reasoning, and a query that runs out of time fails. */
+const GRAPHDB_REPOSITORY = `@prefix rep: <http://www.openrdf.org/config/repository#>.
+@prefix sr: <http://www.openrdf.org/config/repository/sail#>.
+@prefix sail: <http://www.openrdf.org/config/sail#>.
+@prefix graphdb: <http://www.ontotext.com/config/graphdb#>.
+
+[] a rep:Repository ;
+  rep:repositoryID "bench" ;
+  rep:repositoryImpl [
+    rep:repositoryType "graphdb:SailRepository" ;
+    sr:sailImpl [
+      sail:sailType "graphdb:Sail" ;
+      graphdb:ruleset "empty" ;
+      graphdb:disable-sameAs "true" ;
+      graphdb:check-for-inconsistencies "false" ;
+      graphdb:enable-context-index "false" ;
+      graphdb:enable-fts-index "false" ;
+      graphdb:query-timeout "0" ;
+      graphdb:throw-QueryEvaluationException-on-timeout "true" ;
+      graphdb:query-limit-results "0"
+    ]
+  ].
+`;

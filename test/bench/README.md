@@ -93,10 +93,12 @@ parses, which is why the BKR-star query files can be fed to the rewriter verbati
 | **Comunica** | ✅ full | ✅ | 5.0.0 (Jan 2026) | npm library (`@comunica/query-sparql*`) — long-lived worker process here |
 | **Apache Jena / Fuseki** | ✅ full (default) | ✅ | 4.10+ (rec. 5.x/6.x) | Java, Fuseki HTTP SPARQL endpoint over TDB2 here |
 | **Oxigraph** | ✅ full | ✅ | 0.5.0 (2025) | Rust binary, its HTTP server over an on-disk store here |
-| Eclipse RDF4J | ⚠️ old `<< >>` only | ❌ | — | (cannot run the new syntax) |
-| Ontotext GraphDB | ⚠️ old `<< >>` only | ❌ | — | inherits RDF4J limitation |
+| Eclipse RDF4J | ✅ from 6.0 | ✅ from 6.0 | 6.0.0 | (not driven here) |
+| **Ontotext GraphDB** | ⚠️ old `<< >>` only | ❌ | — | 11.5 still on RDF4J 5.3; Java server over its repository here; runs the LUBM and OAEI workloads only |
 | **QLever** | ❌ SPARQL 1.1 only | ❌ | — | C++ server over its own index here; runs the LUBM and OAEI workloads only |
-| Blazegraph, Stardog, Virtuoso, MillenniumDB | ❌ SPARQL 1.1 only | ❌ | — | not usable for native SPARQL 1.2 |
+| **Blazegraph** | ❌ own RDF* (RDR) only | ❌ | — | Java server over its journal here; runs the LUBM and OAEI workloads only |
+| **Virtuoso** | ❌ SPARQL 1.1 only | ❌ | — | C server over its database here; runs the LUBM and OAEI workloads only |
+| Stardog, MillenniumDB | ❌ SPARQL 1.1 only | ❌ | — | not usable for native SPARQL 1.2 |
 
 Verified directly (2026-08-27): **Fuseki 6.2.0** parses and evaluates `<<( s p o )>>`
 natively and returns triple terms in SPARQL Results JSON via the `"type": "triple"`
@@ -160,7 +162,8 @@ ended up with zero valid data points for the approach the whole comparison is ab
 the pushdown-based ones survive. Budget accordingly: a full 3-engine × 2-scheme × 2-scale
 sweep at 300 s is a many-hour run.
 
-`--engines` accepts `comunica`, `oxigraph`, `jena` and `qlever`; QLever skips StarBench, which needs SPARQL 1.2.
+`--engines` accepts `comunica`, `oxigraph`, `jena`, `qlever`, `blazegraph`, `virtuoso` and `graphdb`; all but
+Comunica, Oxigraph and Jena skip StarBench, which needs SPARQL 1.2.
 
 ## Setting up the engines
 
@@ -172,10 +175,13 @@ queried warm:
 | Oxigraph | `oxigraph serve-read-only` | RocksDB on disk | `oxigraph load` (its bulk loader) |
 | Jena | `fuseki-server.jar --tdb2 --loc` | TDB2 on disk | `tdb2.tdbloader --loader=parallel` |
 | QLever | `qlever-server` | its index on disk | `qlever-index` |
+| Blazegraph | `blazegraph.jar` (NanoSparqlServer) | its journal on disk | `DataLoader` |
+| Virtuoso | `virtuoso-t` | its database on disk | `ld_dir` and `rdf_loader_run` |
+| GraphDB | `graphdb -s` | its repository on disk, one GraphDB home per store | `importrdf preload` |
 | Comunica | `comunicaWorker.mjs` | HDT (LUBM, OAEI), in-memory N3 store (StarBench) | `rdf2hdt`, or parsing the Turtle |
 
-The three servers share `ManagedServerEngine` (`engines.ts`). It bulk-loads a store beside each data file the
-first time that file is queried (`lubm-u10.nt` → `lubm-u10.oxigraph/`, `lubm-u10.tdb2/`, `lubm-u10.qlever/`),
+The servers share `ManagedServerEngine` (`engines.ts`). It bulk-loads a store beside each data file the
+first time that file is queried (`lubm-u10.nt` → `lubm-u10.oxigraph/`, `lubm-u10.tdb2/`, `lubm-u10.qlever/`, ...),
 untimed, and reuses it on every later run. It starts one server at a time, restarts it when the store changes,
 and gives the server the query budget too (plus 2 s), so a query the harness gave up on stops using the CPU
 the next one is measured on. A server refuses to start on a port that already answers queries, since a
@@ -215,6 +221,73 @@ micromamba run -p ~/opt/qlever-env bash -c 'cmake -DCMAKE_BUILD_TYPE=Release -DL
 export QLEVER_BIN_DIR="$PWD"
 ```
 
+**Blazegraph.** Take `blazegraph.jar` of the last build, 2.1.6 RC (2020; nothing has been released since), from
+<https://github.com/blazegraph/database/releases> and point `BLAZEGRAPH_JAR` at it. It runs on Java 21. The
+store is set up as a plain triple store, with no quads, inference, full-text index or statement identifiers;
+the server writes a `rules.log` into the store's directory. The time budget goes with each query
+(`maxQueryTimeMillis`), and a query that exceeds it fails.
+
+**Virtuoso.** Take the generic Linux build of the open-source edition
+(`virtuoso-opensource.x86_64-generic_glibc25-linux-gnu.tar.gz`; 7.2.17 is the one measured) from
+<https://github.com/openlink/virtuoso-opensource/releases>, unpack it, and point `VIRTUOSO_HOME` at it. The
+loader is driven through its `isql` client, which needs `libncurses.so.5`. Ubuntu 20.04 has only version 6;
+without root, take version 5 from conda-forge and wrap `isql`:
+
+```bash
+micromamba create -p ~/opt/virtuoso-env -c conda-forge ncurses=5.9
+printf '#!/bin/sh\nLD_LIBRARY_PATH=$HOME/opt/virtuoso-env/lib exec $VIRTUOSO_HOME/bin/isql "$@"\n' > isql.sh
+chmod +x isql.sh && export VIRTUOSO_ISQL="$PWD/isql.sh"
+```
+
+Three of Virtuoso's defaults would corrupt rows without an error, so the engine overrides them:
+
+- **Its default graph** is the union of every graph it holds, its own system graphs included (2,500 triples),
+  which an identity view would copy. The data goes into the graph `urn:bench`, and every query names it as
+  its default graph.
+- **A query that runs out of its budget is answered with what it found so far**, as `206 Partial Content`.
+  The engine reports that as an error, never as an answer.
+- **Answers are capped** at 1,048,576 rows by the endpoint, unless the request asks for more (`maxrows`); the
+  ini's `ResultSetMaxRows` can only lower that cap. Every query asks for the harness's own cap, 50 million rows,
+  and an answer that is cut off anyway (it carries an `X-SPARQL-MaxRows` header) is reported as an error.
+  Virtuoso cannot send more than 2,097,151 rows in one answer, and a bigger one fails (SR078). Every reference
+  answer up to LUBM u100 is smaller than that, but a rewriting that repeats rows can exceed it.
+
+It also gets more memory to compile a query in (`MaxMemPoolSize`, 400 MB by default, now 16 GB): the plain
+rewriting's queries ran out of 2 GB. Two more limits are raised for materialising the views:
+- the largest array a vectored query may build (`MaxVectorSize`, now 4 million): LUBM `u10`'s identity view
+  needs 1.27 million;
+- the transaction log one update may write (`TransactionAfterImageLimit`, 50 MB by default, now 20 GB): an
+  `INSERT … WHERE` of the views over LUBM `u10` exceeds the default. Two more limits the rewritten queries hit cannot be raised, as they are
+compiled into Virtuoso: the length of the SQL a SPARQL query is translated into (SP031, 10,000 lines) and the
+state a compiled query may hold (SQ156, "Query too large").
+
+It runs **unvectorised** (`VectorSize = 1`, default 1000), which corrects one Virtuoso bug at a cost in speed.
+With vectors, a join over UNIONs whose branches BIND the join variable uses, in some branches, values another
+branch computed. It loses and invents rows: LUBM Q04, Q08 and Q09 after pushDownAssertions, for example. The
+wrong answers change with the vector size, and only 1 gives the right ones. Unvectorised, the rewritten queries
+run about 5× slower on LUBM and about 20× slower on OAEI. The setting applies to every store, the materialised
+views' included.
+
+A second bug has no setting that fixes it. A `FILTER(sameTerm(?v, C))` over a UNION whose branches BIND `?v` to
+different constants is compiled as if every branch had bound `C`, so the filter keeps all the branches. The
+plain rewriting and removeProjections hit it on most LUBM and OAEI queries. Those answers are measured and
+graded wrong.
+
+**GraphDB.** Take the distribution (`graphdb-<version>-dist.zip`; 11.5.1 is the one measured) from Ontotext's
+Maven repository,
+<https://maven.ontotext.com/repository/owlim-releases/com/ontotext/graphdb/graphdb/11.5.1/graphdb-11.5.1-dist.zip>,
+unpack it, and point `GRAPHDB_HOME` at it. Since 11.0 even the Free edition needs a licence, which Graphwise
+sends on registering at its download page. It may come as base64 text; GraphDB reads only the decoded file
+(`base64 -d licence.txt > graphdb.license`), and `GRAPHDB_LICENSE` names it. The Free licence states one CPU
+core, though the server is not pinned to one. GraphDB's defaults would change the answers, so the repository
+overrides them: its default ruleset (RDFS-Plus) derives the very facts the LUBM views derive, so it runs with
+`empty`, and a query that runs out of its budget would by default return what it found so far, so it fails
+instead. The server's heap is capped at 36 GB (`GDB_MAX_MEM`), not the JVM's default of a quarter of the
+machine's memory. Some rewritten queries run GraphDB out of heap at 12 GB and at 40 GB alike; GraphDB then kills
+itself, the cell is an error saying so, and the next cell starts a new server. 36 GB leaves the rest of a 48 GB
+machine enough that the heap cap, not the kernel's OOM killer, stops such a query. Its heap dumps, the size of
+the heap, are switched off.
+
 | Env var | Meaning | Default |
 |---|---|---|
 | `OXIGRAPH_BIN` | The `oxigraph` binary. | `oxigraph` |
@@ -226,6 +299,20 @@ export QLEVER_BIN_DIR="$PWD"
 | `QLEVER_BIN_DIR` | Directory holding `qlever-index` and `qlever-server`. | on `PATH` |
 | `QLEVER_PORT` | Port of the QLever server. | `3133` |
 | `QLEVER_MEMORY` | Memory QLever's queries may use. | `12GB` |
+| `BLAZEGRAPH_JAR` | Path to `blazegraph.jar`. **Required** for Blazegraph. | — |
+| `BLAZEGRAPH_JAVA` | Java binary. | `java` |
+| `BLAZEGRAPH_PORT` | Port of the Blazegraph server. | `3134` |
+| `BLAZEGRAPH_JVM_OPTS` | Extra space-separated JVM arguments, for the server and the loader. | (none) |
+| `VIRTUOSO_HOME` | Directory of the Virtuoso build (holding `bin/virtuoso-t`). **Required** for Virtuoso. | — |
+| `VIRTUOSO_ISQL` | Virtuoso's `isql` client, or a wrapper around it. | `$VIRTUOSO_HOME/bin/isql` |
+| `VIRTUOSO_PORT` | HTTP port of the Virtuoso server. | `3135` |
+| `VIRTUOSO_SQL_PORT` | SQL port of the Virtuoso server, which `isql` uses. | `3136` |
+| `VIRTUOSO_BUFFERS` | Virtuoso's page buffers, of 8 KB each. | `1360000` (about 11 GB) |
+| `GRAPHDB_HOME` | Directory of the GraphDB distribution. **Required** for GraphDB. | — |
+| `GRAPHDB_LICENSE` | GraphDB's licence file, decoded. **Required** for GraphDB's server. | — |
+| `GRAPHDB_PORT` | Port of the GraphDB server. | `3137` |
+| `GDB_JAVA_OPTS` | Extra JVM arguments for GraphDB's server and loader (read by GraphDB's own scripts). | (none) |
+| `GDB_MAX_MEM` | Heap cap (`-Xmx`) of GraphDB's server. | `36g` |
 | `RDF2HDT` | hdt-cpp's `rdf2hdt`, for the workloads' HDT copies. | `rdf2hdt` |
 
 ## Known issues in the corpus and the engines
@@ -285,6 +372,39 @@ listed here because every one of them can be misread as one.
   the `UNION` branches it proved statically empty behind as `FILTER(FALSE)`; now that
   `filterFalse` collapses those through sub-`SELECT`s, none of the benchmark
   rewrites contains a boolean-literal `FILTER`, and the workaround stays only as a guard.
+- **Virtuoso 7.2.17 drops a `sameTerm` filter over a `UNION` whose branches bind its variable to
+  different constants.** For `{ … BIND(ekaw:Paper AS ?o) } UNION { … BIND(ekaw:Document AS ?o) }
+  FILTER(sameTerm(?o, ekaw:Paper))`, its compiler fixes `?o` to `ekaw:Paper` everywhere. The filter
+  becomes `ekaw:Paper = ekaw:Paper`, and every branch passes. `?o = ekaw:Paper` is compiled correctly.
+  The plain rewriting and `removeProjections` filter every constant this way, so on OAEI 103 of their
+  answers are wrong, and on LUBM both of the plain rewriting's answers are wrong. The pushdown removes
+  those filters, and all of its answers are right. No setting changes this. The wrong answers are
+  measured and graded as wrong.
+- **Virtuoso's vectorised execution joins `UNION`s that `BIND` the join variable wrongly.** Some branches
+  compute the join with the values another branch bound. The answer changes with the vector size, and only
+  `VectorSize = 1` is right. With the default (1000), LUBM Q04, Q08 and Q09 after the pushdown lose and
+  invent rows: Q04 at `u1` gives 672 rows where the reference has 306. The benchmark runs Virtuoso
+  unvectorised (see "Setting up the engines"), which costs it 5–20× on these queries.
+- **Virtuoso has limits compiled in that the unoptimised rewrites exceed:**
+  - the SQL a query is translated into may have at most 10,000 lines (SP031);
+  - a compiled query may hold about 65,000 state slots (SQ156, "Query too large");
+  - an answer may have at most 2,097,151 rows (SR078);
+  - a `CONSTRUCT` may build at most 2,097,150 triples (D1CTX), so it cannot materialise LUBM's identity view
+    from `u50` on.
+
+  These limits account for 81 of Virtuoso's 83 errors. The other two are `early_registration`'s
+  `pullUpExtends` rewrite at both OAEI scales, which Virtuoso rejects ("Alias ?uq_s is defined twice"). That
+  is the correlated `BIND` described under "Where the optimisations do not help".
+- **Blazegraph 2.1.6 overflows its stack on the plain rewriting of OAEI** (19 queries) after about 50 s.
+  With a 64 MB thread stack, the same query ran past 400 s without an answer, so the default stack was
+  kept and the error is reported as such. On LUBM its optimiser orders Q04's lone `emailAddress`,
+  `telephone` and `name` patterns, which are joined only through `BIND`-computed variables, first. That
+  makes a cross product of about 10¹² rows, which no budget covers.
+- **GraphDB 11.5 runs out of heap on some `removeProjections` rewrites at 12 GB and at 40 GB alike.** It
+  then kills itself. Its start script passes `-XX:OnOutOfMemoryError=kill -9`, and by default it writes a
+  heap dump the size of the heap into the store's directory. The harness switches the dumps off, caps the heap at
+  36 GB, and starts a new server for the next query. In the full run these queries timed out before
+  reaching the cap.
 
 ## Results
 
@@ -571,6 +691,8 @@ timed-out query (see "Setting up the engines"): before that, six Oxigraph rows f
 row near the budget flipping to a timeout. QLever's `u250` and `u500` blocks were measured on 2026-10-02.
 The rows whose answers used to overrun the harness's response cap (Jena's LUBM Q06 at `u50` and `u100`,
 QLever's Q02, Q06 and Q14 from `u50` on) were re-measured on 2026-10-03, once answers were streamed.
+Virtuoso, GraphDB and Blazegraph were added on 2026-10-14. Their rows are in "Three more engines" below,
+and the tables until then cover the first four engines.
 
 | | LUBM ok / timeout / error | OAEI ok / timeout / error |
 |---|---|---|
@@ -590,7 +712,8 @@ Comparisons are paired and count rescues, as for StarBench above.
 
 #### No wrong answers
 
-Of 2,151 graded rows, **none differs from the reference as a set of rows**. The 334 LUBM rows that fail
+Of these four engines' 2,151 graded rows, **none differs from the reference as a set of rows**. Virtuoso, added
+later, gives 105 wrong answers. All of them come from its own bugs (see "Three more engines"). The 334 LUBM rows that fail
 the multiset comparison are duplicates only, which is what running without `preserveCardinality`
 against a set-valued reference predicts. The OAEI answers match exactly, since every competency question
 is `SELECT DISTINCT`.
@@ -665,13 +788,21 @@ The comparison above assumes the views already exist. Views that change, or that
 have to be built again each time. `timeMaterialization.ts` measures that for every engine, doing all of
 it itself: running every view's `CONSTRUCT` against its own store of the source, then loading the output
 into a fresh store of its own, the way it loads data fastest. Starting the server on the source store is
-not counted, because the rewriting needs it too. Measured once, on 2026-09-30/10-01;
-`results/materialization.json` holds the numbers.
+not counted, because the rewriting needs it too. Measured once, on 2026-09-30/10-01, and for Virtuoso,
+GraphDB and Blazegraph on 2026-10-14; `results/materialization.json` holds the numbers.
 
 Doing it inside the database with one `INSERT { GRAPH … } WHERE { … }` per view is slower on every engine
 that supports it, at LUBM `u10` (`results/materialization-methods-u10.json`): QLever 74 s against 16 s,
 Jena 131 s against 35 s, Oxigraph 159 s against 153 s. Comunica cannot write, so it builds an HDT file
-and its index from its own `CONSTRUCT` output.
+and its index from its own `CONSTRUCT` output. Of the engines added later:
+- **GraphDB is the exception.** Its `INSERT` is 1.5–2× faster than its own `CONSTRUCT` and load at every
+  scale, so its build times below are the `INSERT`s.
+- **Virtuoso can only use `INSERT` from LUBM `u50` on.** A `CONSTRUCT` answer is capped at 2,097,150
+  triples (D1CTX, compiled in), and the identity view alone is larger there. Below that, its `CONSTRUCT`
+  and load is faster (126 s against 344 s at `u10`), except at OAEI `eswc`, where creating a fresh
+  database dominates (12 s against 3.0 s).
+- **Blazegraph keeps triples, not named graphs**, so it is only timed with `CONSTRUCT` and load.
+The table shows the faster of the two for each engine.
 
 | Build time | LUBM `u1` | `u10` | `u50` | `u100` | `u250` | `u500` | OAEI `eswc` | `d100` |
 |---|---|---|---|---|---|---|---|---|
@@ -679,12 +810,17 @@ and its index from its own `CONSTRUCT` output.
 | Jena | 8.2 s | 32 s | 178 s | 390 s | — | — | 5.3 s | 11 s |
 | Oxigraph | 11 s | 144 s | 951 s | 41 min | — | — | 3.1 s | 23 s |
 | Comunica | 15 s | 650 s | 4.0 h | 14.2 h | — | — | 4.5 s | 30 s |
+| Virtuoso | 22 s | 126 s | 30 min | 65 min | — | — | 3.0 s | 33 s |
+| GraphDB | 12 s | 56 s | 231 s | 435 s | — | — | 7.0 s | 22 s |
+| Blazegraph | 12 s | 67 s | 318 s | 666 s | — | — | 5.7 s | 15 s |
 
 Running the views is most of it up to `u250`: at `u100` it is 92 s of QLever's 125 and 246 s of Jena's 390,
 at `u250` 226 s of QLever's 378. At `u500` QLever's index build catches up, 716 s of its 1,489: it grew 4.7×
 from `u250` for twice the data, the views 3.4×.
 Comunica's grows far faster than the data, 22× from `u10` to `u50` and another 3.5× to `u100`, so
 `timeMaterialization.ts` no longer runs it at those two scales unless asked to (`--include-slow`).
+Virtuoso's `INSERT`s are slow because it runs unvectorised (see "Setting up the engines"): 9.1 M triples
+take 30 min at `u50`, and 18.3 M take 65 min at `u100`.
 
 The materialised views on disk, against 3.1 GB of N-Triples at LUBM `u100`, measured as the disk
 actually allocated to each engine's store of them (TDB2 preallocates sparse files several times larger):
@@ -696,6 +832,14 @@ actually allocated to each engine's store of them (TDB2 preallocates sparse file
 | Oxigraph | 12 MB | 136 MB | 708 MB | 1.4 GB | — | — | 3.7 MB | 41 MB |
 | QLever | 2.1 MB | 23 MB | 122 MB | 244 MB | 610 MB | 1.2 GB | 0.8 MB | 7.3 MB |
 | HDT + index (Comunica) | 1.2 MB | 16 MB | 91 MB | 189 MB | — | — | 0.3 MB | 3.8 MB |
+| Virtuoso | 92 MB | 210 MB | — | — | — | — | 59 MB | 59 MB |
+| GraphDB | 74 MB | 159 MB | 564 MB | 1.1 GB | — | — | 69 MB | 90 MB |
+| Blazegraph | 15 MB | 193 MB | 917 MB | 1.9 GB | — | — | 4.2 MB | 38 MB |
+
+These are fresh stores loaded from the `CONSTRUCT` output. An empty Virtuoso database takes 59 MB and an
+empty GraphDB repository about 65 MB, which is most of their small sizes. Virtuoso has no row at `u50` and
+`u100`, where it can only `INSERT` into the source's store. That store's file grows in large steps and
+reuses free pages, so its growth (585 MB at `u50`, 149 MB at `u100`) does not measure the views.
 
 LUBM's views take 1.36× the source, because the reasoning adds entailed triples; OAEI's take a third
 of it, keeping only what maps into ekaw.
@@ -710,6 +854,9 @@ saving against `pullUpExtends`, per engine, with that engine's own build time an
 | QLever | 6 | 14 | 27 | 26 | ≤ 41 | ≤ 108 | 110 | 38 |
 | Comunica | ≤ 2 | ≤ 17 | ~365 | ~1,302 | — | — | 13 | ≤ 10 |
 | Oxigraph | 11 | ≤ 259 | never | never | — | — | never | 298 |
+| Virtuoso | 13 | 56 | ≤ 249 | ≤ 623 | — | — | 5 | ≤ 16 |
+| GraphDB | ≤ 1 | ≤ 2 | ≤ 6 | ≤ 11 | — | — | ≤ 5 | ≤ 4 |
+| Blazegraph | ≤ 1 | ≤ 2 | ≤ 7 | ≤ 14 | — | — | ≤ 2 | ≤ 2 |
 
 A timed-out rewrite counts at the 60 s budget, which understates the saving: those counts are upper
 bounds (≤). Where materialised queries timed out as well (~, and Oxigraph's "never" at `u50`/`u100`),
@@ -724,6 +871,13 @@ materialised queries between `u1` and `u250`, and to 106× at `u500`, so its pay
 queries at `u1` to at most 41 at `u250` and at most 108 at `u500`. Comunica's 14-hour build needs over a thousand. On Oxigraph the materialised views
 are no faster to query, so building never pays off at all. On OAEI, where the rewriting runs at parity,
 building takes 10 to 298 queries to pay off, and never on Oxigraph at `eswc`.
+
+The three engines added later follow the same rule: the closer an engine's rewrites come to its own
+materialised views, the longer building them takes to pay off.
+- **GraphDB and Blazegraph pay off within 14 queries everywhere**, like Jena, because their rewrites run
+  at 5–73× their materialised views on LUBM.
+- **Virtuoso needs the most queries of the three**: 56 at `u10`, up to 623 at `u100`. Its rewrites stay
+  within 2.5× its views, and its unvectorised `INSERT` takes an hour at `u100`.
 
 #### Where the optimisations do not help, and why
 
@@ -753,6 +907,65 @@ building takes 10 to 298 queries to pay off, and never on Oxigraph at `eswc`.
   right. Treat it as unverified.
 - **Comunica and QLever stay at 1.5–2.5× the materialised views on OAEI** where Jena and Oxigraph are
   at parity: they pay more per `UNION` branch.
+
+#### Three more engines: Virtuoso, GraphDB and Blazegraph
+
+2,730 more rows, 910 per engine, measured on 2026-10-14 with the same protocol: LUBM `u1`–`u100`, OAEI
+`eswc` and `d100`, 60 s budget, 1 rep. The engines are Virtuoso 7.2.17 (open source, run unvectorised),
+GraphDB 11.5.1 Free (heap capped at 36 GB) and Blazegraph 2.1.6 RC. Each runs as its native server over an
+on-disk store of its own (see "Setting up the engines"). None of them has RDF 1.2, so none runs StarBench.
+Each one's reference answers agree with Jena's, Oxigraph's and QLever's at every scale.
+
+| | LUBM ok / timeout / error | OAEI ok / timeout / error |
+|---|---|---|
+| Virtuoso | 148 / 55 (39 not run) / 57 | 515 / 109 / 26 |
+| GraphDB | 124 / 136 (94 not run) / 0 | 577 / 73 / 0 |
+| Blazegraph | 82 / 178 (130 not run) / 0 | 393 / 236 / 21 |
+
+Queries answered **correctly**, of 13 (LUBM) and 65 (OAEI), in the column order used above:
+materialised views · `rewriting` · `+removeProjections` · `+pushDownAssertions` · `+pullUpExtends`.
+
+| Scale | Virtuoso | GraphDB | Blazegraph |
+|---|---|---|---|
+| LUBM `u1` | 13 · 0 · 0 · 13 · 13 | 13 · 13 · 2 · 8 · 8 | 13 · 0 · 0 · 6 · 6 |
+| LUBM `u10` | 13 · 0 · 0 · 12 · 12 | 13 · 8 · 2 · 5 · 5 | 13 · 0 · 0 · 4 · 5 |
+| LUBM `u50` | 13 · 0 · 0 · 11 · 11 | 13 · 0 · 2 · 4 · 5 | 13 · 0 · 0 · 2 · 3 |
+| LUBM `u100` | 13 · 0 · 0 · 11 · 11 | 13 · 0 · 2 · 3 · 5 | 13 · 0 · 0 · 2 · 2 |
+| OAEI `eswc` | 65 · 12 · 2 · 65 · 64 | 65 · 64 · 42 · 64 · 64 | 65 · 0 · 35 · 62 · 62 |
+| OAEI `d100` | 65 · 12 · 2 · 63 · 62 | 65 · 64 · 33 · 58 · 58 | 65 · 0 · 0 · 51 · 53 |
+
+Median of `pullUpExtends` against the materialised views, on cells where both answered correctly (cell
+counts in parentheses):
+
+| Engine | LUBM `u1` | `u10` | `u50` | `u100` | OAEI `eswc` | `d100` |
+|---|---|---|---|---|---|---|
+| Virtuoso | 1.44× (13) | 2.48× (12) | 1.44× (11) | 2.31× (11) | 1.00× (64) | 1.00× (62) |
+| GraphDB | 19× (8) | 5.2× (5) | 19× (5) | 41× (5) | 1.29× (64) | 1.28× (58) |
+| Blazegraph | 39× (6) | 11× (5) | 16× (3) | 73× (2) | 1.20× (62) | 1.45× (53) |
+
+- **Virtuoso gives the only wrong answers in the benchmark, and they are its bugs** (see "Known issues").
+  - 105 of its 481 graded answers are wrong as a set: 103 on OAEI and the plain rewriting's only two answers
+    on LUBM. All of them come from the plain rewriting or `removeProjections`.
+  - Every answer after the pushdown is right.
+  - Those two pipelines hit its compiled-in limits too. On LUBM they answer nothing correctly; on OAEI, 12
+    and 2 queries.
+  - With the pushdown, Virtuoso comes closest of the seven engines to its own materialised views. On LUBM,
+    `pullUpExtends` runs at 1.4–2.5× them and still answers 11 of 13 at `u100`. On OAEI it runs at parity.
+  - Running unvectorised slows its materialised queries as well, so that ratio compares like with like.
+- **On GraphDB the plain rewriting does best on LUBM's smallest scales.** It is the only engine on which
+  the unoptimised rewrite answers all 13 LUBM queries at `u1`, in 1.6–11 s, Q09 included.
+  - The pushdown is faster wherever both finish (median 0.28× on LUBM, 0.03× on OAEI).
+  - But it loses 7 LUBM cells the plain rewriting answers, and rescues 4. Q02, Q05, Q07, Q08 and Q09 time out after
+    the pushdown at `u1`.
+  - From `u50` on, the plain rewriting answers nothing and the optimised ones answer 3–5 queries.
+  - `removeProjections` is GraphDB's worst pipeline: it loses 11 LUBM and 53 OAEI cells to the plain
+    rewriting. Some of them ran it out of heap in the smoke tests; in this run they timed out first.
+- **Blazegraph answers nothing without the pushdown on LUBM, and nothing with the plain rewriting on
+  OAEI.**
+  - On OAEI, 19 of those plain-rewriting queries overflow its stack.
+  - The pushdown rescues 113 OAEI cells and every LUBM cell it answers.
+  - Even then, it answers 2 of 13 LUBM queries at `u100`, at 73× its materialised views. It orders joins of
+    `BIND`-computed variables badly, as Q04 shows (see "Known issues").
 
 ## With `preserveCardinality`
 
@@ -940,6 +1153,7 @@ figures from any results JSON. In summary:
 | 2026-10-03 | Answers are streamed: each binding is read and canonicalised as it arrives, so no answer becomes one giant string and the 268MB response cap is gone. Every row it had cut off re-measured, and Jena's StarBench block re-run on TDB2. Large answers now count: QLever's LUBM pay-off falls to 27 queries at `u50` and at most 108 at `u500` (from 48 and 169), and `singleton/F-Q3`'s baseline turns out to be a ninth that asks a different question. |
 | 2026-10-05 | LUBM run once with `preserveCardinality` on all four engines (`--preserve-cardinality`): every graded answer exactly right, Q09 answered on Oxigraph and QLever at every scale, Q05 and Q13 up to 4× slower on QLever. The pay-off point barely moves (QLever 23 queries at `u50`, at most 90 at `u500`), which shows that the drop after streaming came from the large answers entering the average, not from duplicates. |
 | 2026-10-05 → 10-06 | StarBench and OAEI run once with `preserveCardinality` too. StarBench's views are already a set, so its `DISTINCT`s only cost: the full pipeline is 1.31–1.55× slower in median (up to a quarter of it drift between runs), mostly because each `DISTINCT` subquery is a boundary filters and joins cannot cross. OAEI's views overlap, so deduplicating mostly wins (`is_author_of_paper` 28× faster on Jena) and the pay-off point moves later (Jena 13 → 117 queries at `d100`). No answer changed. |
+| 2026-10-13 → 10-14 | Virtuoso 7.2.17, GraphDB 11.5.1 Free and Blazegraph 2.1.6 RC added on LUBM and OAEI, with server-wide settings only (Virtuoso unvectorised, because its vectorised joins give wrong answers; GraphDB's heap at 36 GB). The only wrong answers in the benchmark are Virtuoso's: 105 from its `sameTerm` bug, all without the pushdown. With the pushdown, Virtuoso runs at 1.4–2.5× its materialised views on LUBM and at parity on OAEI; GraphDB and Blazegraph run at up to 41× and 73× on LUBM and pay off within 14 queries. |
 
 ## Extending
 

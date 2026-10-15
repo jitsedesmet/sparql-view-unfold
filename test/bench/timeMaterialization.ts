@@ -8,7 +8,7 @@
  *    `tdb2.tdbloader --loader=parallel`, QLever's index builder; for Comunica, which cannot write, `rdf2hdt`
  *    and the HDT index Comunica builds when it first opens the file.
  *  - `insert`: one `INSERT { GRAPH <urn:bench:views> { ... } } WHERE { ... }` per view, into a copy of the
- *    source store (Oxigraph, Jena and QLever).
+ *    source store (Oxigraph, Jena, QLever, Virtuoso and GraphDB; Blazegraph's store holds triples, not named graphs).
  * The views' output overlaps, but a store is a set, so nothing is deduplicated by hand. Starting a server on
  * the source store is not timed: the rewriting needs that server too. Everything after it is, once, as a
  * one-off materialisation would pay it.
@@ -24,7 +24,8 @@
  * took 4 hours at `u50` and over 13 at `u100` (2026-09-30), where the other engines need minutes, and the
  * measurements are kept in the output file.
  *
- * Usage: npx tsx test/bench/timeMaterialization.ts [--engines oxigraph,jena,qlever,comunica]
+ * Usage: npx tsx test/bench/timeMaterialization.ts
+ *   [--engines oxigraph,jena,qlever,blazegraph,virtuoso,graphdb,comunica]
  *   [--workloads lubm,oaei] [--scales u1,u10,...] [--methods construct-load,insert] [--include-slow]
  *   [--out file.json]
  *        npx tsx test/bench/timeMaterialization.ts --break-even results.json [--out file.json]
@@ -36,10 +37,22 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadViews, runsAt, WORKLOADS, workloadSources } from './config.js';
 import type { EngineSource, ManagedServerEngine } from './engines.js';
-import { ComunicaEngine, JenaEngine, OxigraphEngine, QLeverEngine, runTool } from './engines.js';
+import {
+  BlazegraphEngine,
+  ComunicaEngine,
+  GraphDBEngine,
+  JenaEngine,
+  OxigraphEngine,
+  QLeverEngine,
+  runTool,
+  VirtuosoEngine,
+} from './engines.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const VIEWS_GRAPH = 'urn:bench:views';
+
+/** Engines without the `insert` method: Comunica cannot write, and Blazegraph's triple store has no named graphs. */
+const NO_INSERT = new Set([ 'comunica', 'blazegraph' ]);
 
 /** Materialisations that take hours, run only with `--include-slow`: `engine workload scale`. */
 const SLOW = new Set([ 'comunica lubm u50', 'comunica lubm u100' ]);
@@ -132,8 +145,8 @@ Promise<Omit<Measurement, 'engine' | 'workload' | 'scale' | 'method' | 'views'>>
   const copy = join(work, 'copy');
   execFileSync('cp', [ '-r', engine.storeFor(source.file!), copy ]);
   const before = diskBytes(copy);
-  // Started, untimed, by a first update that changes nothing.
-  await engine.runUpdate(`INSERT DATA { GRAPH <${VIEWS_GRAPH}> {} }`, copy);
+  // Started, untimed, by a first update that changes nothing (not an empty `INSERT DATA`, which Virtuoso rejects).
+  await engine.runUpdate(`INSERT { GRAPH <${VIEWS_GRAPH}> { <urn:x> <urn:x> <urn:x> } } WHERE { FILTER(false) }`, copy);
   const start = performance.now();
   for (const view of views) {
     await engine.runUpdate(asInsert(view), copy);
@@ -187,6 +200,9 @@ function makeServer(name: string): ManagedServerEngine {
     case 'oxigraph': return new OxigraphEngine();
     case 'jena': return new JenaEngine();
     case 'qlever': return new QLeverEngine();
+    case 'blazegraph': return new BlazegraphEngine();
+    case 'virtuoso': return new VirtuosoEngine();
+    case 'graphdb': return new GraphDBEngine();
     default: throw new Error(`Unknown engine '${name}'`);
   }
 }
@@ -208,7 +224,7 @@ async function measure(): Promise<void> {
       const { source } = workloadSources(workload, scale);
       for (const engineName of engines) {
         for (const method of <Measurement['method'][]> methods) {
-          if ((engineName === 'comunica' && method === 'insert') || !runsAt(workload, scale, engineName)) {
+          if ((NO_INSERT.has(engineName) && method === 'insert') || !runsAt(workload, scale, engineName)) {
             continue;
           }
           if (SLOW.has(`${engineName} ${workloadName} ${scale}`) && !process.argv.includes('--include-slow')) {
