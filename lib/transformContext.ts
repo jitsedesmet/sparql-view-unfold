@@ -40,7 +40,15 @@ export interface TransformationContext {
    * projection.
    */
   coinExistenceVariable: () => RDF.Variable;
+  /**
+   * How deeply a triple term argument of `<internal://blank>` is encoded, since an expression cannot recurse.
+   * A more deeply nested triple term leaves the node unbound, and each level adds three encodings to the argument.
+   */
+  tripleTermArgumentDepth: number;
 }
+
+/** What a rewrite configures of its {@link TransformationContext}. */
+export type TransformationContextOptions = Partial<Pick<TransformationContext, 'tripleTermArgumentDepth'>>;
 
 /**
  * Parses a SPARQL query or update string into its algebra representation, with blank nodes converted to
@@ -66,9 +74,12 @@ export function parseQuery(
 
 /**
  * Creates a {@link TransformationContext} with a solver of its own, one rewrite's worth of state.
+ * @param options - What to configure, a `tripleTermArgumentDepth` of 2 by default.
  * @returns the context
  */
-export function createTransformationContext(): TransformationContext {
+export function createTransformationContext(
+  { tripleTermArgumentDepth = 2 }: TransformationContextOptions = {},
+): TransformationContext {
   const DF = new DataFactory();
   const usedVariableNames = new Set<string>();
   return {
@@ -81,5 +92,6 @@ export function createTransformationContext(): TransformationContext {
     clusterSolver: new ClusterSolver(),
     usedVariableNames,
     coinExistenceVariable: freshVarGenerator(usedVariableNames, 'mExists'),
+    tripleTermArgumentDepth,
   };
 }

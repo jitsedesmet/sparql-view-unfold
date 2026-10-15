@@ -23,14 +23,6 @@ import { isSubsetOf } from '../utils/setUtils.js';
  */
 
 /**
- * How deeply nested a triple term argument of `<internal://blank>` is encoded, since a SPARQL expression cannot
- * recurse. Only the object of a triple term can itself be one, so 2 encodes a triple term whose object may itself be
- * a triple term whose object is not. A more deeply nested triple term errors the identity, leaving the node unbound.
- * Each level adds three encodings to the expression of every argument that can be a triple term.
- */
-const TRIPLE_TERM_ARGUMENT_DEPTH = 2;
-
-/**
  * Transforms an internal blank node expression into a deterministic expression.
  *
  * The expression `<internal://blank>(?var1, ?var2, ...)` is converted to an
@@ -42,7 +34,7 @@ const TRIPLE_TERM_ARGUMENT_DEPTH = 2;
  * - Literals with lang: `,literal@,<value>,<lang>`
  * - Plain/typed literals: `,literal,<value>,<datatype>`
  * - Triple terms: `,triple` followed by the encodings of its subject, predicate and object,
- *   nested up to {@link TRIPLE_TERM_ARGUMENT_DEPTH}
+ *   nested up to the `tripleTermArgumentDepth` of the context
  * - Unbound variables: `,unbound`, which no bound value gives
  *
  * The result is unambiguous: every part starts with its tag, values have their commas escaped,
@@ -152,12 +144,12 @@ function expressionForConsistentConstruction(
     const argumentExpression = AF.createTermExpression(argument);
     // A constant is always bound, and BOUND only accepts a variable. Its range is its own term type.
     if (argument.termType !== 'Variable') {
-      return encodeTerm(argumentExpression, new RangeSet([ argument.termType ]), TRIPLE_TERM_ARGUMENT_DEPTH);
+      return encodeTerm(argumentExpression, new RangeSet([ argument.termType ]), c.tripleTermArgumentDepth);
     }
     const encoding = encodeTerm(
       argumentExpression,
       scope?.vRanges.rangeOf(argument.value) ?? objectRange,
-      TRIPLE_TERM_ARGUMENT_DEPTH,
+      c.tripleTermArgumentDepth,
     );
     if (scope?.cVars.has(argument.value)) {
       return encoding;

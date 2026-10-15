@@ -11,7 +11,7 @@ import { removeProjectionsTransformation } from './transformations/removeProject
 import type { UnfoldingOptions } from './transformations/unfolding.js';
 import { unfoldingTransformation } from './transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from './transformContext.js';
-import type { TransformationContext } from './transformContext.js';
+import type { TransformationContext, TransformationContextOptions } from './transformContext.js';
 import type { Mapping, QueryTransformation } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
 import { queryFormTypes, solutionModifierTypes } from './utils/solutionModifierChain.js';
@@ -193,6 +193,7 @@ async function rewriteParsedQuery(
  * Creates a rewriter applying the given transformations, in order, to every query handed to it.
  * @param transformations - The pipeline, for instance the one
  * {@link createDefaultTransformationPipeline} builds
+ * @param options - What to configure the context of every rewrite with.
  * @returns the rewriter
  * @example
  * const rewriter = createQueryRewriter([
@@ -202,16 +203,19 @@ async function rewriteParsedQuery(
  * ]);
  * const sparql11Query = await rewriter.rewriteQuery('SELECT * WHERE { ?s ?p ?o }');
  */
-export function createQueryRewriter(transformations: readonly QueryTransformation[]): QueryRewriter {
+export function createQueryRewriter(
+  transformations: readonly QueryTransformation[],
+  options: TransformationContextOptions = {},
+): QueryRewriter {
   return {
     async rewriteQuery(query: string): Promise<string> {
-      const c = createTransformationContext();
+      const c = createTransformationContext(options);
       const operation = parseQuery(c, query);
       markVariableNamesUsed(c, operation);
       return c.generator.generate(toAst(await rewriteParsedQuery(c, transformations, operation)));
     },
     async rewriteOperation(operation: Algebra.Operation): Promise<Algebra.Operation> {
-      const c = createTransformationContext();
+      const c = createTransformationContext(options);
       markVariableNamesUsed(c, operation);
       // A copy, since passes may rewrite in place and the operation is the caller's.
       return rewriteParsedQuery(c, transformations, deepCopy(c, operation));

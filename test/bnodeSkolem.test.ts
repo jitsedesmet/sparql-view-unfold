@@ -200,6 +200,21 @@ describe('bnode skolem', () => {
 }`);
     });
 
+    it('encodes a triple term only as deep as the context says', async({ expect }) => {
+      const shallowRewriter = createQueryRewriter(
+        [ internalBnodeAsSpecialLiteralTransformation() ],
+        { tripleTermArgumentDepth: 1 },
+      );
+      expect((await shallowRewriter.rewriteQuery(`SELECT ?node WHERE {
+        ?s ?p ?o .
+        BIND(<<( ?s ?p ?o )>> AS ?t)
+        BIND(<internal://blank>(?t) AS ?node)
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( CONCAT( ",triple" , ${iriOrLiteralEncoding('SUBJECT( ?t )')} , ${iriOrLiteralEncoding('PREDICATE( ?t )')} , ${iriOrLiteralEncoding('OBJECT( ?t )')} ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+  ?s ?p ?o .
+  BIND( <<( ?s ?p ?o )>> AS ?t )
+}`);
+    });
+
     // BOUND only accepts a variable, and a constant is bound anyway. A constant IRI is no triple term either.
     it('encodes a constant argument without asking whether it is bound or a triple term', async({ expect }) => {
       expect((await rewriter.rewriteQuery('SELECT * WHERE { BIND(<internal://blank>(<ex://c>) AS ?node) }')).trim())
