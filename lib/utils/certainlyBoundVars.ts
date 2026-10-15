@@ -215,7 +215,7 @@ export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
  * @param vRanges - What the input binds
  * @returns whether every component is certainly a term its position admits
  */
-function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
+export function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
   function admits(component: RDF.Term, position: RangeSet): boolean {
     if (component.termType === 'Variable') {
       // Every termType the variable can still take has to be one the position admits. The bottom range

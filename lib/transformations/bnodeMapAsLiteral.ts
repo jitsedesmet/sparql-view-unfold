@@ -7,7 +7,7 @@ import { objectRange, RangeSet, rangeOfPosition, tripleTermRange } from '../Rang
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
-import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { constructionCannotFail, cpMetaOf, VRanges, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { isSubsetOf } from '../utils/setUtils.js';
 
 /**
@@ -141,7 +141,7 @@ function encodeInternalBnode(
    * @returns The encoding, which errors when the term is unbound.
    */
   function encodeTerm(termExpression: Algebra.Expression, range: RangeSet, depth: number): Algebra.Expression {
-    if (depth === 0 || !range.has('Quad')) {
+    if (depth <= 0 || !range.has('Quad')) {
       return encodeIriOrLiteral(termExpression, range);
     }
     const tripleTermEncoding = encodeTripleTerm(triplePositions.map(position => encodeTerm(
@@ -155,27 +155,30 @@ function encodeInternalBnode(
     return AF.createOperatorExpression('if', [
       AF.createOperatorExpression('istriple', [ termExpression ]),
       tripleTermEncoding,
-      encodeIriOrLiteral(termExpression, range),
+      encodeIriOrLiteral(termExpression, new RangeSet([ ...range ].filter(termType => termType !== 'Quad'))),
     ]);
   }
 
   /**
-   * Encodes a term as written, a triple term through its written components and any other through its range.
+   * Encodes a term as written: a triple term that cannot fail to construct through its written components, any
+   * other term through its range. Writing a triple term out uses up depth as binding it to a variable does.
    * @param term - The term, like `?v`, `<ex://c>` or `<<( ?s ?p ?o )>>`.
+   * @param depth - How many nested triple terms are still encoded; a deeper one errors.
    * @returns The encoding, which errors when a variable in it is unbound.
    */
-  function encodeWrittenTerm(term: RDF.Term): Algebra.Expression {
-    if (term.termType === 'Quad') {
-      return encodeTripleTerm(triplePositions.map(position => encodeWrittenTerm(term[position])));
+  function encodeWrittenTerm(term: RDF.Term, depth: number): Algebra.Expression {
+    if (term.termType === 'Quad' && depth > 0 && constructionCannotFail(term, scope?.vRanges ?? new VRanges())) {
+      return encodeTripleTerm(triplePositions.map(position => encodeWrittenTerm(term[position], depth - 1)));
     }
+    // A variable out of scope still gets every branch, in case an engine binds what the ranges miss.
     const range = term.termType === 'Variable' ?
-      scope?.vRanges.rangeOf(term.value) ?? objectRange :
+      scope?.vRanges.get(term.value) ?? objectRange :
       new RangeSet([ term.termType ]);
-    return encodeTerm(AF.createTermExpression(term), range, c.tripleTermArgumentDepth);
+    return encodeTerm(AF.createTermExpression(term), range, depth);
   }
 
   function encodeArgument(argument: RDF.Term): Algebra.Expression {
-    const encoding = encodeWrittenTerm(argument);
+    const encoding = encodeWrittenTerm(argument, c.tripleTermArgumentDepth);
     // BOUND only accepts a variable, and a triple term with an unbound variable errors, as constructing it does.
     if (argument.termType !== 'Variable' || scope?.cVars.has(argument.value)) {
       return encoding;

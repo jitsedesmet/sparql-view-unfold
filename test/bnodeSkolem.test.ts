@@ -122,19 +122,49 @@ describe('bnode skolem', () => {
       expect(new Set(nodes).size).toBe(3);
     });
 
-    it('constructs the same node for a triple term constant as for a variable bound to it', async({ expect }) => {
+    // The second is nested three deep, one more than the default depth, so neither form constructs a node.
+    it.for(<const> [
+      [ '<<( <ex://a> <ex://p1> <ex://o1> )>>', true ],
+      [ '<<( <ex://a> <ex://p1> <<( <ex://a> <ex://p1> <<( <ex://a> <ex://p1> <ex://o1> )>> )>> )>>', false ],
+    ])('constructs the same node for %s written out as for a variable bound to it', async([
+      tripleTerm,
+      constructsNode,
+    ], { expect }) => {
       const query = await createQueryRewriter([ internalBnodeAsSpecialIriTransformation() ]).rewriteQuery(`SELECT * {
-        BIND(<<( <ex://a> <ex://p1> <ex://o1> )>> AS ?t)
+        BIND(${tripleTerm} AS ?t)
         BIND(<internal://blank>(?t) AS ?fromVariable)
-        BIND(<internal://blank>(<<( <ex://a> <ex://p1> <ex://o1> )>>) AS ?fromConstant)
+        BIND(<internal://blank>(${tripleTerm}) AS ?fromConstant)
       }`);
       const bindings = await new QueryEngine().queryBindings(query, {
         sources: [ './test/statics/tripleTermArguments.ttl' ],
       });
       const [ binding ] = await bindings.toArray();
-      expect(binding.get('fromConstant')).toBeDefined();
-      expect(binding.get('fromConstant')?.equals(binding.get('fromVariable'))).toBe(true);
+      expect(binding.has('fromVariable')).toBe(constructsNode);
+      expect(binding.get('fromConstant')?.value).toBe(binding.get('fromVariable')?.value);
     });
+  });
+
+  it.for(<const> [
+    [ 'a typed literal', internalBnodeAsSpecialLiteralTransformation() ],
+    [ 'a prefixed IRI', internalBnodeAsSpecialIriTransformation() ],
+  ])('recognises a node materialised as %s as a blank node', async([ , transformation ], { expect }) => {
+    const rewriter = createQueryRewriter([ transformation ]);
+    await expect(constructedNodes(
+      rewriter,
+      'SELECT ?node WHERE { ?s ?p ?o . BIND(<internal://blank>(?s) AS ?node) FILTER(ISBLANK(?node)) }',
+      './test/statics/tripleTermArguments.ttl',
+    )).resolves.toHaveLength(3);
+    await expect(constructedNodes(
+      rewriter,
+      'SELECT ?node WHERE { ?node ?p ?o . FILTER(ISBLANK(?node)) }',
+      './test/statics/tripleTermArguments.ttl',
+    )).resolves.toHaveLength(0);
+  });
+
+  it('refuses a triple term argument depth that is not a non-negative integer', async({ expect }) => {
+    expect(() => createTransformationContext({ tripleTermArgumentDepth: -1 })).toThrow('non-negative integer');
+    await expect(createQueryRewriter([], { tripleTermArgumentDepth: 1.5 }).rewriteQuery('SELECT * {}'))
+      .rejects.toThrow('non-negative integer');
   });
 
   describe('as a special literal', () => {
@@ -228,8 +258,34 @@ describe('bnode skolem', () => {
       expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
         ?s ?p ?o .
         BIND(<internal://blank>(<<( ?s ?p ?o )>>) AS ?node)
-      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( CONCAT( ",triple" , ${iriEncoding('?s')} , ${iriEncoding('?p')} , ${termEncoding('?o')} ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( CONCAT( ",triple" , ${iriEncoding('?s')} , ${iriEncoding('?p')} , ${termEncoding('?o', 1)} ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
   ?s ?p ?o .
+}`);
+    });
+
+    // `?o` may be a literal, which a subject does not admit: the construction may fail, so it is read through.
+    it('encodes a written triple term that may fail to construct through its accessors', async({ expect }) => {
+      expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
+        ?s ?p ?o .
+        BIND(<internal://blank>(<<( ?o ?p ?s )>>) AS ?node)
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( ${tripleTermEncoding('<<( ?o ?p ?s )>>')} ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+  ?s ?p ?o .
+}`);
+    });
+
+    // An EXISTS substitutes the solution it is asked for, so the ranges of its own pattern do not hold.
+    it('encodes an argument in an EXISTS with every branch', async({ expect }) => {
+      expect((await rewriter.rewriteQuery(`SELECT * WHERE {
+        ?s ?p ?o .
+        FILTER EXISTS { BIND(<internal://blank>(?s) AS ?node) }
+      }`)).trim()).toEqual(`SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( EXISTS {
+    {
+      BIND( STRDT( CONCAT( IF( BOUND( ?s ) , ${termEncoding('?s')} , ",unbound" ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node )
+    }
+  }
+  )
 }`);
     });
 

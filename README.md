@@ -132,10 +132,9 @@ An RDF 1.1 dataset cannot reference a blank node consistently across queries, so
 construct a blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: the same inputs
 always give the same identity. An unbound argument counts as a value of its own, so a node is still built, one
 that differs from every node built from a bound value. A triple term argument is encoded through its subject,
-predicate and object; one bound to a variable is unrolled up to two triple terms deep, or the
-`tripleTermArgumentDepth` given to `createQueryRewriter`. Add
-`internalBnodeAsSpecialLiteralTransformation()` or `internalBnodeAsSpecialIriTransformation()` to your pipeline
-to materialise those identities as a typed literal or as a prefixed IRI respectively.
+predicate and object, up to two triple terms deep or the `tripleTermArgumentDepth` given to `createQueryRewriter`.
+Add `internalBnodeAsSpecialLiteralTransformation()` or `internalBnodeAsSpecialIriTransformation()` to your
+pipeline to materialise those identities as a typed literal or as a prefixed IRI respectively.
 
 ## Restrictions
 

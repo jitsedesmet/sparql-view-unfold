@@ -41,8 +41,8 @@ export interface TransformationContext {
    */
   coinExistenceVariable: () => RDF.Variable;
   /**
-   * How many triple terms deep a variable argument of `<internal://blank>` is unrolled, since an expression cannot
-   * recurse. A more deeply nested one leaves the node unbound.
+   * How many triple terms deep an argument of `<internal://blank>` is encoded, since an expression cannot recurse.
+   * A more deeply nested one leaves the node unbound.
    */
   tripleTermArgumentDepth: number;
 }
@@ -76,10 +76,14 @@ export function parseQuery(
  * Creates a {@link TransformationContext} with a solver of its own, one rewrite's worth of state.
  * @param options - What to configure, a `tripleTermArgumentDepth` of 2 by default.
  * @returns the context
+ * @throws Error if the `tripleTermArgumentDepth` is not a non-negative integer
  */
 export function createTransformationContext(
   { tripleTermArgumentDepth = 2 }: TransformationContextOptions = {},
 ): TransformationContext {
+  if (!Number.isInteger(tripleTermArgumentDepth) || tripleTermArgumentDepth < 0) {
+    throw new Error(`The tripleTermArgumentDepth must be a non-negative integer, not ${tripleTermArgumentDepth}.`);
+  }
   const DF = new DataFactory();
   const usedVariableNames = new Set<string>();
   return {
