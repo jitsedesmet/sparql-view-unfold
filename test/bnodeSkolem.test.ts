@@ -48,6 +48,33 @@ describe('bnode skolem', () => {
     await expect(bindings.toArray()).resolves.toHaveLength(1);
   });
 
+  describe('with an argument an OPTIONAL leaves unbound', () => {
+    // `?x` is bound for the `<ex://o1>` solution only, and both solutions share `?s`.
+    const rewriter = createQueryRewriter([ ...createDefaultTransformationPipeline(mappingFromConstructQueries([
+      `CONSTRUCT { ?node <ex://object> ?o } WHERE {
+        ?s ?p ?o .
+        OPTIONAL { ?x <ex://p1> ?o }
+        BIND(<internal://blank>(?s, ?x) AS ?node)
+      }`,
+    ])), internalBnodeAsSpecialIriTransformation() ]);
+
+    async function constructedNodes(): Promise<(string | undefined)[]> {
+      const query = await rewriter.rewriteQuery('SELECT ?node WHERE { ?node <ex://object> ?o }');
+      const bindings = await new QueryEngine().queryBindings(query, { sources: [ './test/statics/data01.ttl' ]});
+      return (await bindings.toArray()).map(binding => binding.get('node')?.value);
+    }
+
+    it('still constructs a node for the solution leaving it unbound', async({ expect }) => {
+      const nodes = await constructedNodes();
+      expect(nodes).toHaveLength(2);
+      expect(nodes).not.toContain(undefined);
+    });
+
+    it('constructs a different node than for the solution binding it', async({ expect }) => {
+      expect(new Set(await constructedNodes()).size).toBe(2);
+    });
+  });
+
   describe('as a special literal', () => {
     const rewriter = createQueryRewriter([ internalBnodeAsSpecialLiteralTransformation() ]);
 
