@@ -107,8 +107,8 @@ as a `BIND` would leave it unbound, so a node is still built, one that differs f
 A triple term argument is encoded through its components, up to the context's `tripleTermArgumentDepth` (2) deep
 since an expression cannot recurse; a deeper one still leaves the node unbound. In a `BIND` or `FILTER`, an argument
 that is no term is bound to a fresh variable first, so it is evaluated once, and the `vRanges` and `cVars` of the
-input drop the branches an argument cannot take. Two transformations materialise it — `internalBnodeAsSpecialLiteral` as a typed literal,
-`internalBnodeAsSpecialIri` as a prefixed IRI whose length SHA-1 keeps manageable.
+input drop the branches an argument cannot take. Two transformations materialise it — `internalBnodeAsSpecialLiteral`
+as a typed literal, `internalBnodeAsSpecialIri` as a prefixed IRI whose length SHA-1 keeps manageable.
 
 ## SPARQL quirks worth knowing
 
