@@ -6,6 +6,7 @@ import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib
 import {
   internalBnodeAsSpecialIriTransformation,
   internalBnodeAsSpecialLiteral,
+  internalBnodeAsSpecialLiteralTransformation,
 } from '../lib/transformations/bnodeMapAsLiteral.js';
 import { createTransformationContext } from '../lib/transformContext.js';
 
@@ -47,30 +48,27 @@ describe('bnode skolem', () => {
     await expect(bindings.toArray()).resolves.toHaveLength(1);
   });
 
-  describe('with an argument an OPTIONAL leaves unbound', () => {
-    const rewriter = createQueryRewriter([ ...createDefaultTransformationPipeline(mappingFromConstructQueries([
-      `CONSTRUCT { ?node <ex://name> ?name } WHERE {
+  describe('as a special literal', () => {
+    const rewriter = createQueryRewriter([ internalBnodeAsSpecialLiteralTransformation() ]);
+
+    it('encodes an argument an OPTIONAL leaves unbound as a value of its own', async({ expect }) => {
+      expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
         ?person <ex://name> ?name .
         OPTIONAL { ?person <ex://nick> ?nick }
-        BIND(<internal://blank>(?name, ?nick) AS ?node)
-      }`,
-    ])), internalBnodeAsSpecialIriTransformation() ]);
-
-    async function constructedNodes(): Promise<(string | undefined)[]> {
-      const query = await rewriter.rewriteQuery('SELECT ?node WHERE { ?node <ex://name> "Ann" }');
-      const bindings = await new QueryEngine()
-        .queryBindings(query, { sources: [ './test/statics/optionalBlankNodeArgument.ttl' ]});
-      return (await bindings.toArray()).map(binding => binding.get('node')?.value);
-    }
-
-    it('still constructs a node for the solution leaving it unbound', async({ expect }) => {
-      const nodes = await constructedNodes();
-      expect(nodes).toHaveLength(2);
-      expect(nodes).not.toContain(undefined);
+        BIND(<internal://blank>(?nick) AS ?node)
+      }`)).trim()).toEqual(String.raw`SELECT ( STRDT( CONCAT( IF( BOUND( ?nick ) , IF( ISIRI( ?nick ) , CONCAT( ",iri," , REPLACE( REPLACE( STR( ?nick ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( HASLANGDIR( ?nick ) , CONCAT( ",literal@D," , REPLACE( REPLACE( STR( ?nick ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANG( ?nick ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANGDIR( ?nick ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( HASLANG( ?nick ) , CONCAT( ",literal@," , REPLACE( REPLACE( STR( ?nick ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANG( ?nick ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , CONCAT( ",literal," , REPLACE( REPLACE( STR( ?nick ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( STR( DATATYPE( ?nick ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) ) ) ) , ",unbound" ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+  ?person <ex://name> ?name .
+  OPTIONAL {
+    ?person <ex://nick> ?nick .
+  }
+}`);
     });
 
-    it('constructs a different node than for the solution binding it', async({ expect }) => {
-      expect(new Set(await constructedNodes()).size).toBe(2);
+    // BOUND only accepts a variable, and a constant is bound anyway.
+    it('encodes a constant argument without asking whether it is bound', async({ expect }) => {
+      expect((await rewriter.rewriteQuery('SELECT * WHERE { BIND(<internal://blank>(<ex://c>) AS ?node) }')).trim())
+        .toEqual(String.raw`SELECT ( STRDT( CONCAT( IF( ISIRI( <ex://c> ) , CONCAT( ",iri," , REPLACE( REPLACE( STR( <ex://c> ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( HASLANGDIR( <ex://c> ) , CONCAT( ",literal@D," , REPLACE( REPLACE( STR( <ex://c> ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANG( <ex://c> ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANGDIR( <ex://c> ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( HASLANG( <ex://c> ) , CONCAT( ",literal@," , REPLACE( REPLACE( STR( <ex://c> ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANG( <ex://c> ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , CONCAT( ",literal," , REPLACE( REPLACE( STR( <ex://c> ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( STR( DATATYPE( <ex://c> ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) ) ) ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+}`);
     });
   });
 });
