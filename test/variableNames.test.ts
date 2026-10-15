@@ -1,17 +1,25 @@
+import { toAst } from '@traqula/algebra-sparql-1-2';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import { claimVariableName } from '../lib/utils.js';
 
 /**
  * Nothing is told apart by its name: the user query keeps the names it was written with, and a mapping
- * variable is renamed only where the user query takes its name.
+ * variable is renamed only where its name is in use.
  */
 describe('variable names', () => {
   /** Rewrites a query with nothing but the unfolding of the given mappings. */
   async function unfold(query: string, constructs: string[]): Promise<string> {
     return (await createQueryRewriter([ unfoldingTransformation(mappingFromConstructQueries(constructs)) ])
+      .rewriteQuery(query)).trim();
+  }
+
+  /** Rewrites a query with the default pipeline over the given mappings. */
+  async function rewriteWithDefaultPipeline(query: string, constructs: string[]): Promise<string> {
+    return (await createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries(constructs)))
       .rewriteQuery(query)).trim();
   }
 
@@ -33,26 +41,56 @@ describe('variable names', () => {
 }`);
   });
 
-  it('classifies a mapping variable by its side, not by a name looking like the user query\'s', async({ expect }) => {
-    // The mapping's `?a` is unified with the user's `?b`: had it been read as a user query variable, the
-    // pattern would bind `?b` from a variable the mapping body does not project.
-    await expect(unfold('SELECT * { ?b <ex://p> ?c }', [ 'CONSTRUCT WHERE { ?a <ex://p> ?c }' ]))
-      .resolves.toBe(`SELECT ?b ?c WHERE {
-  SELECT ( ?a AS ?b ) ( ?mi_c AS ?c ) WHERE {
-    ?a <ex://p> ?mi_c .
+  it('renames a mapping variable apart from a mapping variable already carrying the prefix', async({ expect }) => {
+    await expect(unfold('SELECT * { ?s <ex://p> ?x }', [
+      'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://p> ?o . ?s <ex://q> ?mi_s }',
+    ])).resolves.toBe(`SELECT ?s ?x WHERE {
+  SELECT ( ?mi_s0 AS ?s ) ( ?o AS ?x ) WHERE {
+    ?mi_s0 <ex://p> ?o .
+    ?mi_s0 <ex://q> ?mi_s .
   }
 }`);
   });
 
+  it('takes the first free numeric suffix', ({ expect }) => {
+    expect(claimVariableName('x', new Set([ 'x', 'x0' ]))).toBe('x1');
+  });
+
+  it('renames the VALUES keys of a renamed mapping variable', async({ expect }) => {
+    await expect(unfold('SELECT * { ?s <ex://p> ?x }', [
+      'CONSTRUCT { ?s <ex://p> ?o } WHERE { VALUES ?s { <ex://a> } ?s <ex://q> ?o }',
+    ])).resolves.toBe(`SELECT ?s ?x WHERE {
+  SELECT ( ?mi_s AS ?s ) ( ?o AS ?x ) WHERE {
+    VALUES ?mi_s {
+      <ex://a>
+    }
+    ?mi_s <ex://q> ?o .
+  }
+}`);
+  });
+
+  it('classifies a mapping variable by its side, not by its name', async({ expect }) => {
+    // `?b`, `?c` and the mapping's `?z` are one group. Sorted by name alone, `?b` would be bound from `?c`,
+    // a variable the mapping body does not bind.
+    await expect(unfold('SELECT * { ?b <ex://p> ?c }', [ 'CONSTRUCT WHERE { ?z <ex://p> ?z }' ]))
+      .resolves.toBe(`SELECT ?b ?c WHERE {
+  SELECT ( ?z AS ?b ) ( ?z AS ?c ) WHERE {
+    ?z <ex://p> ?z .
+  }
+}`);
+  });
+
+  /** Rewrites a join of two patterns, user query and mapping both naming a variable `variableName`. */
+  function rewriteNaming(variableName: string): Promise<string> {
+    return rewriteWithDefaultPipeline(`SELECT * { ?${variableName} <ex://p> ?x . ?x <ex://p> ?${variableName} }`, [
+      `CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://p> ?o . ?o <ex://q> ?${variableName} }`,
+    ]);
+  }
+
   for (const name of [ 'toString', '__proto__' ]) {
     it(`rewrites a variable named ${name} as it rewrites any other`, async({ expect }) => {
-      /** Rewrites a join of two patterns, user query and mapping both naming a variable `name`. */
-      async function rewriteNaming(variableName: string): Promise<string> {
-        return createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
-          `CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://p> ?o . ?o <ex://q> ?${variableName} }`,
-        ]))).rewriteQuery(`SELECT * { ?${variableName} <ex://p> ?x . ?x <ex://p> ?${variableName} }`);
-      }
       const rewritten = await rewriteNaming(name);
+      expect(rewritten).toContain(`?${name} `);
       expect(rewritten.replaceAll(name, `${name}Q`)).toBe(await rewriteNaming(`${name}Q`));
     });
   }
@@ -61,6 +99,13 @@ describe('variable names', () => {
     await expect(unfold(
       'SELECT * { <ex://a> <ex://p> <ex://b> . ?mExists0 <ex://p> ?o }',
       [ 'CONSTRUCT WHERE { ?s <ex://p> ?o }' ],
+    )).resolves.toContain('SELECT ?mExists1 WHERE');
+  });
+
+  it('coins the existence variable apart from the names of the mapping', async({ expect }) => {
+    await expect(unfold(
+      'SELECT * { <ex://a> <ex://p> <ex://b> }',
+      [ 'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://p> ?o . ?o <ex://q> ?mExists0 }' ],
     )).resolves.toContain('SELECT ?mExists1 WHERE');
   });
 
@@ -73,13 +118,50 @@ describe('variable names', () => {
       .toEqual([ 'm_s0', 'm_p', 'm_o' ]);
   });
 
-  it('coins no name a CONSTRUCT template uses', async({ expect }) => {
-    // Had `removeProjections` coined `?v_0` for the hidden `?o`, the template would read a bound `?v_0`.
-    const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
-      'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://p> ?o . ?o <ex://q> ?z }',
-    ])));
-    await expect(rewriter.rewriteQuery('CONSTRUCT { ?s <ex://r> ?v_0 } WHERE { ?s <ex://p> ?x }'))
-      .resolves.not.toMatch(/WHERE[^]*\?v_0\b/u);
+  describe('a name only the query form uses', () => {
+    // `removeProjections` coins `?v_N` for the variables the mapping body hides; `?v_0` stays the user's.
+    const hidingMapping = [ 'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://p> ?o . ?o <ex://q> ?z }' ];
+    const unfoldedPattern = `  ?v_2 <ex://p> ?v_1 .
+  ?v_1 <ex://q> ?v_3 .
+  BIND( ?v_2 AS ?s )
+  BIND( ?v_1 AS ?x )`;
+
+    for (const [ form, query, expected ] of [
+      [ 'SELECT', 'SELECT ?s ?v_0 WHERE { ?s <ex://p> ?x }', `SELECT ?s ?v_0 WHERE {\n${unfoldedPattern}\n}` ],
+      [
+        'CONSTRUCT',
+        'CONSTRUCT { ?s <ex://r> ?v_0 } WHERE { ?s <ex://p> ?x }',
+        `CONSTRUCT {\n  ?s <ex://r> ?v_0 .\n}\nWHERE {\n${unfoldedPattern}\n}`,
+      ],
+      [ 'DESCRIBE', 'DESCRIBE ?s ?v_0 WHERE { ?s <ex://p> ?x }', `DESCRIBE ?s ?v_0 WHERE {\n${unfoldedPattern}\n}` ],
+      [
+        'INSERT',
+        'INSERT { ?s <ex://r> ?v_0 } WHERE { ?s <ex://p> ?x }',
+        `INSERT {
+  ?s <ex://r> ?v_0 .
+}
+WHERE {
+  {
+    ?v_2 <ex://p> ?v_1 .
+    ?v_1 <ex://q> ?v_3 .
+    BIND( ?v_2 AS ?s )
+    BIND( ?v_1 AS ?x )
+  }
+}`,
+      ],
+    ]) {
+      it(`is not coined for ${form}`, async({ expect }) => {
+        await expect(rewriteWithDefaultPipeline(query, hidingMapping)).resolves.toBe(expected);
+      });
+    }
+
+    it('is not coined through rewriteOperation either', async({ expect }) => {
+      const c = createTransformationContext();
+      const rewritten = await createQueryRewriter(createDefaultTransformationPipeline(
+        mappingFromConstructQueries(hidingMapping),
+      )).rewriteOperation(parseQuery(c, 'SELECT ?s ?v_0 WHERE { ?s <ex://p> ?x }'));
+      expect(c.generator.generate(toAst(rewritten)).trim()).toBe(`SELECT ?s ?v_0 WHERE {\n${unfoldedPattern}\n}`);
+    });
   });
 
   it('leaves the operation handed to rewriteOperation as it was', async({ expect }) => {

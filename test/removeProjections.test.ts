@@ -86,7 +86,7 @@ describe('removeProjections', () => {
     // enclosing query instead.
     it('keeps the projection of a grouped sub-SELECT', async({ expect }) => {
       expect(await transform('SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s } OPTIONAL { ?s ?q ?r } }'))
-        .toContain('SELECT ?s WHERE');
+        .toMatch(/\{\s*SELECT \?s WHERE/u);
     });
 
     it('a grouped sub-SELECT returns the same results', async({ expect }) => {

@@ -1425,9 +1425,9 @@ describe('assertionConjunction', () => {
       // The memo is what makes two materialisation sites agree, and the suffix is what keeps a coined
       // name off a variable of the query - including on the second reading, which has to hand back the
       // name the first one settled on rather than coin the next free one.
-      const namer = derivedVarNamer(new Set([ 'o_p' ]));
-      expect(namer('o', 'predicate').value).toBe('o_p0');
-      expect(namer('o', 'predicate').value).toBe('o_p0');
+      const namer = derivedVarNamer(new Set([ 'o_p', 'o_p0' ]));
+      expect(namer('o', 'predicate').value).toBe('o_p1');
+      expect(namer('o', 'predicate').value).toBe('o_p1');
       expect(namer('o', 'object').value).toBe('o_o');
     });
   });
