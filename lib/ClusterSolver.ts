@@ -5,7 +5,7 @@ import { meetShapes, TermClusterSet, triplePositions } from './datastructures/Te
 import { objectRange, RangeSet } from './RangeSet.js';
 import { RewriteNoMatchError } from './RewriteNoMatchError.js';
 import type { RangedVar } from './utils/RangedVar.js';
-import { DF } from './utils/rdfDatatypes.js';
+import { tripleTerm } from './utils/rdfDatatypes.js';
 import { isRdfQuad, isRdfTerm, isRdfVar } from './utils/typeGuards.js';
 
 /** A raw term that is either a concrete term (not a variable) or a ranged variable. */
@@ -265,7 +265,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     }
     // Every position was held to the range it admits while the shape was built, so this really is a
     // triple term - which the types of a data factory have no way of knowing.
-    return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
+    return tripleTerm(subject, predicate, object);
   }
 
   /**

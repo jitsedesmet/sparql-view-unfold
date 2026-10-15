@@ -1,0 +1,8 @@
+@prefix : <ex://> .
+
+:alice :knows   :bob .
+:bob   :worksAt :ugent .
+:bob   :worksAt :imec .
+:carol :worksAt :ugent .
+:carol :worksAt :imec .
+:dave  :worksAt :ugent .

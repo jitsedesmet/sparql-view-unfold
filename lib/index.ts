@@ -36,6 +36,11 @@
  */
 export * from './consts.js';
 export { mappingFromConstructQueries } from './mapping.js';
+export {
+  provenanceCapturingOperation,
+  provenanceCapturingQuery,
+  provenanceMappingFromConstructQueries,
+} from './provenance.js';
 export type { MappingOptions } from './mapping.js';
 export { createDefaultTransformationPipeline, createQueryRewriter } from './queryRewriter.js';
 export type { QueryRewriter } from './queryRewriter.js';

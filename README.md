@@ -135,6 +135,48 @@ that differs from every node built from a bound value. Add `internalBnodeAsSpeci
 `internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed
 literal or as a prefixed IRI respectively.
 
+### Provenance
+
+Which source triples does an answer rest on? Hernández et al.,
+["Computing How-Provenance for SPARQL Queries via Query Rewriting"](https://doi.org/10.14778/3484224.3484235)
+(SPARQLprov) answer that by rewriting the query, and Asma et al.,
+["NPCS: Native Provenance Computation for SPARQL"](https://doi.org/10.1145/3589334.3645557) (NPCS) natively, both
+over data stored reified; NPCS (p. 2092) leaves non-reified data and CONSTRUCT as future work. Here the
+provenance mapping supplies the reification virtually, and a derivation points back through the mapping to the
+source triples it matched. That is no general answer to non-reified data: over one plain graph, a triple can be
+its own identifier.
+
+A *derivation* is one solution of a mapping body. `provenanceMappingFromConstructQueries` builds the view of them:
+each derivation is `provenance:derivationOf` the view triples it produces and `provenance:derivedFrom` the source
+triples it matched, with `provenance:` for `https://sparql-extension.knows.idlab.ugent.be/provenance#`.
+`provenanceCapturingQuery` rewrites a SELECT over the view so that it also selects, per triple pattern, the
+derivation that pattern matched (`?derivation0`, `?derivation1`, …). Unfold the one against the other:
+
+```typescript
+const rewriter = createQueryRewriter([
+  ...createDefaultTransformationPipeline(provenanceMappingFromConstructQueries(constructs)),
+  internalBnodeAsSpecialIriTransformation(),
+]);
+const rewrittenQuery = await rewriter.rewriteQuery(provenanceCapturingQuery(
+  'PREFIX : <ex://> SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }',
+));
+```
+
+It answers one row per combination of derivations an answer has; querying `derivedFrom` of a derivation gives
+the source triples behind it. A derivation is identified by the position of its CONSTRUCT and the values of its
+body's variables. Beyond that:
+
+- `OPTIONAL`, `MINUS` and `EXISTS` get positive provenance only: an `OPTIONAL` selects its derivations where it
+  matched, and a pattern under a `MINUS` or an `EXISTS` selects none. SPARQLprov (Def. 4.12) and NPCS annotate
+  them with ⊖ instead; SPARQLprov (p. 3400) shows the positive annotation of an `OPTIONAL` query,
+  u3 ⊗ (u1 ⊕ u2), to be incorrect, as it does not commute with homomorphisms.
+- Under a `GROUP BY`, `LIMIT` or `OFFSET`, the answers are computed as without provenance and then joined with
+  the derivations of every solution with the same values, including those a `LIMIT` or `OFFSET` leaves out.
+  The order of an `ORDER BY` is lost.
+- `derivedFrom` lists the body's triple patterns every solution matches: none under a `UNION`, the right side
+  of an `OPTIONAL` or `MINUS`, a sub-SELECT, `GROUP`, `GRAPH` or `SERVICE`, nor a property path.
+- Only a `SELECT` is supported.
+
 ## Restrictions
 
 | Restriction | What happens when you break it |
@@ -171,6 +213,9 @@ The tables below are the short version; the generated
 | `createDefaultTransformationPipeline(mapping, options?)` | The pipeline to use when you have no reason to build your own. |
 | `rewriter.rewriteQuery(query)` | Rewrites a SPARQL query string, asynchronously. |
 | `rewriter.rewriteOperation(operation)` | The same over SPARQL algebra, for callers already holding some. |
+| `provenanceMappingFromConstructQueries(constructQueries, options?)` | Builds the mapping of the provenance view the CONSTRUCT queries define. |
+| `provenanceCapturingQuery(query)` | Rewrites a SELECT over the view to also select the derivation every triple pattern matched. |
+| `provenanceCapturingOperation(operation)` | The same over SPARQL algebra. |
 
 | Transformation | Description |
 |---|---|

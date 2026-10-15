@@ -4,7 +4,7 @@ import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import { termFalse, termTrue } from './operationhelpers.js';
-import { DF } from './rdfDatatypes.js';
+import { tripleTerm } from './rdfDatatypes.js';
 import { termIsStaticTerm } from './typeGuards.js';
 
 /**
@@ -313,11 +313,7 @@ export function constructedTermOf(expression: Algebra.Expression): RDF.Term | un
       // Needed for valid grammar
       return undefined;
     }
-    return DF.quad(
-        <RDF.Quad_Subject> components[0],
-        <RDF.Quad_Predicate> components[1],
-        <RDF.Quad_Object> components[2],
-    );
+    return tripleTerm(components[0]!, components[1]!, components[2]!);
   }
   return undefined;
 }

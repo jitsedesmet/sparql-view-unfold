@@ -66,7 +66,7 @@ export interface MappingOptions {
 }
 
 /** The factories building a mapping needs; the solver and the generator of a full context play no part. */
-type MappingConstructionTools = Pick<TransformationContext, 'parser' | 'AF' | 'DF' | 'astTransformer'>;
+export type MappingConstructionTools = Pick<TransformationContext, 'AF' | 'DF' | 'astTransformer'>;
 
 /** The term types each position of a mapping head admits, in subject / predicate / object order. */
 const admissibleHeadTermTypes: [
@@ -180,19 +180,18 @@ function mappingOfSingleTemplateTriple(
 }
 
 /**
- * Builds every single-triple mapping a CONSTRUCT query denotes.
+ * Builds every single-triple mapping a CONSTRUCT denotes.
  * @param tools - The factories to build with
  * @param options - What the mapping is configured with
- * @param constructQuery - The SPARQL CONSTRUCT query string
+ * @param construct - The CONSTRUCT in algebra form
  * @returns one mapping per triple of the CONSTRUCT template
  * @throws Error if the body calls an unstable function, or the template holds an inadmissible term
  */
-function mappingsOfConstructQuery(
+function mappingsOfConstruct(
   tools: MappingConstructionTools,
   options: MappingOptions,
-  constructQuery: string,
+  construct: Algebra.Construct,
 ): Mapping[] {
-  const construct = <Algebra.Construct> parseQuery(tools, constructQuery);
   const body = construct.input;
   assertBodyCallsNoUnstableFunction(body);
   // Copied per template triple, so that no two mappings share a body.
@@ -255,8 +254,28 @@ export function mappingFromConstructQueries(
   options: MappingOptions = {},
 ): Mapping {
   const tools = createTransformationContext();
-  const mappings = constructQueries
-    .flatMap(constructQuery => mappingsOfConstructQuery(tools, options, constructQuery));
+  return mappingFromConstructs(
+    tools,
+    constructQueries.map(constructQuery => <Algebra.Construct> parseQuery(tools, constructQuery)),
+    options,
+  );
+}
+
+/**
+ * Builds the {@link Mapping} a set of CONSTRUCTs in algebra form denotes, as
+ * {@link mappingFromConstructQueries} does for query strings.
+ * @param tools - The factories to build with
+ * @param constructs - The CONSTRUCTs defining the mappings
+ * @param options - What the mapping is configured with
+ * @returns the mapping
+ * @throws Error under the same conditions as {@link mappingFromConstructQueries}
+ */
+export function mappingFromConstructs(
+  tools: MappingConstructionTools,
+  constructs: readonly Algebra.Construct[],
+  options: MappingOptions,
+): Mapping {
+  const mappings = constructs.flatMap(construct => mappingsOfConstruct(tools, options, construct));
 
   if (mappings.length === 0) {
     throw new Error('A mapping needs at least one CONSTRUCT query with at least one template triple.');
