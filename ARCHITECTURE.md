@@ -104,10 +104,10 @@ An RDF 1.1 dataset cannot reference a blank node consistently across queries, so
 *construct* a blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: same inputs,
 same identity. An argument can be any expression, and one that is unbound or errors counts as a value of its own,
 as a `BIND` would leave it unbound, so a node is still built, one that differs from every node built from a value.
-A triple term argument is encoded through its components, up to the
-context's `tripleTermArgumentDepth` (2) deep since an expression cannot recurse; a deeper one still leaves the
-node unbound. In a `BIND` or `FILTER`, the `vRanges` and `cVars` of its input drop the branches an argument
-cannot take. Two transformations materialise it — `internalBnodeAsSpecialLiteral` as a typed literal,
+A triple term argument is encoded through its components, up to the context's `tripleTermArgumentDepth` (2) deep
+since an expression cannot recurse; a deeper one still leaves the node unbound. In a `BIND` or `FILTER`, an argument
+that is no term is bound to a fresh variable first, so it is evaluated once, and the `vRanges` and `cVars` of the
+input drop the branches an argument cannot take. Two transformations materialise it — `internalBnodeAsSpecialLiteral` as a typed literal,
 `internalBnodeAsSpecialIri` as a prefixed IRI whose length SHA-1 keeps manageable.
 
 ## SPARQL quirks worth knowing

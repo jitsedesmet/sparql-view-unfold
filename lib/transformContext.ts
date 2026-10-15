@@ -40,6 +40,8 @@ export interface TransformationContext {
    * projection.
    */
   coinExistenceVariable: () => RDF.Variable;
+  /** Coins the variable an argument of `<internal://blank>` that is no term is bound to, so it is evaluated once. */
+  coinBnodeArgumentVariable: () => RDF.Variable;
   /**
    * How many triple terms deep an argument of `<internal://blank>` is encoded, since an expression cannot recurse.
    * A more deeply nested one leaves the node unbound, and the encoding grows quadratically with it.
@@ -73,17 +75,28 @@ export function parseQuery(
 }
 
 /**
- * Creates a {@link TransformationContext} with a solver of its own, one rewrite's worth of state.
- * @param options - What to configure, a `tripleTermArgumentDepth` of 2 by default.
- * @returns the context
+ * Checks what a {@link TransformationContext} is configured with and fills in the defaults.
+ * @param options - What to configure.
+ * @returns The options, with a `tripleTermArgumentDepth` of 2 by default.
  * @throws Error if the `tripleTermArgumentDepth` is not a non-negative integer
  */
-export function createTransformationContext(
+export function resolveTransformationContextOptions(
   { tripleTermArgumentDepth = 2 }: TransformationContextOptions = {},
-): TransformationContext {
+): Required<TransformationContextOptions> {
   if (!Number.isInteger(tripleTermArgumentDepth) || tripleTermArgumentDepth < 0) {
     throw new Error(`The tripleTermArgumentDepth must be a non-negative integer, not ${tripleTermArgumentDepth}.`);
   }
+  return { tripleTermArgumentDepth };
+}
+
+/**
+ * Creates a {@link TransformationContext} with a solver of its own, one rewrite's worth of state.
+ * @param options - What to configure, see {@link resolveTransformationContextOptions}.
+ * @returns the context
+ * @throws Error if the options are invalid
+ */
+export function createTransformationContext(options: TransformationContextOptions = {}): TransformationContext {
+  const { tripleTermArgumentDepth } = resolveTransformationContextOptions(options);
   const DF = new DataFactory();
   const usedVariableNames = new Set<string>();
   return {
@@ -96,6 +109,7 @@ export function createTransformationContext(
     clusterSolver: new ClusterSolver(),
     usedVariableNames,
     coinExistenceVariable: freshVarGenerator(usedVariableNames, 'mExists'),
+    coinBnodeArgumentVariable: freshVarGenerator(usedVariableNames, 'mBnodeArgument'),
     tripleTermArgumentDepth,
   };
 }

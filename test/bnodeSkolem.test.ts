@@ -145,11 +145,19 @@ describe('bnode skolem', () => {
   });
 
   // `?o + 1` errors on every solution, and constructing `<<( ?o ?p ?s )>>` fails where `?o` is a literal.
-  it.for([ 'STR(?o)', '?o + 1', 'TRIPLE(?s, ?p, ?o)', '<<( ?o ?p ?s )>>' ])(
+  it.for([
+    'STR(?o)',
+    '?o + 1',
+    'TRIPLE(?s, ?p, ?o)',
+    '<<( ?o ?p ?s )>>',
+    '<internal://blank>(?o)',
+    'EXISTS { FILTER(ISBLANK(?node)) }',
+  ])(
     'constructs the same node for the argument %s as for a variable bound to it',
     async(argument, { expect }) => {
       const nodes = await solutions(createQueryRewriter([ internalBnodeAsSpecialIriTransformation() ]), `SELECT * {
         ?s ?p ?o .
+        BIND(<internal://blank>(?s) AS ?node)
         BIND(${argument} AS ?bound)
         BIND(<internal://blank>(?bound) AS ?fromVariable)
         BIND(<internal://blank>(${argument}) AS ?fromExpression)
@@ -179,10 +187,18 @@ describe('bnode skolem', () => {
     )).resolves.toHaveLength(0);
   });
 
+  it('constructs a node per solution for an unstable argument', async({ expect }) => {
+    const nodes = await constructedNodes(
+      createQueryRewriter([ internalBnodeAsSpecialIriTransformation() ]),
+      'SELECT ?node WHERE { ?s ?p ?o . BIND(<internal://blank>(STR(RAND())) AS ?node) }',
+      './test/statics/tripleTermArguments.ttl',
+    );
+    expect(new Set(nodes).size).toBe(3);
+  });
+
   it('refuses a triple term argument depth that is not a non-negative integer', async({ expect }) => {
     expect(() => createTransformationContext({ tripleTermArgumentDepth: -1 })).toThrow('non-negative integer');
-    await expect(createQueryRewriter([], { tripleTermArgumentDepth: 1.5 }).rewriteQuery('SELECT * {}'))
-      .rejects.toThrow('non-negative integer');
+    expect(() => createQueryRewriter([], { tripleTermArgumentDepth: 1.5 })).toThrow('non-negative integer');
   });
 
   describe('as a special literal', () => {
@@ -296,13 +312,38 @@ describe('bnode skolem', () => {
 }`);
     });
 
-    it('encodes an expression argument as unbound when it errors', async({ expect }) => {
+    // Its encoding reads the argument many times, while the BIND evaluates it once.
+    it('binds an expression argument to a variable first', async({ expect }) => {
       expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
         ?s ?p ?o .
         BIND(<internal://blank>(STR(?o)) AS ?node)
-      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( IF( ${evaluates('STR( ?o )')} , ${termEncoding('STR( ?o )')} , ",unbound" ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( IF( BOUND( ?mBnodeArgument0 ) , ${termEncoding('?mBnodeArgument0')} , ",unbound" ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
   ?s ?p ?o .
+  BIND( STR( ?o ) AS ?mBnodeArgument0 )
 }`);
+    });
+
+    it('grows the rewrite linearly with nested blank nodes', async({ expect }) => {
+      const lengths = await Promise.all([ 1, 2, 3 ].map(async(depth) => {
+        const nested = `${'<internal://blank>('.repeat(depth)}?o${')'.repeat(depth)}`;
+        return (await rewriter.rewriteQuery(`SELECT ?node WHERE { ?s ?p ?o . BIND(${nested} AS ?node) }`)).length;
+      }));
+      expect(lengths[2] - lengths[1]).toBe(lengths[1] - lengths[0]);
+    });
+
+    // An OPTIONAL condition has no input to bind the argument in, so it tests the argument itself.
+    it('encodes an expression argument in an OPTIONAL condition as unbound when it errors', async({ expect }) => {
+      const query = await rewriter.rewriteQuery(`SELECT * WHERE {
+        ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(<internal://blank>(STR(?x)) = ?o) }
+      }`);
+      expect(query).toContain(`IF( ${evaluates('STR( ?x )')} , ${termEncoding('STR( ?x )')} , ",unbound" )`);
+      expect(query).not.toContain('internal://blank');
+    });
+
+    it('refuses an unstable argument it cannot bind to a variable', async({ expect }) => {
+      await expect(rewriter.rewriteQuery(`SELECT * WHERE {
+        ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(<internal://blank>(STR(RAND())) = ?o) }
+      }`)).rejects.toThrow('unstable');
     });
 
     it('rewrites an ISBLANK in an argument', async({ expect }) => {

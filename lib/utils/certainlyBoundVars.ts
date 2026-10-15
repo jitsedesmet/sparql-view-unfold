@@ -215,7 +215,7 @@ export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
  * @param vRanges - What the input binds
  * @returns whether every component is certainly a term its position admits
  */
-export function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
+function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
   function admits(component: RDF.Term, position: RangeSet): boolean {
     if (component.termType === 'Variable') {
       // Every termType the variable can still take has to be one the position admits. The bottom range
@@ -236,6 +236,21 @@ export function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): bo
     // A triple term has no graph: the slot is an RDF/JS artefact and is always the default graph. A quad
     // with a real one is not something `<<( … )>>` can construct, so nothing here calls it infallible.
     term.graph.termType === 'DefaultGraph';
+}
+
+/**
+ * Whether a term as written evaluates in every solution of an operation: its variables are certainly bound, and a
+ * triple term in it cannot fail to construct.
+ * @param term - The term, like `?v`, `<ex://c>` or `<<( ?s ?p ?o )>>`
+ * @param input - The metadata of the operation it is evaluated over
+ * @returns whether it certainly evaluates
+ */
+export function termCertainlyEvaluates(term: RDF.Term, input: CPMeta): boolean {
+  // A triple-term construction is the one term expression that can *fail*: it raises an evaluation error when a
+  // component is not a term the position it lands in admits. Where the ranges of the components rule that out, and
+  // a ground one rules it out by itself, the construction is as certain as any other term.
+  return isSubsetOf(termVars(term), input.cVars) &&
+    (term.termType !== 'Quad' || constructionCannotFail(term, input.vRanges));
 }
 
 /**
@@ -386,15 +401,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       // two spellings of one construction - `<<( s p o )>>` and the `TRIPLE(s, p, o)` the parser keeps
       // distinct from it - are the same fact here.
       const constructed = constructedTermOf(resOp.expression);
-      if (constructed !== undefined &&
-          // If it is a var, and that var is certain, we also certain
-          isSubsetOf(termVars(constructed), certain) &&
-          // A triple-term construction is the one term expression that can *fail*: it raises an
-          // evaluation error - leaving the target unbound - when a component is not a term the position
-          // it lands in admits. Where the ranges of the components rule that out, and a ground one rules
-          // it out by itself, the construction is as certain as any other term.
-          (constructed.termType !== 'Quad' ||
-            constructionCannotFail(constructed, input.metadata.vRanges))) {
+      if (constructed !== undefined && termCertainlyEvaluates(constructed, input.metadata)) {
         certain.add(resOp.variable.value);
       }
       resOp.metadata.cVars = certain;

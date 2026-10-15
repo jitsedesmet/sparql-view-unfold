@@ -9,14 +9,13 @@ import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import {
-  constructionCannotFail,
   cpMetaOf,
   expressionRange,
-  termVars,
+  termCertainlyEvaluates,
   VRanges,
   withoutCpVars,
 } from '../utils/certainlyBoundVars.js';
-import { constructedTermOf, createBooleanExpression } from '../utils/expressionHelpers.js';
+import { constructedTermOf, createBooleanExpression, isStableExpression } from '../utils/expressionHelpers.js';
 import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
 
 /**
@@ -32,8 +31,31 @@ import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
  * query results while maintaining the semantics of "same inputs = same node".
  */
 
-/** The scope of an expression nothing is known about: no variable is certainly bound or has a known range. */
-const unknownScope: CPMeta = { cVars: new Set(), vRanges: new VRanges() };
+/**
+ * The scope of an expression nothing is known about.
+ * @returns A fresh scope in which no variable is certainly bound or has a known range.
+ */
+function createUnknownScope(): CPMeta {
+  return { cVars: new Set(), vRanges: new VRanges() };
+}
+
+/**
+ * Whether an operation holds anything this transformation rewrites.
+ * @param op - The operation to check.
+ * @returns Whether it holds an internal blank node or an `ISBLANK`, an EXISTS included.
+ */
+function holdsInternalBnodeOrIsBlank(op: Algebra.Operation): boolean {
+  let found = false;
+  const foundIt = (): { shortcut: boolean } => {
+    found = true;
+    return { shortcut: true };
+  };
+  algebraUtils.visitOperationSub(op, {}, { expression: {
+    named: { preVisitor: named => isInternalBnode(named) ? foundIt() : {}},
+    operator: { preVisitor: operator => operator.operator === 'isblank' ? foundIt() : {}},
+  }});
+  return found;
+}
 
 /**
  * Whether a named expression constructs an internal blank node.
@@ -64,7 +86,7 @@ function isInternalBnode(expression: Algebra.NamedExpression): boolean {
 function encodeInternalBnode(
   c: TransformationContext,
   expression: Algebra.NamedExpression,
-  scope: CPMeta = unknownScope,
+  scope: CPMeta = createUnknownScope(),
 ): Algebra.Expression {
   const { AF, DF } = c;
 
@@ -170,7 +192,7 @@ function encodeInternalBnode(
    * @returns The encoding, which errors when the term is unbound.
    */
   function encodeTerm(termExpression: Algebra.Expression, range: RangeSet, depth: number): Algebra.Expression {
-    if (depth <= 0 || !range.has('Quad')) {
+    if (!(depth > 0) || !range.has('Quad')) {
       return encodeIriOrLiteral(termExpression, range);
     }
     const tripleTermEncoding = encodeTripleTerm(triplePositions.map(position =>
@@ -186,32 +208,23 @@ function encodeInternalBnode(
   }
 
   /**
-   * Whether a term as written evaluates in every solution: a constant, a variable bound in each, or a triple term
-   * of those that cannot fail to construct.
-   * @param term - The term, like `?v`, `<ex://c>` or `<<( ?s ?p ?o )>>`.
-   * @returns Whether it certainly evaluates.
-   */
-  function certainlyEvaluates(term: RDF.Term): boolean {
-    if (term.termType === 'Quad') {
-      return constructionCannotFail(term, scope.vRanges) && isSubsetOf(termVars(term), scope.cVars);
-    }
-    return term.termType !== 'Variable' || scope.cVars.has(term.value);
-  }
-
-  /**
    * Encodes one argument, which can be any expression, as a BIND to a variable followed by the variable would be.
    * @param argument - The argument, like `?v`, `<<( ?s ?p ?o )>>` or `STR(?v)`.
    * @returns The encoding, `,unbound` when the argument errors.
+   * @throws Error if the argument is no term and unstable, since its encoding evaluates it more than once
    */
   function encodeArgument(argument: Algebra.Expression): Algebra.Expression {
     const term = constructedTermOf(argument);
+    if (term === undefined && !isStableExpression(c, argument)) {
+      throw new Error('An unstable argument of <internal://blank>, like RAND(), is only supported in a BIND or FILTER.');
+    }
     const termExpression = term === undefined ? argument : AF.createTermExpression(term);
     const encoding = encodeTerm(
       termExpression,
       term === undefined ? expressionRange(argument, scope) : rangeOfWritten(term),
       c.tripleTermArgumentDepth,
     );
-    if (term !== undefined && certainlyEvaluates(term)) {
+    if (term !== undefined && termCertainlyEvaluates(term, scope)) {
       return encoding;
     }
     // An argument that errors counts as a value of its own instead of erroring the whole identity, like COALESCE
@@ -273,48 +286,91 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   materialiseEncoding: (encoding: Algebra.Expression) => Algebra.Expression,
   isMaterialisedBnode: (args: Algebra.Expression[]) => Algebra.Expression,
 ): T {
-  // What is materialised holds no internal blank node or ISBLANK, its arguments being rewritten before it, so the
-  // second traversal skips it.
-  const materialised = new WeakSet<Algebra.Expression>();
+  const { AF } = c;
+  const expressionKey = new Set([ 'expression' ]);
   function rewriteIsBlank(operator: Algebra.OperatorExpression): Algebra.Expression {
     return operator.operator === 'isblank' ? isMaterialisedBnode(operator.args) : operator;
   }
-  function materialise(expression: Algebra.NamedExpression, scope?: CPMeta): Algebra.Expression {
-    const term = materialiseEncoding(encodeInternalBnode(c, expression, scope));
-    materialised.add(term);
-    return term;
-  }
-  function materialiseOver(expression: Algebra.Expression, input: Algebra.Operation): Algebra.Expression {
+  const materialiseInExistence = {
+    preVisitor: () => ({ continue: false }),
+    transform: (existence: Algebra.ExistenceExpression) => {
+      existence.input = materialiseAll(existence.input, false);
+      return existence;
+    },
+  };
+
+  /**
+   * Materialises the internal blank nodes in the expression of an EXTEND or FILTER, binding each argument that is no
+   * term to a fresh variable of its input first, so it is evaluated once rather than in every branch of its encoding.
+   * @param operation - The EXTEND or FILTER, a copy of its own that is changed in place.
+   * @param scopeInput - Its input as it was, to read the ranges off; absent where they do not hold.
+   */
+  function materialiseIn(operation: Algebra.Extend | Algebra.Filter, scopeInput?: Algebra.Operation): void {
     let scope: CPMeta | undefined;
-    return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: {
-      existence: { preVisitor: () => ({ continue: false }) },
-      named: { transform: named => isInternalBnode(named) ? materialise(named, scope ??= cpMetaOf(input)) : named },
+    operation.expression = algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(operation.expression, {}, {
+      expression: {
+        existence: materialiseInExistence,
+        named: { transform: (named) => {
+          if (!isInternalBnode(named)) {
+            return named;
+          }
+          const args = named.args.map((argument) => {
+            if (constructedTermOf(argument) !== undefined) {
+              return argument;
+            }
+            const variable = c.coinBnodeArgumentVariable();
+            operation.input = AF.createExtend(operation.input, variable, argument);
+            if (scopeInput) {
+              scopeInput = AF.createExtend(scopeInput, variable, argument);
+              scope = undefined;
+            }
+            return AF.createTermExpression(variable);
+          });
+          scope ??= scopeInput && cpMetaOf(scopeInput);
+          return materialiseEncoding(encodeInternalBnode(c, AF.createNamedExpression(named.name, args), scope));
+        } },
+        operator: { transform: rewriteIsBlank },
+      },
+    });
+  }
+
+  /**
+   * Materialises the internal blank nodes in an operation or in the pattern of an EXISTS.
+   * @param operation - The operation to transform.
+   * @param withRanges - Whether the ranges of an input hold for the expression over it, not so in an EXISTS.
+   * @returns The transformed operation.
+   */
+  function materialiseAll<O extends Algebra.Operation>(operation: O, withRanges: boolean): O {
+    // The ranges are read off the original input, which the post-order traversal already copied: reading caches
+    // metadata on an operation, which a traversal cannot copy.
+    const extendsAndFiltersMaterialised = algebraUtils.mapOperation<'unsafe', O>(
+      withRanges ? withoutCpVars(operation) : operation,
+      {
+        [Algebra.Types.EXTEND]: { transform: (extend, original) => {
+          materialiseIn(extend, withRanges ? original.input : undefined);
+          return extend;
+        } },
+        [Algebra.Types.FILTER]: { transform: (filter, original) => {
+          materialiseIn(filter, withRanges ? original.input : undefined);
+          return filter;
+        } },
+        // Only an EXISTS holds an operation, and the expression holding it materialises it.
+        [Algebra.Types.EXPRESSION]: { preVisitor: () => ({ continue: false }) },
+      },
+    );
+    // What is left gets every branch.
+    return algebraUtils.mapOperationSub<'unsafe', O>(extendsAndFiltersMaterialised, {
+      [Algebra.Types.EXTEND]: { preVisitor: () => ({ ignoreKeys: expressionKey }) },
+      [Algebra.Types.FILTER]: { preVisitor: () => ({ ignoreKeys: expressionKey }) },
+    }, { expression: {
+      existence: materialiseInExistence,
+      named: { transform: named =>
+        isInternalBnode(named) ? materialiseEncoding(encodeInternalBnode(c, named)) : named },
       operator: { transform: rewriteIsBlank },
     }});
   }
 
-  // The ranges are read off the original input, which the post-order traversal already copied: reading caches
-  // metadata on an operation, which a traversal cannot copy.
-  const materialisedWithRanges = algebraUtils.mapOperation<'unsafe', T>(withoutCpVars(op), {
-    [Algebra.Types.EXTEND]: { transform: (extend, original) => {
-      extend.expression = materialiseOver(extend.expression, original.input);
-      return extend;
-    } },
-    [Algebra.Types.FILTER]: { transform: (filter, original) => {
-      filter.expression = materialiseOver(filter.expression, original.input);
-      return filter;
-    } },
-    // Only an EXISTS holds an operation, and it is not entered.
-    [Algebra.Types.EXPRESSION]: { preVisitor: () => ({ continue: false }) },
-  });
-  return algebraUtils.mapOperationSub<'unsafe', T>(materialisedWithRanges, {}, { expression: {
-    // What is left gets every branch.
-    named: { transform: named => isInternalBnode(named) ? materialise(named) : named },
-    operator: {
-      preVisitor: operator => materialised.has(operator) ? { continue: false } : {},
-      transform: rewriteIsBlank,
-    },
-  }});
+  return holdsInternalBnodeOrIsBlank(op) ? materialiseAll(op, true) : op;
 }
 
 /**

@@ -10,7 +10,7 @@ import { pushDownAssertionsTransformation } from './transformations/pushDownAsse
 import { removeProjectionsTransformation } from './transformations/removeProjections.js';
 import type { UnfoldingOptions } from './transformations/unfolding.js';
 import { unfoldingTransformation } from './transformations/unfolding.js';
-import { createTransformationContext, parseQuery } from './transformContext.js';
+import { createTransformationContext, parseQuery, resolveTransformationContextOptions } from './transformContext.js';
 import type { TransformationContext, TransformationContextOptions } from './transformContext.js';
 import type { Mapping, QueryTransformation } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
@@ -195,6 +195,7 @@ async function rewriteParsedQuery(
  * {@link createDefaultTransformationPipeline} builds
  * @param options - What to configure the context of every rewrite with.
  * @returns the rewriter
+ * @throws Error if the options are invalid
  * @example
  * const rewriter = createQueryRewriter([
  *   rewriteNonRecursivePathsTransformation(),
@@ -207,15 +208,16 @@ export function createQueryRewriter(
   transformations: readonly QueryTransformation[],
   options: TransformationContextOptions = {},
 ): QueryRewriter {
+  const resolvedOptions = resolveTransformationContextOptions(options);
   return {
     async rewriteQuery(query: string): Promise<string> {
-      const c = createTransformationContext(options);
+      const c = createTransformationContext(resolvedOptions);
       const operation = parseQuery(c, query);
       markVariableNamesUsed(c, operation);
       return c.generator.generate(toAst(await rewriteParsedQuery(c, transformations, operation)));
     },
     async rewriteOperation(operation: Algebra.Operation): Promise<Algebra.Operation> {
-      const c = createTransformationContext(options);
+      const c = createTransformationContext(resolvedOptions);
       markVariableNamesUsed(c, operation);
       // A copy, since passes may rewrite in place and the operation is the caller's.
       return rewriteParsedQuery(c, transformations, deepCopy(c, operation));
