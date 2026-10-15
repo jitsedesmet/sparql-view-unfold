@@ -130,6 +130,10 @@ function directExtensionOverUnionsAndMore(op: Algebra.Operation): Map<string, Va
 }
 
 function directExtensionOverUnions(union: Algebra.Union): Map<string, VariableSet> {
+  // A union of no operands has no solution, so it fixes no variable either.
+  if (union.input.length === 0) {
+    return new Map();
+  }
   const head = union.input[0];
   // Not knowing the variable makes it be noFixed, which is absorbing element under union
   const varSets = new Map([ ...directExtensions(head) ].map(([ var_, term ]) => [ var_, new VariableSet(term) ]));

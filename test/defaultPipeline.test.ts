@@ -133,13 +133,14 @@ describe('the default pipeline over an empty group', () => {
     'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }',
   ])));
 
-  it('keeps an empty group as it stands', async({ expect }) => {
-    // A zero-length path between equal terms expands to an empty group as well.
-    for (const query of [ 'SELECT * {}', 'SELECT * { <ex://a> <ex://p>? <ex://a> }' ]) {
+  // A zero-length path between equal terms expands to an empty group as well.
+  it.for([ 'SELECT * {}', 'SELECT * { <ex://a> <ex://p>? <ex://a> }' ])(
+    'keeps the empty group of %s as it stands',
+    async(query, { expect }) => {
       expect((await rewriter.rewriteQuery(query)).trim()).toEqual(`SELECT * WHERE {
 }`);
-    }
-  });
+    },
+  );
 
   it('keeps an empty group beside an unfolded pattern', async({ expect }) => {
     expect((await rewriter.rewriteQuery('SELECT * { { } UNION { ?s <ex://p> ?o } }')).trim())
