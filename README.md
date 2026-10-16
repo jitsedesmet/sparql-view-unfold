@@ -130,10 +130,12 @@ view that means to present generalized RDF.
 
 An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to
 construct a blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: the same inputs
-always give the same identity. An unbound argument counts as a value of its own, so a node is still built, one
-that differs from every node built from a bound value. Add `internalBnodeAsSpecialLiteralTransformation()` or
-`internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed
-literal or as a prefixed IRI respectively.
+always give the same identity. An argument can be any expression, and one that is unbound or errors counts as a
+value of its own, so a node is still built, one that differs from every node built from a value. A triple term
+argument is encoded through its subject, predicate and object, up to two triple terms deep or the
+`tripleTermArgumentDepth` given to `createQueryRewriter`. Add `internalBnodeAsSpecialLiteralTransformation()` or
+`internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed literal or
+as a prefixed IRI respectively.
 
 ## Restrictions
 
