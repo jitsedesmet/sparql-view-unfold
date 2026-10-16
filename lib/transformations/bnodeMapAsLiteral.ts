@@ -94,47 +94,43 @@ function encodeInternalBnode(
   function encodeIriOrLiteral(termExpression: Algebra.Expression, range: RangeSet): Algebra.Expression {
     const escaped = (operator: string): Algebra.Expression =>
       escapeUserInput(AF.createOperatorExpression(operator, [ termExpression ]));
-    const iriEncoding = AF.createOperatorExpression('concat', [ expressionLiteral(',iri,'), escaped('str') ]);
+    const ifTermIs = (test: string, then: Algebra.Expression, otherwise: Algebra.Expression): Algebra.Expression =>
+      AF.createOperatorExpression('if', [ AF.createOperatorExpression(test, [ termExpression ]), then, otherwise ]);
     // An IRI or a blank node, which is disallowed, so an IRI.
     if (isSubsetOf(range, subjectRange)) {
-      return iriEncoding;
+      return AF.createOperatorExpression('concat', [ expressionLiteral(',iri,'), escaped('str') ]);
     }
-    const literalEncoding = AF.createOperatorExpression('if', [
-      AF.createOperatorExpression('haslangdir', [ termExpression ]),
-      AF.createOperatorExpression('concat', [
-        expressionLiteral(',literal@D,'),
-        escaped('str'),
-        expressionLiteral(','),
-        escaped('lang'),
-        expressionLiteral(','),
-        escaped('langdir'),
-      ]),
-      AF.createOperatorExpression('if', [
-        AF.createOperatorExpression('haslang', [ termExpression ]),
+    // Each part reads the term once: the tag, the value, and what follows the value of a literal.
+    const literalTag = ifTermIs('haslangdir', expressionLiteral(',literal@D,'), ifTermIs(
+      'haslang',
+      expressionLiteral(',literal@,'),
+      expressionLiteral(',literal,'),
+    ));
+    const literalSuffix = AF.createOperatorExpression('concat', [
+      expressionLiteral(','),
+      ifTermIs(
+        'haslang',
         AF.createOperatorExpression('concat', [
-          expressionLiteral(',literal@,'),
-          escaped('str'),
-          expressionLiteral(','),
           escaped('lang'),
+          ifTermIs(
+            'haslangdir',
+            AF.createOperatorExpression('concat', [ expressionLiteral(','), escaped('langdir') ]),
+            expressionLiteral(''),
+          ),
         ]),
-        AF.createOperatorExpression('concat', [
-          expressionLiteral(',literal,'),
-          escaped('str'),
-          expressionLiteral(','),
-          escapeUserInput(AF.createOperatorExpression('str', [
-            AF.createOperatorExpression('datatype', [ termExpression ]),
-          ])),
-        ]),
-      ]),
+        escapeUserInput(AF.createOperatorExpression('str', [
+          AF.createOperatorExpression('datatype', [ termExpression ]),
+        ])),
+      ),
     ]);
     if (isSubsetOf(range, literalRange)) {
-      return literalEncoding;
+      return AF.createOperatorExpression('concat', [ literalTag, escaped('str'), literalSuffix ]);
     }
-    // A triple term left in the range is nested too deeply: the literal branch errors on it.
-    return AF.createOperatorExpression('if', [
-      AF.createOperatorExpression('isiri', [ termExpression ]),
-      iriEncoding,
-      literalEncoding,
+    // A triple term left in the range is nested too deeply: the literal tests error on it.
+    return AF.createOperatorExpression('concat', [
+      ifTermIs('isiri', expressionLiteral(',iri,'), literalTag),
+      escaped('str'),
+      ifTermIs('isiri', expressionLiteral(''), literalSuffix),
     ]);
   }
 
