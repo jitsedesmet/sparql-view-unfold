@@ -172,17 +172,18 @@ VRanges {
 /**
  * The range of the target of a `BIND(e AS ?t)`: what the expression can possibly evaluate to.
  * @param expression - The expression of the EXTEND
- * @param input - The metadata of its input
+ * @param input - The metadata of its input; where it is absent, a variable can be any term
  * @returns the range; only the shapes that decide a term type are read, everything else being the top
  * anyway and this only ever being asked to narrow
  */
-export function expressionRange(expression: Algebra.Expression, input: CPMeta): RangeSet {
+export function expressionRange(expression: Algebra.Expression, input?: CPMeta): RangeSet {
   if (expression.subType === ExpressionTypes.TERM) {
+    if (expression.term.termType !== 'Variable') {
+      return new RangeSet([ expression.term.termType ]);
+    }
     // A variable the input does not have in scope is never bound, so neither is the target: the bottom
     // {@link VRanges.rangeOf} reports for it is exactly right.
-    return expression.term.termType === 'Variable' ?
-      input.vRanges.rangeOf(expression.term.value) :
-      new RangeSet([ expression.term.termType ]);
+    return input?.vRanges.rangeOf(expression.term.value) ?? objectRange;
   }
   if (expression.subType === ExpressionTypes.OPERATOR && expression.operator === 'triple') {
     return tripleTermRange;

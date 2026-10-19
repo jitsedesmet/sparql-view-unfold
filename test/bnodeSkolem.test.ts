@@ -196,8 +196,8 @@ describe('bnode skolem', () => {
       )).resolves.toEqual([ encoding ]);
     });
 
-    // The encodings the rewritten query writes for `term`, each as the list of parts of its CONCAT, so that a nested
-    // one splices in and adjacent constants join as the rewrite does.
+    // Joins encodings, each the list of parts of its CONCAT, as the rewrite does: nested parts spliced in, adjacent
+    // constants merged.
     function concatOf(...encodings: string[][]): string[] {
       const constant = /^"[^"\\]*"$/u;
       const joined: string[] = [];

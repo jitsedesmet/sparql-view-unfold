@@ -1,10 +1,9 @@
-import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { DataFactory } from 'rdf-data-factory';
 import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE, IRI_PREFIX_BNODE } from '../consts.js';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
 import { triplePositions } from '../datastructures/TermClusterSet.js';
-import { literalRange, objectRange, RangeSet, rangeOfPosition, subjectRange, tripleTermRange } from '../RangeSet.js';
+import { literalRange, RangeSet, rangeOfPosition, subjectRange, tripleTermRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import { componentOf } from '../utils/assertions.js';
@@ -13,7 +12,6 @@ import {
   cpMetaOf,
   expressionRange,
   termCertainlyEvaluates,
-  VRanges,
   withoutCpVars,
 } from '../utils/certainlyBoundVars.js';
 import {
@@ -38,14 +36,6 @@ import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
  */
 
 /**
- * The scope of an expression nothing is known about.
- * @returns A fresh scope in which no variable is certainly bound or has a known range.
- */
-function createUnknownScope(): CPMeta {
-  return { cVars: new Set(), vRanges: new VRanges() };
-}
-
-/**
  * Whether a named expression constructs an internal blank node.
  * @param expression - The named expression to check.
  * @returns Whether it calls `<internal://blank>`.
@@ -68,13 +58,13 @@ function isInternalBnode(expression: Algebra.NamedExpression): boolean {
  *
  * @param c - The transformation context
  * @param expression - The internal blank node expression
- * @param scope - What the solutions the expression is evaluated over bind; nothing is known by default.
+ * @param scope - What the solutions the expression is evaluated over bind; nothing is known where it is absent.
  * @returns The encoding, or `STRUUID()` when there are no arguments
  */
 function encodeInternalBnode(
   c: TransformationContext,
   expression: Algebra.NamedExpression,
-  scope: CPMeta = createUnknownScope(),
+  scope?: CPMeta,
 ): Algebra.Expression {
   const { AF, DF } = c;
 
@@ -84,6 +74,14 @@ function encodeInternalBnode(
     return AF.createTermExpression(DF.literal(...args));
   }
 
+  /**
+   * Chooses between two expressions by a type test of a term.
+   * @param operator - The type test, like `isiri`.
+   * @param termExpression - An expression giving the term.
+   * @param then - What to give where the test holds.
+   * @param otherwise - What to give where it does not.
+   * @returns The choice.
+   */
   function ifTermIs(
     operator: string,
     termExpression: Algebra.Expression,
@@ -157,17 +155,6 @@ function encodeInternalBnode(
   }
 
   /**
-   * The term types a term as written can be: its own, or what the scope admits for a variable.
-   * @param term - The term, like `?v` or `<ex://c>`.
-   * @returns Its range, every term type for a variable out of scope in case an engine binds what the ranges miss.
-   */
-  function rangeOfWritten(term: RDF.Term): RangeSet {
-    return term.termType === 'Variable' ?
-      scope.vRanges.get(term.value) ?? objectRange :
-      new RangeSet([ term.termType ]);
-  }
-
-  /**
    * A component of a triple term: as written for a written triple term, else read through its accessor.
    * @param termExpression - An expression giving the triple term, like `?t` or `<<( ?s ?p ?o )>>`.
    * @param position - The component to give.
@@ -182,7 +169,8 @@ function encodeInternalBnode(
       undefined;
     if (component !== undefined) {
       // Only encoded once constructed, so the component is a term its position admits.
-      return [ AF.createTermExpression(component), rangeOfWritten(component).meet(rangeOfPosition(position)) ];
+      const componentExpression = AF.createTermExpression(component);
+      return [ componentExpression, expressionRange(componentExpression, scope).meet(rangeOfPosition(position)) ];
     }
     return [ AF.createOperatorExpression(position, [ termExpression ]), rangeOfPosition(position) ];
   }
@@ -195,7 +183,7 @@ function encodeInternalBnode(
    * @returns The encoding, which errors when the term is unbound.
    */
   function encodeTerm(termExpression: Algebra.Expression, range: RangeSet, depth: number): Algebra.Expression {
-    if (!(depth > 0) || !range.has('Quad')) {
+    if (depth === 0 || !range.has('Quad')) {
       return encodeIriOrLiteral(termExpression, range);
     }
     const tripleTermEncoding = concat([
@@ -238,19 +226,17 @@ function encodeInternalBnode(
    * @returns The encoding, `,unbound` when the argument errors.
    */
   function encodeArgument(argument: Algebra.Expression): Algebra.Expression {
-    const depth = c.tripleTermArgumentDepth;
     const term = constructedTermOf(argument);
-    if (term === undefined) {
-      return orUnbound(argument, encodeTerm(argument, expressionRange(argument, scope), depth));
-    }
-    const termExpression = AF.createTermExpression(term);
-    const encoding = encodeTerm(termExpression, rangeOfWritten(term), depth);
-    return termCertainlyEvaluates(term, scope) ? encoding : orUnbound(termExpression, encoding);
+    const termExpression = term === undefined ? argument : AF.createTermExpression(term);
+    const encoding = encodeTerm(termExpression, expressionRange(termExpression, scope), c.tripleTermArgumentDepth);
+    return term !== undefined && scope !== undefined && termCertainlyEvaluates(term, scope) ?
+      encoding :
+      orUnbound(termExpression, encoding);
   }
 
   // ====================== Implementation ========================
 
-  // In case no vars are provided, we always make a new one (you likely never want this though....)
+  // Without arguments, a fresh identity each time.
   if (expression.args.length === 0) {
     return AF.createOperatorExpression('struuid', []);
   }
@@ -308,12 +294,12 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
    * is no term to a fresh variable of that input first, so it is evaluated once rather than in every branch of its
    * encoding.
    * @param operation - The operation, a copy of its own whose input is changed in place.
-   * @param rangesInput - Its input as it was, to read the ranges off; absent where they do not hold.
+   * @param withRanges - Whether the ranges of the input hold for the expression, not so in an EXISTS.
    * @returns What materialises an expression over the input.
    */
   function materialiserOverInputOf(
     operation: Algebra.Single,
-    rangesInput?: Algebra.Operation,
+    withRanges: boolean,
   ): (expression: Algebra.Expression) => Algebra.Expression {
     return expression => materialiseInExpression(expression, (named) => {
       const args = named.args.map((argument) => {
@@ -322,10 +308,9 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
         }
         const variable = coinArgumentVariable();
         operation.input = AF.createExtend(operation.input, variable, argument);
-        rangesInput &&= AF.createExtend(rangesInput, variable, argument);
         return AF.createTermExpression(variable);
       });
-      const scope = rangesInput && cpMetaOf(rangesInput);
+      const scope = withRanges ? cpMetaOf(operation.input) : undefined;
       return materialiseEncoding(encodeInternalBnode(c, AF.createNamedExpression(named.name, args), scope));
     });
   }
@@ -337,33 +322,32 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
    * @returns The transformed operation.
    */
   function materialiseAll<O extends Algebra.Operation>(operation: O, withRanges: boolean): O {
-    // The ranges are read off the original input, a copy without metadata the post-order traversal is done with, so
-    // the metadata reading them caches never lands on the result.
-    function overInput<S extends Algebra.Single>(
-      expressionsKey: string,
-      materialiseExpressions: (copy: S, materialise: (expression: Algebra.Expression) => Algebra.Expression) => void,
-    ): { preVisitor: () => { ignoreKeys: Set<string> }; transform: (copy: S, original: S) => S } {
-      const ignoreKeys = new Set([ expressionsKey ]);
+    /**
+     * Materialises what the expressions an operation evaluates over its input hold.
+     * @param key - Where the operation holds them, one expression or a list.
+     * @returns The callbacks doing so.
+     */
+    function overInput(key: 'expression' | 'expressions' | 'aggregates'): {
+      preVisitor: () => { ignoreKeys: Set<string> };
+      transform: (copy: Algebra.Single) => Algebra.Single;
+    } {
+      const ignoreKeys = new Set([ key ]);
       return {
         preVisitor: () => ({ ignoreKeys }),
-        transform: (copy, original) => {
-          materialiseExpressions(copy, materialiserOverInputOf(copy, withRanges ? original.input : undefined));
+        transform: (copy) => {
+          const holder = <Record<typeof key, Algebra.Expression | Algebra.Expression[]>> <unknown> copy;
+          const materialise = materialiserOverInputOf(copy, withRanges);
+          const held = holder[key];
+          holder[key] = Array.isArray(held) ? held.map(materialise) : materialise(held);
           return copy;
         },
       };
     }
-    const ofExtendOrFilter = overInput<Algebra.Extend | Algebra.Filter>('expression', (copy, materialise) => {
-      copy.expression = materialise(copy.expression);
-    });
-    return algebraUtils.mapOperation<'unsafe', O>(withRanges ? withoutCpVars(operation) : operation, {
-      [Algebra.Types.EXTEND]: ofExtendOrFilter,
-      [Algebra.Types.FILTER]: ofExtendOrFilter,
-      [Algebra.Types.ORDER_BY]: overInput<Algebra.OrderBy>('expressions', (copy, materialise) => {
-        copy.expressions = copy.expressions.map(materialise);
-      }),
-      [Algebra.Types.GROUP]: overInput<Algebra.Group>('aggregates', (copy, materialise) => {
-        copy.aggregates = copy.aggregates.map(aggregate => <Algebra.BoundAggregate> materialise(aggregate));
-      }),
+    return algebraUtils.mapOperation<'unsafe', O>(operation, {
+      [Algebra.Types.EXTEND]: overInput('expression'),
+      [Algebra.Types.FILTER]: overInput('expression'),
+      [Algebra.Types.ORDER_BY]: overInput('expressions'),
+      [Algebra.Types.GROUP]: overInput('aggregates'),
       // The condition of an OPTIONAL, the one expression left, has no input to bind an argument in, so it gets every
       // branch.
       [Algebra.Types.EXPRESSION]: {
@@ -374,7 +358,8 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
     });
   }
 
-  return materialiseAll(op, true);
+  // The ranges cache metadata on the copy, so it starts and ends without any.
+  return withoutCpVars(materialiseAll(withoutCpVars(op), true));
 }
 
 /**
