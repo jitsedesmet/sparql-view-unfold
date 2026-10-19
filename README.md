@@ -137,20 +137,19 @@ through its subject, predicate and object, up to two triple terms deep or the `t
 `internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed literal or
 as a prefixed IRI respectively.
 
-Evaluating the rewritten query with Comunica, the engine can compute those identities itself, for a triple term of
-any depth too: pass `{ evaluatedByExtensionFunction: true }` to the transformation and its extension function, from
-`sparql-view-unfold/comunica`, as `extensionFunctions`. Both give the same nodes, except where the SPARQL encoding
-falls short: a triple term deeper than it unrolls, a blank node, or an unstable argument in an `OPTIONAL` condition,
-which it evaluates repeatedly.
+Evaluating the rewritten query with Comunica, the engine can encode those identities itself, for a triple term of any
+depth too: pass `{ encodedByExtensionFunction: true }` to the transformation and `internalBnodeExtensionFunctions()` as
+`extensionFunctions`. Both give the same nodes, except where the SPARQL encoding falls short: a triple term deeper
+than it unrolls, a blank node, or an unstable argument in an `OPTIONAL` condition, which it evaluates repeatedly.
 
 ```typescript
 const query = await createQueryRewriter([
   ...createDefaultTransformationPipeline(mapping),
-  internalBnodeAsSpecialIriTransformation({ evaluatedByExtensionFunction: true }),
+  internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
 ]).rewriteQuery('SELECT * WHERE { ?s ?p ?o }');
 const bindings = await new QueryEngine().queryBindings(query, {
   sources,
-  extensionFunctions: internalBnodeAsSpecialIriExtensionFunctions(),
+  extensionFunctions: internalBnodeExtensionFunctions(),
 });
 ```
 
@@ -209,19 +208,15 @@ The tables below are the short version; the generated
 
 ### `sparql-view-unfold/comunica` — Node only
 
-What needs a Comunica runtime lives behind its own subpath:
+One transformation needs a Comunica runtime, and lives behind its own subpath:
 
 ```typescript
-import {
-  internalBnodeAsSpecialIriExtensionFunctions,
-  simplifyStaticExpressionsTransformation,
-} from 'sparql-view-unfold/comunica';
+import { simplifyStaticExpressionsTransformation } from 'sparql-view-unfold/comunica';
 ```
 
 | Transformation | Description |
 |---|---|
 | `simplifyStaticExpressionsTransformation()` | Folds every fully static expression to the term Comunica's evaluator says it is. |
-| `internalBnodeAsSpecial{Literal,Iri}ExtensionFunctions()` | The extension function for `{ evaluatedByExtensionFunction: true }`. |
 
 It builds its evaluator through Components.js, which resolves Comunica's actors through Node's own module
 resolution and so imports `node:module` and `node:path`. Bundlers resolve every import in a module graph

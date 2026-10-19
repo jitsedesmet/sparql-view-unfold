@@ -1,20 +1,16 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
 import { termToString } from 'rdf-string';
-import { beforeAll, describe, it } from 'vitest';
-import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE, IRI_BOUND_BNODE_ARGUMENT } from '../lib/consts.js';
+import { describe, it } from 'vitest';
+import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE_ENCODING, IRI_BOUND_BNODE_ARGUMENT } from '../lib/consts.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import type { ExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
+import { internalBnodeExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
 import {
   internalBnodeAsSpecialIriTransformation,
-  internalBnodeAsSpecialLiteral,
   internalBnodeAsSpecialLiteralTransformation,
 } from '../lib/transformations/bnodeMapAsLiteral.js';
-import type { ExtensionFunctions } from '../lib/transformations/internalBnodeExtensionFunctions.js';
-import {
-  internalBnodeAsSpecialIriExtensionFunctions,
-  internalBnodeAsSpecialLiteralExtensionFunctions,
-} from '../lib/transformations/internalBnodeExtensionFunctions.js';
 import { simplifyStaticExpressionsTransformation } from '../lib/transformations/staticExpressionEvaluation.js';
 import { createTransformationContext } from '../lib/transformContext.js';
 import type { QueryTransformation } from '../lib/types.js';
@@ -41,13 +37,13 @@ const sparqlIri: BnodeEvaluation = {
 };
 const extensionFunctionLiteral: BnodeEvaluation = {
   name: 'an extension function as a typed literal',
-  transformation: internalBnodeAsSpecialLiteralTransformation({ evaluatedByExtensionFunction: true }),
-  extensionFunctions: internalBnodeAsSpecialLiteralExtensionFunctions(),
+  transformation: internalBnodeAsSpecialLiteralTransformation({ encodedByExtensionFunction: true }),
+  extensionFunctions: internalBnodeExtensionFunctions(),
 };
 const extensionFunctionIri: BnodeEvaluation = {
   name: 'an extension function as a prefixed IRI',
-  transformation: internalBnodeAsSpecialIriTransformation({ evaluatedByExtensionFunction: true }),
-  extensionFunctions: internalBnodeAsSpecialIriExtensionFunctions(),
+  transformation: internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
+  extensionFunctions: internalBnodeExtensionFunctions(),
 };
 const evaluations = [ sparqlLiteral, sparqlIri, extensionFunctionLiteral, extensionFunctionIri ];
 
@@ -86,20 +82,13 @@ function unfolding(construct: string): QueryTransformation[] {
 }
 
 describe('bnode skolem', () => {
-  // Comunica's evaluator, which the extension functions and static evaluation share, is built on its first use;
-  // warming it up here keeps that one-time cost out of the individual tests' timeouts.
-  beforeAll(async() => {
-    await Promise.all(evaluations.map(async({ extensionFunctions }) =>
-      extensionFunctions?.[EXTENSION_FUNCTION_BNODE]([])));
-  }, 60_000);
-
   const c = createTransformationContext();
   const AF = c.AF;
   const DF = c.DF;
 
   it('skolem to literal no params', async({ expect }) => {
     const bnodeNoParams = AF.createNamedExpression(DF.namedNode('internal://blank'), []);
-    expect(internalBnodeAsSpecialLiteral(c, bnodeNoParams))
+    expect(internalBnodeAsSpecialLiteralTransformation()(c, bnodeNoParams))
       .toEqual(AF.createOperatorExpression('strdt', [
         AF.createOperatorExpression('struuid', []),
         AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
@@ -245,7 +234,7 @@ describe('bnode skolem', () => {
 
   describe('evaluated by an extension function', () => {
     const rewriter = createQueryRewriter([ extensionFunctionLiteral.transformation ]);
-    const literalFunctions = internalBnodeAsSpecialLiteralExtensionFunctions();
+    const encode = internalBnodeExtensionFunctions()[EXTENSION_FUNCTION_BNODE_ENCODING];
 
     it('wraps every argument and rewrites ISBLANK', async({ expect }) => {
       expect((await rewriter.rewriteQuery(`SELECT * WHERE {
@@ -253,10 +242,10 @@ describe('bnode skolem', () => {
         BIND(<internal://blank>(?s, STR(?o)) AS ?node)
         FILTER(ISBLANK(?node))
       }`)).trim()).toEqual([
-        'SELECT ?node ?o ?p ?s WHERE {\n  {\n    ?s ?p ?o .\n    BIND( <internal://blank> ( ',
+        'SELECT ?node ?o ?p ?s WHERE {\n  {\n    ?s ?p ?o .\n    BIND( STRDT( <internal://blank/encoding> ( ',
         'COALESCE( TRIPLE( <internal://blank/argument> , <internal://blank/argument> , ?s ) , <internal://blank/unbound> ) , ',
         'COALESCE( TRIPLE( <internal://blank/argument> , <internal://blank/argument> , STR( ?o ) ) , <internal://blank/unbound> ) ',
-        `) AS ?node )\n  }\n  FILTER ( ( ISLITERAL( ?node ) && ( DATATYPE( ?node ) = <${DT_INTERNAL_BNODE}> ) ) )\n}`,
+        `) , <${DT_INTERNAL_BNODE}> ) AS ?node )\n  }\n  FILTER ( ( ISLITERAL( ?node ) && ( DATATYPE( ?node ) = <${DT_INTERNAL_BNODE}> ) ) )\n}`,
       ].join(''));
     });
 
@@ -279,13 +268,13 @@ describe('bnode skolem', () => {
 
     // The SPARQL encoding errors on it.
     it('encodes a blank node an engine constructs by its label', async({ expect }) => {
-      await expect(literalFunctions[EXTENSION_FUNCTION_BNODE]([
+      await expect(encode([
         DF.quad(DF.namedNode(IRI_BOUND_BNODE_ARGUMENT), DF.namedNode(IRI_BOUND_BNODE_ARGUMENT), DF.blankNode('b0')),
-      ])).resolves.toEqual(DF.literal(',bnode,2:b0', DF.namedNode(DT_INTERNAL_BNODE)));
+      ])).resolves.toEqual(DF.literal(',bnode,2:b0'));
     });
 
     it('refuses an argument the transformation did not wrap', async({ expect }) => {
-      await expect(literalFunctions[EXTENSION_FUNCTION_BNODE]([ DF.namedNode('ex://a') ]))
+      await expect(encode([ DF.namedNode('ex://a') ]))
         .rejects.toThrow('has to be wrapped');
     });
   });
@@ -609,6 +598,6 @@ describe('bnode skolem', () => {
       expect((await evaluated.rewriteQuery('SELECT * WHERE { BIND(<internal://blank>(<ex://c>) AS ?node) }')).trim())
         .toEqual(`SELECT ( ",iri,6:ex://c"^^<https://sparql-extension.knows.idlab.ugent.be/bnode> AS ?node ) WHERE {
 }`);
-    });
+    }, 60_000);
   });
 });

@@ -19,7 +19,7 @@ import {
 } from '../utils/expressionHelpers.js';
 import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
 import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
-import { internalBnodeAsExtensionFunction } from './bnodeExtensionFunction.js';
+import { materialiseInternalBnodesByExtensionFunction } from './bnodeExtensionFunction.js';
 import type { InternalBnodeMaterialisation } from './internalBnodeMaterialisation.js';
 import {
   holdsInternalBnodeOrIsBlank,
@@ -360,53 +360,31 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   return withoutCpVars(materialiseAll(withoutCpVars(op), true));
 }
 
-/**
- * Materialises every internal blank node as a typed literal of a special datatype, its encoding as value.
- * @param c - The transformation context.
- * @param op - The operation to transform.
- * @returns The transformed operation, `ISBLANK` recognising the literals.
- */
-export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  return materialiseInternalBnodes(c, op, specialLiteralMaterialisation);
-}
-
-/**
- * Materialises every internal blank node as a prefixed IRI, SHA-1 of its encoding keeping its length manageable.
- * @param c - The transformation context.
- * @param op - The operation to transform.
- * @returns The transformed operation, `ISBLANK` recognising the IRIs.
- */
-export function internalBnodeAsSpecialIri<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  return materialiseInternalBnodes(c, op, specialIriMaterialisation);
-}
-
 /** How a pipeline step materialises internal blank nodes. */
 export interface InternalBnodeMaterialisationOptions {
-  /**
-   * Leave the encoding to the extension functions of `internalBnodeAsSpecialLiteralExtensionFunctions` or
-   * `internalBnodeAsSpecialIriExtensionFunctions`, which the engine is then given, rather than spell it out in SPARQL.
-   */
-  evaluatedByExtensionFunction?: boolean;
+  /** Leave the encoding to {@link transformations/bnodeExtensionFunction!internalBnodeExtensionFunctions}. */
+  encodedByExtensionFunction?: boolean;
 }
 
 /**
- * The pipeline step materialising internal blank nodes as a materialisation does.
+ * The pipeline step materialising every internal blank node as a materialisation does.
  * @param materialisation - What the internal blank nodes become.
- * @param options - Whether an extension function evaluates them.
+ * @param options - Whether an extension function encodes them.
  * @returns the transformation
  */
 function internalBnodeMaterialisationTransformation(
   materialisation: InternalBnodeMaterialisation,
   options: InternalBnodeMaterialisationOptions,
 ): QueryTransformation {
-  return options.evaluatedByExtensionFunction ?
-      (c, op) => internalBnodeAsExtensionFunction(c, op, materialisation) :
-      (c, op) => materialiseInternalBnodes(c, op, materialisation);
+  const materialise = options.encodedByExtensionFunction ?
+    materialiseInternalBnodesByExtensionFunction :
+    materialiseInternalBnodes;
+  return (c, op) => materialise(c, op, materialisation);
 }
 
 /**
- * The pipeline step materialising every internal blank node as a typed literal.
- * @param options - Whether an extension function evaluates them.
+ * The pipeline step materialising every internal blank node as a typed literal of a special datatype.
+ * @param options - Whether an extension function encodes them.
  * @returns the transformation
  */
 export function internalBnodeAsSpecialLiteralTransformation(
@@ -417,7 +395,7 @@ export function internalBnodeAsSpecialLiteralTransformation(
 
 /**
  * The pipeline step materialising every internal blank node as a prefixed IRI.
- * @param options - Whether an extension function evaluates them.
+ * @param options - Whether an extension function encodes them.
  * @returns the transformation
  */
 export function internalBnodeAsSpecialIriTransformation(
