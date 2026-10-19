@@ -1266,6 +1266,21 @@ GROUP BY ?x ( ?x AS ?y )`,
       );
     });
 
+    it('empties a clique whose BIND gives a term type no other member can take', ({ expect }) => {
+      // CONCAT gives a literal, which the subject ?y is never.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?w BIND(CONCAT(?w, "x") AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        `SELECT ?t ?w ?y WHERE {
+  {
+    ?y <ex://p> ?w .
+    BIND( CONCAT( ?w , "x" ) AS ?t )
+  }
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
     it('keeps a clique above a BIND whose expression is compound', ({ expect }) => {
       // `sameTerm(e, ?y)` over a compound `e` is a multi-variable condition, which this pass has no
       // licence for - so nothing transfers and the edge stays where it was.
@@ -1473,6 +1488,21 @@ GROUP BY ?x ( ?x AS ?y )`,
     <ex://c> <ex://p> ?y .
     BIND( <ex://c> AS ?z )
   }
+}`,
+      );
+    });
+
+    it('empties the plan where a BIND gives a term type the assertion rules out', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { SELECT ?x ?a WHERE { ?a :p ?b BIND(?a + ?b AS ?x) } } FILTER(sameTerm(?x, :c)) }',
+        `SELECT ?a ?x WHERE {
+  {
+    SELECT ( ( ?a + ?b ) AS ?x ) ?a WHERE {
+      ?a <ex://p> ?b .
+    }
+  }
+  FILTER ( FALSE )
 }`,
       );
     });

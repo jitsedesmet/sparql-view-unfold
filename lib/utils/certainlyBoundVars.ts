@@ -2,6 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
+import { triplePositions } from '../datastructures/TermClusterSet.js';
 import {
   blankNodeRange,
   emptyRange,
@@ -11,6 +12,7 @@ import {
   objectRange,
   predicateRange,
   RangeSet,
+  rangeOfPosition,
   serviceNameRange,
   subjectRange,
   tripleTermRange,
@@ -174,26 +176,22 @@ VRanges {
   return result;
 }
 
-/** The operators whose value is a literal whenever it is no error: a boolean, a number, a string or another literal. */
-const literalOperators = `
-  ! != && < <= = > >= || bound contains haslang haslangdir in isblank isiri isliteral isnumeric istriple isuri
-  langmatches notin regex sameterm strends strstarts
-  * + - / abs ceil day floor hours minutes month rand round seconds strlen uminus uplus year
-  concat encode_for_uri lang langdir lcase md5 replace sha1 sha256 sha384 sha512 str strafter strbefore struuid
-  substr tz ucase
-  now strdt strlang strlangdir timezone
-`.trim().split(/\s+/u);
-
 /** The range of the value of each operator its arguments do not decide; an operator missing here can be any term. */
-const operatorRanges = new Map<string, RangeSet>([
-  ...literalOperators.map(operator => <const> [ operator, literalRange ]),
-  ...[ 'datatype', 'iri', 'uri', 'uuid' ].map(operator => <const> [ operator, iriRange ]),
-  [ 'bnode', blankNodeRange ],
-  [ 'triple', tripleTermRange ],
-  [ 'subject', subjectRange ],
-  [ 'predicate', predicateRange ],
-  [ 'object', objectRange ],
-]);
+const operatorRanges = new Map(([
+  [ literalRange, `
+    ! != && < <= = > >= || bound contains haslang haslangdir in isblank isiri isliteral isnumeric istriple isuri
+    langmatches notin regex sameterm strends strstarts
+    * + - / abs ceil day floor hours minutes month rand round seconds strlen uminus uplus year
+    concat encode_for_uri lang langdir lcase md5 replace sha1 sha256 sha384 sha512 str strafter strbefore struuid
+    substr tz ucase
+    now strdt strlang strlangdir timezone
+  ` ],
+  [ iriRange, 'datatype iri uri uuid' ],
+  [ blankNodeRange, 'bnode' ],
+  [ tripleTermRange, 'triple' ],
+  ...triplePositions.map((position): [RangeSet, string] => [ rangeOfPosition(position), position ]),
+] satisfies [RangeSet, string][]).flatMap(([ range, operators ]) =>
+  operators.trim().split(/\s+/u).map(operator => <const> [ operator, range ])));
 
 /**
  * The term types an expression can evaluate to, like the target of a `BIND(e AS ?t)` can be bound to.

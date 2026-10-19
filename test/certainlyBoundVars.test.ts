@@ -64,12 +64,6 @@ describe('withCpVars', () => {
   });
 });
 
-/**
- * A triple-term construction is the one term expression that can fail, leaving its target unbound where a
- * component is not a term the position it lands in admits. What decides it is the *range* of the
- * components, so this is the rule the ranges were needed for: a ground construction is infallible by
- * itself, and so is one over a variable that can only take terms the position admits.
- */
 describe('the range of what an expression gives', () => {
   const top = [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ];
   const subject = [ 'BlankNode', 'NamedNode' ];
@@ -102,6 +96,12 @@ describe('the range of what an expression gives', () => {
   });
 });
 
+/**
+ * A triple-term construction is the one term expression that can fail, leaving its target unbound where a
+ * component is not a term the position it lands in admits. What decides it is the *range* of the
+ * components, so this is the rule the ranges were needed for: a ground construction is infallible by
+ * itself, and so is one over a variable that can only take terms the position admits.
+ */
 describe('the target of a triple-term BIND', () => {
   const t = c.DF.variable('t');
   const ground = c.DF.quad(c.DF.namedNode('ex://a'), c.DF.namedNode('ex://b'), c.DF.namedNode('ex://c'));
