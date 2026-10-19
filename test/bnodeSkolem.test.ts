@@ -266,12 +266,36 @@ describe('bnode skolem', () => {
         ?person <ex://name> ?name .
         OPTIONAL { ?person <ex://nick> ?nick }
         BIND(<internal://blank>(?nick) AS ?node)
-      }`)).trim()).toEqual(String.raw`SELECT ( STRDT( IF( BOUND( ?nick ) , IF( ISTRIPLE( ?nick ) , CONCAT( ",triple,iri," , STR( STRLEN( STR( SUBJECT( ?nick ) ) ) ) , ":" , STR( SUBJECT( ?nick ) ) , ",iri," , STR( STRLEN( STR( PREDICATE( ?nick ) ) ) ) , ":" , STR( PREDICATE( ?nick ) ) , IF( ISTRIPLE( OBJECT( ?nick ) ) , CONCAT( ",triple,iri," , STR( STRLEN( STR( SUBJECT( OBJECT( ?nick ) ) ) ) ) , ":" , STR( SUBJECT( OBJECT( ?nick ) ) ) , ",iri," , STR( STRLEN( STR( PREDICATE( OBJECT( ?nick ) ) ) ) ) , ":" , STR( PREDICATE( OBJECT( ?nick ) ) ) , IF( ISIRI( OBJECT( OBJECT( ?nick ) ) ) , CONCAT( ",iri," , STR( STRLEN( STR( OBJECT( OBJECT( ?nick ) ) ) ) ) , ":" , STR( OBJECT( OBJECT( ?nick ) ) ) ) , CONCAT( ",literal," , STR( STRLEN( STR( OBJECT( OBJECT( ?nick ) ) ) ) ) , ":" , STR( OBJECT( OBJECT( ?nick ) ) ) , "," , STR( STRLEN( STR( DATATYPE( OBJECT( OBJECT( ?nick ) ) ) ) ) ) , ":" , STR( DATATYPE( OBJECT( OBJECT( ?nick ) ) ) ) , "," , STR( STRLEN( LANG( OBJECT( OBJECT( ?nick ) ) ) ) ) , ":" , LANG( OBJECT( OBJECT( ?nick ) ) ) , "," , STR( STRLEN( LANGDIR( OBJECT( OBJECT( ?nick ) ) ) ) ) , ":" , LANGDIR( OBJECT( OBJECT( ?nick ) ) ) ) ) ) , IF( ISIRI( OBJECT( ?nick ) ) , CONCAT( ",iri," , STR( STRLEN( STR( OBJECT( ?nick ) ) ) ) , ":" , STR( OBJECT( ?nick ) ) ) , CONCAT( ",literal," , STR( STRLEN( STR( OBJECT( ?nick ) ) ) ) , ":" , STR( OBJECT( ?nick ) ) , "," , STR( STRLEN( STR( DATATYPE( OBJECT( ?nick ) ) ) ) ) , ":" , STR( DATATYPE( OBJECT( ?nick ) ) ) , "," , STR( STRLEN( LANG( OBJECT( ?nick ) ) ) ) , ":" , LANG( OBJECT( ?nick ) ) , "," , STR( STRLEN( LANGDIR( OBJECT( ?nick ) ) ) ) , ":" , LANGDIR( OBJECT( ?nick ) ) ) ) ) ) , IF( ISIRI( ?nick ) , CONCAT( ",iri," , STR( STRLEN( STR( ?nick ) ) ) , ":" , STR( ?nick ) ) , CONCAT( ",literal," , STR( STRLEN( STR( ?nick ) ) ) , ":" , STR( ?nick ) , "," , STR( STRLEN( STR( DATATYPE( ?nick ) ) ) ) , ":" , STR( DATATYPE( ?nick ) ) , "," , STR( STRLEN( LANG( ?nick ) ) ) , ":" , LANG( ?nick ) , "," , STR( STRLEN( LANGDIR( ?nick ) ) ) , ":" , LANGDIR( ?nick ) ) ) ) , ",unbound" ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+      }`)).trim()).toEqual([
+        String.raw`SELECT ( STRDT( IF( BOUND( ?nick ) , IF( ISTRIPLE( ?nick ) , CONCAT( ",triple,iri," , STR( `,
+        String.raw`STRLEN( STR( SUBJECT( ?nick ) ) ) ) , ":" , STR( SUBJECT( ?nick ) ) , ",iri," , STR( STRLEN( `,
+        String.raw`STR( PREDICATE( ?nick ) ) ) ) , ":" , STR( PREDICATE( ?nick ) ) , IF( ISTRIPLE( OBJECT( ?nick ) `,
+        String.raw`) , CONCAT( ",triple,iri," , STR( STRLEN( STR( SUBJECT( OBJECT( ?nick ) ) ) ) ) , ":" , STR( `,
+        String.raw`SUBJECT( OBJECT( ?nick ) ) ) , ",iri," , STR( STRLEN( STR( PREDICATE( OBJECT( ?nick ) ) ) ) ) , `,
+        String.raw`":" , STR( PREDICATE( OBJECT( ?nick ) ) ) , IF( ISIRI( OBJECT( OBJECT( ?nick ) ) ) , CONCAT( `,
+        String.raw`",iri," , STR( STRLEN( STR( OBJECT( OBJECT( ?nick ) ) ) ) ) , ":" , STR( OBJECT( OBJECT( ?nick `,
+        String.raw`) ) ) ) , CONCAT( ",literal," , STR( STRLEN( STR( OBJECT( OBJECT( ?nick ) ) ) ) ) , ":" , STR( `,
+        String.raw`OBJECT( OBJECT( ?nick ) ) ) , "," , STR( STRLEN( STR( DATATYPE( OBJECT( OBJECT( ?nick ) ) ) ) ) `,
+        String.raw`) , ":" , STR( DATATYPE( OBJECT( OBJECT( ?nick ) ) ) ) , "," , STR( STRLEN( LANG( OBJECT( `,
+        String.raw`OBJECT( ?nick ) ) ) ) ) , ":" , LANG( OBJECT( OBJECT( ?nick ) ) ) , "," , STR( STRLEN( LANGDIR( `,
+        String.raw`OBJECT( OBJECT( ?nick ) ) ) ) ) , ":" , LANGDIR( OBJECT( OBJECT( ?nick ) ) ) ) ) ) , IF( ISIRI( `,
+        String.raw`OBJECT( ?nick ) ) , CONCAT( ",iri," , STR( STRLEN( STR( OBJECT( ?nick ) ) ) ) , ":" , STR( `,
+        String.raw`OBJECT( ?nick ) ) ) , CONCAT( ",literal," , STR( STRLEN( STR( OBJECT( ?nick ) ) ) ) , ":" , `,
+        String.raw`STR( OBJECT( ?nick ) ) , "," , STR( STRLEN( STR( DATATYPE( OBJECT( ?nick ) ) ) ) ) , ":" , STR( `,
+        String.raw`DATATYPE( OBJECT( ?nick ) ) ) , "," , STR( STRLEN( LANG( OBJECT( ?nick ) ) ) ) , ":" , LANG( `,
+        String.raw`OBJECT( ?nick ) ) , "," , STR( STRLEN( LANGDIR( OBJECT( ?nick ) ) ) ) , ":" , LANGDIR( OBJECT( `,
+        String.raw`?nick ) ) ) ) ) ) , IF( ISIRI( ?nick ) , CONCAT( ",iri," , STR( STRLEN( STR( ?nick ) ) ) , ":" `,
+        String.raw`, STR( ?nick ) ) , CONCAT( ",literal," , STR( STRLEN( STR( ?nick ) ) ) , ":" , STR( ?nick ) , `,
+        String.raw`"," , STR( STRLEN( STR( DATATYPE( ?nick ) ) ) ) , ":" , STR( DATATYPE( ?nick ) ) , "," , STR( `,
+        String.raw`STRLEN( LANG( ?nick ) ) ) , ":" , LANG( ?nick ) , "," , STR( STRLEN( LANGDIR( ?nick ) ) ) , ":" `,
+        String.raw`, LANGDIR( ?nick ) ) ) ) , ",unbound" ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> `,
+        String.raw`) AS ?node ) WHERE {
   ?person <ex://name> ?name .
   OPTIONAL {
     ?person <ex://nick> ?nick .
   }
-}`);
+}`,
+      ].join(''));
     });
 
     // A subject is never a literal or a triple term, and the pattern binds `?s` in every solution.
@@ -314,9 +338,24 @@ describe('bnode skolem', () => {
       expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
         ?s ?p ?o .
         BIND(<internal://blank>(<<( ?s ?p ?o )>>) AS ?node)
-      }`)).trim()).toEqual(String.raw`SELECT ( STRDT( CONCAT( ",triple,iri," , STR( STRLEN( STR( ?s ) ) ) , ":" , STR( ?s ) , ",iri," , STR( STRLEN( STR( ?p ) ) ) , ":" , STR( ?p ) , IF( ISTRIPLE( ?o ) , CONCAT( ",triple,iri," , STR( STRLEN( STR( SUBJECT( ?o ) ) ) ) , ":" , STR( SUBJECT( ?o ) ) , ",iri," , STR( STRLEN( STR( PREDICATE( ?o ) ) ) ) , ":" , STR( PREDICATE( ?o ) ) , IF( ISIRI( OBJECT( ?o ) ) , CONCAT( ",iri," , STR( STRLEN( STR( OBJECT( ?o ) ) ) ) , ":" , STR( OBJECT( ?o ) ) ) , CONCAT( ",literal," , STR( STRLEN( STR( OBJECT( ?o ) ) ) ) , ":" , STR( OBJECT( ?o ) ) , "," , STR( STRLEN( STR( DATATYPE( OBJECT( ?o ) ) ) ) ) , ":" , STR( DATATYPE( OBJECT( ?o ) ) ) , "," , STR( STRLEN( LANG( OBJECT( ?o ) ) ) ) , ":" , LANG( OBJECT( ?o ) ) , "," , STR( STRLEN( LANGDIR( OBJECT( ?o ) ) ) ) , ":" , LANGDIR( OBJECT( ?o ) ) ) ) ) , IF( ISIRI( ?o ) , CONCAT( ",iri," , STR( STRLEN( STR( ?o ) ) ) , ":" , STR( ?o ) ) , CONCAT( ",literal," , STR( STRLEN( STR( ?o ) ) ) , ":" , STR( ?o ) , "," , STR( STRLEN( STR( DATATYPE( ?o ) ) ) ) , ":" , STR( DATATYPE( ?o ) ) , "," , STR( STRLEN( LANG( ?o ) ) ) , ":" , LANG( ?o ) , "," , STR( STRLEN( LANGDIR( ?o ) ) ) , ":" , LANGDIR( ?o ) ) ) ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+      }`)).trim()).toEqual([
+        String.raw`SELECT ( STRDT( CONCAT( ",triple,iri," , STR( STRLEN( STR( ?s ) ) ) , ":" , STR( ?s ) , ",iri," `,
+        String.raw`, STR( STRLEN( STR( ?p ) ) ) , ":" , STR( ?p ) , IF( ISTRIPLE( ?o ) , CONCAT( ",triple,iri," , `,
+        String.raw`STR( STRLEN( STR( SUBJECT( ?o ) ) ) ) , ":" , STR( SUBJECT( ?o ) ) , ",iri," , STR( STRLEN( `,
+        String.raw`STR( PREDICATE( ?o ) ) ) ) , ":" , STR( PREDICATE( ?o ) ) , IF( ISIRI( OBJECT( ?o ) ) , CONCAT( `,
+        String.raw`",iri," , STR( STRLEN( STR( OBJECT( ?o ) ) ) ) , ":" , STR( OBJECT( ?o ) ) ) , CONCAT( `,
+        String.raw`",literal," , STR( STRLEN( STR( OBJECT( ?o ) ) ) ) , ":" , STR( OBJECT( ?o ) ) , "," , STR( `,
+        String.raw`STRLEN( STR( DATATYPE( OBJECT( ?o ) ) ) ) ) , ":" , STR( DATATYPE( OBJECT( ?o ) ) ) , "," , `,
+        String.raw`STR( STRLEN( LANG( OBJECT( ?o ) ) ) ) , ":" , LANG( OBJECT( ?o ) ) , "," , STR( STRLEN( `,
+        String.raw`LANGDIR( OBJECT( ?o ) ) ) ) , ":" , LANGDIR( OBJECT( ?o ) ) ) ) ) , IF( ISIRI( ?o ) , CONCAT( `,
+        String.raw`",iri," , STR( STRLEN( STR( ?o ) ) ) , ":" , STR( ?o ) ) , CONCAT( ",literal," , STR( STRLEN( `,
+        String.raw`STR( ?o ) ) ) , ":" , STR( ?o ) , "," , STR( STRLEN( STR( DATATYPE( ?o ) ) ) ) , ":" , STR( `,
+        String.raw`DATATYPE( ?o ) ) , "," , STR( STRLEN( LANG( ?o ) ) ) , ":" , LANG( ?o ) , "," , STR( STRLEN( `,
+        String.raw`LANGDIR( ?o ) ) ) , ":" , LANGDIR( ?o ) ) ) ) ) , `,
+        String.raw`<https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
   ?s ?p ?o .
-}`);
+}`,
+      ].join(''));
     });
 
     // `?o` may be a literal, which a subject does not admit, so constructing the triple term may fail.
@@ -398,8 +437,11 @@ describe('bnode skolem', () => {
     // BOUND only accepts a variable, and a constant is bound anyway. Its range is its own term type.
     it('encodes a constant argument without asking whether it is bound', async({ expect }) => {
       expect((await rewriter.rewriteQuery('SELECT * WHERE { BIND(<internal://blank>(<ex://c>) AS ?node) }')).trim())
-        .toEqual(String.raw`SELECT ( STRDT( CONCAT( ",iri," , STR( STRLEN( STR( <ex://c> ) ) ) , ":" , STR( <ex://c> ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
-}`);
+        .toEqual([
+          String.raw`SELECT ( STRDT( CONCAT( ",iri," , STR( STRLEN( STR( <ex://c> ) ) ) , ":" , STR( <ex://c> ) ) , `,
+          String.raw`<https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+}`,
+        ].join(''));
       // Static evaluation folds the encoding of a constant into the node itself.
       const evaluated = createQueryRewriter([
         internalBnodeAsSpecialLiteralTransformation(),
