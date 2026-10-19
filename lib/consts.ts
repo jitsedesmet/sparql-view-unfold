@@ -21,3 +21,9 @@ export const VAR_PREFIX_MAPPING = 'mi_';
 
 /** Prefix of the variables `?m_s ?m_p ?m_o` of the generic head several mappings are merged into. */
 export const VAR_PREFIX_MERGED_HEAD = 'm_';
+
+/** Subject and predicate of the triple term wrapping an argument of `<internal://blank>` that evaluates. */
+export const IRI_BOUND_BNODE_ARGUMENT = 'internal://blank/argument';
+
+/** What an argument of `<internal://blank>` that is unbound or errors is passed as. */
+export const IRI_UNBOUND_BNODE_ARGUMENT = 'internal://blank/unbound';

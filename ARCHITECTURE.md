@@ -113,6 +113,12 @@ the branches the `vRanges` and `cVars` of the input rule out. Two transformation
 `internalBnodeAsSpecialLiteral` as a typed literal, `internalBnodeAsSpecialIri` as a prefixed IRI whose length
 SHA-1 keeps manageable.
 
+With `evaluatedByExtensionFunction`, an extension function of the engine computes the encoding from the evaluated
+arguments instead, at any depth (`lib/transformations/bnodeExtensionFunction.ts`). An engine errors the call when an
+argument errors, so each argument `e` is wrapped as
+`COALESCE(TRIPLE(<internal://blank/argument>, <internal://blank/argument>, e), <internal://blank/unbound>)`. Both
+ways share an `InternalBnodeMaterialisation`, so they give the same nodes wherever the SPARQL encoding can.
+
 ## SPARQL quirks worth knowing
 
 There is a [working draft for RDF 1.2 interoperability](https://w3c.github.io/rdf-interop/spec/) describing
