@@ -79,6 +79,39 @@ export function isInternalBnode(expression: Algebra.NamedExpression): boolean {
   return expression.name.value === EXTENSION_FUNCTION_BNODE;
 }
 
+/** The expression callbacks of {@link internalBnodeExpressionCallbacks}. */
+interface InternalBnodeExpressionCallbacks {
+  named: { transform: (named: Algebra.NamedExpression) => Algebra.Expression };
+  operator: { transform: (operator: Algebra.OperatorExpression) => Algebra.Expression };
+}
+
+/**
+ * The expression callbacks materialising internal blank nodes and rewriting `ISBLANK` to recognise them.
+ * @param c - The transformation context.
+ * @param materialisation - What the internal blank nodes become.
+ * @param encodeArguments - Gives the encoding of an internal blank node with arguments, already materialised.
+ * @returns The callbacks, for the `expression` of `algebraUtils.mapOperationSub`.
+ */
+export function internalBnodeExpressionCallbacks(
+  c: TransformationContext,
+  materialisation: InternalBnodeMaterialisation,
+  encodeArguments: (named: Algebra.NamedExpression) => Algebra.Expression,
+): InternalBnodeExpressionCallbacks {
+  return {
+    named: { transform: (named) => {
+      if (!isInternalBnode(named)) {
+        return named;
+      }
+      // Without arguments, a fresh identity each time.
+      const encoding = named.args.length === 0 ? c.AF.createOperatorExpression('struuid', []) : encodeArguments(named);
+      return materialisation.materialiseEncodingExpression(c, encoding);
+    } },
+    operator: { transform: operator => operator.operator === 'isblank' ?
+      materialisation.isMaterialisedExpression(c, operator.args) :
+      operator },
+  };
+}
+
 /**
  * Whether an operation holds anything materialising internal blank nodes rewrites.
  * @param op - The operation to check.

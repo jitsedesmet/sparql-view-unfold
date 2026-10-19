@@ -2,11 +2,14 @@ import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
 import { termToString } from 'rdf-string';
 import { describe, it } from 'vitest';
-import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE_ENCODING, IRI_BOUND_BNODE_ARGUMENT } from '../lib/consts.js';
+import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE_ENCODING } from '../lib/consts.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import type { ExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
-import { internalBnodeExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
+import {
+  boundArgumentMarker,
+  internalBnodeExtensionFunctions,
+} from '../lib/transformations/bnodeExtensionFunction.js';
 import {
   internalBnodeAsSpecialIriTransformation,
   internalBnodeAsSpecialLiteralTransformation,
@@ -27,24 +30,23 @@ interface BnodeEvaluation {
   extensionFunctions?: ExtensionFunctions;
 }
 
-const sparqlLiteral: BnodeEvaluation = {
-  name: 'SPARQL as a typed literal',
-  transformation: internalBnodeAsSpecialLiteralTransformation(),
-};
-const sparqlIri: BnodeEvaluation = {
-  name: 'SPARQL as a prefixed IRI',
-  transformation: internalBnodeAsSpecialIriTransformation(),
-};
-const extensionFunctionLiteral: BnodeEvaluation = {
-  name: 'an extension function as a typed literal',
-  transformation: internalBnodeAsSpecialLiteralTransformation({ encodedByExtensionFunction: true }),
-  extensionFunctions: internalBnodeExtensionFunctions(),
-};
-const extensionFunctionIri: BnodeEvaluation = {
-  name: 'an extension function as a prefixed IRI',
-  transformation: internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
-  extensionFunctions: internalBnodeExtensionFunctions(),
-};
+// The evaluation materialising as the step does, its encoding in SPARQL or by the extension function.
+function bnodeEvaluation(
+  materialisedAs: string,
+  transformationStep: typeof internalBnodeAsSpecialLiteralTransformation,
+  encodedByExtensionFunction: boolean,
+): BnodeEvaluation {
+  return {
+    name: `${encodedByExtensionFunction ? 'an extension function' : 'SPARQL'} as ${materialisedAs}`,
+    transformation: transformationStep({ encodedByExtensionFunction }),
+    ...encodedByExtensionFunction && { extensionFunctions: internalBnodeExtensionFunctions() },
+  };
+}
+
+const sparqlLiteral = bnodeEvaluation('a typed literal', internalBnodeAsSpecialLiteralTransformation, false);
+const sparqlIri = bnodeEvaluation('a prefixed IRI', internalBnodeAsSpecialIriTransformation, false);
+const extensionFunctionLiteral = bnodeEvaluation('a typed literal', internalBnodeAsSpecialLiteralTransformation, true);
+const extensionFunctionIri = bnodeEvaluation('a prefixed IRI', internalBnodeAsSpecialIriTransformation, true);
 const evaluations = [ sparqlLiteral, sparqlIri, extensionFunctionLiteral, extensionFunctionIri ];
 
 // Where a query is evaluated, and the pipeline rewriting it before the evaluation's step.
@@ -187,10 +189,19 @@ describe('bnode skolem', () => {
       .sort().join(' ')).sort();
   }
 
+  // The canonical solutions of both evaluations of the query.
+  async function canonicalSolutionsOfBoth(
+    evaluations: readonly [BnodeEvaluation, BnodeEvaluation],
+    query: string,
+    setting?: QuerySetting,
+  ): Promise<string[][]> {
+    return Promise.all(evaluations.map(async evaluation => canonicalSolutions(evaluation, query, setting)));
+  }
+
   describe.for(<const> [
     [ 'a typed literal', sparqlLiteral, extensionFunctionLiteral ],
     [ 'a prefixed IRI', sparqlIri, extensionFunctionIri ],
-  ])('as %s, an extension function evaluates as SPARQL does', ([ , sparql, extensionFunction ]) => {
+  ])('as %s, an extension function evaluates as SPARQL does', ([ , ...sparqlAndExtensionFunction ]) => {
     // Every kind of term the SPARQL encoding unrolls, its default depth of two included, and one left unbound. Their
     // `STR` errors for a triple term, `+ 1` for anything but a number, and `<<( ?x ?x ?x )>>` for anything but an IRI.
     it('encodes every kind of term, and an argument that is unbound or errors', async({ expect }) => {
@@ -203,10 +214,7 @@ describe('bnode skolem', () => {
         BIND(ISBLANK(?node) AS ?nodeIsBlank)
         BIND(ISBLANK(?x) AS ?xIsBlank)
       }`;
-      const [ expected, actual ] = await Promise.all([
-        canonicalSolutions(sparql, query),
-        canonicalSolutions(extensionFunction, query),
-      ]);
+      const [ expected, actual ] = await canonicalSolutionsOfBoth(sparqlAndExtensionFunction, query);
       expect(expected).toHaveLength(11);
       expect(expected.every(row => row.includes('node=') && row.includes('nodeIsBlank='))).toBe(true);
       expect(actual).toEqual(expected);
@@ -223,10 +231,7 @@ describe('bnode skolem', () => {
         ?node <ex://subject> ?s ; <ex://object> ?o .
         FILTER(!SAMETERM(<internal://blank>(?o), ?node))
       } GROUP BY ?node ORDER BY <internal://blank>(?node)`;
-      const [ expected, actual ] = await Promise.all([
-        canonicalSolutions(sparql, query, { pipeline }),
-        canonicalSolutions(extensionFunction, query, { pipeline }),
-      ]);
+      const [ expected, actual ] = await canonicalSolutionsOfBoth(sparqlAndExtensionFunction, query, { pipeline });
       expect(expected).toHaveLength(3);
       expect(actual).toEqual(expected);
     });
@@ -269,7 +274,7 @@ describe('bnode skolem', () => {
     // The SPARQL encoding errors on it.
     it('encodes a blank node an engine constructs by its label', async({ expect }) => {
       await expect(encode([
-        DF.quad(DF.namedNode(IRI_BOUND_BNODE_ARGUMENT), DF.namedNode(IRI_BOUND_BNODE_ARGUMENT), DF.blankNode('b0')),
+        DF.quad(boundArgumentMarker, boundArgumentMarker, DF.blankNode('b0')),
       ])).resolves.toEqual(DF.literal(',bnode,2:b0'));
     });
 
@@ -285,7 +290,7 @@ describe('bnode skolem', () => {
   });
 
   describe('as a special literal', () => {
-    const rewriter = createQueryRewriter([ internalBnodeAsSpecialLiteralTransformation() ]);
+    const rewriter = createQueryRewriter([ sparqlLiteral.transformation ]);
 
     // A node materialised as a typed literal has its encoding as value.
     // The last is nested three deep, one more than the default depth, so it constructs no node.

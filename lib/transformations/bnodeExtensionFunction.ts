@@ -1,19 +1,11 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils } from '@traqula/algebra-transformations-1-2';
-import {
-  EXTENSION_FUNCTION_BNODE_ENCODING,
-  IRI_BOUND_BNODE_ARGUMENT,
-  IRI_UNBOUND_BNODE_ARGUMENT,
-} from '../consts.js';
+import { EXTENSION_FUNCTION_BNODE_ENCODING } from '../consts.js';
 import type { TransformationContext } from '../transformContext.js';
 import { DF } from '../utils/rdfDatatypes.js';
 import type { InternalBnodeMaterialisation } from './internalBnodeMaterialisation.js';
-import {
-  holdsInternalBnodeOrIsBlank,
-  internalBnodeEncodingTags,
-  isInternalBnode,
-} from './internalBnodeMaterialisation.js';
+import { internalBnodeEncodingTags, internalBnodeExpressionCallbacks } from './internalBnodeMaterialisation.js';
 
 /**
  * @fileoverview Internal blank nodes encoded by an extension function of the engine, like Comunica's
@@ -24,8 +16,12 @@ import {
 /** Extension functions by the IRI they are called by, the shape of Comunica's `extensionFunctions` context entry. */
 export type ExtensionFunctions = Record<string, (args: RDF.Term[]) => Promise<RDF.Term>>;
 
-const boundArgumentMarker = DF.namedNode(IRI_BOUND_BNODE_ARGUMENT);
-const unboundArgumentMarker = DF.namedNode(IRI_UNBOUND_BNODE_ARGUMENT);
+/** Subject and predicate of the triple term an argument that evaluates is wrapped in. */
+export const boundArgumentMarker = DF.namedNode('internal://blank/argument');
+
+/** What an argument that is unbound or errors is passed as. */
+export const unboundArgumentMarker = DF.namedNode('internal://blank/unbound');
+
 const encodingFunctionName = DF.namedNode(EXTENSION_FUNCTION_BNODE_ENCODING);
 
 /**
@@ -42,31 +38,17 @@ export function materialiseInternalBnodesByExtensionFunction<T extends Algebra.O
   op: T,
   materialisation: InternalBnodeMaterialisation,
 ): T {
-  if (!holdsInternalBnodeOrIsBlank(op)) {
-    return op;
-  }
   const { AF } = c;
   const boundMarkerExpression = AF.createTermExpression(boundArgumentMarker);
   const unboundMarkerExpression = AF.createTermExpression(unboundArgumentMarker);
-  return algebraUtils.mapOperationSub<'unsafe', typeof op>(op, {}, { expression: {
-    named: { transform: (named) => {
-      if (!isInternalBnode(named)) {
-        return named;
-      }
-      // Without arguments, a fresh identity each time, as the SPARQL encoding gives.
-      const encoding = named.args.length === 0 ?
-        AF.createOperatorExpression('struuid', []) :
-        AF.createNamedExpression(encodingFunctionName, named.args.map(argument =>
-          AF.createOperatorExpression('coalesce', [
-            AF.createOperatorExpression('triple', [ boundMarkerExpression, boundMarkerExpression, argument ]),
-            unboundMarkerExpression,
-          ])));
-      return materialisation.materialiseEncodingExpression(c, encoding);
-    } },
-    operator: { transform: operator => operator.operator === 'isblank' ?
-      materialisation.isMaterialisedExpression(c, operator.args) :
-      operator },
-  }});
+  return algebraUtils.mapOperationSub<'unsafe', typeof op>(op, {}, {
+    expression: internalBnodeExpressionCallbacks(c, materialisation, named =>
+      AF.createNamedExpression(encodingFunctionName, named.args.map(argument =>
+        AF.createOperatorExpression('coalesce', [
+          AF.createOperatorExpression('triple', [ boundMarkerExpression, boundMarkerExpression, argument ]),
+          unboundMarkerExpression,
+        ])))),
+  });
 }
 
 /**

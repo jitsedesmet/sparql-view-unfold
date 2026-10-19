@@ -24,7 +24,7 @@ import type { InternalBnodeMaterialisation } from './internalBnodeMaterialisatio
 import {
   holdsInternalBnodeOrIsBlank,
   internalBnodeEncodingTags,
-  isInternalBnode,
+  internalBnodeExpressionCallbacks,
   specialIriMaterialisation,
   specialLiteralMaterialisation,
 } from './internalBnodeMaterialisation.js';
@@ -57,7 +57,7 @@ import {
  * @param c - The transformation context
  * @param expression - The internal blank node expression
  * @param scope - What the solutions the expression is evaluated over bind; nothing is known where it is absent.
- * @returns The encoding, or `STRUUID()` when there are no arguments
+ * @returns The encoding
  */
 function encodeInternalBnode(
   c: TransformationContext,
@@ -235,10 +235,6 @@ function encodeInternalBnode(
 
   // ====================== Implementation ========================
 
-  // Without arguments, a fresh identity each time.
-  if (expression.args.length === 0) {
-    return AF.createOperatorExpression('struuid', []);
-  }
   // In the order the arguments are written: removeProjections gives hidden variables fresh names per pattern,
   // so an order read off their names would differ between two patterns constructing the same node.
   return concat(expression.args.map(encodeArgument));
@@ -258,32 +254,25 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   op: T,
   materialisation: InternalBnodeMaterialisation,
 ): T {
-  if (!holdsInternalBnodeOrIsBlank(op)) {
-    return op;
-  }
   const { AF } = c;
-  const materialiseEncoding = (encoding: Algebra.Expression): Algebra.Expression =>
-    materialisation.materialiseEncodingExpression(c, encoding);
   const coinArgumentVariable = freshVarGenerator(markVariableNamesUsed(c, op), 'mBnodeArgument');
 
   /**
    * Materialises the internal blank nodes in an expression and rewrites its `ISBLANK`s.
    * @param expression - The expression to transform.
-   * @param materialise - Materialises one internal blank node, whose arguments are transformed already.
+   * @param encodeArguments - Encodes one internal blank node with arguments, which are materialised already.
    * @returns The transformed expression.
    */
   function materialiseInExpression(
     expression: Algebra.Expression,
-    materialise: (named: Algebra.NamedExpression) => Algebra.Expression,
+    encodeArguments: (named: Algebra.NamedExpression) => Algebra.Expression,
   ): Algebra.Expression {
     return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: {
       existence: { preVisitor: () => ({ continue: false }), transform: (existence) => {
         existence.input = materialiseAll(existence.input, false);
         return existence;
       } },
-      named: { transform: named => isInternalBnode(named) ? materialise(named) : named },
-      operator: { transform: operator =>
-        operator.operator === 'isblank' ? materialisation.isMaterialisedExpression(c, operator.args) : operator },
+      ...internalBnodeExpressionCallbacks(c, materialisation, encodeArguments),
     }});
   }
 
@@ -309,7 +298,7 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
         return AF.createTermExpression(variable);
       });
       const scope = withRanges ? cpMetaOf(operation.input) : undefined;
-      return materialiseEncoding(encodeInternalBnode(c, AF.createNamedExpression(named.name, args), scope));
+      return encodeInternalBnode(c, AF.createNamedExpression(named.name, args), scope);
     });
   }
 
@@ -351,7 +340,7 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
       [Algebra.Types.EXPRESSION]: {
         preVisitor: () => ({ continue: false }),
         transform: expression =>
-          materialiseInExpression(expression, named => materialiseEncoding(encodeInternalBnode(c, named))),
+          materialiseInExpression(expression, named => encodeInternalBnode(c, named)),
       },
     });
   }
@@ -379,7 +368,7 @@ function internalBnodeMaterialisationTransformation(
   const materialise = options.encodedByExtensionFunction ?
     materialiseInternalBnodesByExtensionFunction :
     materialiseInternalBnodes;
-  return (c, op) => materialise(c, op, materialisation);
+  return (c, op) => holdsInternalBnodeOrIsBlank(op) ? materialise(c, op, materialisation) : op;
 }
 
 /**

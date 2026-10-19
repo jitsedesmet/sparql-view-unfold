@@ -24,9 +24,3 @@ export const VAR_PREFIX_MERGED_HEAD = 'm_';
 
 /** Extension function IRI giving the encoding of an internal blank node, from arguments wrapped as below. */
 export const EXTENSION_FUNCTION_BNODE_ENCODING = 'internal://blank/encoding';
-
-/** Subject and predicate of the triple term wrapping an argument of `<internal://blank>` that evaluates. */
-export const IRI_BOUND_BNODE_ARGUMENT = 'internal://blank/argument';
-
-/** What an argument of `<internal://blank>` that is unbound or errors is passed as. */
-export const IRI_UNBOUND_BNODE_ARGUMENT = 'internal://blank/unbound';
