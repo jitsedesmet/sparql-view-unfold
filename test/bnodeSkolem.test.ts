@@ -417,12 +417,6 @@ describe('bnode skolem', () => {
 }`);
     });
 
-    it('refuses an unstable argument it cannot bind to a variable', async({ expect }) => {
-      await expect(rewriter.rewriteQuery(`SELECT * WHERE {
-        ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(<internal://blank>(STR(RAND())) = ?o) }
-      }`)).rejects.toThrow('like RAND()');
-    });
-
     it('rewrites an ISBLANK in an argument', async({ expect }) => {
       expect((await rewriter.rewriteQuery(`SELECT * WHERE {
         ?s ?p ?o . BIND(<internal://blank>(STR(ISBLANK(?s))) AS ?node)

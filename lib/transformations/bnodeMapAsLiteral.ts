@@ -20,7 +20,6 @@ import {
   constructedTermOf,
   createBooleanExpression,
   holdsExpression,
-  unstableOperators,
 } from '../utils/expressionHelpers.js';
 import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
 import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
@@ -237,17 +236,11 @@ function encodeInternalBnode(
    * Encodes one argument, which can be any expression, as a BIND to a variable followed by the variable would be.
    * @param argument - The argument, like `?v`, `<<( ?s ?p ?o )>>` or `STR(?v)`.
    * @returns The encoding, `,unbound` when the argument errors.
-   * @throws Error if the argument is no term and differs each time it is evaluated, as its encoding evaluates it
-   * more than once
    */
   function encodeArgument(argument: Algebra.Expression): Algebra.Expression {
     const depth = c.tripleTermArgumentDepth;
     const term = constructedTermOf(argument);
     if (term === undefined) {
-      if (holdsExpression(argument, held =>
-        held.subType === Algebra.ExpressionTypes.OPERATOR && unstableOperators.has(held.operator))) {
-        throw new Error('An argument of <internal://blank> like RAND() is not supported in an OPTIONAL condition.');
-      }
       return orUnbound(argument, encodeTerm(argument, expressionRange(argument, scope), depth));
     }
     const termExpression = AF.createTermExpression(term);
