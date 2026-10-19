@@ -34,7 +34,8 @@
  * - **internalBnodeAsSpecialLiteralTransformation** / **internalBnodeAsSpecialIriTransformation**:
  *   materialise internal blank nodes as typed literals or as prefixed IRIs, since RDF 1.1 sources cannot
  *   reference blank nodes consistently. With `{ evaluatedByExtensionFunction: true }`, the engine computes them
- *   through `internalBnodeAsSpecialLiteralExtensionFunctions` or `internalBnodeAsSpecialIriExtensionFunctions`.
+ *   through {@link comunica!internalBnodeAsSpecialLiteralExtensionFunctions} or
+ *   {@link comunica!internalBnodeAsSpecialIriExtensionFunctions}.
  *
  * One step is deliberately **not** re-exported here:
  * {@link comunica!simplifyStaticExpressionsTransformation}, which folds static expressions through
@@ -45,11 +46,6 @@
  * `sparql-view-unfold/comunica` subpath instead, which only a Node consumer needs to reach for.
  * @module transformations
  */
-export type { ExtensionFunctions } from './bnodeExtensionFunction.js';
-export {
-  internalBnodeAsSpecialIriExtensionFunctions,
-  internalBnodeAsSpecialLiteralExtensionFunctions,
-} from './bnodeExtensionFunction.js';
 export type { InternalBnodeMaterialisationOptions } from './bnodeMapAsLiteral.js';
 export {
   internalBnodeAsSpecialIriTransformation,

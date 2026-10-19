@@ -62,32 +62,43 @@ async function getExpressionEvaluatorFactory(): Promise<ActorExpressionEvaluator
 }
 
 /**
- * Prepares a function that evaluates a static expression over a fresh, shared Comunica action context.
+ * Compiles an expression with Comunica's Expression Evaluator, over a fresh action context.
  * @param c - The transformation context, for its data factory
- * @returns an evaluator returning the resulting term, or `undefined` when evaluation raises
+ * @param expression - The expression to compile
+ * @returns a function evaluating it over a solution, raising where the expression does
  */
-async function prepareStaticEvaluator(
+export async function compileExpression(
   c: TransformationContext,
-): Promise<(expression: Algebra.Expression) => Promise<RDF.Term | undefined>> {
+  expression: Algebra.Expression,
+): Promise<(bindings: RDF.Bindings) => Promise<RDF.Term>> {
   const factory = await getExpressionEvaluatorFactory();
-  const emptyBindings = new BindingsFactory(c.DF).bindings();
   const context = new ActionContext({
     [KeysInitQuery.queryTimestamp.name]: new Date(),
     [KeysInitQuery.dataFactory.name]: c.DF,
     [KeysInitQuery.functionArgumentsCache.name]: {},
   });
-  return async(expression) => {
-    try {
-      const action = <Parameters<ActorExpressionEvaluatorFactory['run']>[0]>
-        <unknown> { algExpr: expression, context };
-      const evaluator = await factory.run(action, undefined);
-      // The binding is empty: a static expression has no variable left to substitute.
-      return await evaluator.evaluate(emptyBindings);
-    } catch {
-      // An error is not `false` in every context (`COALESCE(Error, false, true)`), so a raising expression
-      // is left standing; falling through yields `undefined`, read by the caller as "leave it standing".
-    }
-  };
+  const action = <Parameters<ActorExpressionEvaluatorFactory['run']>[0]> <unknown> { algExpr: expression, context };
+  const evaluator = await factory.run(action, undefined);
+  return async bindings => evaluator.evaluate(bindings);
+}
+
+/**
+ * Evaluates a static expression through Comunica's Expression Evaluator.
+ * @param c - The transformation context, for its data factory
+ * @param expression - The expression, holding no variable
+ * @returns the resulting term, or `undefined` when evaluation raises
+ */
+async function evaluateStaticExpression(
+  c: TransformationContext,
+  expression: Algebra.Expression,
+): Promise<RDF.Term | undefined> {
+  try {
+    // The binding is empty: a static expression has no variable left to substitute.
+    return await (await compileExpression(c, expression))(new BindingsFactory(c.DF).bindings());
+  } catch {
+    // An error is not `false` in every context (`COALESCE(Error, false, true)`), so a raising expression
+    // is left standing; falling through yields `undefined`, read by the caller as "leave it standing".
+  }
 }
 
 /**
@@ -101,8 +112,6 @@ export async function simplifyStaticExpressions<T extends Algebra.Operation>(
   c: TransformationContext,
   operation: T,
 ): Promise<T> {
-  const evaluate = await prepareStaticEvaluator(c);
-
   // A post-order walk visits an operator after its arguments, so a static argument has already been folded
   // to a term by the time its operator is seen: {@link foldsToConstantTerm} then decides staticness from
   // the direct arguments alone. A raising expression yields `undefined` and is left standing; because
@@ -111,7 +120,7 @@ export async function simplifyStaticExpressions<T extends Algebra.Operation>(
     [Algebra.Types.EXPRESSION]: {
       transform: async(expression) => {
         if (foldsToConstantTerm(expression)) {
-          const term = await evaluate(expression);
+          const term = await evaluateStaticExpression(c, expression);
           if (term !== undefined) {
             return c.AF.createTermExpression(term);
           }

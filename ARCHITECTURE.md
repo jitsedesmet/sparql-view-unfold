@@ -114,10 +114,10 @@ the branches the `vRanges` and `cVars` of the input rule out. Two transformation
 SHA-1 keeps manageable.
 
 With `evaluatedByExtensionFunction`, an extension function of the engine computes the encoding from the evaluated
-arguments instead, at any depth (`lib/transformations/bnodeExtensionFunction.ts`). An engine errors the call when an
-argument errors, so each argument `e` is wrapped as
-`COALESCE(TRIPLE(<internal://blank/argument>, <internal://blank/argument>, e), <internal://blank/unbound>)`. Both
-ways share an `InternalBnodeMaterialisation`, so they give the same nodes wherever the SPARQL encoding can.
+arguments instead, at any depth, and materialises it through Comunica's evaluator with the same expression
+(`lib/transformations/internalBnodeExtensionFunctions.ts`). An engine errors the call when an argument errors, so each
+argument `e` is wrapped as
+`COALESCE(TRIPLE(<internal://blank/argument>, <internal://blank/argument>, e), <internal://blank/unbound>)`.
 
 ## SPARQL quirks worth knowing
 

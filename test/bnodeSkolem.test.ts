@@ -1,20 +1,20 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
 import { termToString } from 'rdf-string';
-import { describe, it } from 'vitest';
+import { beforeAll, describe, it } from 'vitest';
 import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE, IRI_BOUND_BNODE_ARGUMENT } from '../lib/consts.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
-import type { ExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
-import {
-  internalBnodeAsSpecialIriExtensionFunctions,
-  internalBnodeAsSpecialLiteralExtensionFunctions,
-} from '../lib/transformations/bnodeExtensionFunction.js';
 import {
   internalBnodeAsSpecialIriTransformation,
   internalBnodeAsSpecialLiteral,
   internalBnodeAsSpecialLiteralTransformation,
 } from '../lib/transformations/bnodeMapAsLiteral.js';
+import type { ExtensionFunctions } from '../lib/transformations/internalBnodeExtensionFunctions.js';
+import {
+  internalBnodeAsSpecialIriExtensionFunctions,
+  internalBnodeAsSpecialLiteralExtensionFunctions,
+} from '../lib/transformations/internalBnodeExtensionFunctions.js';
 import { simplifyStaticExpressionsTransformation } from '../lib/transformations/staticExpressionEvaluation.js';
 import { createTransformationContext } from '../lib/transformContext.js';
 import type { QueryTransformation } from '../lib/types.js';
@@ -86,6 +86,13 @@ function unfolding(construct: string): QueryTransformation[] {
 }
 
 describe('bnode skolem', () => {
+  // Comunica's evaluator, which the extension functions and static evaluation share, is built on its first use;
+  // warming it up here keeps that one-time cost out of the individual tests' timeouts.
+  beforeAll(async() => {
+    await Promise.all(evaluations.map(async({ extensionFunctions }) =>
+      extensionFunctions?.[EXTENSION_FUNCTION_BNODE]([])));
+  }, 60_000);
+
   const c = createTransformationContext();
   const AF = c.AF;
   const DF = c.DF;
@@ -602,6 +609,6 @@ describe('bnode skolem', () => {
       expect((await evaluated.rewriteQuery('SELECT * WHERE { BIND(<internal://blank>(<ex://c>) AS ?node) }')).trim())
         .toEqual(`SELECT ( ",iri,6:ex://c"^^<https://sparql-extension.knows.idlab.ugent.be/bnode> AS ?node ) WHERE {
 }`);
-    }, 60_000);
+    });
   });
 });

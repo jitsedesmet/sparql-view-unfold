@@ -1,5 +1,5 @@
 /**
- * @fileoverview The Node-only entry point: the pipeline steps that need a Comunica runtime.
+ * @fileoverview The Node-only entry point: the pipeline steps and extension functions that need a Comunica runtime.
  *
  * Everything here reaches {@link https://github.com/LinkedSoftwareDependencies/Components.js Components.js},
  * which bootstraps Comunica's actors from Node's own module resolution and so imports `node:module` and
@@ -24,3 +24,8 @@ export {
   simplifyStaticExpressions,
   simplifyStaticExpressionsTransformation,
 } from './transformations/staticExpressionEvaluation.js';
+export type { ExtensionFunctions } from './transformations/internalBnodeExtensionFunctions.js';
+export {
+  internalBnodeAsSpecialIriExtensionFunctions,
+  internalBnodeAsSpecialLiteralExtensionFunctions,
+} from './transformations/internalBnodeExtensionFunctions.js';

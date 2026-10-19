@@ -1,4 +1,3 @@
-import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE, IRI_PREFIX_BNODE } from '../consts.js';
 import type { TransformationContext } from '../transformContext.js';
@@ -6,8 +5,8 @@ import { holdsExpression } from '../utils/expressionHelpers.js';
 import { DF } from '../utils/rdfDatatypes.js';
 
 /**
- * @fileoverview What an internal blank node `<internal://blank>(…)` becomes, shared by its SPARQL encoding and by the
- * extension function computing it, so that both give the same node.
+ * @fileoverview What an internal blank node `<internal://blank>(…)` becomes, as a SPARQL expression over its encoding.
+ * Both the SPARQL encoding and the extension function computing it materialise through it, so both give the same node.
  */
 
 /** The tag each argument's encoding starts with; only an engine constructs a blank node. */
@@ -19,7 +18,7 @@ export const internalBnodeEncodingTags = <const> {
   unbound: ',unbound',
 };
 
-/** What an internal blank node becomes, both as a SPARQL expression and as the term an engine gives. */
+/** What an internal blank node becomes, and how `ISBLANK` recognises it. */
 export interface InternalBnodeMaterialisation {
   /**
    * The SPARQL expression materialising an encoding.
@@ -35,27 +34,10 @@ export interface InternalBnodeMaterialisation {
    * @returns The test.
    */
   isMaterialisedExpression: (c: TransformationContext, args: Algebra.Expression[]) => Algebra.Expression;
-  /**
-   * The term an encoding is materialised as.
-   * @param encoding - The encoding.
-   * @returns The node.
-   */
-  materialiseEncoding: (encoding: string) => Promise<RDF.Term>;
 }
 
 const internalBnodeDatatype = DF.namedNode(DT_INTERNAL_BNODE);
 const iriPrefixLiteral = DF.literal(IRI_PREFIX_BNODE);
-const textEncoder = new TextEncoder();
-
-/**
- * The SHA-1 of a string, as SPARQL's `SHA1` gives it.
- * @param value - The string, hashed as UTF-8.
- * @returns The hash in lowercase hexadecimal.
- */
-async function sha1(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-1', textEncoder.encode(value));
-  return [ ...new Uint8Array(digest) ].map(byte => byte.toString(16).padStart(2, '0')).join('');
-}
 
 /** Materialises an internal blank node as a literal of a special datatype, its encoding as value. */
 export const specialLiteralMaterialisation: InternalBnodeMaterialisation = {
@@ -69,7 +51,6 @@ export const specialLiteralMaterialisation: InternalBnodeMaterialisation = {
       AF.createTermExpression(internalBnodeDatatype),
     ]),
   ]),
-  materialiseEncoding: async encoding => DF.literal(encoding, internalBnodeDatatype),
 };
 
 /** Materialises an internal blank node as a prefixed IRI, the SHA-1 of its encoding keeping nested ones short. */
@@ -87,7 +68,6 @@ export const specialIriMaterialisation: InternalBnodeMaterialisation = {
       AF.createTermExpression(iriPrefixLiteral),
     ]),
   ]),
-  materialiseEncoding: async encoding => DF.namedNode(`${IRI_PREFIX_BNODE}${await sha1(encoding)}`),
 };
 
 /**
