@@ -113,6 +113,18 @@ describe('mappingFromConstructQueries', () => {
       ])).body).not.toContain('FILTER');
     });
 
+    it('is only asked to be bound where a BIND gives it an IRI', ({ expect }) => {
+      expect(mappingAsStrings(mappingFromConstructQueries([
+        'PREFIX : <ex://>\nCONSTRUCT { ?s :p ?o } WHERE { ?x :src ?o BIND(IRI(CONCAT("ex://", STR(?o))) AS ?s) }',
+      ])).body.trim()).toEqual(`SELECT ?o ?s WHERE {
+  {
+    ?x <ex://src> ?o .
+    BIND( IRI( CONCAT( "ex://" , STR( ?o ) ) ) AS ?s )
+  }
+  FILTER ( BOUND( ?s ) )
+}`);
+    });
+
     it('is left alone for a view that means to present generalized RDF', ({ expect }) => {
       expect(mappingAsStrings(mappingFromConstructQueries(
         [ 'CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?o }' ],

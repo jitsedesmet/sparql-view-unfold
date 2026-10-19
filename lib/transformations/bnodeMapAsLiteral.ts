@@ -167,12 +167,11 @@ function encodeInternalBnode(
     const component = termExpression.subType === Algebra.ExpressionTypes.TERM ?
       componentOf(termExpression.term, position) :
       undefined;
-    if (component !== undefined) {
-      // Only encoded once constructed, so the component is a term its position admits.
-      const componentExpression = AF.createTermExpression(component);
-      return [ componentExpression, expressionRange(componentExpression, scope).meet(rangeOfPosition(position)) ];
-    }
-    return [ AF.createOperatorExpression(position, [ termExpression ]), rangeOfPosition(position) ];
+    const componentExpression = component === undefined ?
+      AF.createOperatorExpression(position, [ termExpression ]) :
+      AF.createTermExpression(component);
+    // Only encoded once constructed, so the component is a term its position admits.
+    return [ componentExpression, expressionRange(componentExpression, scope).meet(rangeOfPosition(position)) ];
   }
 
   /**

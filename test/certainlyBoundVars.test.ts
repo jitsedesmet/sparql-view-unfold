@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import type { TransformationContext } from '../lib/transformContext.js';
-import { createTransformationContext } from '../lib/transformContext.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import { withCpVars } from '../lib/utils/certainlyBoundVars.js';
 import { constructedTermOf } from '../lib/utils/expressionHelpers.js';
 
@@ -70,6 +70,38 @@ describe('withCpVars', () => {
  * components, so this is the rule the ranges were needed for: a ground construction is infallible by
  * itself, and so is one over a variable that can only take terms the position admits.
  */
+describe('the range of what an expression gives', () => {
+  const top = [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ];
+  const subject = [ 'BlankNode', 'NamedNode' ];
+
+  it.for<[string, string[]]>([
+    [ 'STR(?o)', [ 'Literal' ]],
+    [ '?o + 1', [ 'Literal' ]],
+    [ 'EXISTS { ?o ?p ?s }', [ 'Literal' ]],
+    [ '<http://www.w3.org/2001/XMLSchema#integer>(?o)', [ 'Literal' ]],
+    [ 'IRI(?o)', [ 'NamedNode' ]],
+    [ 'DATATYPE(?o)', [ 'NamedNode' ]],
+    [ 'BNODE()', [ 'BlankNode' ]],
+    [ '<internal://blank>(?o)', [ 'BlankNode' ]],
+    [ 'SUBJECT(?o)', subject ],
+    [ 'COALESCE(?s, "x")', [ 'BlankNode', 'Literal', 'NamedNode' ]],
+    [ 'IF(BOUND(?o), ?s, IRI(?o))', subject ],
+    [ 'COALESCE(?unbound)', []],
+    [ '<ex://f>(?o)', top ],
+  ])('is read through the operators of a BIND of %s', ([ expression, range ], { expect }) => {
+    expect(rangeOfX(parseQuery(c, `SELECT * WHERE { ?s ?p ?o BIND(${expression} AS ?x) }`))).toEqual(range);
+  });
+
+  it.for<[string, string[]]>([
+    [ 'COUNT(*)', [ 'Literal' ]],
+    [ 'GROUP_CONCAT(?o)', [ 'Literal' ]],
+    [ 'SAMPLE(?s)', subject ],
+    [ 'MAX(?o)', top ],
+  ])('is read through the aggregate of %s', ([ aggregate, range ], { expect }) => {
+    expect(rangeOfX(parseQuery(c, `SELECT (${aggregate} AS ?x) WHERE { ?s ?p ?o }`))).toEqual(range);
+  });
+});
+
 describe('the target of a triple-term BIND', () => {
   const t = c.DF.variable('t');
   const ground = c.DF.quad(c.DF.namedNode('ex://a'), c.DF.namedNode('ex://b'), c.DF.namedNode('ex://c'));

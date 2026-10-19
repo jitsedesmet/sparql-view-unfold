@@ -22,7 +22,8 @@ RDF 1.2 pattern and its RDF 1.1 representation. `mappingFromConstructQueries`
 
 The body also gets what SPARQL 1.1 §16.2 asks of a CONSTRUCT: a `FILTER(bound(?x))` per head variable the
 body does not certainly bind, and a type test per head variable whose `vRanges` range exceeds what its head
-position admits (`generalizedRdfView` turns those off). Both read one template triple, so both happen
+position admits (`generalizedRdfView` turns those off); a BIND's range is what its expression's operators give, so
+`BIND(IRI(…) AS ?s)` needs none. Both read one template triple, so both happen
 *before* the merge — after it the head is three plain variables and a triple term is a BIND whose interior
 nothing re-reads, which is exactly the case the type tests are for.
 

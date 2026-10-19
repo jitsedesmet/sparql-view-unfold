@@ -47,6 +47,12 @@ export const tripleTermRange = new RangeSet([ 'Quad' ]);
 /** The term types of a literal: Literals only. */
 export const literalRange = new RangeSet([ 'Literal' ]);
 
+/** The term types of an IRI: NamedNodes only. */
+export const iriRange = new RangeSet([ 'NamedNode' ]);
+
+/** The term types of a blank node: BlankNodes only. */
+export const blankNodeRange = new RangeSet([ 'BlankNode' ]);
+
 /**
  * The term types the name of a `SERVICE` admits, where it is a variable.
  *

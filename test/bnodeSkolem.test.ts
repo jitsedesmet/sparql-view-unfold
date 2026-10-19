@@ -381,12 +381,13 @@ describe('bnode skolem', () => {
 }`);
     });
 
-    // Its encoding reads the argument many times, while the BIND evaluates it once.
+    // Its encoding reads the argument many times, while the BIND evaluates it once. STR gives a literal, so the
+    // encoding is that of a literal only.
     it('binds an expression argument to a variable first', async({ expect }) => {
       expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
         ?s ?p ?o .
         BIND(<internal://blank>(STR(?o)) AS ?node)
-      }`)).trim()).toEqual(`SELECT ( ${materialised(orUnbound('BOUND( ?mBnodeArgument0 )', termEncoding('?mBnodeArgument0')))} AS ?node ) WHERE {
+      }`)).trim()).toEqual(`SELECT ( ${materialised(orUnbound('BOUND( ?mBnodeArgument0 )', literalEncoding('?mBnodeArgument0')))} AS ?node ) WHERE {
   ?s ?p ?o .
   BIND( STR( ?o ) AS ?mBnodeArgument0 )
 }`);
@@ -412,7 +413,7 @@ describe('bnode skolem', () => {
   ?s ?p ?o .
   OPTIONAL {
     ?s ?q ?x .
-    FILTER ( ( ${materialised(orUnbound(evaluates('STR( ?x )'), termEncoding('STR( ?x )')))} = ?o ) )
+    FILTER ( ( ${materialised(orUnbound(evaluates('STR( ?x )'), literalEncoding('STR( ?x )')))} = ?o ) )
   }
 }`);
     });
@@ -420,7 +421,7 @@ describe('bnode skolem', () => {
     it('rewrites an ISBLANK in an argument', async({ expect }) => {
       expect((await rewriter.rewriteQuery(`SELECT * WHERE {
         ?s ?p ?o . BIND(<internal://blank>(STR(ISBLANK(?s))) AS ?node)
-      }`)).trim()).toEqual(`SELECT ( ${materialised(orUnbound('BOUND( ?mBnodeArgument0 )', termEncoding('?mBnodeArgument0')))} AS ?node ) ?o ?p ?s WHERE {
+      }`)).trim()).toEqual(`SELECT ( ${materialised(orUnbound('BOUND( ?mBnodeArgument0 )', literalEncoding('?mBnodeArgument0')))} AS ?node ) ?o ?p ?s WHERE {
   ?s ?p ?o .
   BIND( STR( ( ISLITERAL( ?s ) && ( DATATYPE( ?s ) = <${DT_INTERNAL_BNODE}> ) ) ) AS ?mBnodeArgument0 )
 }`);

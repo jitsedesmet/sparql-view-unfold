@@ -1,9 +1,13 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
+import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
 import {
+  blankNodeRange,
   emptyRange,
   graphRange,
+  iriRange,
+  literalRange,
   objectRange,
   predicateRange,
   RangeSet,
@@ -12,6 +16,7 @@ import {
   tripleTermRange,
 } from '../RangeSet.js';
 import { constructedTermOf } from './expressionHelpers.js';
+import { xsd } from './rdfDatatypes.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
 
@@ -169,26 +174,71 @@ VRanges {
   return result;
 }
 
+/** The operators whose value is a literal whenever it is no error: a boolean, a number, a string or another literal. */
+const literalOperators = `
+  ! != && < <= = > >= || bound contains haslang haslangdir in isblank isiri isliteral isnumeric istriple isuri
+  langmatches notin regex sameterm strends strstarts
+  * + - / abs ceil day floor hours minutes month rand round seconds strlen uminus uplus year
+  concat encode_for_uri lang langdir lcase md5 replace sha1 sha256 sha384 sha512 str strafter strbefore struuid
+  substr tz ucase
+  now strdt strlang strlangdir timezone
+`.trim().split(/\s+/u);
+
+/** The range of the value of each operator its arguments do not decide; an operator missing here can be any term. */
+const operatorRanges = new Map<string, RangeSet>([
+  ...literalOperators.map(operator => <const> [ operator, literalRange ]),
+  ...[ 'datatype', 'iri', 'uri', 'uuid' ].map(operator => <const> [ operator, iriRange ]),
+  [ 'bnode', blankNodeRange ],
+  [ 'triple', tripleTermRange ],
+  [ 'subject', subjectRange ],
+  [ 'predicate', predicateRange ],
+  [ 'object', objectRange ],
+]);
+
 /**
- * The range of the target of a `BIND(e AS ?t)`: what the expression can possibly evaluate to.
- * @param expression - The expression of the EXTEND
- * @param input - The metadata of its input; where it is absent, a variable can be any term
- * @returns the range; only the shapes that decide a term type are read, everything else being the top
- * anyway and this only ever being asked to narrow
+ * The term types an expression can evaluate to, like the target of a `BIND(e AS ?t)` can be bound to.
+ * @param expression - The expression, like `?v`, `STR(?v)` or `COUNT(?v)`
+ * @param input - The metadata of the solutions it is evaluated over; where it is absent, a variable can be any term
+ * @returns the range, the top where the expression does not decide a term type
  */
 export function expressionRange(expression: Algebra.Expression, input?: CPMeta): RangeSet {
-  if (expression.subType === ExpressionTypes.TERM) {
-    if (expression.term.termType !== 'Variable') {
-      return new RangeSet([ expression.term.termType ]);
+  switch (expression.subType) {
+    case ExpressionTypes.TERM: {
+      if (expression.term.termType !== 'Variable') {
+        return new RangeSet([ expression.term.termType ]);
+      }
+      // A variable the input does not have in scope is never bound, so neither is the target: the bottom
+      // {@link VRanges.rangeOf} reports for it is exactly right.
+      return input?.vRanges.rangeOf(expression.term.value) ?? objectRange;
     }
-    // A variable the input does not have in scope is never bound, so neither is the target: the bottom
-    // {@link VRanges.rangeOf} reports for it is exactly right.
-    return input?.vRanges.rangeOf(expression.term.value) ?? objectRange;
+    case ExpressionTypes.OPERATOR: {
+      // COALESCE gives one of its arguments, IF one of its branches.
+      if (expression.operator === 'coalesce' || expression.operator === 'if') {
+        const choices = expression.operator === 'if' ? expression.args.slice(1) : expression.args;
+        return new RangeSet(choices.flatMap(choice => [ ...expressionRange(choice, input) ]));
+      }
+      return operatorRanges.get(expression.operator) ?? objectRange;
+    }
+    case ExpressionTypes.AGGREGATE: {
+      // MIN, MAX and SAMPLE give one of the values they aggregate, the others compute a literal.
+      return [ 'max', 'min', 'sample' ].includes(expression.aggregator) ?
+        expressionRange(expression.expression, input) :
+        literalRange;
+    }
+    case ExpressionTypes.EXISTENCE: {
+      return literalRange;
+    }
+    case ExpressionTypes.NAMED: {
+      if (expression.name.value === EXTENSION_FUNCTION_BNODE) {
+        return blankNodeRange;
+      }
+      // A function of the XSD namespace is a cast to one of its datatypes.
+      return expression.name.value.startsWith(xsd) ? literalRange : objectRange;
+    }
+    case ExpressionTypes.WILDCARD: {
+      return objectRange;
+    }
   }
-  if (expression.subType === ExpressionTypes.OPERATOR && expression.operator === 'triple') {
-    return tripleTermRange;
-  }
-  return objectRange;
 }
 
 /** Drops the `metadata` of the operation it is applied to, whatever that metadata holds. */
@@ -366,12 +416,11 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
           .filter(aggregate => aggregate.aggregator === 'count')
           .map(aggregate => aggregate.variable.value)),
       ]);
-      // A grouping key keeps holding the value of the input; an aggregate computes a new one, of a type
-      // this does not track (COUNT is an integer, MIN takes the type of whichever row won), so it is top.
+      // A grouping key keeps holding the value of the input, an aggregate target what the aggregate computes.
       // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins.
       const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
       for (const aggregate of resOp.aggregates) {
-        ranges.set(aggregate.variable.value, objectRange);
+        ranges.set(aggregate.variable.value, expressionRange(aggregate, input.metadata));
       }
       resOp.metadata.vRanges = ranges;
       return resOp;
