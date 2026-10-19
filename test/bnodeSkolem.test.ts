@@ -1,8 +1,8 @@
+import { createHash } from 'node:crypto';
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
-import { termToString } from 'rdf-string';
 import { describe, it } from 'vitest';
-import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE_ENCODING } from '../lib/consts.js';
+import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE_ENCODING, IRI_PREFIX_BNODE } from '../lib/consts.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import type { ExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
@@ -181,62 +181,6 @@ describe('bnode skolem', () => {
     });
   });
 
-  // Every solution as sorted `variable=term` entries, the solutions sorted too, to compare two evaluations by.
-  async function canonicalSolutions(evaluation: BnodeEvaluation, query: string, setting?: QuerySetting):
-  Promise<string[]> {
-    const rows = await solutions(evaluation, query, setting);
-    return rows.map(row => [ ...row ].map(([ variable, term ]) => `${variable.value}=${termToString(term)}`)
-      .sort().join(' ')).sort();
-  }
-
-  // The canonical solutions of both evaluations of the query.
-  async function canonicalSolutionsOfBoth(
-    evaluations: readonly [BnodeEvaluation, BnodeEvaluation],
-    query: string,
-    setting?: QuerySetting,
-  ): Promise<string[][]> {
-    return Promise.all(evaluations.map(async evaluation => canonicalSolutions(evaluation, query, setting)));
-  }
-
-  describe.for(<const> [
-    [ 'a typed literal', sparqlLiteral, extensionFunctionLiteral ],
-    [ 'a prefixed IRI', sparqlIri, extensionFunctionIri ],
-  ])('as %s, an extension function evaluates as SPARQL does', ([ , ...sparqlAndExtensionFunction ]) => {
-    // Every kind of term the SPARQL encoding unrolls, its default depth of two included, and one left unbound. Their
-    // `STR` errors for a triple term, `+ 1` for anything but a number, and `<<( ?x ?x ?x )>>` for anything but an IRI.
-    it('encodes every kind of term, and an argument that is unbound or errors', async({ expect }) => {
-      const query = `SELECT * WHERE {
-        VALUES ?x {
-          <ex://a> "a" "a,b\\\\c" "😀" "a"@en "a"@en--ltr "1"^^<ex://dt> 1
-          <<( <ex://a> <ex://p> "o"@en )>> <<( <ex://a> <ex://p> <<( <ex://b> <ex://q> <ex://c> )>> )>> UNDEF
-        }
-        BIND(<internal://blank>(?x, STR(?x), ?x + 1, <<( ?x ?x ?x )>>) AS ?node)
-        BIND(ISBLANK(?node) AS ?nodeIsBlank)
-        BIND(ISBLANK(?x) AS ?xIsBlank)
-      }`;
-      const [ expected, actual ] = await canonicalSolutionsOfBoth(sparqlAndExtensionFunction, query);
-      expect(expected).toHaveLength(11);
-      expect(expected.every(row => row.includes('node=') && row.includes('nodeIsBlank='))).toBe(true);
-      expect(actual).toEqual(expected);
-    });
-
-    // The unfolding moves the BINDs around, and a FILTER, a GROUP and an ORDER BY each hold a node.
-    it('constructs the same nodes through the unfolding', async({ expect }) => {
-      const pipeline = unfolding(`CONSTRUCT { ?node <ex://subject> ?s . ?node <ex://object> ?o } WHERE {
-        ?s ?p ?o .
-        OPTIONAL { ?x <ex://p2> ?o }
-        BIND(<internal://blank>(<<( ?s ?p ?o )>>, ?x) AS ?node)
-      }`);
-      const query = `SELECT ?node (COUNT(*) AS ?count) (SAMPLE(<internal://blank>(?node, ?s)) AS ?nested) WHERE {
-        ?node <ex://subject> ?s ; <ex://object> ?o .
-        FILTER(!SAMETERM(<internal://blank>(?o), ?node))
-      } GROUP BY ?node ORDER BY <internal://blank>(?node)`;
-      const [ expected, actual ] = await canonicalSolutionsOfBoth(sparqlAndExtensionFunction, query, { pipeline });
-      expect(expected).toHaveLength(3);
-      expect(actual).toEqual(expected);
-    });
-  });
-
   describe('evaluated by an extension function', () => {
     const rewriter = createQueryRewriter([ extensionFunctionLiteral.transformation ]);
     const encode = internalBnodeExtensionFunctions()[EXTENSION_FUNCTION_BNODE_ENCODING];
@@ -262,15 +206,6 @@ describe('bnode skolem', () => {
       }`)).resolves.toHaveLength(9);
     });
 
-    // The SPARQL encoding leaves it unbound beyond its depth.
-    it('encodes a triple term of any depth', async({ expect }) => {
-      await expect(constructedNodes(extensionFunctionLiteral, `SELECT ?node WHERE {
-        BIND(<internal://blank>(<<( <ex://a> <ex://p> <<( <ex://b> <ex://q> <<( <ex://c> <ex://r> <ex://d> )>> )>> )>>) AS ?node)
-      }`)).resolves.toEqual([
-        ',triple,iri,6:ex://a,iri,6:ex://p,triple,iri,6:ex://b,iri,6:ex://q,triple,iri,6:ex://c,iri,6:ex://r,iri,6:ex://d',
-      ]);
-    });
-
     // The SPARQL encoding errors on it.
     it('encodes a blank node an engine constructs by its label', async({ expect }) => {
       await expect(encode([
@@ -289,16 +224,15 @@ describe('bnode skolem', () => {
     expect(() => createQueryRewriter([], { tripleTermArgumentDepth: 1.5 })).toThrow('non-negative integer');
   });
 
-  describe('as a special literal', () => {
-    const rewriter = createQueryRewriter([ sparqlLiteral.transformation ]);
-
-    // A node materialised as a typed literal has its encoding as value.
-    // The last is nested three deep, one more than the default depth, so it constructs no node.
+  // A node materialised as a typed literal has its encoding as value, the same whichever way it is encoded.
+  describe.for([ sparqlLiteral, extensionFunctionLiteral ])('encoded by $name', (evaluation) => {
     const encodings = <const> [
       [ '<ex://a>', ',iri,6:ex://a' ],
       [ '"a"', ',literal,1:a,39:http://www.w3.org/2001/XMLSchema#string,0:,0:' ],
       // The length tells where a string ends, so a comma or backslash in it needs no escaping.
       [ '"a,b\\\\c"', ',literal,5:a,b\\c,39:http://www.w3.org/2001/XMLSchema#string,0:,0:' ],
+      // The length counts characters, as `STRLEN` does, not UTF-16 code units.
+      [ '"😀"', ',literal,1:😀,39:http://www.w3.org/2001/XMLSchema#string,0:,0:' ],
       [ '"a"@en', ',literal,1:a,53:http://www.w3.org/1999/02/22-rdf-syntax-ns#langString,2:en,0:' ],
       [ '"a"@en--ltr', ',literal,1:a,56:http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString,2:en,3:ltr' ],
       [ '"1"^^<ex://dt>', ',literal,1:1,7:ex://dt,0:,0:' ],
@@ -307,39 +241,66 @@ describe('bnode skolem', () => {
         '<<( <ex://a> <ex://p> <<( <ex://b> <ex://q> <ex://c> )>> )>>',
         ',triple,iri,6:ex://a,iri,6:ex://p,triple,iri,6:ex://b,iri,6:ex://q,iri,6:ex://c',
       ],
-      [ '<<( <ex://a> <ex://p> <<( <ex://b> <ex://q> <<( <ex://c> <ex://r> <ex://d> )>> )>> )>>', undefined ],
     ];
 
     it('encodes each kind of term bound to a variable with its own tag, and an unbound one too', async({ expect }) => {
-      await expect(constructedNodes(sparqlLiteral, `SELECT ?node WHERE {
+      await expect(constructedNodes(evaluation, `SELECT ?node WHERE {
         VALUES ?x { ${encodings.map(([ term ]) => term).join(' ')} UNDEF }
         BIND(<internal://blank>(?x) AS ?node)
       }`)).resolves.toEqual([ ...encodings.map(([ , encoding ]) => encoding), ',unbound' ]);
     });
 
     it.for(encodings)('encodes %s written out as when bound to a variable', async([ term, encoding ], { expect }) => {
-      await expect(constructedNodes(
-        sparqlLiteral,
-        `SELECT ?node WHERE { BIND(<internal://blank>(${term}) AS ?node) }`,
-      )).resolves.toEqual([ encoding ]);
+      await expect(constructedNodes(evaluation, `SELECT ?node WHERE { BIND(<internal://blank>(${term}) AS ?node) }`))
+        .resolves.toEqual([ encoding ]);
     });
 
-    const expressionEncodings = <const> [
+    // An argument that errors is encoded as one left unbound: `1 + "x"` errors, and a literal subject fails to
+    // construct its triple term.
+    it.for(<const> [
       [ 'STR(<ex://a>)', ',literal,6:ex://a,39:http://www.w3.org/2001/XMLSchema#string,0:,0:' ],
       [ '1 + "x"', ',unbound' ],
+      [ '<<( ?literal <ex://p> <ex://o> )>>', ',unbound' ],
       [ 'TRIPLE(<ex://a>, <ex://p>, "o"@en)', ',triple,iri,6:ex://a,iri,6:ex://p,literal,1:o,53:http://www.w3.org/1999/02/22-rdf-syntax-ns#langString,2:en,0:' ],
       [ 'EXISTS {}', ',literal,4:true,40:http://www.w3.org/2001/XMLSchema#boolean,0:,0:' ],
-    ];
-
-    it.for(expressionEncodings)('encodes the expression %s as the value it evaluates to', async([
-      expression,
-      encoding,
-    ], { expect }) => {
-      await expect(constructedNodes(
-        sparqlLiteral,
-        `SELECT ?node WHERE { BIND(<internal://blank>(${expression}) AS ?node) }`,
-      )).resolves.toEqual([ encoding ]);
+      // In the order they are written.
+      [ '<ex://b>, ?unbound, "a"', ',iri,6:ex://b,unbound,literal,1:a,39:http://www.w3.org/2001/XMLSchema#string,0:,0:' ],
+    ])('encodes the arguments %s as the values they evaluate to', async([ args, encoding ], { expect }) => {
+      await expect(constructedNodes(evaluation, `SELECT ?node WHERE {
+        BIND("a" AS ?literal)
+        BIND(<internal://blank>(${args}) AS ?node)
+      }`)).resolves.toEqual([ encoding ]);
     });
+  });
+
+  describe('with a triple term three deep', () => {
+    const query = `SELECT ?node WHERE {
+      BIND(<internal://blank>(<<( <ex://a> <ex://p> <<( <ex://b> <ex://q> <<( <ex://c> <ex://r> <ex://d> )>> )>> )>>) AS ?node)
+    }`;
+
+    // An expression cannot recurse, so the SPARQL encoding unrolls a triple term only `tripleTermArgumentDepth` deep.
+    it('encoded in SPARQL, constructs no node', async({ expect }) => {
+      await expect(constructedNodes(sparqlLiteral, query)).resolves.toEqual([ undefined ]);
+    });
+
+    it('encoded by an extension function, constructs its node', async({ expect }) => {
+      await expect(constructedNodes(extensionFunctionLiteral, query)).resolves.toEqual([
+        ',triple,iri,6:ex://a,iri,6:ex://p,triple,iri,6:ex://b,iri,6:ex://q,triple,iri,6:ex://c,iri,6:ex://r,iri,6:ex://d',
+      ]);
+    });
+  });
+
+  // A node materialised as an IRI is the prefixed SHA-1 of its encoding, the same whichever way it is encoded.
+  it.for([ sparqlIri, extensionFunctionIri ])('encoded by $name, materialises the SHA-1 of the encoding', async(
+    evaluation,
+    { expect },
+  ) => {
+    await expect(constructedNodes(evaluation, 'SELECT ?node WHERE { BIND(<internal://blank>(<ex://a>) AS ?node) }'))
+      .resolves.toEqual([ `${IRI_PREFIX_BNODE}${createHash('sha1').update(',iri,6:ex://a').digest('hex')}` ]);
+  });
+
+  describe('as a special literal', () => {
+    const rewriter = createQueryRewriter([ sparqlLiteral.transformation ]);
 
     // Joins encodings, each the list of parts of its CONCAT, as the rewrite does: nested parts spliced in, adjacent
     // constants merged.
