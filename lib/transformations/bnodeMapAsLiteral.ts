@@ -85,6 +85,27 @@ function encodeInternalBnode(
     return AF.createTermExpression(DF.literal(...args));
   }
 
+  function ifTermIs(
+    operator: string,
+    termExpression: Algebra.Expression,
+    then: Algebra.Expression,
+    otherwise: Algebra.Expression,
+  ): Algebra.Expression {
+    const test = AF.createOperatorExpression(operator, [ termExpression ]);
+    return AF.createOperatorExpression('if', [ test, then, otherwise ]);
+  }
+
+  /**
+   * Concatenates strings, splicing in the parts of one that is a CONCAT itself.
+   * @param parts - The strings, all simple literals.
+   * @returns Their concatenation, or the one part there is.
+   */
+  function concat(parts: Algebra.Expression[]): Algebra.Expression {
+    const spliced = parts.flatMap(part =>
+      part.subType === Algebra.ExpressionTypes.OPERATOR && part.operator === 'concat' ? part.args : [ part ]);
+    return spliced.length === 1 ? spliced[0] : AF.createOperatorExpression('concat', spliced);
+  }
+
   /**
    * Encodes a term that is an IRI or a literal, testing which one only where its range admits both.
    * @param termExpression - An expression giving the term, like `?v` or `OBJECT(?t)`.
@@ -94,27 +115,31 @@ function encodeInternalBnode(
   function encodeIriOrLiteral(termExpression: Algebra.Expression, range: RangeSet): Algebra.Expression {
     const escaped = (operator: string): Algebra.Expression =>
       escapeUserInput(AF.createOperatorExpression(operator, [ termExpression ]));
-    const ifTermIs = (test: string, then: Algebra.Expression, otherwise: Algebra.Expression): Algebra.Expression =>
-      AF.createOperatorExpression('if', [ AF.createOperatorExpression(test, [ termExpression ]), then, otherwise ]);
+    const iriEncoding = concat([ expressionLiteral(',iri,'), escaped('str') ]);
     // An IRI or a blank node, which is disallowed, so an IRI.
     if (isSubsetOf(range, subjectRange)) {
-      return AF.createOperatorExpression('concat', [ expressionLiteral(',iri,'), escaped('str') ]);
+      return iriEncoding;
     }
-    // Each part reads the term once: the tag, the value, and what follows the value of a literal.
-    const literalTag = ifTermIs('haslangdir', expressionLiteral(',literal@D,'), ifTermIs(
-      'haslang',
-      expressionLiteral(',literal@,'),
-      expressionLiteral(',literal,'),
-    ));
-    const literalSuffix = AF.createOperatorExpression('concat', [
+    // The tag, the value and what follows it, so STR of the term is written once rather than per kind of literal. A
+    // base direction is `ltr` or `rtl`, which needs no escaping.
+    const literalEncoding = concat([
+      ifTermIs(
+        'haslang',
+        termExpression,
+        ifTermIs('haslangdir', termExpression, expressionLiteral(',literal@D,'), expressionLiteral(',literal@,')),
+        expressionLiteral(',literal,'),
+      ),
+      escaped('str'),
       expressionLiteral(','),
       ifTermIs(
         'haslang',
-        AF.createOperatorExpression('concat', [
+        termExpression,
+        concat([
           escaped('lang'),
           ifTermIs(
             'haslangdir',
-            AF.createOperatorExpression('concat', [ expressionLiteral(','), escaped('langdir') ]),
+            termExpression,
+            concat([ expressionLiteral(','), AF.createOperatorExpression('langdir', [ termExpression ]) ]),
             expressionLiteral(''),
           ),
         ]),
@@ -124,14 +149,10 @@ function encodeInternalBnode(
       ),
     ]);
     if (isSubsetOf(range, literalRange)) {
-      return AF.createOperatorExpression('concat', [ literalTag, escaped('str'), literalSuffix ]);
+      return literalEncoding;
     }
-    // A triple term left in the range is nested too deeply: the literal tests error on it.
-    return AF.createOperatorExpression('concat', [
-      ifTermIs('isiri', expressionLiteral(',iri,'), literalTag),
-      escaped('str'),
-      ifTermIs('isiri', expressionLiteral(''), literalSuffix),
-    ]);
+    // A triple term left in the range is nested too deeply: STR of its datatype errors on it.
+    return ifTermIs('isiri', termExpression, iriEncoding, literalEncoding);
   }
 
   /**
@@ -176,18 +197,19 @@ function encodeInternalBnode(
     if (!(depth > 0) || !range.has('Quad')) {
       return encodeIriOrLiteral(termExpression, range);
     }
-    const tripleTermEncoding = AF.createOperatorExpression('concat', [
+    const tripleTermEncoding = concat([
       expressionLiteral(',triple'),
       ...triplePositions.map(position => encodeTerm(...componentExpressionOf(termExpression, position), depth - 1)),
     ]);
     if (isSubsetOf(range, tripleTermRange)) {
       return tripleTermEncoding;
     }
-    return AF.createOperatorExpression('if', [
-      AF.createOperatorExpression('istriple', [ termExpression ]),
+    return ifTermIs(
+      'istriple',
+      termExpression,
       tripleTermEncoding,
       encodeIriOrLiteral(termExpression, new RangeSet(differenceSets(range, tripleTermRange))),
-    ]);
+    );
   }
 
   /**
@@ -258,7 +280,7 @@ function encodeInternalBnode(
   }
   // In the order the arguments are written: removeProjections gives hidden variables fresh names per pattern,
   // so an order read off their names would differ between two patterns constructing the same node.
-  return AF.createOperatorExpression('concat', expression.args.map(encodeArgument));
+  return concat(expression.args.map(encodeArgument));
 }
 
 /**
