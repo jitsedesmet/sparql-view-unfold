@@ -80,9 +80,7 @@ describe('bnode skolem', () => {
       constructedNodes(rewriter, 'SELECT ?node WHERE { ?node <ex://object> ?o }', './test/statics/data01.ttl');
 
     it('still constructs a node for the solution leaving it unbound', async({ expect }) => {
-      const constructed = await nodes();
-      expect(constructed).toHaveLength(2);
-      expect(constructed).not.toContain(undefined);
+      await expect(nodes()).resolves.toEqual([ expect.any(String), expect.any(String) ]);
     });
 
     it('constructs a different node than for the solution binding it', async({ expect }) => {
@@ -105,8 +103,7 @@ describe('bnode skolem', () => {
       'constructs a different node for each triple term %s',
       async(tripleTerm, { expect }) => {
         const nodes = await nodesFrom(tripleTerm, 'SELECT ?node WHERE { ?node <ex://subject> ?s }');
-        expect(nodes).toHaveLength(3);
-        expect(nodes).not.toContain(undefined);
+        expect(nodes).toEqual([ expect.any(String), expect.any(String), expect.any(String) ]);
         expect(new Set(nodes).size).toBe(3);
       },
     );
@@ -194,6 +191,14 @@ describe('bnode skolem', () => {
       'SELECT ?node WHERE { ?node ?p ?o . FILTER(ISBLANK(?node)) }',
       tripleTermData,
     )).resolves.toHaveLength(0);
+  });
+
+  // `<o1>` and `"o1"` have no triples of their own, so the EXISTS is false and every OPTIONAL row matches.
+  it('evaluates an EXISTS argument in an OPTIONAL condition', async({ expect }) => {
+    const rows = await solutions(iriRewriter, `SELECT ?x WHERE {
+      ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(<internal://blank>(EXISTS { ?x ?y ?z }) = <internal://blank>(false)) }
+    }`, tripleTermData);
+    expect(rows.map(row => row.get('x')?.value)).toEqual(Array.from({ length: 9 }, () => expect.any(String)));
   });
 
   it('constructs a node per solution for an unstable argument', async({ expect }) => {
@@ -308,7 +313,7 @@ describe('bnode skolem', () => {
       expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
         ?s ?p ?o .
         BIND(<internal://blank>(<<( ?s ?p ?o )>>) AS ?node)
-      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( CONCAT( ",triple" , ${iriEncoding('?s')} , ${iriEncoding('?p')} , ${termEncoding('?o', 1)} ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
+      }`)).trim()).toEqual(String.raw`SELECT ( STRDT( CONCAT( CONCAT( ",triple" , CONCAT( ",iri," , REPLACE( REPLACE( STR( ?s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , CONCAT( ",iri," , REPLACE( REPLACE( STR( ?p ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( ISTRIPLE( ?o ) , CONCAT( ",triple" , CONCAT( ",iri," , REPLACE( REPLACE( STR( SUBJECT( ?o ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , CONCAT( ",iri," , REPLACE( REPLACE( STR( PREDICATE( ?o ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , CONCAT( IF( ISIRI( OBJECT( ?o ) ) , ",iri," , IF( HASLANGDIR( OBJECT( ?o ) ) , ",literal@D," , IF( HASLANG( OBJECT( ?o ) ) , ",literal@," , ",literal," ) ) ) , REPLACE( REPLACE( STR( OBJECT( ?o ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , IF( ISIRI( OBJECT( ?o ) ) , "" , CONCAT( "," , IF( HASLANG( OBJECT( ?o ) ) , CONCAT( REPLACE( REPLACE( LANG( OBJECT( ?o ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , IF( HASLANGDIR( OBJECT( ?o ) ) , CONCAT( "," , REPLACE( REPLACE( LANGDIR( OBJECT( ?o ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , "" ) ) , REPLACE( REPLACE( STR( DATATYPE( OBJECT( ?o ) ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) ) ) ) ) , CONCAT( IF( ISIRI( ?o ) , ",iri," , IF( HASLANGDIR( ?o ) , ",literal@D," , IF( HASLANG( ?o ) , ",literal@," , ",literal," ) ) ) , REPLACE( REPLACE( STR( ?o ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , IF( ISIRI( ?o ) , "" , CONCAT( "," , IF( HASLANG( ?o ) , CONCAT( REPLACE( REPLACE( LANG( ?o ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , IF( HASLANGDIR( ?o ) , CONCAT( "," , REPLACE( REPLACE( LANGDIR( ?o ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , "" ) ) , REPLACE( REPLACE( STR( DATATYPE( ?o ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) ) ) ) ) ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
   ?s ?p ?o .
 }`);
     });
@@ -344,18 +349,15 @@ describe('bnode skolem', () => {
 
     // An OPTIONAL condition has no input to bind the argument in, so it tests the argument itself.
     it('encodes an expression argument in an OPTIONAL condition as unbound when it errors', async({ expect }) => {
-      const query = await rewriter.rewriteQuery(`SELECT * WHERE {
+      expect((await rewriter.rewriteQuery(`SELECT * WHERE {
         ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(<internal://blank>(STR(?x)) = ?o) }
-      }`);
-      expect(query).toContain(`IF( ${evaluates('STR( ?x )')} , ${termEncoding('STR( ?x )')} , ",unbound" )`);
-      expect(query).not.toContain('internal://blank');
-    });
-
-    // Evaluating an EXISTS again on the same solution gives the same answer.
-    it('accepts an EXISTS argument it cannot bind to a variable', async({ expect }) => {
-      await expect(rewriter.rewriteQuery(`SELECT * WHERE {
-        ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(<internal://blank>(EXISTS { ?x ?y ?z }) = ?o) }
-      }`)).resolves.not.toContain('internal://blank');
+      }`)).trim()).toEqual(`SELECT ?o ?p ?q ?s ?x WHERE {
+  ?s ?p ?o .
+  OPTIONAL {
+    ?s ?q ?x .
+    FILTER ( ( STRDT( CONCAT( IF( ${evaluates('STR( ?x )')} , ${termEncoding('STR( ?x )')} , ",unbound" ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) = ?o ) )
+  }
+}`);
     });
 
     it('refuses an unstable argument it cannot bind to a variable', async({ expect }) => {
@@ -365,8 +367,12 @@ describe('bnode skolem', () => {
     });
 
     it('rewrites an ISBLANK in an argument', async({ expect }) => {
-      await expect(rewriter.rewriteQuery('SELECT * WHERE { ?s ?p ?o . BIND(<internal://blank>(STR(ISBLANK(?s))) AS ?node) }'))
-        .resolves.not.toContain('ISBLANK');
+      expect((await rewriter.rewriteQuery(`SELECT * WHERE {
+        ?s ?p ?o . BIND(<internal://blank>(STR(ISBLANK(?s))) AS ?node)
+      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( IF( BOUND( ?mBnodeArgument0 ) , ${termEncoding('?mBnodeArgument0')} , ",unbound" ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  BIND( STR( ( DATATYPE( ?s ) = <https://sparql-extension.knows.idlab.ugent.be/bnode> ) ) AS ?mBnodeArgument0 )
+}`);
     });
 
     // An EXISTS substitutes the solution it is asked for, so the ranges of its own pattern do not hold.
