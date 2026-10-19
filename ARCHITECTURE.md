@@ -134,11 +134,11 @@ encoding from the evaluated arguments instead, at any depth, and the same materi
   The derivations an operation selects are the derivation variables in its scope, so only a PROJECT needs a
   rule to keep selecting them, and those under a MINUS or an EXISTS never leave it.
 
-A GROUP or SLICE counts solutions rather than derivations, so its answers are computed with the lookups
-projected away and then joined with the derivations of the solutions they agree with, the shape of that
-paper's aggregate rewrite (Def. 4.17). A join lets an unbound variable match any value, so a variable that may
-be unbound is joined on a `COALESCE(?x, <unbound>)` key instead, which also keeps the join one Comunica can
-evaluate.
+A GROUP or SLICE counts solutions rather than derivations, so its answers are computed over each BGP's distinct
+lookups projected onto its variables, the view's set semantics, and then joined with the derivations of the
+solutions they agree with, the shape of that paper's aggregate rewrite (Def. 4.17). A join lets an unbound
+variable match any value, so a variable that may be unbound is joined on the key the extension function wraps
+its arguments in, `COALESCE(TRIPLE(<…argument>, <…argument>, ?x), <…unbound>)`.
 
 ## SPARQL quirks worth knowing
 

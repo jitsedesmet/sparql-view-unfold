@@ -192,8 +192,9 @@ body's variables. Beyond that:
   matched, and a pattern under a `MINUS` or an `EXISTS` selects none. SPARQLprov (Def. 4.12) and NPCS annotate
   them with ⊖ instead; SPARQLprov (p. 3400) shows the positive annotation of an `OPTIONAL` query,
   u3 ⊗ (u1 ⊕ u2), to be incorrect, as it does not commute with homomorphisms.
-- Under a `GROUP BY`, `LIMIT` or `OFFSET`, the answers are computed as without provenance and then joined with
-  the derivations of every solution with the same values, including those a `LIMIT` or `OFFSET` leaves out.
+- Under a `GROUP BY`, `LIMIT` or `OFFSET`, the answers are computed over the view as a set, as with
+  `preserveCardinality`, and then joined with the derivations of every solution with the same values, including
+  those a `LIMIT` or `OFFSET` leaves out.
   The order of an `ORDER BY` is lost.
 - `derivedFrom` lists the body's triple patterns every solution matches: none under a `UNION`, the right side
   of an `OPTIONAL` or `MINUS`, a sub-SELECT, `GROUP`, `GRAPH` or `SERVICE`, nor a property path.

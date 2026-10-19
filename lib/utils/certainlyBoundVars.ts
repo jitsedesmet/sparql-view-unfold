@@ -1,7 +1,9 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
+import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
 import {
+  blankNodeRange,
   emptyRange,
   graphRange,
   objectRange,
@@ -187,6 +189,9 @@ export function expressionRange(expression: Algebra.Expression, input?: CPMeta):
   }
   if (expression.subType === ExpressionTypes.OPERATOR && expression.operator === 'triple') {
     return tripleTermRange;
+  }
+  if (expression.subType === ExpressionTypes.NAMED && expression.name.value === EXTENSION_FUNCTION_BNODE) {
+    return blankNodeRange;
   }
   return objectRange;
 }

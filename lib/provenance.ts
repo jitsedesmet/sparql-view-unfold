@@ -9,41 +9,25 @@ import {
 } from './consts.js';
 import type { MappingConstructionTools, MappingOptions } from './mapping.js';
 import { mappingFromConstructs } from './mapping.js';
+import { boundOrUnboundArgumentExpression } from './transformations/bnodeExtensionFunction.js';
 import { rewriteNonRecursivePaths } from './transformations/pathTransformation.js';
 import type { TransformationContext } from './transformContext.js';
 import { createTransformationContext, parseQuery } from './transformContext.js';
 import type { Mapping } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
 import { cpMetaOf, withoutCpVars } from './utils/certainlyBoundVars.js';
-import { projectSolutionExistence } from './utils/operationhelpers.js';
+import { groupProjectedBy, projectOntoVariablesOrExistence } from './utils/operationhelpers.js';
 import { DF, tripleTerm } from './utils/rdfDatatypes.js';
-import { intersectSets } from './utils/setUtils.js';
 import { queryFormTypes, solutionModifierChainOf } from './utils/solutionModifierChain.js';
-import { collectVariableNames, freshVarGenerator } from './utils.js';
+import { collectVariableNames, freshVarGenerator, markVariableNamesUsed } from './utils.js';
 
 /**
- * @fileoverview Provenance capture: which view triples, and which source triples, every answer rests on.
- *
- * A *derivation* is one solution of a mapping body. {@link provenanceMappingFromConstructQueries} gives each
- * a stable identity, linked by `derivationOf` to the view triples it produces and by `derivedFrom` to the
- * source triples it matched. {@link provenanceCapturingQuery} makes a SELECT over the view also select, per
- * triple pattern, the derivation that pattern matched. Unfolded against the provenance mapping, it answers
- * one row per combination of derivations an answer has.
- *
- * The query side is the semiring query rewriting of Hernández et al., "Computing How-Provenance for SPARQL
- * Queries via Query Rewriting" (https://doi.org/10.14778/3484224.3484235), Def. 4.3: every triple pattern
- * becomes Reify(p(s, o), ?Σi) and the new variables are projected, so a row is one monomial and the rows of an
- * answer are its sum. Here the reification is `?derivationN derivationOf <<( s p o )>>`, its reifiers
- * derivations.
- *
- * OPTIONAL, MINUS and EXISTS get positive provenance only. That paper (Def. 4.12) and Asma et al., "NPCS:
- * Native Provenance Computation for SPARQL" (https://doi.org/10.1145/3589334.3645557) annotate them with ⊖ in
- * spm-semirings instead; the former (p. 3400) shows the positive annotation of an OPTIONAL query,
- * u3 ⊗ (u1 ⊕ u2), to be incorrect, as it does not commute with homomorphisms.
+ * @fileoverview Provenance capture: a mapping linking each derivation, one solution of a mapping body, to the triples
+ * it produces and matched, and a SELECT rewrite selecting the derivation of every triple pattern. See ARCHITECTURE.md.
  */
 
-/** Stands in for an unbound variable in a join key, where a term is needed. */
-const unboundMarker = DF.namedNode(`${PROVENANCE_NAMESPACE}unbound`);
+const derivationOfPredicate = DF.namedNode(PREDICATE_DERIVATION_OF);
+const derivedFromPredicate = DF.namedNode(PREDICATE_DERIVED_FROM);
 
 /** The transformation context, with the variable coiners provenance capture needs. */
 type ProvenanceCaptureContext = TransformationContext & {
@@ -71,34 +55,6 @@ function tripleTermOf(triple: RDF.BaseQuad): RDF.Quad {
  */
 function certainlyBoundVariablesOf(operation: Algebra.Operation): Set<string> {
   return cpMetaOf(withoutCpVars(operation)).cVars;
-}
-
-/**
- * Creates `COALESCE(?variable, unboundMarker)`: the variable's value, or the marker where it is unbound.
- * @param AF - The algebra factory to create it with
- * @param variable - The variable to read
- * @returns the expression
- */
-function valueOrUnboundMarker(AF: TransformationContext['AF'], variable: RDF.Variable): Algebra.Expression {
-  return AF.createOperatorExpression('coalesce', [
-    AF.createTermExpression(variable),
-    AF.createTermExpression(unboundMarker),
-  ]);
-}
-
-/**
- * Finds the GROUP a projection writes its GROUP BY on: its input, below the binds of its aggregates, its HAVING
- * and its ORDER BY.
- * @param project - The projection to read
- * @returns the GROUP, or `undefined` when the projection groups nothing
- */
-function groupProjectedBy(project: Algebra.Project): Algebra.Group | undefined {
-  let input = project.input;
-  while (input.type === Algebra.Types.EXTEND || input.type === Algebra.Types.FILTER ||
-    input.type === Algebra.Types.ORDER_BY) {
-    input = input.input;
-  }
-  return input.type === Algebra.Types.GROUP ? input : undefined;
 }
 
 /**
@@ -150,11 +106,11 @@ export function provenanceConstructOf(
     AF.createTermExpression(constructIdentifier),
     ...algebraUtils.inScopeVariables(body).map(variable => AF.createTermExpression(variable)),
   ]);
-  const derivationLink = (predicate: string, triple: RDF.BaseQuad): Algebra.Pattern =>
-    AF.createPattern(derivation, DF.namedNode(predicate), tripleTermOf(triple));
+  const derivationLink = (predicate: RDF.NamedNode, triple: RDF.BaseQuad): Algebra.Pattern =>
+    AF.createPattern(derivation, predicate, tripleTermOf(triple));
   return AF.createConstruct(AF.createExtend(body, derivation, derivationIdentity), [
-    ...construct.template.map(triple => derivationLink(PREDICATE_DERIVATION_OF, triple)),
-    ...triplePatternsEverySolutionMatches(body).map(pattern => derivationLink(PREDICATE_DERIVED_FROM, pattern)),
+    ...construct.template.map(triple => derivationLink(derivationOfPredicate, triple)),
+    ...triplePatternsEverySolutionMatches(body).map(pattern => derivationLink(derivedFromPredicate, pattern)),
   ]);
 }
 
@@ -195,9 +151,8 @@ function derivationLookupsOf(
   bgp: Algebra.Bgp,
   coinVariable: () => RDF.Variable,
 ): Algebra.Bgp {
-  const derivationOf = DF.namedNode(PREDICATE_DERIVATION_OF);
   return c.AF.createBgp(bgp.patterns.map(pattern =>
-    c.AF.createPattern(coinVariable(), derivationOf, tripleTermOf(pattern))));
+    c.AF.createPattern(coinVariable(), derivationOfPredicate, tripleTermOf(pattern))));
 }
 
 /**
@@ -212,32 +167,26 @@ function derivationsSelectedBy(c: ProvenanceCaptureContext, operation: Algebra.O
 }
 
 /**
- * Replaces every BGP outside a SERVICE by its derivation lookups projected onto the BGP's own variables, so
- * the solutions stay the same and select no derivation.
+ * Replaces every BGP outside a SERVICE by the distinct solutions of its derivation lookups on the BGP's own
+ * variables, which are the BGP's solutions over the view, selecting no derivation.
  * @param c - The provenance capture context
- * @param object - The operation or expression to rewrite
- * @returns the rewritten operation or expression
+ * @param operation - The operation to rewrite
+ * @returns the rewritten operation
  */
-function withDerivationsHidden<T extends object>(c: ProvenanceCaptureContext, object: T): T {
-  return algebraUtils.mapOperation<'unsafe', T>(object, {
-    [Algebra.Types.BGP]: { transform: (bgp) => {
-      const lookups = derivationLookupsOf(c, bgp, c.coinInternalVariable);
-      const variables = algebraUtils.inScopeVariables(bgp);
-      return variables.length === 0 ? projectSolutionExistence(c, lookups) : c.AF.createProject(lookups, variables);
-    } },
+function withDerivationsHidden(c: ProvenanceCaptureContext, operation: Algebra.Operation): Algebra.Operation {
+  return algebraUtils.mapOperation<'unsafe', Algebra.Operation>(operation, {
+    [Algebra.Types.BGP]: { transform: bgp => c.AF.createDistinct(projectOntoVariablesOrExistence(
+      c,
+      derivationLookupsOf(c, bgp, c.coinInternalVariable),
+      algebraUtils.inScopeVariables(bgp),
+    )) },
     [Algebra.Types.SERVICE]: { preVisitor: () => ({ continue: false }) },
   });
 }
 
 /**
- * Attaches to every answer the derivations of the solutions agreeing with it on the join variables, where an
- * unbound variable only agrees with an unbound one.
- *
- * The shape of the aggregate rewrite of Hernández et al., "Computing How-Provenance for SPARQL Queries via
- * Query Rewriting" (https://doi.org/10.14778/3484224.3484235), Def. 4.17: answers computed apart, joined with
- * the provenance under cautious compatibility, which skips strongly bound variables as this joins certainly
- * bound ones directly. A COALESCE key replaces their renaming and filter. LIMIT and OFFSET are in neither that
- * paper nor NPCS.
+ * Attaches to every answer the derivations of the solutions agreeing with it on the join variables, where an unbound
+ * variable only agrees with an unbound one (SPARQLprov, Def. 4.17).
  * @param c - The provenance capture context
  * @param answers - The answers, selecting the join and answer variables but no derivation
  * @param solutions - The solutions the answers are computed from, selecting their derivations
@@ -254,19 +203,20 @@ function attachDerivationsToAnswers(
 ): Algebra.Project {
   const { AF } = c;
   const derivations = derivationsSelectedBy(c, solutions);
-  const certainlyBound = intersectSets([ certainlyBoundVariablesOf(answers), certainlyBoundVariablesOf(solutions) ]);
-  const keyedVariables = joinVariables.filter(variable => !certainlyBound.has(variable.value));
-  const keys = keyedVariables.map(() => c.coinInternalVariable());
+  // The answers are computed from the solutions, so a variable every solution binds every answer binds too.
+  const certainlyBound = certainlyBoundVariablesOf(solutions);
   // A join lets an unbound variable match any value, so a variable that may be unbound is joined on a key.
-  const withKeys = (operation: Algebra.Operation): Algebra.Operation =>
-    keyedVariables.reduce<Algebra.Operation>((keyed, variable, index) => AF.createExtend(
-      keyed,
-      keys[index],
-      valueOrUnboundMarker(AF, variable),
-    ), operation);
+  const keyOfVariable = joinVariables
+    .filter(variable => !certainlyBound.has(variable.value))
+    .map(variable => <const> [ variable, c.coinInternalVariable() ]);
+  const withKeys = (operation: Algebra.Operation): Algebra.Operation => keyOfVariable.reduce<Algebra.Operation>(
+    (keyed, [ variable, key ]) =>
+      AF.createExtend(keyed, key, boundOrUnboundArgumentExpression(AF, AF.createTermExpression(variable))),
+    operation,
+  );
   const solutionsOnJoin = AF.createProject(withKeys(solutions), [
     ...joinVariables.filter(variable => certainlyBound.has(variable.value)),
-    ...keys,
+    ...keyOfVariable.map(([ , key ]) => key),
     ...derivations,
   ]);
   const answersWithDerivations = AF.createLeftJoin(withKeys(answers), solutionsOnJoin);
@@ -338,7 +288,7 @@ function captureProvenance(c: TransformationContext, operation: Algebra.Operatio
   }
   assertUserQueryIsSupported(operation);
   const pathless = rewriteNonRecursivePaths(c, operation);
-  const variableNames = collectVariableNames(c.astTransformer, pathless);
+  const variableNames = markVariableNamesUsed(c, pathless);
   const derivationVariableNames = new Set<string>();
   const coinFreshDerivationVariable = freshVarGenerator(variableNames, 'derivation');
   return withDerivations({

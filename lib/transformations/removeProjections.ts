@@ -1,6 +1,7 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
+import { groupProjectedBy } from '../utils/operationhelpers.js';
 import { collectVariableNames, freshVarGenerator, markVariableNamesUsed, renameVariables } from '../utils.js';
 
 /**
@@ -48,33 +49,16 @@ export function removeProjections<T extends Algebra.Operation>(c: Transformation
     }
     return {};
   };
-  // The projection an operation sits below, through the binds of its aggregates, its HAVING and its ORDER BY.
-  const projectionAbove = new Map<Algebra.Operation, Algebra.Project>();
-  const passProjectionDown = (operation: Algebra.Extend | Algebra.Filter | Algebra.OrderBy): object => {
-    const project = projectionAbove.get(operation);
-    if (project) {
-      projectionAbove.set(operation.input, project);
-    }
-    return {};
-  };
 
   // TODO: this renames even if it has already renamed so could be optimized, but that's not a priority now.
   return algebraUtils.mapOperation<'unsafe', typeof op>(op, {
     [Algebra.Types.DISTINCT]: { preVisitor: keepProjectedInput },
     [Algebra.Types.REDUCED]: { preVisitor: keepProjectedInput },
     [Algebra.Types.SLICE]: { preVisitor: keepProjectedInput },
-    [Algebra.Types.EXTEND]: { preVisitor: passProjectionDown },
-    [Algebra.Types.FILTER]: { preVisitor: passProjectionDown },
-    [Algebra.Types.ORDER_BY]: { preVisitor: passProjectionDown },
-    [Algebra.Types.GROUP]: { preVisitor: (group) => {
-      const project = projectionAbove.get(group);
-      if (project) {
+    [Algebra.Types.PROJECT]: { preVisitor: (project) => {
+      if (groupProjectedBy(project)) {
         keptProjections.add(project);
       }
-      return {};
-    } },
-    [Algebra.Types.PROJECT]: { preVisitor: (project) => {
-      projectionAbove.set(project.input, project);
       return {};
     }, transform: (project, original) => {
       if (keptProjections.has(original)) {

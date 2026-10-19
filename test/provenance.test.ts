@@ -16,21 +16,22 @@ import {
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import { internalBnodeExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
 import { internalBnodeAsSpecialIriTransformation } from '../lib/transformations/bnodeMapAsLiteral.js';
+import type { UnfoldingOptions } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import type { Mapping } from '../lib/types.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
 
-const prefixes = 'PREFIX : <ex://> PREFIX provenance: <https://sparql-extension.knows.idlab.ugent.be/provenance#> ';
+const prefixes = `PREFIX : <ex://> PREFIX provenance: <${PROVENANCE_NAMESPACE}> `;
 // The provenance IRIs as a rewritten query writes them.
 const derivationOf = `<${PREDICATE_DERIVATION_OF}>`;
 const derivedFrom = `<${PREDICATE_DERIVED_FROM}>`;
-const unbound = `<${PROVENANCE_NAMESPACE}unbound>`;
+// The join key of `?o`, telling its value apart from it being unbound.
+const keyOfO = 'COALESCE( TRIPLE( <internal://blank/argument> , <internal://blank/argument> , ?o ) , <internal://blank/unbound> )';
 const construct0 = `<${PROVENANCE_NAMESPACE}construct0>`;
 const colleagueConstructs = [
   `${prefixes} CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }`,
   `${prefixes} CONSTRUCT { ?x :colleague ?y } WHERE { ?x :worksAt ?org . ?y :worksAt ?org . FILTER(?x != ?y) }`,
 ];
-const colleaguesOfAlicesFriends = `${prefixes} SELECT DISTINCT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }`;
 
 type Row = Record<string, string>;
 
@@ -41,11 +42,12 @@ const colleagues = new Store(new Parser().parse(readFileSync('./test/statics/col
  * Rewrites a query against a mapping and evaluates it over the colleagues data.
  * @param mapping - The mapping to unfold
  * @param query - The query over the view
+ * @param options - What to configure the unfolding with
  * @returns one record per solution, each term written as a string
  */
-async function evaluate(mapping: Mapping, query: string): Promise<Row[]> {
+async function evaluate(mapping: Mapping, query: string, options: UnfoldingOptions = {}): Promise<Row[]> {
   const rewriter = createQueryRewriter([
-    ...createDefaultTransformationPipeline(mapping),
+    ...createDefaultTransformationPipeline(mapping, options),
     internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
   ]);
   const bindings = await engine.queryBindings(await rewriter.rewriteQuery(query), {
@@ -133,13 +135,13 @@ WHERE {
       expect,
       'CONSTRUCT { ?x :name ?n } WHERE { ?x :firstName ?f BIND(CONCAT(?f, "!") AS ?n) }',
       `CONSTRUCT {
-  ?derivation0 <https://sparql-extension.knows.idlab.ugent.be/provenance#derivationOf> <<( ?x <ex://name> ?n )>> .
-  ?derivation0 <https://sparql-extension.knows.idlab.ugent.be/provenance#derivedFrom> <<( ?x <ex://firstName> ?f )>> .
+  ?derivation0 ${derivationOf} <<( ?x <ex://name> ?n )>> .
+  ?derivation0 ${derivedFrom} <<( ?x <ex://firstName> ?f )>> .
 }
 WHERE {
   ?x <ex://firstName> ?f .
   BIND( CONCAT( ?f , "!" ) AS ?n )
-  BIND( <internal://blank> ( <https://sparql-extension.knows.idlab.ugent.be/provenance#construct0> , ?x , ?f , ?n ) AS ?derivation0 )
+  BIND( <internal://blank> ( ${construct0} , ?x , ?f , ?n ) AS ?derivation0 )
 }`,
     );
   });
@@ -348,7 +350,7 @@ describe('provenanceCapturingQuery', () => {
       `SELECT ?x ?n ?derivation0 WHERE {
   {
     SELECT ?x ( COUNT( * ) AS ?n ) WHERE {
-      SELECT ?x ?y WHERE {
+      SELECT DISTINCT ?x ?y WHERE {
         ?internal0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
       }
     }
@@ -372,7 +374,7 @@ describe('provenanceCapturingQuery', () => {
       `SELECT ?n ?derivation0 WHERE {
   {
     SELECT ( COUNT( * ) AS ?n ) ?x WHERE {
-      SELECT ?x ?y WHERE {
+      SELECT DISTINCT ?x ?y WHERE {
         ?internal0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
       }
     }
@@ -389,7 +391,7 @@ describe('provenanceCapturingQuery', () => {
     );
   });
 
-  it('joins on a key coalescing a group key that may be unbound', ({ expect }) => {
+  it('joins on a key wrapping a group key that may be unbound', ({ expect }) => {
     expectCapture(
       expect,
       'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?o } } GROUP BY ?x ?o',
@@ -398,13 +400,13 @@ describe('provenanceCapturingQuery', () => {
     {
       SELECT ?x ?o WHERE {
         {
-          SELECT ?x WHERE {
+          SELECT DISTINCT ?x WHERE {
             ?internal0 ${derivationOf} <<( ?x <ex://worksAt> <ex://ugent> )>> .
           }
         }
         OPTIONAL {
           {
-            SELECT ?x ?o WHERE {
+            SELECT DISTINCT ?x ?o WHERE {
               ?internal1 ${derivationOf} <<( ?x <ex://knows> ?o )>> .
             }
           }
@@ -412,11 +414,11 @@ describe('provenanceCapturingQuery', () => {
       }
       GROUP BY ?x ?o
     }
-    BIND( COALESCE( ?o , ${unbound} ) AS ?internal2 )
+    BIND( ${keyOfO} AS ?internal2 )
   }
   OPTIONAL {
     {
-      SELECT ?x ( COALESCE( ?o , ${unbound} ) AS ?internal2 ) ?derivation0 ?derivation1 WHERE {
+      SELECT ?x ( ${keyOfO} AS ?internal2 ) ?derivation0 ?derivation1 WHERE {
         ?derivation0 ${derivationOf} <<( ?x <ex://worksAt> <ex://ugent> )>> .
         OPTIONAL {
           ?derivation1 ${derivationOf} <<( ?x <ex://knows> ?o )>> .
@@ -435,7 +437,7 @@ describe('provenanceCapturingQuery', () => {
       `SELECT ?n ?derivation0 WHERE {
   {
     SELECT ( COUNT( * ) AS ?n ) WHERE {
-      SELECT ?mExists0 WHERE {
+      SELECT DISTINCT ?mExists0 WHERE {
         ?internal0 ${derivationOf} <<( <ex://alice> <ex://knows> <ex://bob> )>> .
       }
     }
@@ -459,7 +461,7 @@ describe('provenanceCapturingQuery', () => {
   {
     SELECT DISTINCT ?x ?y WHERE {
       SELECT ?x ?y WHERE {
-        SELECT ?x ?y WHERE {
+        SELECT DISTINCT ?x ?y WHERE {
           ?internal0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
         }
       }
@@ -511,13 +513,16 @@ describe('provenance captured over the colleagues data', () => {
   ])('answers %s as the query without provenance does', async([ query, variables ], { expect }) => {
     const [ rowsWithProvenance, rows ] = await Promise.all([
       evaluate(provenanceMapping, provenanceCapturingQuery(prefixes + query)),
-      evaluate(mapping, prefixes + query),
+      // The answers keep the view's set semantics, whatever the unfolding preserves.
+      evaluate(mapping, prefixes + query, { preserveCardinality: true }),
     ]);
     expect(distinctAnswers(rowsWithProvenance, variables)).toEqual(distinctAnswers(rows, variables));
   });
 
   it('answers once per combination of derivations', async({ expect }) => {
-    const rows = await evaluate(provenanceMapping, provenanceCapturingQuery(colleaguesOfAlicesFriends));
+    const rows = await evaluate(provenanceMapping, provenanceCapturingQuery(
+      `${prefixes} SELECT DISTINCT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }`,
+    ));
     const derivationsOf = (colleague: string): string[] =>
       rows.filter(row => row.c === colleague).map(row => row.derivation1);
 
@@ -532,9 +537,8 @@ describe('provenance captured over the colleagues data', () => {
       `${prefixes} SELECT (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x`,
     ));
 
-    // Bob and Carol have three colleague derivations each, Dave two: every one is attached to its own group.
-    expect(rows.map(row => row.n.split('^^')[0]).sort())
-      .toEqual([ '"2"', '"2"', '"3"', '"3"', '"3"', '"3"', '"3"', '"3"' ]);
+    // Everyone has two colleagues; Bob and Carol through three derivations, Dave two, each attached to its group.
+    expect(rows.map(row => row.n.split('^^')[0])).toEqual(Array.from({ length: 8 }, () => '"2"'));
     expect(new Set(rows.map(row => row.derivation0)).size).toBe(8);
   });
 

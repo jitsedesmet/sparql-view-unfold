@@ -14,7 +14,7 @@ import { access, assertBound, assertTermType, conjunctAsExpression } from './uti
 import type { VRanges } from './utils/certainlyBoundVars.js';
 import { withCpVars } from './utils/certainlyBoundVars.js';
 import { conjunctionOf, unstableOperators } from './utils/expressionHelpers.js';
-import { projectSolutionExistence } from './utils/operationhelpers.js';
+import { projectOntoVariablesOrExistence } from './utils/operationhelpers.js';
 import { isSubsetOf, unionSets } from './utils/setUtils.js';
 import { claimVariableName, collectVariableNames, deepCopy } from './utils.js';
 
@@ -311,7 +311,7 @@ export function withDeduplicatedBody(
     // single row. Deduplicating over the head's (zero) variables cannot express that: a SELECT over no
     // variables is not SPARQL, and generating one yields `SELECT *`, which deduplicates over the body's
     // own variables and so does not deduplicate at all.
-    const existenceOfBody = projectSolutionExistence(c, mapping.body.input);
+    const existenceOfBody = projectOntoVariablesOrExistence(c, mapping.body.input);
     return {
       head: mapping.head,
       body: AF.createProject(AF.createDistinct(existenceOfBody), existenceOfBody.variables),
