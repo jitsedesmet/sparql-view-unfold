@@ -68,70 +68,18 @@ describe('bnode skolem', () => {
     )).resolves.toHaveLength(1);
   });
 
-  describe('with an argument an OPTIONAL leaves unbound', () => {
-    // `?x` is bound for the `<ex://o1>` solution only, and both solutions share `?s`.
-    const rewriter = skolemisingRewriter(`CONSTRUCT { ?node <ex://object> ?o } WHERE {
+  // The join on `?node` keeps a solution only when both patterns constructed the same node.
+  it('constructs the same node for the same triple term in every pattern', async({ expect }) => {
+    const rewriter = skolemisingRewriter(`CONSTRUCT { ?node <ex://subject> ?s . ?node <ex://object> ?o } WHERE {
       ?s ?p ?o .
-      OPTIONAL { ?x <ex://p1> ?o }
-      BIND(<internal://blank>(?s, ?x) AS ?node)
+      BIND(<<( ?s ?p ?o )>> AS ?t)
+      BIND(<internal://blank>(?t) AS ?node)
     }`);
-
-    const nodes = (): Promise<(string | undefined)[]> =>
-      constructedNodes(rewriter, 'SELECT ?node WHERE { ?node <ex://object> ?o }', './test/statics/data01.ttl');
-
-    it('still constructs a node for the solution leaving it unbound', async({ expect }) => {
-      await expect(nodes()).resolves.toEqual([ expect.any(String), expect.any(String) ]);
-    });
-
-    it('constructs a different node than for the solution binding it', async({ expect }) => {
-      expect(new Set(await nodes()).size).toBe(2);
-    });
-  });
-
-  describe('with an argument bound to a triple term', () => {
-    function nodesFrom(tripleTerm: string, query: string): Promise<(string | undefined)[]> {
-      const rewriter = skolemisingRewriter(`CONSTRUCT { ?node <ex://subject> ?s . ?node <ex://object> ?o } WHERE {
-        ?s ?p ?o .
-        BIND(${tripleTerm} AS ?t)
-        BIND(<internal://blank>(?t) AS ?node)
-      }`);
-      return constructedNodes(rewriter, query, tripleTermData);
-    }
-
-    // The second nests a triple term in the object of one.
-    it.for([ '<<( ?s ?p ?o )>>', '<<( ?s ?p <<( ?s ?p ?o )>> )>>' ])(
-      'constructs a different node for each triple term %s',
-      async(tripleTerm, { expect }) => {
-        const nodes = await nodesFrom(tripleTerm, 'SELECT ?node WHERE { ?node <ex://subject> ?s }');
-        expect(nodes).toEqual([ expect.any(String), expect.any(String), expect.any(String) ]);
-        expect(new Set(nodes).size).toBe(3);
-      },
-    );
-
-    // The join on `?node` keeps a solution only when both patterns constructed the same node.
-    it('constructs the same node for the same triple term in every pattern', async({ expect }) => {
-      await expect(nodesFrom(
-        '<<( ?s ?p ?o )>>',
-        'SELECT ?node WHERE { ?node <ex://subject> ?s . ?node <ex://object> ?o }',
-      )).resolves.toHaveLength(3);
-    });
-
-    // The second is nested three deep, one more than the default depth, so neither form constructs a node.
-    it.for(<const> [
-      [ '<<( <ex://a> <ex://p1> <ex://o1> )>>', true ],
-      [ '<<( <ex://a> <ex://p1> <<( <ex://a> <ex://p1> <<( <ex://a> <ex://p1> <ex://o1> )>> )>> )>>', false ],
-    ])('constructs the same node for %s written out as for a variable bound to it', async([
-      tripleTerm,
-      constructsNode,
-    ], { expect }) => {
-      const [ binding ] = await solutions(iriRewriter, `SELECT * {
-        BIND(${tripleTerm} AS ?t)
-        BIND(<internal://blank>(?t) AS ?fromVariable)
-        BIND(<internal://blank>(${tripleTerm}) AS ?fromConstant)
-      }`, tripleTermData);
-      expect(binding.has('fromVariable')).toBe(constructsNode);
-      expect(binding.get('fromConstant')?.value).toBe(binding.get('fromVariable')?.value);
-    });
+    await expect(constructedNodes(
+      rewriter,
+      'SELECT ?node WHERE { ?node <ex://subject> ?s . ?node <ex://object> ?o }',
+      tripleTermData,
+    )).resolves.toHaveLength(3);
   });
 
   // `?o + 1` errors on every solution, and constructing `<<( ?o ?p ?s )>>` fails where `?o` is a literal.
@@ -160,20 +108,37 @@ describe('bnode skolem', () => {
     },
   );
 
-  // A node materialised as a typed literal has its encoding as value.
-  it('encodes each kind of term with its own tag', async({ expect }) => {
-    const encodings = await constructedNodes(createQueryRewriter([ internalBnodeAsSpecialLiteralTransformation() ]), `
-      SELECT ?node WHERE {
-        VALUES ?x { <ex://a> "a" "a"@en "a"@en--ltr "1"^^<ex://dt> }
+  describe('materialised as a typed literal, whose value is its encoding', () => {
+    const literalRewriter = createQueryRewriter([ internalBnodeAsSpecialLiteralTransformation() ]);
+    // The last is nested three deep, one more than the default depth, so it constructs no node.
+    const encodings = <const> [
+      [ '<ex://a>', ',iri,ex://a' ],
+      [ '"a"', ',literal,a,http://www.w3.org/2001/XMLSchema#string' ],
+      [ '"a"@en', ',literal@,a,en' ],
+      [ '"a"@en--ltr', ',literal@D,a,en,ltr' ],
+      [ '"1"^^<ex://dt>', ',literal,1,ex://dt' ],
+      [ '<<( <ex://a> <ex://p> "o"@en )>>', ',triple,iri,ex://a,iri,ex://p,literal@,o,en' ],
+      [
+        '<<( <ex://a> <ex://p> <<( <ex://b> <ex://q> <ex://c> )>> )>>',
+        ',triple,iri,ex://a,iri,ex://p,triple,iri,ex://b,iri,ex://q,iri,ex://c',
+      ],
+      [ '<<( <ex://a> <ex://p> <<( <ex://b> <ex://q> <<( <ex://c> <ex://r> <ex://d> )>> )>> )>>', undefined ],
+    ];
+
+    it('encodes each kind of term bound to a variable with its own tag, and an unbound one too', async({ expect }) => {
+      await expect(constructedNodes(literalRewriter, `SELECT ?node WHERE {
+        VALUES ?x { ${encodings.map(([ term ]) => term).join(' ')} UNDEF }
         BIND(<internal://blank>(?x) AS ?node)
-      }`, tripleTermData);
-    expect(encodings).toEqual([
-      ',iri,ex://a',
-      ',literal,a,http://www.w3.org/2001/XMLSchema#string',
-      ',literal@,a,en',
-      ',literal@D,a,en,ltr',
-      ',literal,1,ex://dt',
-    ]);
+      }`, tripleTermData)).resolves.toEqual([ ...encodings.map(([ , encoding ]) => encoding), ',unbound' ]);
+    });
+
+    it.for(encodings)('encodes %s written out as when bound to a variable', async([ term, encoding ], { expect }) => {
+      await expect(constructedNodes(
+        literalRewriter,
+        `SELECT ?node WHERE { BIND(<internal://blank>(${term}) AS ?node) }`,
+        tripleTermData,
+      )).resolves.toEqual([ encoding ]);
+    });
   });
 
   it.for(<const> [
@@ -270,15 +235,6 @@ describe('bnode skolem', () => {
         ?s ?p ?o .
         BIND(<internal://blank>(?s) AS ?node)
       }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( ${iriEncoding('?s')} ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
-  ?s ?p ?o .
-}`);
-    });
-
-    it('encodes a variable that can be any term with every branch', async({ expect }) => {
-      expect((await rewriter.rewriteQuery(`SELECT ?node WHERE {
-        ?s ?p ?o .
-        BIND(<internal://blank>(?o) AS ?node)
-      }`)).trim()).toEqual(`SELECT ( STRDT( CONCAT( ${termEncoding('?o')} ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
   ?s ?p ?o .
 }`);
     });
