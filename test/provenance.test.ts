@@ -14,6 +14,7 @@ import {
   provenanceMappingFromConstructQueries,
 } from '../lib/provenance.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import { internalBnodeExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
 import { internalBnodeAsSpecialIriTransformation } from '../lib/transformations/bnodeMapAsLiteral.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import type { Mapping } from '../lib/types.js';
@@ -45,10 +46,11 @@ const colleagues = new Store(new Parser().parse(readFileSync('./test/statics/col
 async function evaluate(mapping: Mapping, query: string): Promise<Row[]> {
   const rewriter = createQueryRewriter([
     ...createDefaultTransformationPipeline(mapping),
-    internalBnodeAsSpecialIriTransformation(),
+    internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
   ]);
   const bindings = await engine.queryBindings(await rewriter.rewriteQuery(query), {
     sources: [ colleagues ],
+    extensionFunctions: internalBnodeExtensionFunctions(),
   });
   return (await bindings.toArray()).map(binding =>
     Object.fromEntries([ ...binding ].map(([ variable, term ]) => [ variable.value, termToString(term) ])));

@@ -173,11 +173,15 @@ derivation that pattern matched (`?derivation0`, `?derivation1`, …). Unfold th
 ```typescript
 const rewriter = createQueryRewriter([
   ...createDefaultTransformationPipeline(provenanceMappingFromConstructQueries(constructs)),
-  internalBnodeAsSpecialIriTransformation(),
+  internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
 ]);
 const rewrittenQuery = await rewriter.rewriteQuery(provenanceCapturingQuery(
   'PREFIX : <ex://> SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }',
 ));
+const bindings = await new QueryEngine().queryBindings(rewrittenQuery, {
+  sources,
+  extensionFunctions: internalBnodeExtensionFunctions(),
+});
 ```
 
 It answers one row per combination of derivations an answer has; querying `derivedFrom` of a derivation gives
