@@ -172,17 +172,18 @@ VRanges {
 /**
  * The range of the target of a `BIND(e AS ?t)`: what the expression can possibly evaluate to.
  * @param expression - The expression of the EXTEND
- * @param input - The metadata of its input
+ * @param input - The metadata of its input; where it is absent, a variable can be any term
  * @returns the range; only the shapes that decide a term type are read, everything else being the top
  * anyway and this only ever being asked to narrow
  */
-function expressionRange(expression: Algebra.Expression, input: CPMeta): RangeSet {
+export function expressionRange(expression: Algebra.Expression, input?: CPMeta): RangeSet {
   if (expression.subType === ExpressionTypes.TERM) {
+    if (expression.term.termType !== 'Variable') {
+      return new RangeSet([ expression.term.termType ]);
+    }
     // A variable the input does not have in scope is never bound, so neither is the target: the bottom
     // {@link VRanges.rangeOf} reports for it is exactly right.
-    return expression.term.termType === 'Variable' ?
-      input.vRanges.rangeOf(expression.term.value) :
-      new RangeSet([ expression.term.termType ]);
+    return input?.vRanges.rangeOf(expression.term.value) ?? objectRange;
   }
   if (expression.subType === ExpressionTypes.OPERATOR && expression.operator === 'triple') {
     return tripleTermRange;
@@ -236,6 +237,18 @@ function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
     // A triple term has no graph: the slot is an RDF/JS artefact and is always the default graph. A quad
     // with a real one is not something `<<( … )>>` can construct, so nothing here calls it infallible.
     term.graph.termType === 'DefaultGraph';
+}
+
+/**
+ * Whether a term as written evaluates in every solution of an operation: its variables are certainly bound, and a
+ * triple term in it cannot fail to construct, which it does where a component is no term its position admits.
+ * @param term - The term, like `?v`, `<ex://c>` or `<<( ?s ?p ?o )>>`
+ * @param input - The metadata of the operation it is evaluated over
+ * @returns whether it certainly evaluates
+ */
+export function termCertainlyEvaluates(term: RDF.Term, input: CPMeta): boolean {
+  return isSubsetOf(termVars(term), input.cVars) &&
+    (term.termType !== 'Quad' || constructionCannotFail(term, input.vRanges));
 }
 
 /**
@@ -386,15 +399,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       // two spellings of one construction - `<<( s p o )>>` and the `TRIPLE(s, p, o)` the parser keeps
       // distinct from it - are the same fact here.
       const constructed = constructedTermOf(resOp.expression);
-      if (constructed !== undefined &&
-          // If it is a var, and that var is certain, we also certain
-          isSubsetOf(termVars(constructed), certain) &&
-          // A triple-term construction is the one term expression that can *fail*: it raises an
-          // evaluation error - leaving the target unbound - when a component is not a term the position
-          // it lands in admits. Where the ranges of the components rule that out, and a ground one rules
-          // it out by itself, the construction is as certain as any other term.
-          (constructed.termType !== 'Quad' ||
-            constructionCannotFail(constructed, input.metadata.vRanges))) {
+      if (constructed !== undefined && termCertainlyEvaluates(constructed, input.metadata)) {
         certain.add(resOp.variable.value);
       }
       resOp.metadata.cVars = certain;

@@ -102,9 +102,21 @@ projection (`mExists0`, `mExists1`, …), which is never bound.
 
 An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to
 *construct* a blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: same inputs,
-same identity. An unbound argument counts as a value of its own, so a node is still built, one that differs from
-every node built from a bound value. Two transformations materialise it — `internalBnodeAsSpecialLiteral` as a
-typed literal, `internalBnodeAsSpecialIri` as a prefixed IRI whose length SHA-1 keeps manageable.
+same identity. An argument can be any expression, and one that is unbound or errors counts as a value of its own,
+as a `BIND` would leave it, so a node is still built, one that differs from every node built from a value.
+
+Every string in an encoding is written with its length, so it needs no escaping. A triple term argument is encoded
+through its components, up to the context's `tripleTermArgumentDepth` (2) deep since an expression cannot recurse;
+a deeper one leaves the node unbound. Outside an `OPTIONAL` condition, which has no input to bind it in, an
+argument that is no term is bound to a fresh variable first, so it is evaluated once, and the encoding leaves out
+the branches the `vRanges` and `cVars` of the input rule out. Two transformations materialise it —
+`internalBnodeAsSpecialLiteralTransformation` as a typed literal, `internalBnodeAsSpecialIriTransformation` as a
+prefixed IRI whose length SHA-1 keeps manageable, each through its `InternalBnodeMaterialisation`.
+
+With `encodedByExtensionFunction`, an extension function of the engine, `<internal://blank/encoding>`, gives the
+encoding from the evaluated arguments instead, at any depth, and the same materialisation turns it into the node
+(`lib/transformations/bnodeExtensionFunction.ts`). An engine errors the call when an argument errors, so each argument
+`e` is wrapped as `COALESCE(TRIPLE(<internal://blank/argument>, <internal://blank/argument>, e), <internal://blank/unbound>)`.
 
 ## Provenance
 
