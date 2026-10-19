@@ -246,7 +246,7 @@ function encodeInternalBnode(
     if (term === undefined) {
       if (holdsExpression(argument, held =>
         held.subType === Algebra.ExpressionTypes.OPERATOR && unstableOperators.has(held.operator))) {
-        throw new Error('An argument of <internal://blank> like RAND() is only supported in a BIND or FILTER.');
+        throw new Error('An argument of <internal://blank> like RAND() is not supported in an OPTIONAL condition.');
       }
       return orUnbound(argument, encodeTerm(argument, expressionRange(argument, scope), depth));
     }
@@ -268,8 +268,8 @@ function encodeInternalBnode(
 
 /**
  * Materialises every internal blank node in an operation and rewrites `ISBLANK` to recognise what they became.
- * One in the expression of an EXTEND or FILTER is encoded with the ranges of its input, except inside an EXISTS,
- * which binds what it is asked for beyond those ranges.
+ * One in an expression over the input of an EXTEND, FILTER, ORDER BY or GROUP is encoded with the ranges of that input,
+ * except inside an EXISTS, which binds what it is asked for beyond those ranges.
  * @param c - The transformation context
  * @param op - The operation to transform
  * @param materialiseEncoding - Turns the encoding of an internal blank node into the term it becomes.
@@ -288,7 +288,6 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   }
   const { AF } = c;
   const coinArgumentVariable = freshVarGenerator(markVariableNamesUsed(c, op), 'mBnodeArgument');
-  const expressionKey = new Set([ 'expression' ]);
 
   /**
    * Materialises the internal blank nodes in an expression and rewrites its `ISBLANK`s.
@@ -312,17 +311,18 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   }
 
   /**
-   * Materialises the internal blank nodes in the expression of an EXTEND or FILTER, binding each argument that is no
-   * term to a fresh variable of its input first, so it is evaluated once rather than in every branch of its encoding.
-   * @param operation - The EXTEND or FILTER, a copy of its own that is changed in place.
+   * Materialises the internal blank nodes in an expression over the input of an operation, binding each argument that
+   * is no term to a fresh variable of that input first, so it is evaluated once rather than in every branch of its
+   * encoding.
+   * @param operation - The operation, a copy of its own whose input is changed in place.
    * @param rangesInput - Its input as it was, to read the ranges off; absent where they do not hold.
-   * @returns The operation.
+   * @returns What materialises an expression over the input.
    */
-  function materialiseExpressionOf(
-    operation: Algebra.Extend | Algebra.Filter,
+  function materialiserOverInputOf(
+    operation: Algebra.Single,
     rangesInput?: Algebra.Operation,
-  ): Algebra.Extend | Algebra.Filter {
-    operation.expression = materialiseInExpression(operation.expression, (named) => {
+  ): (expression: Algebra.Expression) => Algebra.Expression {
+    return expression => materialiseInExpression(expression, (named) => {
       const args = named.args.map((argument) => {
         if (constructedTermOf(argument) !== undefined) {
           return argument;
@@ -335,7 +335,6 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
       const scope = rangesInput && cpMetaOf(rangesInput);
       return materialiseEncoding(encodeInternalBnode(c, AF.createNamedExpression(named.name, args), scope));
     });
-    return operation;
   }
 
   /**
@@ -347,15 +346,33 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   function materialiseAll<O extends Algebra.Operation>(operation: O, withRanges: boolean): O {
     // The ranges are read off the original input, a copy without metadata the post-order traversal is done with, so
     // the metadata reading them caches never lands on the result.
-    const ofExtendOrFilter = {
-      preVisitor: () => ({ ignoreKeys: expressionKey }),
-      transform: (copy: Algebra.Extend | Algebra.Filter, original: Algebra.Extend | Algebra.Filter) =>
-        materialiseExpressionOf(copy, withRanges ? original.input : undefined),
-    };
+    function overInput<S extends Algebra.Single>(
+      expressionsKey: string,
+      materialiseExpressions: (copy: S, materialise: (expression: Algebra.Expression) => Algebra.Expression) => void,
+    ): { preVisitor: () => { ignoreKeys: Set<string> }; transform: (copy: S, original: S) => S } {
+      const ignoreKeys = new Set([ expressionsKey ]);
+      return {
+        preVisitor: () => ({ ignoreKeys }),
+        transform: (copy, original) => {
+          materialiseExpressions(copy, materialiserOverInputOf(copy, withRanges ? original.input : undefined));
+          return copy;
+        },
+      };
+    }
+    const ofExtendOrFilter = overInput<Algebra.Extend | Algebra.Filter>('expression', (copy, materialise) => {
+      copy.expression = materialise(copy.expression);
+    });
     return algebraUtils.mapOperation<'unsafe', O>(withRanges ? withoutCpVars(operation) : operation, {
       [Algebra.Types.EXTEND]: ofExtendOrFilter,
       [Algebra.Types.FILTER]: ofExtendOrFilter,
-      // Any other expression, like the condition of an OPTIONAL, gets every branch.
+      [Algebra.Types.ORDER_BY]: overInput<Algebra.OrderBy>('expressions', (copy, materialise) => {
+        copy.expressions = copy.expressions.map(materialise);
+      }),
+      [Algebra.Types.GROUP]: overInput<Algebra.Group>('aggregates', (copy, materialise) => {
+        copy.aggregates = copy.aggregates.map(aggregate => <Algebra.BoundAggregate> materialise(aggregate));
+      }),
+      // The condition of an OPTIONAL, the one expression left, has no input to bind an argument in, so it gets every
+      // branch.
       [Algebra.Types.EXPRESSION]: {
         preVisitor: () => ({ continue: false }),
         transform: expression =>

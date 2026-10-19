@@ -107,7 +107,8 @@ describe('bnode skolem', () => {
       { VALUES ?x { <ex://a> "a" <<( <ex://a> <ex://p> <ex://o> )>> } } UNION { BIND(<internal://blank>(<ex://a>) AS ?x) }
       BIND(ISBLANK(?x) AS ?isBlank)
     }`, tripleTermData);
-    expect(rows.map(row => row.get('isBlank')?.value)).toEqual([ 'false', 'false', 'false', 'true' ]);
+    // In any order, as a UNION promises none.
+    expect(rows.map(row => String(row.get('isBlank')?.value)).sort()).toEqual([ 'false', 'false', 'false', 'true' ]);
   });
 
   // `<o1>` and `"o1"` have no triples of their own, so the EXISTS is false and every OPTIONAL row matches.
@@ -118,13 +119,22 @@ describe('bnode skolem', () => {
     expect(rows.map(row => row.get('x')?.value)).toEqual(Array.from({ length: 9 }, () => expect.any(String)));
   });
 
-  it('constructs a node per solution for an unstable argument', async({ expect }) => {
-    const nodes = await constructedNodes(
-      iriRewriter,
-      'SELECT ?node WHERE { ?s ?p ?o . BIND(<internal://blank>(STR(RAND())) AS ?node) }',
-      tripleTermData,
-    );
-    expect(new Set(nodes).size).toBe(3);
+  // `?x` is bound for the `<ex://o1>` solution only, and both solutions share `?s`.
+  it('constructs a node of its own for an argument an OPTIONAL in the mapping leaves unbound', async({ expect }) => {
+    const nodes = await constructedNodes(skolemisingRewriter(`CONSTRUCT { ?node <ex://object> ?o } WHERE {
+      ?s ?p ?o .
+      OPTIONAL { ?x <ex://p1> ?o }
+      BIND(<internal://blank>(?s, ?x) AS ?node)
+    }`), 'SELECT ?node WHERE { ?node <ex://object> ?o }', './test/statics/data01.ttl');
+    expect(nodes).toEqual([ expect.any(String), expect.any(String) ]);
+    expect(new Set(nodes).size).toBe(2);
+  });
+
+  it.for([
+    'SELECT ?node WHERE { ?s ?p ?o . BIND(<internal://blank>(STR(RAND())) AS ?node) }',
+    'SELECT (SAMPLE(<internal://blank>(STR(RAND()))) AS ?node) WHERE { ?s ?p ?o } GROUP BY ?s ?p ?o',
+  ])('constructs a node per solution for an unstable argument in %s', async(query, { expect }) => {
+    expect(new Set(await constructedNodes(iriRewriter, query, tripleTermData)).size).toBe(3);
   });
 
   it('refuses a triple term argument depth that is not a non-negative integer', ({ expect }) => {
@@ -382,10 +392,14 @@ describe('bnode skolem', () => {
 }`);
     });
 
-    it('grows the rewrite linearly with nested blank nodes', async({ expect }) => {
+    it.for([
+      'SELECT ?node WHERE { ?s ?p ?o . BIND(NESTED AS ?node) }',
+      'SELECT * WHERE { ?s ?p ?o } ORDER BY (NESTED)',
+      'SELECT (SAMPLE(NESTED) AS ?node) WHERE { ?s ?p ?o }',
+    ])('grows the rewrite linearly with nested blank nodes in %s', async(query, { expect }) => {
       const lengths = await Promise.all([ 1, 2, 3 ].map(async(depth) => {
         const nested = `${'<internal://blank>('.repeat(depth)}?o${')'.repeat(depth)}`;
-        return (await rewriter.rewriteQuery(`SELECT ?node WHERE { ?s ?p ?o . BIND(${nested} AS ?node) }`)).length;
+        return (await rewriter.rewriteQuery(query.replace('NESTED', nested))).length;
       }));
       expect(lengths[2] - lengths[1]).toBe(lengths[1] - lengths[0]);
     });
