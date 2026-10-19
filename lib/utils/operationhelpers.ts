@@ -58,16 +58,26 @@ export function projectOntoVariablesOrExistence(
 }
 
 /**
- * Finds the GROUP a projection writes its GROUP BY on: its input, below the binds of its aggregates, its HAVING and
- * its ORDER BY.
+ * Finds the GROUP a projection writes its GROUP BY on: its input, below the binds of its aggregates, its HAVING, its
+ * ORDER BY and the join with a trailing VALUES.
  * @param project - The projection to read
  * @returns the GROUP, or `undefined` when the projection groups nothing
  */
 export function groupProjectedBy(project: Algebra.Project): Algebra.Group | undefined {
   let input = project.input;
   while (input.type === Algebra.Types.EXTEND || input.type === Algebra.Types.FILTER ||
-    input.type === Algebra.Types.ORDER_BY) {
-    input = input.input;
+    input.type === Algebra.Types.ORDER_BY || isJoinWithTrailingValues(input)) {
+    input = input.type === Algebra.Types.JOIN ? input.input[0] : input.input;
   }
   return input.type === Algebra.Types.GROUP ? input : undefined;
+}
+
+/**
+ * Whether an operation is the join a VALUES after the WHERE clause writes, which comes after the GROUP and its HAVING.
+ * @param operation - The operation to read
+ * @returns whether it joins one operation with a VALUES
+ */
+function isJoinWithTrailingValues(operation: Algebra.Operation): operation is Algebra.Join {
+  return operation.type === Algebra.Types.JOIN && operation.input.length === 2 &&
+    operation.input[1].type === Algebra.Types.VALUES;
 }

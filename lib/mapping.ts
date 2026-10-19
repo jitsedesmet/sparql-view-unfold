@@ -1,7 +1,6 @@
 /* eslint-disable jsdoc/check-param-names */
 import type * as RDF from '@rdfjs/types';
-import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_MERGED_HEAD } from './consts.js';
 import { triplePositions } from './datastructures/TermClusterSet.js';
 import type { RangeSet } from './RangeSet.js';
@@ -256,9 +255,27 @@ export function mappingFromConstructQueries(
   const tools = createTransformationContext();
   return mappingFromConstructs(
     tools,
-    constructQueries.map(constructQuery => <Algebra.Construct> parseQuery(tools, constructQuery)),
+    constructQueries.map(constructQuery => parseConstructQuery(tools, constructQuery)),
     options,
   );
+}
+
+/**
+ * Parses a CONSTRUCT query string into its algebra form.
+ * @param tools - The context to parse with
+ * @param constructQuery - The SPARQL CONSTRUCT query string
+ * @returns the CONSTRUCT
+ * @throws Error if the query is not a CONSTRUCT, or wraps one in a solution modifier
+ */
+export function parseConstructQuery(
+  tools: Pick<TransformationContext, 'parser'>,
+  constructQuery: string,
+): Algebra.Construct {
+  const construct = parseQuery(tools, constructQuery);
+  if (construct.type !== Algebra.Types.CONSTRUCT) {
+    throw new Error('A mapping is defined by a CONSTRUCT query without ORDER BY, LIMIT or OFFSET.');
+  }
+  return construct;
 }
 
 /**

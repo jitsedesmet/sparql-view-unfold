@@ -510,6 +510,7 @@ describe('provenance captured over the colleagues data', () => {
     [ 'SELECT ?x WHERE { { SELECT DISTINCT ?x WHERE { ?x :worksAt ?o } } }', [ 'x' ]],
     [ 'SELECT (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x ORDER BY ?x LIMIT 1', [ 'n' ]],
     [ 'SELECT ?x WHERE { { SELECT ?x WHERE { ?x :worksAt ?o } GROUP BY ?x } } ORDER BY ?x LIMIT 1', [ 'x' ]],
+    [ 'SELECT ?x (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x VALUES ?x { :bob }', [ 'x', 'n' ]],
   ])('answers %s as the query without provenance does', async([ query, variables ], { expect }) => {
     const [ rowsWithProvenance, rows ] = await Promise.all([
       evaluate(provenanceMapping, provenanceCapturingQuery(prefixes + query)),
@@ -540,6 +541,14 @@ describe('provenance captured over the colleagues data', () => {
     // Everyone has two colleagues; Bob and Carol through three derivations, Dave two, each attached to its group.
     expect(rows.map(row => row.n.split('^^')[0])).toEqual(Array.from({ length: 8 }, () => '"2"'));
     expect(new Set(rows.map(row => row.derivation0)).size).toBe(8);
+  });
+
+  it('answers a group with no derivation to attach once', async({ expect }) => {
+    const rows = await evaluate(provenanceMapping, provenanceCapturingQuery(
+      `${prefixes} SELECT (COUNT(*) AS ?n) WHERE { VALUES ?x { 1 2 3 } }`,
+    ));
+
+    expect(rows.map(row => row.n.split('^^')[0])).toEqual([ '"3"' ]);
   });
 
   it('links a derivation to the source triples it matched', async({ expect }) => {

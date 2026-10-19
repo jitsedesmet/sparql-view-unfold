@@ -8,7 +8,7 @@ import {
   PROVENANCE_NAMESPACE,
 } from './consts.js';
 import type { MappingConstructionTools, MappingOptions } from './mapping.js';
-import { mappingFromConstructs } from './mapping.js';
+import { mappingFromConstructs, parseConstructQuery } from './mapping.js';
 import { boundOrUnboundArgumentExpression } from './transformations/bnodeExtensionFunction.js';
 import { rewriteNonRecursivePaths } from './transformations/pathTransformation.js';
 import type { TransformationContext } from './transformContext.js';
@@ -132,7 +132,7 @@ export function provenanceMappingFromConstructQueries(
     constructQueries.map((constructQuery, index) =>
       provenanceConstructOf(
         tools,
-        <Algebra.Construct> parseQuery(tools, constructQuery),
+        parseConstructQuery(tools, constructQuery),
         DF.namedNode(`${PROVENANCE_NAMESPACE}construct${index}`),
       )),
     options,
@@ -203,6 +203,10 @@ function attachDerivationsToAnswers(
 ): Algebra.Project {
   const { AF } = c;
   const derivations = derivationsSelectedBy(c, solutions);
+  if (derivations.length === 0) {
+    // Joining would only repeat each answer per solution.
+    return AF.createProject(answers, answerVariables);
+  }
   // The answers are computed from the solutions, so a variable every solution binds every answer binds too.
   const certainlyBound = certainlyBoundVariablesOf(solutions);
   // A join lets an unbound variable match any value, so a variable that may be unbound is joined on a key.

@@ -231,7 +231,7 @@ The tables below are the short version; the generated
 
 | Function | Description |
 |---|---|
-| `mappingFromConstructQueries(constructQueries, options?)` | Builds the `Mapping` a set of CONSTRUCT query strings denotes. The only way to build one. |
+| `mappingFromConstructQueries(constructQueries, options?)` | Builds the `Mapping` a set of CONSTRUCT query strings denotes. |
 | `createQueryRewriter(transformations)` | Builds a `QueryRewriter` running those transformations, in order. |
 | `createDefaultTransformationPipeline(mapping, options?)` | The pipeline to use when you have no reason to build your own. |
 | `rewriter.rewriteQuery(query)` | Rewrites a SPARQL query string, asynchronously. |
