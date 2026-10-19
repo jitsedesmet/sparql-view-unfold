@@ -105,10 +105,11 @@ An RDF 1.1 dataset cannot reference a blank node consistently across queries, so
 same identity. An argument can be any expression, and one that is unbound or errors counts as a value of its own,
 as a `BIND` would leave it, so a node is still built, one that differs from every node built from a value.
 
-A triple term argument is encoded through its components, up to the context's `tripleTermArgumentDepth` (2) deep
-since an expression cannot recurse; a deeper one leaves the node unbound. In a `BIND` or `FILTER`, an argument that
-is no term is bound to a fresh variable first, so it is evaluated once, and the encoding leaves out the branches the
-`vRanges` and `cVars` of the input rule out. Two transformations materialise it — `internalBnodeAsSpecialLiteral`
+Every string in an encoding is written with its length, so it needs no escaping. A triple term argument is
+encoded through its components, up to the context's `tripleTermArgumentDepth` (2) deep since an expression cannot
+recurse; a deeper one leaves the node unbound. In a `BIND` or `FILTER`, an argument that is no term is bound to a
+fresh variable first, so it is evaluated once, and the encoding leaves out the branches the `vRanges` and `cVars`
+of the input rule out. Two transformations materialise it — `internalBnodeAsSpecialLiteral`
 as a typed literal, `internalBnodeAsSpecialIri` as a prefixed IRI whose length SHA-1 keeps manageable.
 
 ## SPARQL quirks worth knowing

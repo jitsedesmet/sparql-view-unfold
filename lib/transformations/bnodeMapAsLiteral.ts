@@ -59,11 +59,11 @@ function isInternalBnode(expression: Algebra.NamedExpression): boolean {
  * Encodes the arguments of an internal blank node into a string that is equal exactly when the arguments are,
  * whatever branches their ranges leave out.
  *
- * The output encodes each argument's value with its type information:
- * - IRIs: `,iri,<escaped-value>`
- * - Literals with lang+dir: `,literal@D,<value>,<lang>,<dir>`
- * - Literals with lang: `,literal@,<value>,<lang>`
- * - Plain/typed literals: `,literal,<value>,<datatype>`
+ * The output encodes each argument's value after a tag, writing every string as `,<length>:<string>` so that it
+ * needs no escaping:
+ * - IRIs: `,iri,<length>:<iri>`
+ * - Literals: `,literal` followed by their value, datatype, language and base direction, the last two empty where
+ *   they have none
  * - Triple terms: `,triple` followed by the encodings of its subject, predicate and object
  * - Arguments that are unbound or error, as a BIND would leave them unbound: `,unbound`, which no value gives
  *
@@ -96,14 +96,37 @@ function encodeInternalBnode(
   }
 
   /**
-   * Concatenates strings, splicing in the parts of one that is a CONCAT itself.
+   * Concatenates strings, splicing in the parts of one that is a CONCAT itself and joining adjacent constants.
    * @param parts - The strings, all simple literals.
    * @returns Their concatenation, or the one part there is.
    */
   function concat(parts: Algebra.Expression[]): Algebra.Expression {
-    const spliced = parts.flatMap(part =>
-      part.subType === Algebra.ExpressionTypes.OPERATOR && part.operator === 'concat' ? part.args : [ part ]);
-    return spliced.length === 1 ? spliced[0] : AF.createOperatorExpression('concat', spliced);
+    const joined: Algebra.Expression[] = [];
+    for (const part of parts.flatMap(part =>
+      part.subType === Algebra.ExpressionTypes.OPERATOR && part.operator === 'concat' ? part.args : [ part ])) {
+      const previous = joined.at(-1);
+      if (previous?.subType === Algebra.ExpressionTypes.TERM && previous.term.termType === 'Literal' &&
+        part.subType === Algebra.ExpressionTypes.TERM && part.term.termType === 'Literal') {
+        joined[joined.length - 1] = expressionLiteral(previous.term.value + part.term.value);
+      } else {
+        joined.push(part);
+      }
+    }
+    return joined.length === 1 ? joined[0] : AF.createOperatorExpression('concat', joined);
+  }
+
+  /**
+   * Writes a string as its length and itself, which tells where it ends whatever characters it holds.
+   * @param value - An expression giving the string, like `STR(?v)`.
+   * @returns The field, `,<length>:<string>`.
+   */
+  function field(value: Algebra.Expression): Algebra.Expression {
+    return concat([
+      expressionLiteral(','),
+      AF.createOperatorExpression('str', [ AF.createOperatorExpression('strlen', [ value ]) ]),
+      expressionLiteral(':'),
+      value,
+    ]);
   }
 
   /**
@@ -113,45 +136,24 @@ function encodeInternalBnode(
    * @returns The encoding, which errors when the term is unbound or a triple term.
    */
   function encodeIriOrLiteral(termExpression: Algebra.Expression, range: RangeSet): Algebra.Expression {
-    const escaped = (operator: string): Algebra.Expression =>
-      escapeUserInput(AF.createOperatorExpression(operator, [ termExpression ]));
-    const iriEncoding = concat([ expressionLiteral(',iri,'), escaped('str') ]);
+    const termFunction = (operator: string): Algebra.Expression =>
+      AF.createOperatorExpression(operator, [ termExpression ]);
+    const iriEncoding = concat([ expressionLiteral(',iri'), field(termFunction('str')) ]);
     // An IRI or a blank node, which is disallowed, so an IRI.
     if (isSubsetOf(range, subjectRange)) {
       return iriEncoding;
     }
-    // The tag, the value and what follows it, so STR of the term is written once rather than per kind of literal. A
-    // base direction is `ltr` or `rtl`, which needs no escaping.
     const literalEncoding = concat([
-      ifTermIs(
-        'haslang',
-        termExpression,
-        ifTermIs('haslangdir', termExpression, expressionLiteral(',literal@D,'), expressionLiteral(',literal@,')),
-        expressionLiteral(',literal,'),
-      ),
-      escaped('str'),
-      expressionLiteral(','),
-      ifTermIs(
-        'haslang',
-        termExpression,
-        concat([
-          escaped('lang'),
-          ifTermIs(
-            'haslangdir',
-            termExpression,
-            concat([ expressionLiteral(','), AF.createOperatorExpression('langdir', [ termExpression ]) ]),
-            expressionLiteral(''),
-          ),
-        ]),
-        escapeUserInput(AF.createOperatorExpression('str', [
-          AF.createOperatorExpression('datatype', [ termExpression ]),
-        ])),
-      ),
+      expressionLiteral(',literal'),
+      field(termFunction('str')),
+      field(AF.createOperatorExpression('str', [ termFunction('datatype') ])),
+      field(termFunction('lang')),
+      field(termFunction('langdir')),
     ]);
     if (isSubsetOf(range, literalRange)) {
       return literalEncoding;
     }
-    // A triple term left in the range is nested too deeply: STR of its datatype errors on it.
+    // A triple term left in the range is nested too deeply: its DATATYPE errors.
     return ifTermIs('isiri', termExpression, iriEncoding, literalEncoding);
   }
 
@@ -251,25 +253,6 @@ function encodeInternalBnode(
     const termExpression = AF.createTermExpression(term);
     const encoding = encodeTerm(termExpression, rangeOfWritten(term), depth);
     return termCertainlyEvaluates(term, scope) ? encoding : orUnbound(termExpression, encoding);
-  }
-
-  /**
-   * Assert that the input does not use our value separator: `,` -> `\,`
-   * Know that this means a string should not end in `\` since then we would also get `\,`
-   */
-  function escapeUserInput(val: Algebra.Expression): Algebra.Expression {
-    const backslashEscaped = AF.createOperatorExpression('replace', [
-      val,
-      // Regex: matches one backslash
-      expressionLiteral('\\\\'),
-      // Replacement: outputs two backslashes
-      expressionLiteral('\\\\\\\\'),
-    ]);
-    return AF.createOperatorExpression('replace', [
-      backslashEscaped,
-      expressionLiteral(','),
-      expressionLiteral('\\\\,'),
-    ]);
   }
 
   // ====================== Implementation ========================
@@ -408,9 +391,13 @@ export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: Tr
       encoding,
       AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
     ]),
-    args => AF.createOperatorExpression('=', [
-      AF.createOperatorExpression('datatype', args),
-      AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
+    // DATATYPE errors on any other term than a literal, so it is asked of a literal only.
+    args => AF.createOperatorExpression('&&', [
+      AF.createOperatorExpression('isliteral', args),
+      AF.createOperatorExpression('=', [
+        AF.createOperatorExpression('datatype', args),
+        AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
+      ]),
     ]),
   );
 }
