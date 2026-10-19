@@ -1,140 +1,222 @@
+import { createHash } from 'node:crypto';
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
 import { describe, it } from 'vitest';
-import { DT_INTERNAL_BNODE } from '../lib/consts.js';
+import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE_ENCODING, IRI_PREFIX_BNODE } from '../lib/consts.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import type { QueryRewriter } from '../lib/queryRewriter.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import type { ExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
+import {
+  boundArgumentMarker,
+  internalBnodeExtensionFunctions,
+} from '../lib/transformations/bnodeExtensionFunction.js';
 import {
   internalBnodeAsSpecialIriTransformation,
-  internalBnodeAsSpecialLiteral,
   internalBnodeAsSpecialLiteralTransformation,
 } from '../lib/transformations/bnodeMapAsLiteral.js';
 import { simplifyStaticExpressionsTransformation } from '../lib/transformations/staticExpressionEvaluation.js';
 import { createTransformationContext } from '../lib/transformContext.js';
+import type { QueryTransformation } from '../lib/types.js';
 
 const engine = new QueryEngine();
 
 // The data holds `<a> <p1> <o1>` and two triples differing from it in one position.
 const tripleTermData = './test/statics/tripleTermArguments.ttl';
 
-// Every solution of the rewritten query over the source.
-async function solutions(rewriter: QueryRewriter, query: string, source: string): Promise<RDF.Bindings[]> {
-  const bindings = await engine.queryBindings(await rewriter.rewriteQuery(query), { sources: [ source ]});
+// How internal blank nodes are evaluated: the step materialising them, and the functions the engine is given for it.
+interface BnodeEvaluation {
+  name: string;
+  transformation: QueryTransformation;
+  extensionFunctions?: ExtensionFunctions;
+}
+
+// The evaluation materialising as the step does, its encoding in SPARQL or by the extension function.
+function bnodeEvaluation(
+  materialisedAs: string,
+  transformationStep: typeof internalBnodeAsSpecialLiteralTransformation,
+  encodedByExtensionFunction: boolean,
+): BnodeEvaluation {
+  return {
+    name: `${encodedByExtensionFunction ? 'an extension function' : 'SPARQL'} as ${materialisedAs}`,
+    transformation: transformationStep({ encodedByExtensionFunction }),
+    ...encodedByExtensionFunction && { extensionFunctions: internalBnodeExtensionFunctions() },
+  };
+}
+
+const sparqlLiteral = bnodeEvaluation('a typed literal', internalBnodeAsSpecialLiteralTransformation, false);
+const sparqlIri = bnodeEvaluation('a prefixed IRI', internalBnodeAsSpecialIriTransformation, false);
+const extensionFunctionLiteral = bnodeEvaluation('a typed literal', internalBnodeAsSpecialLiteralTransformation, true);
+const extensionFunctionIri = bnodeEvaluation('a prefixed IRI', internalBnodeAsSpecialIriTransformation, true);
+const evaluations = [ sparqlLiteral, sparqlIri, extensionFunctionLiteral, extensionFunctionIri ];
+
+// Where a query is evaluated, and the pipeline rewriting it before the evaluation's step.
+interface QuerySetting {
+  source?: string;
+  pipeline?: QueryTransformation[];
+}
+
+// Every solution of the query, rewritten by the pipeline and the evaluation's step, over the source.
+async function solutions(
+  evaluation: BnodeEvaluation,
+  query: string,
+  { source = tripleTermData, pipeline = []}: QuerySetting = {},
+): Promise<RDF.Bindings[]> {
+  const rewritten = await createQueryRewriter([ ...pipeline, evaluation.transformation ]).rewriteQuery(query);
+  const bindings = await engine.queryBindings(rewritten, {
+    sources: [ source ],
+    ...evaluation.extensionFunctions && { extensionFunctions: evaluation.extensionFunctions },
+  });
   return bindings.toArray();
 }
 
-// The value of `?node` in every solution of the rewritten query.
+// The value of `?node` in every solution of the query.
 async function constructedNodes(
-  rewriter: QueryRewriter,
+  evaluation: BnodeEvaluation,
   query: string,
-  source: string,
+  setting?: QuerySetting,
 ): Promise<(string | undefined)[]> {
-  return (await solutions(rewriter, query, source)).map(binding => binding.get('node')?.value);
+  return (await solutions(evaluation, query, setting)).map(binding => binding.get('node')?.value);
 }
 
-// A rewriter unfolding the CONSTRUCT and materialising its blank nodes as prefixed IRIs.
-function skolemisingRewriter(construct: string): QueryRewriter {
-  return createQueryRewriter([
-    ...createDefaultTransformationPipeline(mappingFromConstructQueries([ construct ])),
-    internalBnodeAsSpecialIriTransformation(),
-  ]);
+// The default pipeline unfolding the CONSTRUCT.
+function unfolding(construct: string): QueryTransformation[] {
+  return createDefaultTransformationPipeline(mappingFromConstructQueries([ construct ]));
 }
 
 describe('bnode skolem', () => {
   const c = createTransformationContext();
-  const iriRewriter = createQueryRewriter([ internalBnodeAsSpecialIriTransformation() ]);
   const AF = c.AF;
   const DF = c.DF;
 
   it('skolem to literal no params', async({ expect }) => {
     const bnodeNoParams = AF.createNamedExpression(DF.namedNode('internal://blank'), []);
-    expect(internalBnodeAsSpecialLiteral(c, bnodeNoParams))
+    expect(internalBnodeAsSpecialLiteralTransformation()(c, bnodeNoParams))
       .toEqual(AF.createOperatorExpression('strdt', [
         AF.createOperatorExpression('struuid', []),
         AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
       ]));
   });
 
-  // The join on `?node` keeps a solution only when both patterns constructed the same node.
-  it.for([ '?s, ?p, ?o', '<<( ?s ?p ?o )>>', 'STR(?o), ?p, ?s' ])(
-    'constructs the same node from %s in every pattern it is unfolded into',
-    async(args, { expect }) => {
-      const rewriter = skolemisingRewriter(`CONSTRUCT { ?node <ex://subject> ?s . ?node <ex://object> ?o } WHERE {
-        ?s ?p ?o .
-        BIND(<internal://blank>(${args}) AS ?node)
+  describe.for(evaluations)('evaluated by $name', (evaluation) => {
+    // The join on `?node` keeps a solution only when both patterns constructed the same node.
+    it.for([ '?s, ?p, ?o', '<<( ?s ?p ?o )>>', 'STR(?o), ?p, ?s' ])(
+      'constructs the same node from %s in every pattern it is unfolded into',
+      async(args, { expect }) => {
+        await expect(constructedNodes(
+          evaluation,
+          'SELECT ?node WHERE { ?node <ex://subject> ?s . ?node <ex://object> ?o }',
+          { pipeline: unfolding(`CONSTRUCT { ?node <ex://subject> ?s . ?node <ex://object> ?o } WHERE {
+            ?s ?p ?o .
+            BIND(<internal://blank>(${args}) AS ?node)
+          }`) },
+        )).resolves.toEqual([ expect.any(String), expect.any(String), expect.any(String) ]);
+      },
+    );
+
+    // `?o + 1` errors on every solution, and constructing `<<( ?o ?p ?s )>>` fails where `?o` is a literal.
+    it.for([
+      'STR(?o)',
+      '?o + 1',
+      'TRIPLE(?s, ?p, ?o)',
+      '<<( ?o ?p ?s )>>',
+      '<internal://blank>(?o)',
+      'EXISTS { FILTER(ISBLANK(?node)) }',
+    ])(
+      'constructs the same node for the argument %s as for a variable bound to it',
+      async(argument, { expect }) => {
+        const nodes = await solutions(evaluation, `SELECT * {
+          ?s ?p ?o .
+          BIND(<internal://blank>(?s) AS ?node)
+          BIND(${argument} AS ?bound)
+          BIND(<internal://blank>(?bound) AS ?fromVariable)
+          BIND(<internal://blank>(${argument}) AS ?fromExpression)
+        }`);
+        expect(nodes).toHaveLength(3);
+        for (const binding of nodes) {
+          expect(binding.get('fromExpression')).toBeDefined();
+          expect(binding.get('fromExpression')?.value).toBe(binding.get('fromVariable')?.value);
+        }
+      },
+    );
+
+    // A BIND keeps an error apart from false, which a FILTER would drop alike.
+    it('recognises a materialised node as the only blank node', async({ expect }) => {
+      const rows = await solutions(evaluation, `SELECT ?isBlank WHERE {
+        { VALUES ?x { <ex://a> "a" <<( <ex://a> <ex://p> <ex://o> )>> } } UNION { BIND(<internal://blank>(<ex://a>) AS ?x) }
+        BIND(ISBLANK(?x) AS ?isBlank)
       }`);
-      await expect(constructedNodes(
-        rewriter,
-        'SELECT ?node WHERE { ?node <ex://subject> ?s . ?node <ex://object> ?o }',
-        tripleTermData,
-      )).resolves.toEqual([ expect.any(String), expect.any(String), expect.any(String) ]);
-    },
-  );
+      // In any order, as a UNION promises none.
+      expect(rows.map(row => String(row.get('isBlank')?.value)).sort()).toEqual([ 'false', 'false', 'false', 'true' ]);
+    });
 
-  // `?o + 1` errors on every solution, and constructing `<<( ?o ?p ?s )>>` fails where `?o` is a literal.
-  it.for([
-    'STR(?o)',
-    '?o + 1',
-    'TRIPLE(?s, ?p, ?o)',
-    '<<( ?o ?p ?s )>>',
-    '<internal://blank>(?o)',
-    'EXISTS { FILTER(ISBLANK(?node)) }',
-  ])(
-    'constructs the same node for the argument %s as for a variable bound to it',
-    async(argument, { expect }) => {
-      const nodes = await solutions(iriRewriter, `SELECT * {
+    // `<o1>` and `"o1"` have no triples of their own, so the EXISTS is false and every OPTIONAL row matches.
+    it('evaluates an EXISTS argument in an OPTIONAL condition', async({ expect }) => {
+      const rows = await solutions(evaluation, `SELECT ?x WHERE {
+        ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(<internal://blank>(EXISTS { ?x ?y ?z }) = <internal://blank>(false)) }
+      }`);
+      expect(rows.map(row => row.get('x')?.value)).toEqual(Array.from({ length: 9 }, () => expect.any(String)));
+    });
+
+    // `?x` is bound for the `<ex://o1>` solution only, and both solutions share `?s`.
+    it('constructs a node of its own for an argument an OPTIONAL in the mapping leaves unbound', async({ expect }) => {
+      const nodes = await constructedNodes(
+        evaluation,
+        'SELECT ?node WHERE { ?node <ex://object> ?o }',
+        { source: './test/statics/data01.ttl', pipeline: unfolding(`CONSTRUCT { ?node <ex://object> ?o } WHERE {
+          ?s ?p ?o .
+          OPTIONAL { ?x <ex://p1> ?o }
+          BIND(<internal://blank>(?s, ?x) AS ?node)
+        }`) },
+      );
+      expect(nodes).toEqual([ expect.any(String), expect.any(String) ]);
+      expect(new Set(nodes).size).toBe(2);
+    });
+
+    it.for([
+      'SELECT ?node WHERE { ?s ?p ?o . BIND(<internal://blank>(STR(RAND())) AS ?node) }',
+      'SELECT (SAMPLE(<internal://blank>(STR(RAND()))) AS ?node) WHERE { ?s ?p ?o } GROUP BY ?s ?p ?o',
+      'SELECT ?node WHERE { ?s ?p ?o . BIND(<internal://blank>() AS ?node) }',
+    ])('constructs a node per solution for an unstable argument in %s', async(query, { expect }) => {
+      expect(new Set(await constructedNodes(evaluation, query)).size).toBe(3);
+    });
+  });
+
+  describe('evaluated by an extension function', () => {
+    const rewriter = createQueryRewriter([ extensionFunctionLiteral.transformation ]);
+    const encode = internalBnodeExtensionFunctions()[EXTENSION_FUNCTION_BNODE_ENCODING];
+
+    it('wraps every argument and rewrites ISBLANK', async({ expect }) => {
+      expect((await rewriter.rewriteQuery(`SELECT * WHERE {
         ?s ?p ?o .
-        BIND(<internal://blank>(?s) AS ?node)
-        BIND(${argument} AS ?bound)
-        BIND(<internal://blank>(?bound) AS ?fromVariable)
-        BIND(<internal://blank>(${argument}) AS ?fromExpression)
-      }`, tripleTermData);
-      expect(nodes).toHaveLength(3);
-      for (const binding of nodes) {
-        expect(binding.get('fromExpression')).toBeDefined();
-        expect(binding.get('fromExpression')?.value).toBe(binding.get('fromVariable')?.value);
-      }
-    },
-  );
+        BIND(<internal://blank>(?s, STR(?o)) AS ?node)
+        FILTER(ISBLANK(?node))
+      }`)).trim()).toEqual([
+        'SELECT ?node ?o ?p ?s WHERE {\n  {\n    ?s ?p ?o .\n    BIND( STRDT( <internal://blank/encoding> ( ',
+        'COALESCE( TRIPLE( <internal://blank/argument> , <internal://blank/argument> , ?s ) , <internal://blank/unbound> ) , ',
+        'COALESCE( TRIPLE( <internal://blank/argument> , <internal://blank/argument> , STR( ?o ) ) , <internal://blank/unbound> ) ',
+        `) , <${DT_INTERNAL_BNODE}> ) AS ?node )\n  }\n  FILTER ( ( ISLITERAL( ?node ) && ( DATATYPE( ?node ) = <${DT_INTERNAL_BNODE}> ) ) )\n}`,
+      ].join(''));
+    });
 
-  // A BIND keeps an error apart from false, which a FILTER would drop alike.
-  it.for(<const> [
-    [ 'a typed literal', internalBnodeAsSpecialLiteralTransformation() ],
-    [ 'a prefixed IRI', internalBnodeAsSpecialIriTransformation() ],
-  ])('recognises a node materialised as %s as the only blank node', async([ , transformation ], { expect }) => {
-    const rows = await solutions(createQueryRewriter([ transformation ]), `SELECT ?isBlank WHERE {
-      { VALUES ?x { <ex://a> "a" <<( <ex://a> <ex://p> <ex://o> )>> } } UNION { BIND(<internal://blank>(<ex://a>) AS ?x) }
-      BIND(ISBLANK(?x) AS ?isBlank)
-    }`, tripleTermData);
-    // In any order, as a UNION promises none.
-    expect(rows.map(row => String(row.get('isBlank')?.value)).sort()).toEqual([ 'false', 'false', 'false', 'true' ]);
-  });
+    // The SPARQL encoding there tests an argument by evaluating it again, so it takes `RAND()` for an error: both sides
+    // become `,unbound` and the condition fails.
+    it('evaluates an unstable argument in an OPTIONAL condition once', async({ expect }) => {
+      await expect(solutions(extensionFunctionLiteral, `SELECT ?x WHERE {
+        ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(!SAMETERM(<internal://blank>(STR(RAND())), <internal://blank>(STR(RAND())))) }
+      }`)).resolves.toHaveLength(9);
+    });
 
-  // `<o1>` and `"o1"` have no triples of their own, so the EXISTS is false and every OPTIONAL row matches.
-  it('evaluates an EXISTS argument in an OPTIONAL condition', async({ expect }) => {
-    const rows = await solutions(iriRewriter, `SELECT ?x WHERE {
-      ?s ?p ?o OPTIONAL { ?s ?q ?x FILTER(<internal://blank>(EXISTS { ?x ?y ?z }) = <internal://blank>(false)) }
-    }`, tripleTermData);
-    expect(rows.map(row => row.get('x')?.value)).toEqual(Array.from({ length: 9 }, () => expect.any(String)));
-  });
+    // The SPARQL encoding errors on it.
+    it('encodes a blank node an engine constructs by its label', async({ expect }) => {
+      await expect(encode([
+        DF.quad(boundArgumentMarker, boundArgumentMarker, DF.blankNode('b0')),
+      ])).resolves.toEqual(DF.literal(',bnode,2:b0'));
+    });
 
-  // `?x` is bound for the `<ex://o1>` solution only, and both solutions share `?s`.
-  it('constructs a node of its own for an argument an OPTIONAL in the mapping leaves unbound', async({ expect }) => {
-    const nodes = await constructedNodes(skolemisingRewriter(`CONSTRUCT { ?node <ex://object> ?o } WHERE {
-      ?s ?p ?o .
-      OPTIONAL { ?x <ex://p1> ?o }
-      BIND(<internal://blank>(?s, ?x) AS ?node)
-    }`), 'SELECT ?node WHERE { ?node <ex://object> ?o }', './test/statics/data01.ttl');
-    expect(nodes).toEqual([ expect.any(String), expect.any(String) ]);
-    expect(new Set(nodes).size).toBe(2);
-  });
-
-  it.for([
-    'SELECT ?node WHERE { ?s ?p ?o . BIND(<internal://blank>(STR(RAND())) AS ?node) }',
-    'SELECT (SAMPLE(<internal://blank>(STR(RAND()))) AS ?node) WHERE { ?s ?p ?o } GROUP BY ?s ?p ?o',
-  ])('constructs a node per solution for an unstable argument in %s', async(query, { expect }) => {
-    expect(new Set(await constructedNodes(iriRewriter, query, tripleTermData)).size).toBe(3);
+    it('refuses an argument the transformation did not wrap', async({ expect }) => {
+      await expect(encode([ DF.namedNode('ex://a') ]))
+        .rejects.toThrow('has to be wrapped');
+    });
   });
 
   it('refuses a triple term argument depth that is not a non-negative integer', ({ expect }) => {
@@ -142,16 +224,15 @@ describe('bnode skolem', () => {
     expect(() => createQueryRewriter([], { tripleTermArgumentDepth: 1.5 })).toThrow('non-negative integer');
   });
 
-  describe('as a special literal', () => {
-    const rewriter = createQueryRewriter([ internalBnodeAsSpecialLiteralTransformation() ]);
-
-    // A node materialised as a typed literal has its encoding as value.
-    // The last is nested three deep, one more than the default depth, so it constructs no node.
+  // A node materialised as a typed literal has its encoding as value, the same whichever way it is encoded.
+  describe.for([ sparqlLiteral, extensionFunctionLiteral ])('encoded by $name', (evaluation) => {
     const encodings = <const> [
       [ '<ex://a>', ',iri,6:ex://a' ],
       [ '"a"', ',literal,1:a,39:http://www.w3.org/2001/XMLSchema#string,0:,0:' ],
       // The length tells where a string ends, so a comma or backslash in it needs no escaping.
       [ '"a,b\\\\c"', ',literal,5:a,b\\c,39:http://www.w3.org/2001/XMLSchema#string,0:,0:' ],
+      // The length counts characters, as `STRLEN` does, not UTF-16 code units.
+      [ '"😀"', ',literal,1:😀,39:http://www.w3.org/2001/XMLSchema#string,0:,0:' ],
       [ '"a"@en', ',literal,1:a,53:http://www.w3.org/1999/02/22-rdf-syntax-ns#langString,2:en,0:' ],
       [ '"a"@en--ltr', ',literal,1:a,56:http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString,2:en,3:ltr' ],
       [ '"1"^^<ex://dt>', ',literal,1:1,7:ex://dt,0:,0:' ],
@@ -160,41 +241,66 @@ describe('bnode skolem', () => {
         '<<( <ex://a> <ex://p> <<( <ex://b> <ex://q> <ex://c> )>> )>>',
         ',triple,iri,6:ex://a,iri,6:ex://p,triple,iri,6:ex://b,iri,6:ex://q,iri,6:ex://c',
       ],
-      [ '<<( <ex://a> <ex://p> <<( <ex://b> <ex://q> <<( <ex://c> <ex://r> <ex://d> )>> )>> )>>', undefined ],
     ];
 
     it('encodes each kind of term bound to a variable with its own tag, and an unbound one too', async({ expect }) => {
-      await expect(constructedNodes(rewriter, `SELECT ?node WHERE {
+      await expect(constructedNodes(evaluation, `SELECT ?node WHERE {
         VALUES ?x { ${encodings.map(([ term ]) => term).join(' ')} UNDEF }
         BIND(<internal://blank>(?x) AS ?node)
-      }`, tripleTermData)).resolves.toEqual([ ...encodings.map(([ , encoding ]) => encoding), ',unbound' ]);
+      }`)).resolves.toEqual([ ...encodings.map(([ , encoding ]) => encoding), ',unbound' ]);
     });
 
     it.for(encodings)('encodes %s written out as when bound to a variable', async([ term, encoding ], { expect }) => {
-      await expect(constructedNodes(
-        rewriter,
-        `SELECT ?node WHERE { BIND(<internal://blank>(${term}) AS ?node) }`,
-        tripleTermData,
-      )).resolves.toEqual([ encoding ]);
+      await expect(constructedNodes(evaluation, `SELECT ?node WHERE { BIND(<internal://blank>(${term}) AS ?node) }`))
+        .resolves.toEqual([ encoding ]);
     });
 
-    const expressionEncodings = <const> [
+    // An argument that errors is encoded as one left unbound: `1 + "x"` errors, and a literal subject fails to
+    // construct its triple term.
+    it.for(<const> [
       [ 'STR(<ex://a>)', ',literal,6:ex://a,39:http://www.w3.org/2001/XMLSchema#string,0:,0:' ],
       [ '1 + "x"', ',unbound' ],
+      [ '<<( ?literal <ex://p> <ex://o> )>>', ',unbound' ],
       [ 'TRIPLE(<ex://a>, <ex://p>, "o"@en)', ',triple,iri,6:ex://a,iri,6:ex://p,literal,1:o,53:http://www.w3.org/1999/02/22-rdf-syntax-ns#langString,2:en,0:' ],
       [ 'EXISTS {}', ',literal,4:true,40:http://www.w3.org/2001/XMLSchema#boolean,0:,0:' ],
-    ];
-
-    it.for(expressionEncodings)('encodes the expression %s as the value it evaluates to', async([
-      expression,
-      encoding,
-    ], { expect }) => {
-      await expect(constructedNodes(
-        rewriter,
-        `SELECT ?node WHERE { BIND(<internal://blank>(${expression}) AS ?node) }`,
-        tripleTermData,
-      )).resolves.toEqual([ encoding ]);
+      // In the order they are written.
+      [ '<ex://b>, ?unbound, "a"', ',iri,6:ex://b,unbound,literal,1:a,39:http://www.w3.org/2001/XMLSchema#string,0:,0:' ],
+    ])('encodes the arguments %s as the values they evaluate to', async([ args, encoding ], { expect }) => {
+      await expect(constructedNodes(evaluation, `SELECT ?node WHERE {
+        BIND("a" AS ?literal)
+        BIND(<internal://blank>(${args}) AS ?node)
+      }`)).resolves.toEqual([ encoding ]);
     });
+  });
+
+  describe('with a triple term three deep', () => {
+    const query = `SELECT ?node WHERE {
+      BIND(<internal://blank>(<<( <ex://a> <ex://p> <<( <ex://b> <ex://q> <<( <ex://c> <ex://r> <ex://d> )>> )>> )>>) AS ?node)
+    }`;
+
+    // An expression cannot recurse, so the SPARQL encoding unrolls a triple term only `tripleTermArgumentDepth` deep.
+    it('encoded in SPARQL, constructs no node', async({ expect }) => {
+      await expect(constructedNodes(sparqlLiteral, query)).resolves.toEqual([ undefined ]);
+    });
+
+    it('encoded by an extension function, constructs its node', async({ expect }) => {
+      await expect(constructedNodes(extensionFunctionLiteral, query)).resolves.toEqual([
+        ',triple,iri,6:ex://a,iri,6:ex://p,triple,iri,6:ex://b,iri,6:ex://q,triple,iri,6:ex://c,iri,6:ex://r,iri,6:ex://d',
+      ]);
+    });
+  });
+
+  // A node materialised as an IRI is the prefixed SHA-1 of its encoding, the same whichever way it is encoded.
+  it.for([ sparqlIri, extensionFunctionIri ])('encoded by $name, materialises the SHA-1 of the encoding', async(
+    evaluation,
+    { expect },
+  ) => {
+    await expect(constructedNodes(evaluation, 'SELECT ?node WHERE { BIND(<internal://blank>(<ex://a>) AS ?node) }'))
+      .resolves.toEqual([ `${IRI_PREFIX_BNODE}${createHash('sha1').update(',iri,6:ex://a').digest('hex')}` ]);
+  });
+
+  describe('as a special literal', () => {
+    const rewriter = createQueryRewriter([ sparqlLiteral.transformation ]);
 
     // Joins encodings, each the list of parts of its CONCAT, as the rewrite does: nested parts spliced in, adjacent
     // constants merged.

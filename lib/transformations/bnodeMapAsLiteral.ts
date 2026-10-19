@@ -1,6 +1,5 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { DataFactory } from 'rdf-data-factory';
-import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE, IRI_PREFIX_BNODE } from '../consts.js';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
 import { triplePositions } from '../datastructures/TermClusterSet.js';
 import { literalRange, RangeSet, rangeOfPosition, subjectRange, tripleTermRange } from '../RangeSet.js';
@@ -17,10 +16,18 @@ import {
 import {
   constructedTermOf,
   createBooleanExpression,
-  holdsExpression,
 } from '../utils/expressionHelpers.js';
 import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
 import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
+import { materialiseInternalBnodesByExtensionFunction } from './bnodeExtensionFunction.js';
+import type { InternalBnodeMaterialisation } from './internalBnodeMaterialisation.js';
+import {
+  holdsInternalBnodeOrIsBlank,
+  internalBnodeEncodingTags,
+  internalBnodeExpressionCallbacks,
+  specialIriMaterialisation,
+  specialLiteralMaterialisation,
+} from './internalBnodeMaterialisation.js';
 
 /**
  * @fileoverview Blank node transformation utilities.
@@ -34,15 +41,6 @@ import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
  * Both approaches allow blank nodes to be consistently identified across
  * query results while maintaining the semantics of "same inputs = same node".
  */
-
-/**
- * Whether a named expression constructs an internal blank node.
- * @param expression - The named expression to check.
- * @returns Whether it calls `<internal://blank>`.
- */
-function isInternalBnode(expression: Algebra.NamedExpression): boolean {
-  return expression.name.value === EXTENSION_FUNCTION_BNODE;
-}
 
 /**
  * Encodes the arguments of an internal blank node into a string that is equal exactly when the arguments are,
@@ -59,7 +57,7 @@ function isInternalBnode(expression: Algebra.NamedExpression): boolean {
  * @param c - The transformation context
  * @param expression - The internal blank node expression
  * @param scope - What the solutions the expression is evaluated over bind; nothing is known where it is absent.
- * @returns The encoding, or `STRUUID()` when there are no arguments
+ * @returns The encoding
  */
 function encodeInternalBnode(
   c: TransformationContext,
@@ -135,13 +133,13 @@ function encodeInternalBnode(
   function encodeIriOrLiteral(termExpression: Algebra.Expression, range: RangeSet): Algebra.Expression {
     const termFunction = (operator: string): Algebra.Expression =>
       AF.createOperatorExpression(operator, [ termExpression ]);
-    const iriEncoding = concat([ expressionLiteral(',iri'), field(termFunction('str')) ]);
+    const iriEncoding = concat([ expressionLiteral(internalBnodeEncodingTags.iri), field(termFunction('str')) ]);
     // An IRI or a blank node, which is disallowed, so an IRI.
     if (isSubsetOf(range, subjectRange)) {
       return iriEncoding;
     }
     const literalEncoding = concat([
-      expressionLiteral(',literal'),
+      expressionLiteral(internalBnodeEncodingTags.literal),
       field(termFunction('str')),
       field(AF.createOperatorExpression('str', [ termFunction('datatype') ])),
       field(termFunction('lang')),
@@ -187,7 +185,7 @@ function encodeInternalBnode(
       return encodeIriOrLiteral(termExpression, range);
     }
     const tripleTermEncoding = concat([
-      expressionLiteral(',triple'),
+      expressionLiteral(internalBnodeEncodingTags.triple),
       ...triplePositions.map(position => encodeTerm(...componentExpressionOf(termExpression, position), depth - 1)),
     ]);
     if (isSubsetOf(range, tripleTermRange)) {
@@ -217,7 +215,8 @@ function encodeInternalBnode(
         AF.createOperatorExpression('sameterm', [ argument, argument ]),
         createBooleanExpression(c, false),
       ]);
-    return AF.createOperatorExpression('if', [ evaluates, encoding, expressionLiteral(',unbound') ]);
+    const unbound = expressionLiteral(internalBnodeEncodingTags.unbound);
+    return AF.createOperatorExpression('if', [ evaluates, encoding, unbound ]);
   }
 
   /**
@@ -236,10 +235,6 @@ function encodeInternalBnode(
 
   // ====================== Implementation ========================
 
-  // Without arguments, a fresh identity each time.
-  if (expression.args.length === 0) {
-    return AF.createOperatorExpression('struuid', []);
-  }
   // In the order the arguments are written: removeProjections gives hidden variables fresh names per pattern,
   // so an order read off their names would differ between two patterns constructing the same node.
   return concat(expression.args.map(encodeArgument));
@@ -251,41 +246,33 @@ function encodeInternalBnode(
  * except inside an EXISTS, which binds what it is asked for beyond those ranges.
  * @param c - The transformation context
  * @param op - The operation to transform
- * @param materialiseEncoding - Turns the encoding of an internal blank node into the term it becomes.
- * @param isMaterialisedBnode - Turns the arguments of an `ISBLANK` into the test for such a term.
+ * @param materialisation - What the internal blank nodes become.
  * @returns The transformed operation
  */
 function materialiseInternalBnodes<T extends Algebra.Operation>(
   c: TransformationContext,
   op: T,
-  materialiseEncoding: (encoding: Algebra.Expression) => Algebra.Expression,
-  isMaterialisedBnode: (args: Algebra.Expression[]) => Algebra.Expression,
+  materialisation: InternalBnodeMaterialisation,
 ): T {
-  if (!holdsExpression(op, held => (held.subType === Algebra.ExpressionTypes.NAMED && isInternalBnode(held)) ||
-    (held.subType === Algebra.ExpressionTypes.OPERATOR && held.operator === 'isblank'))) {
-    return op;
-  }
   const { AF } = c;
   const coinArgumentVariable = freshVarGenerator(markVariableNamesUsed(c, op), 'mBnodeArgument');
 
   /**
    * Materialises the internal blank nodes in an expression and rewrites its `ISBLANK`s.
    * @param expression - The expression to transform.
-   * @param materialise - Materialises one internal blank node, whose arguments are transformed already.
+   * @param encodeArguments - Encodes one internal blank node with arguments, which are materialised already.
    * @returns The transformed expression.
    */
   function materialiseInExpression(
     expression: Algebra.Expression,
-    materialise: (named: Algebra.NamedExpression) => Algebra.Expression,
+    encodeArguments: (named: Algebra.NamedExpression) => Algebra.Expression,
   ): Algebra.Expression {
     return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: {
       existence: { preVisitor: () => ({ continue: false }), transform: (existence) => {
         existence.input = materialiseAll(existence.input, false);
         return existence;
       } },
-      named: { transform: named => isInternalBnode(named) ? materialise(named) : named },
-      operator: { transform: operator =>
-        operator.operator === 'isblank' ? isMaterialisedBnode(operator.args) : operator },
+      ...internalBnodeExpressionCallbacks(c, materialisation, encodeArguments),
     }});
   }
 
@@ -311,7 +298,7 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
         return AF.createTermExpression(variable);
       });
       const scope = withRanges ? cpMetaOf(operation.input) : undefined;
-      return materialiseEncoding(encodeInternalBnode(c, AF.createNamedExpression(named.name, args), scope));
+      return encodeInternalBnode(c, AF.createNamedExpression(named.name, args), scope);
     });
   }
 
@@ -353,7 +340,7 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
       [Algebra.Types.EXPRESSION]: {
         preVisitor: () => ({ continue: false }),
         transform: expression =>
-          materialiseInExpression(expression, named => materialiseEncoding(encodeInternalBnode(c, named))),
+          materialiseInExpression(expression, named => encodeInternalBnode(c, named)),
       },
     });
   }
@@ -362,91 +349,46 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   return withoutCpVars(materialiseAll(withoutCpVars(op), true));
 }
 
-/**
- * Transforms internal blank nodes to typed literals with a special datatype.
- *
- * This transformation:
- * 1. Converts `<internal://blank>(...)` to `STRDT(computed-value, <internal-bnode-type>)`
- * 2. Rewrites `ISBLANK(x)` to check if the datatype matches the special type
- *
- * @param c - The transformation context
- * @param op - The operation to transform
- * @returns The transformed operation with blank nodes as typed literals
- *
- * @example
- * // Internal blank node expression becomes:
- * // STRDT(CONCAT(...encoded vars...), <https://sparql-extension.knows.idlab.ugent.be/bnode>)
- */
-export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  const { AF, DF } = c;
-  return materialiseInternalBnodes(
-    c,
-    op,
-    encoding => AF.createOperatorExpression('strdt', [
-      encoding,
-      AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
-    ]),
-    // DATATYPE errors on any other term than a literal, so it is asked of a literal only.
-    args => AF.createOperatorExpression('&&', [
-      AF.createOperatorExpression('isliteral', args),
-      AF.createOperatorExpression('=', [
-        AF.createOperatorExpression('datatype', args),
-        AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
-      ]),
-    ]),
-  );
+/** How a pipeline step materialises internal blank nodes. */
+export interface InternalBnodeMaterialisationOptions {
+  /** Leave the encoding to {@link transformations/bnodeExtensionFunction!internalBnodeExtensionFunctions}. */
+  encodedByExtensionFunction?: boolean;
 }
 
 /**
- * Transforms internal blank nodes to IRIs with a special prefix.
- *
- * This transformation:
- * 1. Converts `<internal://blank>(...)` to `IRI(CONCAT(prefix, SHA1(computed-value)))`
- * 2. Rewrites `ISBLANK(x)` to check if the IRI starts with the special prefix
- *
- * Using SHA1 keeps the IRI length manageable when blank nodes are nested.
- *
- * @param c - The transformation context
- * @param op - The operation to transform
- * @returns The transformed operation with blank nodes as prefixed IRIs
- *
- * @example
- * // Internal blank node expression becomes:
- * // IRI(CONCAT("https://myInternalBnode.example.org/", SHA1(...encoded vars...)))
- */
-export function internalBnodeAsSpecialIri<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  const { AF, DF } = c;
-  return materialiseInternalBnodes(
-    c,
-    op,
-    encoding => AF.createOperatorExpression('iri', [
-      AF.createOperatorExpression('concat', [
-        AF.createTermExpression(DF.literal(IRI_PREFIX_BNODE)),
-        AF.createOperatorExpression('sha1', [ encoding ]),
-      ]),
-    ]),
-    args => AF.createOperatorExpression('&&', [
-      AF.createOperatorExpression('isiri', args),
-      AF.createOperatorExpression('strstarts', [
-        AF.createOperatorExpression('str', args),
-        AF.createTermExpression(DF.literal(IRI_PREFIX_BNODE)),
-      ]),
-    ]),
-  );
-}
-
-/**
- * The pipeline step materialising every internal blank node as a typed literal.
+ * The pipeline step materialising every internal blank node as a materialisation does.
+ * @param materialisation - What the internal blank nodes become.
+ * @param options - Whether an extension function encodes them.
  * @returns the transformation
  */
-export function internalBnodeAsSpecialLiteralTransformation(): QueryTransformation {
-  return internalBnodeAsSpecialLiteral;
+function internalBnodeMaterialisationTransformation(
+  materialisation: InternalBnodeMaterialisation,
+  options: InternalBnodeMaterialisationOptions,
+): QueryTransformation {
+  const materialise = options.encodedByExtensionFunction ?
+    materialiseInternalBnodesByExtensionFunction :
+    materialiseInternalBnodes;
+  return (c, op) => holdsInternalBnodeOrIsBlank(op) ? materialise(c, op, materialisation) : op;
+}
+
+/**
+ * The pipeline step materialising every internal blank node as a typed literal of a special datatype.
+ * @param options - Whether an extension function encodes them.
+ * @returns the transformation
+ */
+export function internalBnodeAsSpecialLiteralTransformation(
+  options: InternalBnodeMaterialisationOptions = {},
+): QueryTransformation {
+  return internalBnodeMaterialisationTransformation(specialLiteralMaterialisation, options);
 }
 
 /**
  * The pipeline step materialising every internal blank node as a prefixed IRI.
+ * @param options - Whether an extension function encodes them.
  * @returns the transformation
  */
-export function internalBnodeAsSpecialIriTransformation(): QueryTransformation {
-  return internalBnodeAsSpecialIri;
+export function internalBnodeAsSpecialIriTransformation(
+  options: InternalBnodeMaterialisationOptions = {},
+): QueryTransformation {
+  return internalBnodeMaterialisationTransformation(specialIriMaterialisation, options);
 }

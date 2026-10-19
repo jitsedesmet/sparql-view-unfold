@@ -110,8 +110,13 @@ through its components, up to the context's `tripleTermArgumentDepth` (2) deep s
 a deeper one leaves the node unbound. Outside an `OPTIONAL` condition, which has no input to bind it in, an
 argument that is no term is bound to a fresh variable first, so it is evaluated once, and the encoding leaves out
 the branches the `vRanges` and `cVars` of the input rule out. Two transformations materialise it —
-`internalBnodeAsSpecialLiteral` as a typed literal, `internalBnodeAsSpecialIri` as a prefixed IRI whose length
-SHA-1 keeps manageable.
+`internalBnodeAsSpecialLiteralTransformation` as a typed literal, `internalBnodeAsSpecialIriTransformation` as a
+prefixed IRI whose length SHA-1 keeps manageable, each through its `InternalBnodeMaterialisation`.
+
+With `encodedByExtensionFunction`, an extension function of the engine, `<internal://blank/encoding>`, gives the
+encoding from the evaluated arguments instead, at any depth, and the same materialisation turns it into the node
+(`lib/transformations/bnodeExtensionFunction.ts`). An engine errors the call when an argument errors, so each argument
+`e` is wrapped as `COALESCE(TRIPLE(<internal://blank/argument>, <internal://blank/argument>, e), <internal://blank/unbound>)`.
 
 ## SPARQL quirks worth knowing
 
