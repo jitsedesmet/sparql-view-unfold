@@ -10,6 +10,7 @@ import {
   internalBnodeAsSpecialLiteral,
   internalBnodeAsSpecialLiteralTransformation,
 } from '../lib/transformations/bnodeMapAsLiteral.js';
+import { simplifyStaticExpressionsTransformation } from '../lib/transformations/staticExpressionEvaluation.js';
 import { createTransformationContext } from '../lib/transformContext.js';
 
 const engine = new QueryEngine();
@@ -389,6 +390,14 @@ describe('bnode skolem', () => {
       expect((await rewriter.rewriteQuery('SELECT * WHERE { BIND(<internal://blank>(<ex://c>) AS ?node) }')).trim())
         .toEqual(String.raw`SELECT ( STRDT( CONCAT( CONCAT( ",iri," , REPLACE( REPLACE( STR( <ex://c> ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?node ) WHERE {
 }`);
-    });
+      // Static evaluation folds the encoding of a constant into the node itself.
+      const evaluated = createQueryRewriter([
+        internalBnodeAsSpecialLiteralTransformation(),
+        simplifyStaticExpressionsTransformation(),
+      ]);
+      expect((await evaluated.rewriteQuery('SELECT * WHERE { BIND(<internal://blank>(<ex://c>) AS ?node) }')).trim())
+        .toEqual(`SELECT ( ",iri,ex://c"^^<https://sparql-extension.knows.idlab.ugent.be/bnode> AS ?node ) WHERE {
+}`);
+    }, 60_000);
   });
 });
