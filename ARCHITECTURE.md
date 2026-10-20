@@ -134,11 +134,13 @@ encoding from the evaluated arguments instead, at any depth, and the same materi
   The derivations an operation selects are the derivation variables in its scope, so only a PROJECT needs a
   rule to keep selecting them, and those under a MINUS or an EXISTS never leave it.
 
-A GROUP or SLICE counts solutions rather than derivations, so its answers are computed over each BGP's distinct
-lookups projected onto its variables, the view's set semantics, and then joined with the derivations of the
-solutions they agree with, the shape of that paper's aggregate rewrite (Def. 4.17). A join lets an unbound
-variable match any value, so a variable that may be unbound is joined on the key the extension function wraps
-its arguments in, `COALESCE(TRIPLE(<…argument>, <…argument>, ?x), <…unbound>)`.
+Every operator but a GROUP or SLICE is rewritten in place (Def. 4.3). A GROUP or SLICE counts solutions rather than
+derivations, so it duplicates its subtree: once without derivations to compute the answers, once with them for the
+solutions whose derivations are left-joined onto those answers; the subtree is thus evaluated twice, and nested
+GROUPs and SLICEs grow the query exponentially. That duplication is the paper's aggregate rewrite for a GROUP
+(Def. 4.17); applying it to LIMIT and OFFSET, computing the answers over each BGP's distinct lookups (the view's set
+semantics), and joining a variable that may be unbound on the extension function's wrapped key,
+`COALESCE(TRIPLE(<…argument>, <…argument>, ?x), <…unbound>)`, are this repo's own choices.
 
 ## SPARQL quirks worth knowing
 

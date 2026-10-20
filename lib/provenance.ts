@@ -168,7 +168,7 @@ function derivationsSelectedBy(c: ProvenanceCaptureContext, operation: Algebra.O
 
 /**
  * Replaces every BGP outside a SERVICE by the distinct solutions of its derivation lookups on the BGP's own
- * variables, which are the BGP's solutions over the view, selecting no derivation.
+ * variables: the BGP's solutions over the view as a set, selecting no derivation (this repo's choice).
  * @param c - The provenance capture context
  * @param operation - The operation to rewrite
  * @returns the rewritten operation
@@ -186,7 +186,7 @@ function withDerivationsHidden(c: ProvenanceCaptureContext, operation: Algebra.O
 
 /**
  * Attaches to every answer the derivations of the solutions agreeing with it on the join variables, where an unbound
- * variable only agrees with an unbound one (SPARQLprov, Def. 4.17).
+ * variable only agrees with an unbound one: the GROUP rewrite of SPARQLprov, Def. 4.17, here also used for a SLICE.
  * @param c - The provenance capture context
  * @param answers - The answers, selecting the join and answer variables but no derivation
  * @param solutions - The solutions the answers are computed from, selecting their derivations
@@ -209,7 +209,8 @@ function attachDerivationsToAnswers(
   }
   // The answers are computed from the solutions, so a variable every solution binds every answer binds too.
   const certainlyBound = certainlyBoundVariablesOf(solutions);
-  // A join lets an unbound variable match any value, so a variable that may be unbound is joined on a key.
+  // A join lets an unbound variable match any value, so a variable that may be unbound is joined on the extension
+  // function's wrapped key, this repo's choice.
   const keyOfVariable = joinVariables
     .filter(variable => !certainlyBound.has(variable.value))
     .map(variable => <const> [ variable, c.coinInternalVariable() ]);
@@ -228,8 +229,8 @@ function attachDerivationsToAnswers(
 }
 
 /**
- * Rewrites an operation to also select, per triple pattern outside a SERVICE, the derivation that pattern
- * matched.
+ * Rewrites an operation to also select, per triple pattern outside a SERVICE, the derivation that pattern matched.
+ * Every operator but a GROUP or SLICE is rewritten in place (SPARQLprov, Def. 4.3); those duplicate their subtree.
  * @param c - The provenance capture context
  * @param operation - The operation to rewrite
  * @returns the rewritten operation
@@ -243,8 +244,8 @@ function withDerivations(c: ProvenanceCaptureContext, operation: Algebra.Operati
       if (group === undefined) {
         return AF.createProject(project.input, [ ...project.variables, ...derivationsSelectedBy(c, project.input) ]);
       }
-      // An aggregate counts the solutions of its group rather than their derivations, so the groups are
-      // computed without derivations and the derivations of their solutions attached afterwards.
+      // An aggregate counts solutions rather than derivations, so the subtree is duplicated: the groups are computed
+      // without derivations and those of their solutions attached afterwards (SPARQLprov, Def. 4.17).
       const groupsWithTheirKeys = AF.createProject(original.input, [
         ...original.variables,
         ...group.variables.filter(variable => !original.variables.some(selected => selected.equals(variable))),
@@ -258,8 +259,9 @@ function withDerivations(c: ProvenanceCaptureContext, operation: Algebra.Operati
       );
     } },
     [Algebra.Types.SLICE]: { transform: (slice, original) => {
-      // LIMIT and OFFSET count solutions rather than their derivations, likewise. Every solution agreeing with
-      // an answer is one of its derivations, so the solutions need no order and the answers no repeats.
+      // LIMIT and OFFSET count solutions likewise, so the GROUP duplication applies to them too, this repo's choice.
+      // Every solution agreeing with an answer is one of its derivations, so the solutions need no order and the
+      // answers no repeats.
       const answerVariables = algebraUtils.inScopeVariables(original);
       const unorderedSolutions = algebraUtils.mapOperation<'unsafe', Algebra.Operation>(slice.input, {
         [Algebra.Types.ORDER_BY]: { transform: orderBy => orderBy.input },
