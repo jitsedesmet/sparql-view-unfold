@@ -2,6 +2,11 @@
   "name": "sparql-view-unfold",
   "type": "module",
   "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "comunica/engines/*",
+    "comunica/packages/*"
+  ],
   "packageManager": "yarn@1.22.22",
   "description": "View unfolding and query optimisation for SPARQL 1.2, with views defined as CONSTRUCT queries",
   "lsd:module": true,
