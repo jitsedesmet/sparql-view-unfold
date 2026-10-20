@@ -584,3 +584,71 @@ describe('provenance captured over the colleagues data', () => {
     expect(distinctAnswers(rows, [ 'source' ])).toEqual([ 'source=<<ex://bob ex://worksAt ex://ugent>>' ]);
   });
 });
+
+describe('provenance, the whole story', () => {
+  it('traces a grouped answer over the view back to the source triples it rests on', async({ expect }) => {
+    // The source data (test/statics/colleagues.ttl): Bob and Carol work at UGent and imec, Dave at UGent only.
+    // The view: two people working at the same organisation are colleagues.
+    const view = [
+      `${prefixes} CONSTRUCT { ?x :colleague ?y } WHERE { ?x :worksAt ?org . ?y :worksAt ?org . FILTER(?x != ?y) }`,
+    ];
+    // A user asks the view how many colleagues each person has.
+    const query = `${prefixes} SELECT ?x (COUNT(*) AS ?colleagues) WHERE { ?x :colleague ?y } GROUP BY ?x`;
+
+    // 1. The provenance view: every solution of the view's body is a derivation, `derivationOf` the view triple it
+    //    produces and `derivedFrom` the source triples it matched. SPARQLprov (Hernández et al., "Computing
+    //    How-Provenance for SPARQL Queries via Query Rewriting", https://doi.org/10.14778/3484224.3484235) and NPCS
+    //    (Asma et al., "NPCS: Native Provenance Computation for SPARQL", https://doi.org/10.1145/3589334.3645557)
+    //    need the data stored reified; NPCS (p. 2092) leaves non-reified data as future work. This view supplies the
+    //    reification virtually.
+    const provenanceMapping = provenanceMappingFromConstructQueries(view);
+
+    // 2. The query is rewritten over the provenance view. Its triple pattern becomes a derivation lookup, as
+    //    SPARQLprov (Def. 4.3) reifies every triple pattern. The GROUP duplicates its subtree, as SPARQLprov's
+    //    aggregate rewrite (Def. 4.17) does: the counts are computed without derivations, and the derivations of
+    //    every solution in a group are left-joined onto that group's answer on its key `?x`. Computing the counts
+    //    over each BGP's distinct lookups, the view's set semantics, is this repository's own choice.
+    expect(provenanceCapturingQuery(query).trim()).toEqual(`SELECT ?x ?colleagues ?derivation0 WHERE {
+  {
+    SELECT ?x ( COUNT( * ) AS ?colleagues ) WHERE {
+      SELECT DISTINCT ?x ?y WHERE {
+        ?internal0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
+      }
+    }
+    GROUP BY ?x
+  }
+  OPTIONAL {
+    {
+      SELECT ?x ?derivation0 WHERE {
+        ?derivation0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
+      }
+    }
+  }
+}`);
+
+    // 3. Unfolded onto the source and evaluated, with Comunica encoding the derivations' identities.
+    const answers = await evaluate(provenanceMapping, provenanceCapturingQuery(query));
+    const bobsAnswers = answers.filter(answer => answer.x === 'ex://bob');
+    // Bob has two colleagues, as the view without provenance says, resting on three derivations: Carol through
+    // UGent, Carol through imec, and Dave through UGent.
+    expect(new Set(bobsAnswers.map(answer => answer.colleagues.split('^^')[0]))).toEqual(new Set([ '"2"' ]));
+    const bobsDerivations = new Set(bobsAnswers.map(answer => answer.derivation0));
+    expect(bobsDerivations.size).toBe(3);
+
+    // 4. Every derivation leads back, through the provenance view, to the view triple it produced and the source
+    //    triples it matched.
+    const links = await evaluate(provenanceMapping, `${prefixes} SELECT ?derivation ?viewTriple ?source WHERE {
+      ?derivation provenance:derivationOf ?viewTriple ; provenance:derivedFrom ?source .
+    }`);
+    const traceOf = (derivation: string): string => {
+      const linksOfDerivation = links.filter(link => link.derivation === derivation);
+      const sources = linksOfDerivation.map(link => link.source).sort().join(' and ');
+      return `${linksOfDerivation[0].viewTriple} from ${sources}`;
+    };
+    expect([ ...bobsDerivations ].map(traceOf).sort()).toEqual([
+      '<<ex://bob ex://colleague ex://carol>> from <<ex://bob ex://worksAt ex://imec>> and <<ex://carol ex://worksAt ex://imec>>',
+      '<<ex://bob ex://colleague ex://carol>> from <<ex://bob ex://worksAt ex://ugent>> and <<ex://carol ex://worksAt ex://ugent>>',
+      '<<ex://bob ex://colleague ex://dave>> from <<ex://bob ex://worksAt ex://ugent>> and <<ex://dave ex://worksAt ex://ugent>>',
+    ]);
+  });
+});
