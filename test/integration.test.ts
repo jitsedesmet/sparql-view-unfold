@@ -60,8 +60,16 @@ describe('integration tests', () => {
    */
   function isRdfTriple(triple: RDF.BaseQuad): boolean {
     return (triple.subject.termType === 'NamedNode' || triple.subject.termType === 'BlankNode') &&
-      triple.predicate.termType === 'NamedNode' &&
-      (triple.object.termType !== 'Quad' || isRdfTriple(triple.object));
+      triple.predicate.termType === 'NamedNode' && holdsOnlyRdfTripleTerms(triple);
+  }
+
+  /**
+   * Whether every triple term a triple holds is one RDF 1.2 admits, which is all SPARQL can build.
+   * @param triple - The triple to check
+   * @returns whether its object is no triple term or an admitted one
+   */
+  function holdsOnlyRdfTripleTerms(triple: RDF.BaseQuad): boolean {
+    return triple.object.termType !== 'Quad' || isRdfTriple(triple.object);
   }
 
   /**
@@ -78,7 +86,7 @@ describe('integration tests', () => {
     for (const mapper of mappers) {
       const subRes = (await sourceToStore([ source ], mapper)).getQuads(null, null, null, null);
       result.addQuads(options.generalizedRdfView === true ?
-        subRes.filter(triple => triple.object.termType !== 'Quad' || isRdfTriple(triple.object)) :
+        subRes.filter(holdsOnlyRdfTripleTerms) :
         subRes.filter(isRdfTriple));
     }
     return result;

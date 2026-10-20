@@ -2,14 +2,14 @@ import type * as RDF from '@rdfjs/types';
 import type { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { ClusterSolver } from '../ClusterSolver.js';
-import { triplePositions } from '../datastructures/TermClusterSet.js';
+import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import { rangeOfPosition } from '../RangeSet.js';
 import { RewriteNoMatchError } from '../RewriteNoMatchError.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
+import { evaluationTestOf } from '../utils/expressionHelpers.js';
 import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
 import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
-import { deepCopy } from '../utils.js';
 
 /**
  * @fileoverview Core pattern rewriting logic: rewriting a single triple pattern against a mapping.
@@ -235,13 +235,12 @@ function wrapOperationInProject({ triplePatternBinds, operation, coinExistenceVa
  * Adds the EXTEND operations that bind the user query's variables to what the subquery found.
  * @returns the subquery with one EXTEND per pattern variable
  */
-function bindPatternTerms({ operation, AF, DF, triplePatternBinds }: {
+function bindPatternTerms({ operation, AF, DF, sortedTriplePatternBinds }: {
   operation: Alg.Operation;
-  triplePatternBinds: ReadonlyMap<string, Alg.Expression>;
+  sortedTriplePatternBinds: readonly [string, Alg.Expression][];
 } & Pick<TransformationContext, 'DF' | 'AF'>): Alg.Operation {
   let buildOperation: Alg.Operation = operation;
-  // Finally add the binds after the subselect - Sort to create stable tests
-  for (const [ variable, expression ] of [ ...triplePatternBinds ].sort((a, b) => a[0].localeCompare(b[0]))) {
+  for (const [ variable, expression ] of sortedTriplePatternBinds) {
     buildOperation = AF.createExtend(
       buildOperation,
       DF.variable(variable),
@@ -252,19 +251,33 @@ function bindPatternTerms({ operation, AF, DF, triplePatternBinds }: {
 }
 
 /**
- * Builds the condition under which a pattern bind yields a term: `sameTerm(e, e)` holds exactly when `e` does
- * not raise, where a raising BIND would leave its pattern variable unbound and keep the solution.
+ * Builds the conditions under which every pattern bind yields a term, a raising BIND leaving its pattern variable
+ * unbound while keeping the solution.
  * @param c - The transformation context
- * @param expression - The expression a pattern variable gets bound to
- * @returns the condition, or `undefined` for a term, which never raises on a body solution
+ * @param sortedTriplePatternBinds - The expression each pattern variable gets bound to
+ * @returns one `sameTerm(e, e)` per distinct way a bind can raise
  */
-function bindEvaluationGuard(c: TransformationContext, expression: Alg.Expression): Alg.Expression | undefined {
-  // Head variables are bound in every body solution, and the mapping tests what its triple terms are built of.
-  if (expression.subType === Algebra.ExpressionTypes.TERM) {
-    return undefined;
+function bindEvaluationGuards(
+  c: TransformationContext,
+  sortedTriplePatternBinds: readonly [string, Alg.Expression][],
+): Alg.Expression[] {
+  const guards = new Map<string, Alg.Expression>();
+  for (const [ , expression ] of sortedTriplePatternBinds) {
+    // Head variables are bound in every body solution, and the mapping tests what its triple terms are built of.
+    if (expression.subType === Algebra.ExpressionTypes.TERM) {
+      continue;
+    }
+    // `SUBJECT`, `PREDICATE` and `OBJECT` of one argument raise alike, so one guard covers all three.
+    const raisesLike = expression.subType === Algebra.ExpressionTypes.OPERATOR &&
+      isTriplePosition(expression.operator) ?
+      expression.args[0] :
+      expression;
+    const key = JSON.stringify(raisesLike);
+    if (!guards.has(key)) {
+      guards.set(key, evaluationTestOf(c, expression));
+    }
   }
-  // Copy the expression: the guard and the bind must not alias, later passes rewrite algebra in place.
-  return c.AF.createOperatorExpression('sameterm', [ deepCopy(c, expression), deepCopy(c, expression) ]);
+  return [ ...guards.values() ];
 }
 
 /**
@@ -303,21 +316,19 @@ function unfoldMappingWithinPattern(
 
   // Construct the contents of our subselect
   let inProject: Alg.Operation = mapping.body.input;
+  // Sort to create stable output.
+  const sortedTriplePatternBinds = [ ...triplePatternBinds ].sort((a, b) => a[0].localeCompare(b[0]));
   // A triple pattern only matches when every one of its variables is assigned, so filter the body on each
   // bind evaluating: the EXTENDs on top then never raise.
-  const guards = [ ...triplePatternBinds ]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([ , expression ]) => bindEvaluationGuard(c, expression))
-    .filter(guard => guard !== undefined);
   for (const expression of [
     ...expressionFilters,
     ...clusterSolver.getStaticExpressionValidation()
       .map(x => AF.createOperatorExpression('sameterm', [ AF.createTermExpression(x.term), x.expression ])),
-    ...guards,
+    ...bindEvaluationGuards(c, sortedTriplePatternBinds),
   ]) {
     inProject = AF.createFilter(inProject, expression);
   }
-  inProject = bindPatternTerms({ operation: inProject, triplePatternBinds, DF, AF });
+  inProject = bindPatternTerms({ operation: inProject, sortedTriplePatternBinds, DF, AF });
   return wrapOperationInProject({ operation: inProject, triplePatternBinds, coinExistenceVariable, AF, DF });
 }
 
