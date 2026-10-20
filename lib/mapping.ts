@@ -60,7 +60,8 @@ export interface MappingOptions {
    * Off by default, and a head variable the body could bind outside the range its position admits then
    * costs a type test, since a CONSTRUCT instantiates no triple for a solution that would make an illegal
    * one (SPARQL 1.1 §16.2). Turn it on where the source is read as generalized RDF and those solutions
-   * keep their triples; the tests are cheap, but they are wrong for a view that wants them.
+   * keep their triples; the tests are cheap, but they are wrong for a view that wants them. The positions
+   * inside a head triple term stay tested, SPARQL building no triple term out of terms they do not admit.
    */
   generalizedRdfView?: boolean;
 }
@@ -164,10 +165,11 @@ function mappingOfSingleTemplateTriple(
   const conditions: AssertionConjunct[] = headVariableNames
     .filter(name => !certainlyBoundVariableNames.has(name))
     .map(name => ({ access: access(name), assertion: assertBound() }));
-  if (options.generalizedRdfView !== true) {
-    conditions.push(...triplePositions.flatMap(position =>
-      headPositionTypeTests(head[position], rangeOfPosition(position), bodyRanges)));
-  }
+  // SPARQL cannot build a triple term out of terms its positions do not admit, so a generalized view still tests
+  // what its triple terms are built of: otherwise a BIND of one raises and leaves its variable unbound.
+  conditions.push(...triplePositions
+    .filter(position => options.generalizedRdfView !== true || head[position].termType === 'Quad')
+    .flatMap(position => headPositionTypeTests(head[position], rangeOfPosition(position), bodyRanges)));
   let body: Algebra.Operation = constructBody;
   if (conditions.length > 0) {
     body = AF.createFilter(body, conjunctionOf(tools, conditions

@@ -2,7 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import type { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { ClusterSolver } from '../ClusterSolver.js';
-import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
+import { triplePositions } from '../datastructures/TermClusterSet.js';
 import { rangeOfPosition } from '../RangeSet.js';
 import { RewriteNoMatchError } from '../RewriteNoMatchError.js';
 import type { TransformationContext } from '../transformContext.js';
@@ -252,27 +252,19 @@ function bindPatternTerms({ operation, AF, DF, triplePatternBinds }: {
 }
 
 /**
- * Builds the conditions under which a pattern bind yields a term instead of raising an evaluation error -
- * README step 2.5, "assert the triple term vars are assigned".
- *
- * A BIND whose expression errors leaves its target *unbound* while keeping the solution, but a triple
- * pattern only matches when every one of its variables is assigned a term. A pattern variable inside a
- * triple term is bound through `SUBJECT`/`PREDICATE`/`OBJECT` of a mapping variable, and those raise
- * whenever that variable does not hold a triple term.
+ * Builds the condition under which a pattern bind yields a term: `sameTerm(e, e)` holds exactly when `e` does
+ * not raise, where a raising BIND would leave its pattern variable unbound and keep the solution.
  * @param c - The transformation context
  * @param expression - The expression a pattern variable gets bound to
- * @returns the conditions to assert, innermost argument first
+ * @returns the condition, or `undefined` for a term, which never raises on a body solution
  */
-function bindEvaluationGuards(c: TransformationContext, expression: Alg.Expression): Alg.Expression[] {
-  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR || !isTriplePosition(expression.operator)) {
-    return [];
+function bindEvaluationGuard(c: TransformationContext, expression: Alg.Expression): Alg.Expression | undefined {
+  // Head variables are bound in every body solution, and the mapping tests what its triple terms are built of.
+  if (expression.subType === Algebra.ExpressionTypes.TERM) {
+    return undefined;
   }
-  const [ argument ] = expression.args;
-  return [
-    ...bindEvaluationGuards(c, argument),
-    // Copy the argument: the guard and the bind must not alias, later passes rewrite algebra in place.
-    c.AF.createOperatorExpression('istriple', [ deepCopy(c, argument) ]),
-  ];
+  // Copy the expression: the guard and the bind must not alias, later passes rewrite algebra in place.
+  return c.AF.createOperatorExpression('sameterm', [ deepCopy(c, expression), deepCopy(c, expression) ]);
 }
 
 /**
@@ -311,19 +303,17 @@ function unfoldMappingWithinPattern(
 
   // Construct the contents of our subselect
   let inProject: Alg.Operation = mapping.body.input;
-  // A pattern variable read out of a triple term is only assigned when that triple term really is one -
-  // assert it, duplicates removed since one mapping variable feeds several binds.
-  const guards = new Map<string, Alg.Expression>();
-  for (const [ , expression ] of [ ...triplePatternBinds ].sort((a, b) => a[0].localeCompare(b[0]))) {
-    for (const guard of bindEvaluationGuards(c, expression)) {
-      guards.set(JSON.stringify(guard), guard);
-    }
-  }
+  // A triple pattern only matches when every one of its variables is assigned, so filter the body on each
+  // bind evaluating: the EXTENDs on top then never raise.
+  const guards = [ ...triplePatternBinds ]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([ , expression ]) => bindEvaluationGuard(c, expression))
+    .filter(guard => guard !== undefined);
   for (const expression of [
     ...expressionFilters,
     ...clusterSolver.getStaticExpressionValidation()
       .map(x => AF.createOperatorExpression('sameterm', [ AF.createTermExpression(x.term), x.expression ])),
-    ...guards.values(),
+    ...guards,
   ]) {
     inProject = AF.createFilter(inProject, expression);
   }

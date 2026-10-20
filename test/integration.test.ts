@@ -66,7 +66,8 @@ describe('integration tests', () => {
 
   /**
    * Materialises the graph the mappings denote. Comunica's CONSTRUCT keeps triples RDF does not admit, which
-   * SPARQL 1.1 §16.2 does not instantiate, so this drops them unless the view is generalized RDF.
+   * SPARQL 1.1 §16.2 does not instantiate, so this drops them; a generalized RDF view keeps all but those holding a
+   * triple term SPARQL cannot build.
    * @param source - The RDF 1.1 store
    * @param mappers - The CONSTRUCT queries of the mappings
    * @param options - What the mapping is configured with
@@ -76,7 +77,9 @@ describe('integration tests', () => {
     const result = new Store();
     for (const mapper of mappers) {
       const subRes = (await sourceToStore([ source ], mapper)).getQuads(null, null, null, null);
-      result.addQuads(options.generalizedRdfView === true ? subRes : subRes.filter(isRdfTriple));
+      result.addQuads(options.generalizedRdfView === true ?
+        subRes.filter(triple => triple.object.termType !== 'Quad' || isRdfTriple(triple.object)) :
+        subRes.filter(isRdfTriple));
     }
     return result;
   }
@@ -828,6 +831,23 @@ describe('integration tests', () => {
           '{a=ex://carol,t=ex://carol,z=ex://carol}',
           '{a=ex://erin,t=_:someone,z=_:someone}',
         ],
+      );
+    });
+
+    it('binds a triple term of a generalized RDF view only where SPARQL can build it', async({ expect }) => {
+      // "Bob", 42 and the triple term cannot be a subject of the `:claims` triple term: a rewrite binding it without
+      // testing that returns their rows without a `?t`.
+      await expectRowsOverPermutedPositions(
+        expect,
+        'SELECT * WHERE { ?s :claims ?t }',
+        [
+          '{s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
+          '{s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
+          '{s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
+          '{s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
+          '{s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
+        ],
+        { generalizedRdfView: true },
       );
     });
 

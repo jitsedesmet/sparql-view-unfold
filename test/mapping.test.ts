@@ -119,6 +119,13 @@ describe('mappingFromConstructQueries', () => {
         { generalizedRdfView: true },
       )).body).not.toContain('FILTER');
     });
+
+    it('is still filtered inside a triple term of a generalized view, SPARQL building no other', ({ expect }) => {
+      expect(mappingAsStrings(mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { ?o :reifies <<( ?o :p ?s )>> } WHERE { ?s :p ?o }' ],
+        { generalizedRdfView: true },
+      )).body).toContain('FILTER ( ( ISIRI( ?o ) || ISBLANK( ?o ) ) )');
+    });
   });
 
   describe('an unstable function in the mapping body', () => {
