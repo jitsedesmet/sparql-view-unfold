@@ -38,6 +38,7 @@ export interface InternalBnodeMaterialisation {
 
 const internalBnodeDatatype = DF.namedNode(DT_INTERNAL_BNODE);
 const iriPrefixLiteral = DF.literal(IRI_PREFIX_BNODE);
+const internalBnodeFunctionName = DF.namedNode(EXTENSION_FUNCTION_BNODE);
 
 /** Materialises an internal blank node as a literal of a special datatype, its encoding as value. */
 export const specialLiteralMaterialisation: InternalBnodeMaterialisation = {
@@ -69,6 +70,19 @@ export const specialIriMaterialisation: InternalBnodeMaterialisation = {
     ]),
   ]),
 };
+
+/**
+ * Creates an internal blank node `<internal://blank>(…)`, its identity given by its arguments.
+ * @param AF - The algebra factory to create it with.
+ * @param args - The arguments identifying it.
+ * @returns The named expression.
+ */
+export function internalBnodeExpression(
+  AF: TransformationContext['AF'],
+  args: Algebra.Expression[],
+): Algebra.NamedExpression {
+  return AF.createNamedExpression(internalBnodeFunctionName, args);
+}
 
 /**
  * Whether a named expression constructs an internal blank node.

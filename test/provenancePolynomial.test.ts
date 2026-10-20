@@ -68,13 +68,13 @@ describe('decodeProvenance', () => {
 
   it('sums the rows of a solution and multiplies the factors of a row', ({ expect }) => {
     // SPARQLprov's Example 4.1: OT is a writer or novelist (s22, s24), female (s21) and awarded (s23).
-    const rows = [ 's22', 's24' ].map(occupation => row({
+    const rows = [ 's22', 's24' ].map((occupation, index) => row({
       person: 'OT',
       prov_sum: 'OT',
       prov_sum_product: 'OT',
       prov_sum_product_1_osum: 'OT',
-      [`prov_sum_product_1_osum_${occupation === 's22' ? 1 : 2}_sum`]: 'OT',
-      [`prov_sum_product_1_osum_${occupation === 's22' ? 1 : 2}_sum_statement`]: occupation,
+      [`prov_sum_product_1_osum_${index + 1}_sum`]: 'OT',
+      [`prov_sum_product_1_osum_${index + 1}_sum_statement`]: occupation,
       prov_sum_product_2_sum: 'OT',
       prov_sum_product_2_sum_statement: 's21',
       prov_sum_product_3_sum: 'OT',
@@ -100,9 +100,10 @@ describe('simplifyPolynomial', () => {
 });
 
 describe('evaluatePolynomial', () => {
+  const difference: ProvenancePolynomial = { type: 'difference', minuend: source('c'), subtrahend: source('d') };
   const polynomial: ProvenancePolynomial = { type: 'sum', operands: [
     { type: 'product', operands: [ source('a'), source('b') ]},
-    { type: 'difference', minuend: source('c'), subtrahend: source('d') },
+    difference,
     { type: 'aggregate', operand: { type: 'constant', value: 0 }},
   ]};
 
@@ -112,9 +113,8 @@ describe('evaluatePolynomial', () => {
   });
 
   it('tells whether a solution is an answer in the Boolean spm-semiring', ({ expect }) => {
-    const { operands } = <{ operands: ProvenancePolynomial[] }> polynomial;
-    expect(evaluatePolynomial(operands[1], booleanSpmSemiring, () => true)).toBe(false);
-    expect(evaluatePolynomial(operands[1], booleanSpmSemiring, term => term.value !== 'd')).toBe(true);
+    expect(evaluatePolynomial(difference, booleanSpmSemiring, () => true)).toBe(false);
+    expect(evaluatePolynomial(difference, booleanSpmSemiring, term => term.value !== 'd')).toBe(true);
   });
 });
 

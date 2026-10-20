@@ -14,6 +14,7 @@ import {
   provenanceConstructOf,
   provenanceMappingFromConstructQueries,
 } from '../lib/provenance.js';
+import type { ProvenanceAnnotatedAnswer } from '../lib/provenancePolynomial.js';
 import {
   countingSpmSemiring,
   decodeProvenance,
@@ -64,11 +65,11 @@ async function bindingsOf(mapping: Mapping, query: string, options: UnfoldingOpt
 }
 
 /**
- * Rewrites a query against a mapping and evaluates it over the colleagues data.
+ * As {@link bindingsOf}, each term written as a string.
  * @param mapping - The mapping to unfold
  * @param query - The query over the view
  * @param options - What to configure the unfolding with
- * @returns one record per solution, each term written as a string
+ * @returns one record per solution
  */
 async function evaluate(mapping: Mapping, query: string, options: UnfoldingOptions = {}): Promise<Row[]> {
   return (await bindingsOf(mapping, query, options)).map(binding =>
@@ -286,10 +287,22 @@ describe('provenance captured over the colleagues data', () => {
   const provenanceMapping = provenanceMappingFromConstructQueries(colleagueConstructs);
 
   /**
+   * Captures the provenance of a query, evaluates it over the provenance view and decodes its answers.
+   * @param query - The query over the view, without prefixes
+   * @returns the decoded solutions
+   */
+  async function decodedAnswersOf(query: string): Promise<ProvenanceAnnotatedAnswer[]> {
+    const capture = provenanceCapturingQuery(prefixes + query);
+    return decodeProvenance(await bindingsOf(provenanceMapping, capture.query), capture.provenanceVariablePrefix);
+  }
+
+  let derivationLabels: Promise<Map<string, string>> | undefined;
+
+  /**
    * Labels every derivation by the view triple it produces and, where they differ, the source triples it matched.
    * @returns the labels by derivation
    */
-  async function derivationLabels(): Promise<Map<string, string>> {
+  async function labelDerivations(): Promise<Map<string, string>> {
     const links = await evaluate(provenanceMapping, `${prefixes} SELECT ?derivation ?viewTriple ?source WHERE {
       ?derivation provenance:derivationOf ?viewTriple . OPTIONAL { ?derivation provenance:derivedFrom ?source }
     }`);
@@ -312,12 +325,9 @@ describe('provenance captured over the colleagues data', () => {
    * @returns per solution `+` for an answer or `-` for a solution a difference removes, its values and polynomial
    */
   async function explain(query: string): Promise<string[]> {
-    const capture = provenanceCapturingQuery(prefixes + query);
-    const [ bindings, labels ] = await Promise.all([
-      bindingsOf(provenanceMapping, capture.query),
-      derivationLabels(),
-    ]);
-    return decodeProvenance(bindings, capture.provenanceVariablePrefix).map(({ answer, polynomial, isAnswer }) => {
+    derivationLabels ??= labelDerivations();
+    const [ answers, labels ] = await Promise.all([ decodedAnswersOf(query), derivationLabels ]);
+    return answers.map(({ answer, polynomial, isAnswer }) => {
       const values = [ ...answer ].map(([ name, term ]) => `${name}=${termToString(term).replace('ex://', '')}`)
         .sort().join(' ');
       const explanation = polynomialToString(polynomial, term => labels.get(termToString(term))!);
@@ -342,13 +352,12 @@ describe('provenance captured over the colleagues data', () => {
     'SELECT ?x WHERE { { SELECT ?x WHERE { ?x :worksAt ?o } GROUP BY ?x } } ORDER BY ?x LIMIT 1',
     'SELECT ?x (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x VALUES ?x { :bob }',
   ])('answers %s as the query without provenance does', async(query, { expect }) => {
-    const capture = provenanceCapturingQuery(prefixes + query);
-    const [ bindings, rows ] = await Promise.all([
-      bindingsOf(provenanceMapping, capture.query),
+    const [ decodedAnswers, rows ] = await Promise.all([
+      decodedAnswersOf(query),
       // The answers keep the view's set semantics, whatever the unfolding preserves.
       evaluate(mapping, prefixes + query, { preserveCardinality: true }),
     ]);
-    const answers = decodeProvenance(bindings, capture.provenanceVariablePrefix)
+    const answers = decodedAnswers
       .filter(({ isAnswer }) => isAnswer)
       .map(({ answer }) => Object.fromEntries([ ...answer ].map(([ name, term ]) => [ name, termToString(term) ])));
     const variables = [ ...new Set(rows.flatMap(row => Object.keys(row))) ];
@@ -406,6 +415,28 @@ describe('provenance captured over the colleagues data', () => {
       ]);
   });
 
+  it('subtracts from every row of an OPTIONAL, its unmatched left side included', async({ expect }) => {
+    expect(await explain(
+      'SELECT ?x ?o WHERE { { ?x :worksAt :ugent OPTIONAL { ?x :worksAt ?o FILTER(?o != :ugent) } } ' +
+      'MINUS { ?x :worksAt :imec } }',
+    )).toEqual([
+      '+ x=dave: ((dave worksAt ugent ⊖ 0) ⊖ 0)',
+      '- o=imec x=bob: ((bob worksAt imec ⊗ bob worksAt ugent) ⊖ bob worksAt imec)',
+      '- o=imec x=carol: ((carol worksAt imec ⊗ carol worksAt ugent) ⊖ carol worksAt imec)',
+      '- x=bob: ((bob worksAt ugent ⊖ bob worksAt imec) ⊖ bob worksAt imec)',
+      '- x=carol: ((carol worksAt ugent ⊖ carol worksAt imec) ⊖ carol worksAt imec)',
+    ]);
+  });
+
+  it('evaluates an EXISTS nested in an expression over the view, contributing no provenance', async({ expect }) => {
+    // Uncorrelated: the rewrite without provenance loses a correlated EXISTS in an expression on main.
+    expect(await explain('SELECT ?x ?e WHERE { ?x :worksAt :imec BIND(EXISTS { :dave :worksAt :ugent } AS ?e) }'))
+      .toEqual([
+        '+ e="true"^^http://www.w3.org/2001/XMLSchema#boolean x=bob: bob worksAt imec',
+        '+ e="true"^^http://www.w3.org/2001/XMLSchema#boolean x=carol: carol worksAt imec',
+      ]);
+  });
+
   it('marks the derivations of an aggregated group by the lineage δ', async({ expect }) => {
     expect(await explain('SELECT ?x (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x VALUES ?x { :dave }'))
       .toEqual([
@@ -421,9 +452,7 @@ describe('provenance captured over the colleagues data', () => {
   });
 
   it('counts the derivations of an answer in the spm-semiring of natural numbers', async({ expect }) => {
-    const capture = provenanceCapturingQuery(`${prefixes} SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }`);
-    const bindings = await bindingsOf(provenanceMapping, capture.query);
-    const answers = decodeProvenance(bindings, capture.provenanceVariablePrefix);
+    const answers = await decodedAnswersOf('SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }');
     const counts = Object.fromEntries(answers.map(({ answer, polynomial }) =>
       [ answer.get('c')!.value, evaluatePolynomial(polynomial, countingSpmSemiring, () => 1) ]));
 
