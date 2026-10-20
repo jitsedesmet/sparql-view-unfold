@@ -13,6 +13,9 @@ export const datatypeBoolean = DF.namedNode(`${xsd}boolean`);
 /** XSD string datatype as a NamedNode */
 export const datatypeString = DF.namedNode(`${xsd}string`);
 
+/** XSD integer datatype as a NamedNode */
+export const datatypeInteger = DF.namedNode(`${xsd}integer`);
+
 /**
  * Creates a triple term, its caller vouching that each position holds a term that position admits.
  * @param subject - The subject

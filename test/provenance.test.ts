@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { QueryEngine } from '@comunica/query-sparql-file';
+import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { Parser, Store } from 'n3';
@@ -13,6 +14,13 @@ import {
   provenanceConstructOf,
   provenanceMappingFromConstructQueries,
 } from '../lib/provenance.js';
+import {
+  countingSpmSemiring,
+  decodeProvenance,
+  evaluatePolynomial,
+  lineageOf,
+  polynomialToString,
+} from '../lib/provenancePolynomial.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import { internalBnodeExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
 import { internalBnodeAsSpecialIriTransformation } from '../lib/transformations/bnodeMapAsLiteral.js';
@@ -25,8 +33,6 @@ const prefixes = `PREFIX : <ex://> PREFIX provenance: <${PROVENANCE_NAMESPACE}> 
 // The provenance IRIs as a rewritten query writes them.
 const derivationOf = `<${PREDICATE_DERIVATION_OF}>`;
 const derivedFrom = `<${PREDICATE_DERIVED_FROM}>`;
-// The join key of `?o`, telling its value apart from it being unbound.
-const keyOfO = 'COALESCE( TRIPLE( <internal://blank/argument> , <internal://blank/argument> , ?o ) , <internal://blank/unbound> )';
 const construct0 = `<${PROVENANCE_NAMESPACE}construct0>`;
 const colleagueConstructs = [
   `${prefixes} CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }`,
@@ -43,9 +49,9 @@ const colleagues = new Store(new Parser().parse(readFileSync('./test/statics/col
  * @param mapping - The mapping to unfold
  * @param query - The query over the view
  * @param options - What to configure the unfolding with
- * @returns one record per solution, each term written as a string
+ * @returns the solutions
  */
-async function evaluate(mapping: Mapping, query: string, options: UnfoldingOptions = {}): Promise<Row[]> {
+async function bindingsOf(mapping: Mapping, query: string, options: UnfoldingOptions = {}): Promise<RDF.Bindings[]> {
   const rewriter = createQueryRewriter([
     ...createDefaultTransformationPipeline(mapping, options),
     internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
@@ -54,7 +60,18 @@ async function evaluate(mapping: Mapping, query: string, options: UnfoldingOptio
     sources: [ colleagues ],
     extensionFunctions: internalBnodeExtensionFunctions(),
   });
-  return (await bindings.toArray()).map(binding =>
+  return bindings.toArray();
+}
+
+/**
+ * Rewrites a query against a mapping and evaluates it over the colleagues data.
+ * @param mapping - The mapping to unfold
+ * @param query - The query over the view
+ * @param options - What to configure the unfolding with
+ * @returns one record per solution, each term written as a string
+ */
+async function evaluate(mapping: Mapping, query: string, options: UnfoldingOptions = {}): Promise<Row[]> {
+  return (await bindingsOf(mapping, query, options)).map(binding =>
     Object.fromEntries([ ...binding ].map(([ variable, term ]) => [ variable.value, termToString(term) ])));
 }
 
@@ -237,249 +254,20 @@ WHERE {
 });
 
 describe('provenanceCapturingQuery', () => {
-  function expectCapture(expect: typeof Expect, query: string, expected: string): void {
-    expect(provenanceCapturingQuery(prefixes + query).trim()).toEqual(expected.trim());
-  }
+  it('reifies a triple pattern as the sum of its derivations, each node identified by its solution', ({ expect }) => {
+    const capture = provenanceCapturingQuery(`${prefixes} SELECT ?x WHERE { ?x :worksAt :ugent }`);
 
-  it('looks up one derivation per triple pattern and selects it', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT DISTINCT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }',
-      `SELECT DISTINCT ?c ?derivation0 ?derivation1 WHERE {
-  ?derivation0 ${derivationOf} <<( <ex://alice> <ex://knows> ?f )>> .
-  ?derivation1 ${derivationOf} <<( ?f <ex://colleague> ?c )>> .
-}`,
-    );
+    expect(capture.provenanceVariablePrefix).toBe('prov');
+    expect(capture.query.trim()).toBe(`SELECT ?x ?prov_sum_sum_statement \
+( <internal://blank> ( "prov_sum_sum" , ?x ) AS ?prov_sum_sum ) \
+( <internal://blank> ( "prov_sum" , ?x ) AS ?prov_sum ) WHERE {
+  ?prov_sum_sum_statement ${derivationOf} <<( ?x <ex://worksAt> <ex://ugent> )>> .
+}`.replaceAll(' \\\n', ' '));
   });
 
-  it('selects the derivation of a pattern under an OPTIONAL', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT ?x WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?y } }',
-      `SELECT ?x ?derivation0 ?derivation1 WHERE {
-  ?derivation0 ${derivationOf} <<( ?x <ex://worksAt> <ex://ugent> )>> .
-  OPTIONAL {
-    ?derivation1 ${derivationOf} <<( ?x <ex://knows> ?y )>> .
-  }
-}`,
-    );
-  });
-
-  it('selects no derivation of a pattern under a MINUS', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT ?x WHERE { ?x :worksAt :ugent MINUS { ?x :worksAt :imec } }',
-      `SELECT ?x ?derivation0 WHERE {
-  ?derivation0 ${derivationOf} <<( ?x <ex://worksAt> <ex://ugent> )>> .
-  MINUS {
-    ?derivation1 ${derivationOf} <<( ?x <ex://worksAt> <ex://imec> )>> .
-  }
-}`,
-    );
-  });
-
-  it('selects no derivation of a pattern under a NOT EXISTS', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT ?x WHERE { ?x :worksAt :ugent FILTER NOT EXISTS { ?x :knows ?y } }',
-      `SELECT ?x ?derivation1 WHERE {
-  ?derivation1 ${derivationOf} <<( ?x <ex://worksAt> <ex://ugent> )>> .
-  FILTER ( NOT EXISTS {
-    ?derivation0 ${derivationOf} <<( ?x <ex://knows> ?y )>> .
-  }
-  )
-}`,
-    );
-  });
-
-  it('selects the derivations of both branches of a UNION', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT ?x WHERE { { ?x :knows ?y } UNION { ?x :colleague :dave } }',
-      `SELECT ?x ?derivation0 ?derivation1 WHERE {
-  {
-    ?derivation0 ${derivationOf} <<( ?x <ex://knows> ?y )>> .
-  }
-  UNION {
-    ?derivation1 ${derivationOf} <<( ?x <ex://colleague> <ex://dave> )>> .
-  }
-}`,
-    );
-  });
-
-  it('looks up a derivation per step of a non-recursive property path', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT ?x WHERE { :alice :knows/:colleague ?x }',
-      `SELECT ?x ?derivation0 ?derivation1 WHERE {
-  ?derivation0 ${derivationOf} <<( <ex://alice> <ex://knows> ?var0 )>> .
-  ?derivation1 ${derivationOf} <<( ?var0 <ex://colleague> ?x )>> .
-}`,
-    );
-  });
-
-  it('selects the derivations of a sub-SELECT through it', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT ?x WHERE { { SELECT ?x WHERE { ?x :knows ?y } } }',
-      `SELECT ?x ?derivation0 WHERE {
-  SELECT ?x ?derivation0 WHERE {
-    ?derivation0 ${derivationOf} <<( ?x <ex://knows> ?y )>> .
-  }
-}`,
-    );
-  });
-
-  it('leaves a SERVICE alone', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT ?x WHERE { SERVICE <ex://endpoint> { ?x :knows ?y } ?x :worksAt ?o }',
-      `SELECT ?x ?derivation0 WHERE {
-  SERVICE <ex://endpoint> {
-    ?x <ex://knows> ?y .
-  }
-  ?derivation0 ${derivationOf} <<( ?x <ex://worksAt> ?o )>> .
-}`,
-    );
-  });
-
-  it('groups without derivations and attaches those of the group\'s solutions, joined on its key', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT ?x (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x',
-      `SELECT ?x ?n ?derivation0 WHERE {
-  {
-    SELECT ?x ( COUNT( * ) AS ?n ) WHERE {
-      SELECT DISTINCT ?x ?y WHERE {
-        ?internal0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
-      }
-    }
-    GROUP BY ?x
-  }
-  OPTIONAL {
-    {
-      SELECT ?x ?derivation0 WHERE {
-        ?derivation0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
-      }
-    }
-  }
-}`,
-    );
-  });
-
-  it('selects a group key the query does not, to join on it', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x',
-      `SELECT ?n ?derivation0 WHERE {
-  {
-    SELECT ( COUNT( * ) AS ?n ) ?x WHERE {
-      SELECT DISTINCT ?x ?y WHERE {
-        ?internal0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
-      }
-    }
-    GROUP BY ?x
-  }
-  OPTIONAL {
-    {
-      SELECT ?x ?derivation0 WHERE {
-        ?derivation0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
-      }
-    }
-  }
-}`,
-    );
-  });
-
-  it('joins on a key wrapping a group key that may be unbound', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?o } } GROUP BY ?x ?o',
-      `SELECT ?x ?o ?derivation0 ?derivation1 WHERE {
-  {
-    {
-      SELECT ?x ?o WHERE {
-        {
-          SELECT DISTINCT ?x WHERE {
-            ?internal0 ${derivationOf} <<( ?x <ex://worksAt> <ex://ugent> )>> .
-          }
-        }
-        OPTIONAL {
-          {
-            SELECT DISTINCT ?x ?o WHERE {
-              ?internal1 ${derivationOf} <<( ?x <ex://knows> ?o )>> .
-            }
-          }
-        }
-      }
-      GROUP BY ?x ?o
-    }
-    BIND( ${keyOfO} AS ?internal2 )
-  }
-  OPTIONAL {
-    {
-      SELECT ?x ( ${keyOfO} AS ?internal2 ) ?derivation0 ?derivation1 WHERE {
-        ?derivation0 ${derivationOf} <<( ?x <ex://worksAt> <ex://ugent> )>> .
-        OPTIONAL {
-          ?derivation1 ${derivationOf} <<( ?x <ex://knows> ?o )>> .
-        }
-      }
-    }
-  }
-}`,
-    );
-  });
-
-  it('attaches the derivations of a group without a key through a join on nothing', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT (COUNT(*) AS ?n) WHERE { :alice :knows :bob }',
-      `SELECT ?n ?derivation0 WHERE {
-  {
-    SELECT ( COUNT( * ) AS ?n ) WHERE {
-      SELECT DISTINCT ?mExists0 WHERE {
-        ?internal0 ${derivationOf} <<( <ex://alice> <ex://knows> <ex://bob> )>> .
-      }
-    }
-  }
-  OPTIONAL {
-    {
-      SELECT ?derivation0 WHERE {
-        ?derivation0 ${derivationOf} <<( <ex://alice> <ex://knows> <ex://bob> )>> .
-      }
-    }
-  }
-}`,
-    );
-  });
-
-  it('limits the answers without derivations and attaches those of their solutions, unordered', ({ expect }) => {
-    expectCapture(
-      expect,
-      'SELECT ?x ?y WHERE { ?x :colleague ?y } ORDER BY ?x LIMIT 2',
-      `SELECT ?x ?y ?derivation0 WHERE {
-  {
-    SELECT DISTINCT ?x ?y WHERE {
-      SELECT ?x ?y WHERE {
-        SELECT DISTINCT ?x ?y WHERE {
-          ?internal0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
-        }
-      }
-      ORDER BY ASC ( ?x )
-      LIMIT 2
-    }
-  }
-  OPTIONAL {
-    {
-      SELECT ?x ?y ?derivation0 WHERE {
-        SELECT ?x ?y ?derivation0 WHERE {
-          ?derivation0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
-        }
-      }
-    }
-  }
-}`,
-    );
+  it('coins a provenance variable prefix no variable of the query starts with', ({ expect }) => {
+    expect(provenanceCapturingQuery(`${prefixes} SELECT ?prov_x WHERE { ?prov_x :knows ?y }`).provenanceVariablePrefix)
+      .toBe('prov1');
   });
 
   it('rejects a query that is not a SELECT', ({ expect }) => {
@@ -497,58 +285,149 @@ describe('provenance captured over the colleagues data', () => {
   const mapping = mappingFromConstructQueries(colleagueConstructs);
   const provenanceMapping = provenanceMappingFromConstructQueries(colleagueConstructs);
 
+  /**
+   * Labels every derivation by the view triple it produces and, where they differ, the source triples it matched.
+   * @returns the labels by derivation
+   */
+  async function derivationLabels(): Promise<Map<string, string>> {
+    const links = await evaluate(provenanceMapping, `${prefixes} SELECT ?derivation ?viewTriple ?source WHERE {
+      ?derivation provenance:derivationOf ?viewTriple . OPTIONAL { ?derivation provenance:derivedFrom ?source }
+    }`);
+    const compact = (triple: string): string => triple.replaceAll(/<<|>>|ex:\/\//gu, '');
+    const labels = new Map<string, string>();
+    for (const derivation of new Set(links.map(link => link.derivation))) {
+      const linksOfDerivation = links.filter(link => link.derivation === derivation);
+      const viewTriple = linksOfDerivation[0].viewTriple;
+      const sources = linksOfDerivation.map(link => link.source).filter(source => source !== viewTriple).sort();
+      labels.set(derivation, sources.length === 0 ?
+        compact(viewTriple) :
+        `${compact(viewTriple)} from ${sources.map(compact).join(' and ')}`);
+    }
+    return labels;
+  }
+
+  /**
+   * Captures the provenance of a query, evaluates it and decodes its answers.
+   * @param query - The query over the view, without prefixes
+   * @returns per solution `+` for an answer or `-` for a solution a difference removes, its values and polynomial
+   */
+  async function explain(query: string): Promise<string[]> {
+    const capture = provenanceCapturingQuery(prefixes + query);
+    const [ bindings, labels ] = await Promise.all([
+      bindingsOf(provenanceMapping, capture.query),
+      derivationLabels(),
+    ]);
+    return decodeProvenance(bindings, capture.provenanceVariablePrefix).map(({ answer, polynomial, isAnswer }) => {
+      const values = [ ...answer ].map(([ name, term ]) => `${name}=${termToString(term).replace('ex://', '')}`)
+        .sort().join(' ');
+      const explanation = polynomialToString(polynomial, term => labels.get(termToString(term))!);
+      return `${isAnswer ? '+' : '-'} ${values}: ${explanation}`;
+    }).sort();
+  }
+
+  // FILTER (NOT) EXISTS is left out: the rewrite without provenance gets a correlated one wrong on main.
   it.for(<const> [
-    [ 'SELECT DISTINCT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }', [ 'c' ]],
-    [ 'SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }', [ 'c' ]],
-    [ 'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :worksAt ?o FILTER(?o != :ugent) } }', [ 'x', 'o' ]],
-    [ 'SELECT ?x WHERE { ?x :worksAt :ugent MINUS { ?x :worksAt :imec } }', [ 'x' ]],
-    [ 'SELECT ?x WHERE { { ?x :knows ?y } UNION { ?x :colleague :dave } }', [ 'x' ]],
-    [ 'SELECT ?x (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x', [ 'x', 'n' ]],
-    [ 'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?o } } GROUP BY ?x ?o', [ 'x', 'o' ]],
-    [ 'SELECT (COUNT(*) AS ?n) WHERE { ?x :colleague :nobody }', [ 'n' ]],
-    [ 'SELECT ?x ?y WHERE { ?x :colleague ?y } ORDER BY ?x ?y LIMIT 2', [ 'x', 'y' ]],
-    [ 'SELECT ?x WHERE { { SELECT DISTINCT ?x WHERE { ?x :worksAt ?o } } }', [ 'x' ]],
-    [ 'SELECT (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x ORDER BY ?x LIMIT 1', [ 'n' ]],
-    [ 'SELECT ?x WHERE { { SELECT ?x WHERE { ?x :worksAt ?o } GROUP BY ?x } } ORDER BY ?x LIMIT 1', [ 'x' ]],
-    [ 'SELECT ?x (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x VALUES ?x { :bob }', [ 'x', 'n' ]],
-  ])('answers %s as the query without provenance does', async([ query, variables ], { expect }) => {
-    const [ rowsWithProvenance, rows ] = await Promise.all([
-      evaluate(provenanceMapping, provenanceCapturingQuery(prefixes + query)),
+    'SELECT DISTINCT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }',
+    'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :worksAt ?o FILTER(?o != :ugent) } }',
+    'SELECT ?x WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?y } }',
+    'SELECT ?x WHERE { ?x :worksAt :ugent MINUS { ?x :worksAt :imec } }',
+    'SELECT ?x WHERE { { ?x :knows ?y } UNION { ?x :colleague :dave } }',
+    'SELECT ?x ?n WHERE { VALUES ?x { :bob :erin } ?x :worksAt :ugent BIND(1 AS ?n) }',
+    'SELECT ?x (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x',
+    'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?o } } GROUP BY ?x ?o',
+    'SELECT (COUNT(*) AS ?n) WHERE { ?x :colleague :nobody }',
+    'SELECT ?x ?y WHERE { ?x :colleague ?y } ORDER BY ?x ?y LIMIT 2',
+    'SELECT ?x WHERE { { SELECT DISTINCT ?x WHERE { ?x :worksAt ?o } } }',
+    'SELECT (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x ORDER BY ?x LIMIT 1',
+    'SELECT ?x WHERE { { SELECT ?x WHERE { ?x :worksAt ?o } GROUP BY ?x } } ORDER BY ?x LIMIT 1',
+    'SELECT ?x (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x VALUES ?x { :bob }',
+  ])('answers %s as the query without provenance does', async(query, { expect }) => {
+    const capture = provenanceCapturingQuery(prefixes + query);
+    const [ bindings, rows ] = await Promise.all([
+      bindingsOf(provenanceMapping, capture.query),
       // The answers keep the view's set semantics, whatever the unfolding preserves.
       evaluate(mapping, prefixes + query, { preserveCardinality: true }),
     ]);
-    expect(distinctAnswers(rowsWithProvenance, variables)).toEqual(distinctAnswers(rows, variables));
+    const answers = decodeProvenance(bindings, capture.provenanceVariablePrefix)
+      .filter(({ isAnswer }) => isAnswer)
+      .map(({ answer }) => Object.fromEntries([ ...answer ].map(([ name, term ]) => [ name, termToString(term) ])));
+    const variables = [ ...new Set(rows.flatMap(row => Object.keys(row))) ];
+    expect(distinctAnswers(answers, variables)).toEqual(distinctAnswers(rows, variables));
   });
 
-  it('answers once per combination of derivations', async({ expect }) => {
-    const rows = await evaluate(provenanceMapping, provenanceCapturingQuery(
-      `${prefixes} SELECT DISTINCT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }`,
-    ));
-    const derivationsOf = (colleague: string): string[] =>
-      rows.filter(row => row.c === colleague).map(row => row.derivation1);
-
+  it('multiplies the derivations of a join and sums those of one view triple', async({ expect }) => {
     // Carol works with Bob at two organisations, Dave at one; both through the one triple Alice knows Bob.
-    expect(new Set(derivationsOf('ex://carol')).size).toBe(2);
-    expect(derivationsOf('ex://dave')).toHaveLength(1);
-    expect(new Set(rows.map(row => row.derivation0)).size).toBe(1);
+    expect(await explain('SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }')).toEqual([
+      '+ c=carol: ((bob colleague carol from bob worksAt imec and carol worksAt imec ⊕ ' +
+      'bob colleague carol from bob worksAt ugent and carol worksAt ugent) ⊗ alice knows bob)',
+      '+ c=dave: (alice knows bob ⊗ bob colleague dave from bob worksAt ugent and dave worksAt ugent)',
+    ]);
   });
 
-  it('attaches to a group the derivations of its solutions, its key selected or not', async({ expect }) => {
-    const rows = await evaluate(provenanceMapping, provenanceCapturingQuery(
-      `${prefixes} SELECT (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x`,
-    ));
-
-    // Everyone has two colleagues; Bob and Carol through three derivations, Dave two, each attached to its group.
-    expect(rows.map(row => row.n.split('^^')[0])).toEqual(Array.from({ length: 8 }, () => '"2"'));
-    expect(new Set(rows.map(row => row.derivation0)).size).toBe(8);
+  it('sums the derivations of the branches of a UNION', async({ expect }) => {
+    expect(await explain('SELECT ?x WHERE { { ?x :worksAt :imec } UNION { ?x :colleague :dave } }')).toEqual([
+      '+ x=bob: (bob colleague dave from bob worksAt ugent and dave worksAt ugent ⊕ bob worksAt imec)',
+      '+ x=carol: (carol colleague dave from carol worksAt ugent and dave worksAt ugent ⊕ carol worksAt imec)',
+    ]);
   });
 
-  it('answers a group with no derivation to attach once', async({ expect }) => {
-    const rows = await evaluate(provenanceMapping, provenanceCapturingQuery(
-      `${prefixes} SELECT (COUNT(*) AS ?n) WHERE { VALUES ?x { 1 2 3 } }`,
-    ));
+  it('subtracts the derivations of the solutions a MINUS or NOT EXISTS removes with', async({ expect }) => {
+    const expected = [
+      '+ x=dave: (dave worksAt ugent ⊖ 0)',
+      '- x=bob: (bob worksAt ugent ⊖ bob worksAt imec)',
+      '- x=carol: (carol worksAt ugent ⊖ carol worksAt imec)',
+    ];
+    expect(await explain('SELECT ?x WHERE { ?x :worksAt :ugent MINUS { ?x :worksAt :imec } }')).toEqual(expected);
+    expect(await explain('SELECT ?x WHERE { ?x :worksAt :ugent FILTER NOT EXISTS { ?x :worksAt :imec } }'))
+      .toEqual(expected);
+  });
 
-    expect(rows.map(row => row.n.split('^^')[0])).toEqual([ '"3"' ]);
+  it('keeps a solution of an EXISTS as the difference with its difference', async({ expect }) => {
+    expect(await explain('SELECT ?x WHERE { ?x :worksAt :ugent FILTER EXISTS { ?x :worksAt :imec } }')).toEqual([
+      '+ x=bob: (bob worksAt ugent ⊖ (bob worksAt ugent ⊖ bob worksAt imec))',
+      '+ x=carol: (carol worksAt ugent ⊖ (carol worksAt ugent ⊖ carol worksAt imec))',
+      '- x=dave: (dave worksAt ugent ⊖ (dave worksAt ugent ⊖ 0))',
+    ]);
+  });
+
+  it('explains an OPTIONAL as the join of both sides plus the left side less the right', async({ expect }) => {
+    expect(await explain('SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?o } }')).toEqual([
+      '+ x=bob: (bob worksAt ugent ⊖ 0)',
+      '+ x=carol: (carol worksAt ugent ⊖ 0)',
+      '+ x=dave: (dave worksAt ugent ⊖ 0)',
+    ]);
+    expect(await explain('SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :worksAt ?o FILTER(?o != :ugent) } }'))
+      .toEqual([
+        '+ o=imec x=bob: (bob worksAt imec ⊗ bob worksAt ugent)',
+        '+ o=imec x=carol: (carol worksAt imec ⊗ carol worksAt ugent)',
+        '+ x=dave: (dave worksAt ugent ⊖ 0)',
+        '- x=bob: (bob worksAt ugent ⊖ bob worksAt imec)',
+        '- x=carol: (carol worksAt ugent ⊖ carol worksAt imec)',
+      ]);
+  });
+
+  it('marks the derivations of an aggregated group by the lineage δ', async({ expect }) => {
+    expect(await explain('SELECT ?x (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x VALUES ?x { :dave }'))
+      .toEqual([
+        '+ n="2"^^http://www.w3.org/2001/XMLSchema#integer x=dave: δ(dave colleague bob from bob worksAt ugent and ' +
+        'dave worksAt ugent ⊕ dave colleague carol from carol worksAt ugent and dave worksAt ugent)',
+      ]);
+    expect(await explain('SELECT (COUNT(*) AS ?n) WHERE { ?x :colleague :nobody }'))
+      .toEqual([ '+ n="0"^^http://www.w3.org/2001/XMLSchema#integer: δ0' ]);
+  });
+
+  it('annotates a solution produced from no view triple with 1', async({ expect }) => {
+    expect(await explain('SELECT ?x WHERE { VALUES ?x { :dave } }')).toEqual([ '+ x=dave: 1' ]);
+  });
+
+  it('counts the derivations of an answer in the spm-semiring of natural numbers', async({ expect }) => {
+    const capture = provenanceCapturingQuery(`${prefixes} SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }`);
+    const bindings = await bindingsOf(provenanceMapping, capture.query);
+    const answers = decodeProvenance(bindings, capture.provenanceVariablePrefix);
+    const counts = Object.fromEntries(answers.map(({ answer, polynomial }) =>
+      [ answer.get('c')!.value, evaluatePolynomial(polynomial, countingSpmSemiring, () => 1) ]));
+
+    expect(counts).toEqual({ 'ex://carol': 2, 'ex://dave': 1 });
   });
 
   it('links a derivation to the source triples it matched', async({ expect }) => {
@@ -600,40 +479,28 @@ describe('provenance, the whole story', () => {
     //    How-Provenance for SPARQL Queries via Query Rewriting", https://doi.org/10.14778/3484224.3484235) and NPCS
     //    (Asma et al., "NPCS: Native Provenance Computation for SPARQL", https://doi.org/10.1145/3589334.3645557)
     //    need the data stored reified; NPCS (p. 2092) leaves non-reified data as future work. This view supplies the
-    //    reification virtually.
+    //    reification virtually: the derivations are SPARQLprov's sources, `derivationOf` its reification scheme.
     const provenanceMapping = provenanceMappingFromConstructQueries(view);
 
-    // 2. The query is rewritten over the provenance view. Its triple pattern becomes a derivation lookup, as
-    //    SPARQLprov (Def. 4.3) reifies every triple pattern. The GROUP duplicates its subtree, as SPARQLprov's
-    //    aggregate rewrite (Def. 4.17) does: the counts are computed without derivations, and the derivations of
-    //    every solution in a group are left-joined onto that group's answer on its key `?x`. Computing the counts
-    //    over each BGP's distinct lookups, the view's set semantics, is this repository's own choice.
-    expect(provenanceCapturingQuery(query).trim()).toEqual(`SELECT ?x ?colleagues ?derivation0 WHERE {
-  {
-    SELECT ?x ( COUNT( * ) AS ?colleagues ) WHERE {
-      SELECT DISTINCT ?x ?y WHERE {
-        ?internal0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
-      }
-    }
-    GROUP BY ?x
-  }
-  OPTIONAL {
-    {
-      SELECT ?x ?derivation0 WHERE {
-        ?derivation0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
-      }
-    }
-  }
-}`);
+    // 2. The query is rewritten as SPARQLprov rewrites it (Def. 4.12 and 4.17): every triple pattern reified by a
+    //    lookup of the derivations of the view triple it matches, and every operator encoding its node of the
+    //    answer's polynomial in provenance variables `?prov_…`. The GROUP duplicates its subtree: the counts are
+    //    computed without provenance, and the provenance of each group's solutions joined onto its answer.
+    const capture = provenanceCapturingQuery(query);
 
-    // 3. Unfolded onto the source and evaluated, with Comunica encoding the derivations' identities.
-    const answers = await evaluate(provenanceMapping, provenanceCapturingQuery(query));
-    const bobsAnswers = answers.filter(answer => answer.x === 'ex://bob');
-    // Bob has two colleagues, as the view without provenance says, resting on three derivations: Carol through
-    // UGent, Carol through imec, and Dave through UGent.
-    expect(new Set(bobsAnswers.map(answer => answer.colleagues.split('^^')[0]))).toEqual(new Set([ '"2"' ]));
-    const bobsDerivations = new Set(bobsAnswers.map(answer => answer.derivation0));
-    expect(bobsDerivations.size).toBe(3);
+    // 3. Unfolded onto the source and evaluated, with Comunica encoding the identities, the answers decode into their
+    //    polynomials (Def. 4.10). Bob has two colleagues, as the view without provenance says, resting on three
+    //    derivations: Carol through UGent, Carol through imec, and Dave through UGent. δ marks them as aggregated
+    //    (Def. 4.15).
+    const answers = decodeProvenance(
+      await bindingsOf(provenanceMapping, capture.query),
+      capture.provenanceVariablePrefix,
+    );
+    const bobsAnswer = answers.find(({ answer }) => answer.get('x')!.value === 'ex://bob')!;
+    expect(bobsAnswer.answer.get('colleagues')!.value).toBe('2');
+    expect(bobsAnswer.polynomial.type).toBe('aggregate');
+    const bobsDerivations = lineageOf(bobsAnswer.polynomial).map(termToString);
+    expect(bobsDerivations).toHaveLength(3);
 
     // 4. Every derivation leads back, through the provenance view, to the view triple it produced and the source
     //    triples it matched.
@@ -645,10 +512,12 @@ describe('provenance, the whole story', () => {
       const sources = linksOfDerivation.map(link => link.source).sort().join(' and ');
       return `${linksOfDerivation[0].viewTriple} from ${sources}`;
     };
-    expect([ ...bobsDerivations ].map(traceOf).sort()).toEqual([
-      '<<ex://bob ex://colleague ex://carol>> from <<ex://bob ex://worksAt ex://imec>> and <<ex://carol ex://worksAt ex://imec>>',
-      '<<ex://bob ex://colleague ex://carol>> from <<ex://bob ex://worksAt ex://ugent>> and <<ex://carol ex://worksAt ex://ugent>>',
-      '<<ex://bob ex://colleague ex://dave>> from <<ex://bob ex://worksAt ex://ugent>> and <<ex://dave ex://worksAt ex://ugent>>',
-    ]);
+    expect(polynomialToString(bobsAnswer.polynomial, term => traceOf(termToString(term)))).toBe(
+      'δ(<<ex://bob ex://colleague ex://carol>> from <<ex://bob ex://worksAt ex://imec>> and ' +
+      '<<ex://carol ex://worksAt ex://imec>> ⊕ <<ex://bob ex://colleague ex://carol>> from ' +
+      '<<ex://bob ex://worksAt ex://ugent>> and <<ex://carol ex://worksAt ex://ugent>> ⊕ ' +
+      '<<ex://bob ex://colleague ex://dave>> from <<ex://bob ex://worksAt ex://ugent>> and ' +
+      '<<ex://dave ex://worksAt ex://ugent>>)',
+    );
   });
 });

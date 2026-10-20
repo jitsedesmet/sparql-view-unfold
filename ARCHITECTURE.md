@@ -128,19 +128,28 @@ encoding from the evaluated arguments instead, at any depth, and the same materi
   `derivationOf` to every template triple and by `derivedFrom` to every body triple pattern each solution
   matches. The result goes through `mappingFromConstructs` like any other.
 - **The query** (`provenanceCapturingQuery`) is a query-to-query rewrite over the view, run *before* the
-  rewriter: it changes the projection, which the runner rebuilds as the user wrote it. Each triple pattern
-  becomes `?derivationN derivationOf <<( s p o )>>`, the semiring rewriting of Hernández et al., "Computing
-  How-Provenance for SPARQL Queries via Query Rewriting" (https://doi.org/10.14778/3484224.3484235), Def. 4.3.
-  The derivations an operation selects are the derivation variables in its scope, so only a PROJECT needs a
-  rule to keep selecting them, and those under a MINUS or an EXISTS never leave it.
+  rewriter: it changes the projection, which the runner rebuilds as the user wrote it. It is SPARQLprov's rewrite
+  α(Q, z) (Hernández et al., "Computing How-Provenance for SPARQL Queries via Query Rewriting",
+  https://doi.org/10.14778/3484224.3484235, Def. 4.12), with `?z_sum_statement derivationOf <<( s p o )>>` as the
+  reification of a triple pattern. Every operator encodes its node of the polynomial in variables named by the
+  node's path, `?prov_sum_product_1_sum_statement`, as SPARQLprov's implementation names them, and binds the node to
+  an identity of its solution, `<internal://blank>("<variable>", <the solution's variables>)`, by which
+  `decodeProvenance` (`lib/provenancePolynomial.ts`, Def. 4.10) groups the rows into sums.
 
-Every operator but a GROUP or SLICE is rewritten in place (Def. 4.3). A GROUP or SLICE counts solutions rather than
-derivations, so it duplicates its subtree: once without derivations to compute the answers, once with them for the
-solutions whose derivations are left-joined onto those answers; the subtree is thus evaluated twice, and nested
-GROUPs and SLICEs grow the query exponentially. That duplication is the paper's aggregate rewrite for a GROUP
-(Def. 4.17); applying it to LIMIT and OFFSET, computing the answers over each BGP's distinct lookups (the view's set
-semantics), and joining a variable that may be unbound on the extension function's wrapped key,
-`COALESCE(TRIPLE(<…argument>, <…argument>, ?x), <…unbound>)`, are this repo's own choices.
+OPTIONAL is normalised to `(P1 ⊗ P2) ⊕ (P1 ⊖ P2)` (Def. 3.1), MINUS and NOT EXISTS are ⊖, and EXISTS is
+`P1 ⊖ (P1 ⊖ P2)`. A difference keeps every solution of its minuend, each with the provenance of the subtrahend's
+compatible solutions. SPARQLprov writes it as an OPTIONAL conditioned on their compatibility, which Comunica only
+evaluates as a bind join that cannot bind through a BIND; here the compatible pairs are joined apart, keyed by the
+minuend's identity, and left-joined back on it, which gives the same table.
+
+Every other operator is rewritten in place. A GROUP or SLICE counts solutions rather than derivations, so it
+duplicates its subtree: once without provenance to compute the answers, once with it for the solutions whose
+provenance is left-joined onto those answers; the subtree is thus evaluated twice, and nested GROUPs and SLICEs grow
+the query exponentially. That duplication is the paper's aggregate rewrite for a GROUP (Def. 4.17), under the
+lineage δ (Def. 4.15); applying it to LIMIT and OFFSET, computing the answers over each BGP's distinct lookups (the
+view's set semantics), and joining a variable that may be unbound on the extension function's wrapped key,
+`COALESCE(TRIPLE(<…argument>, <…argument>, ?x), <…unbound>)`, rather than on SPARQLprov's cautious compatibility
+filter, are this repo's own choices.
 
 ## SPARQL quirks worth knowing
 
@@ -173,7 +182,7 @@ So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
   inside the triple term only caught at run time by `sameTerm(c, PREDICATE(?m_o))`. Folding
   `SUBJECT`/`PREDICATE`/`OBJECT` of a bound triple term into the term it reads would prune those branches and
   leave plain SPARQL 1.1.
-- **Provenance across SERVICE.** A SERVICE pattern selects no derivation, and `derivedFrom` stops at one.
+- **Provenance across SERVICE.** A SERVICE pattern is annotated with `1`, and `derivedFrom` stops at one.
   Asma et al., "Native Provenance Computation for Federated and Non-Federated SPARQL Queries"
   (https://doi.org/10.4230/TGDK.4.1.4), Def. 62, annotates provenance per endpoint (`y ⊛ x`) by shipping the
   rewrite into the SERVICE: the reference for extending it.

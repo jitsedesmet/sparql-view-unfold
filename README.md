@@ -166,36 +166,41 @@ its own identifier.
 
 A *derivation* is one solution of a mapping body. `provenanceMappingFromConstructQueries` builds the view of them:
 each derivation is `provenance:derivationOf` the view triples it produces and `provenance:derivedFrom` the source
-triples it matched, with `provenance:` for `https://sparql-extension.knows.idlab.ugent.be/provenance#`.
-`provenanceCapturingQuery` rewrites a SELECT over the view so that it also selects, per triple pattern, the
-derivation that pattern matched (`?derivation0`, `?derivation1`, …). Unfold the one against the other:
+triples it matched, with `provenance:` for `https://sparql-extension.knows.idlab.ugent.be/provenance#`. The
+derivations are SPARQLprov's sources, and `derivationOf` its reification scheme. `provenanceCapturingQuery` rewrites
+a SELECT over the view as SPARQLprov does (Def. 4.12 and 4.17), so that its answers also carry their how-provenance
+polynomial, encoded in variables starting with the returned prefix. `decodeProvenance` decodes them (Def. 4.10):
 
 ```typescript
 const rewriter = createQueryRewriter([
   ...createDefaultTransformationPipeline(provenanceMappingFromConstructQueries(constructs)),
   internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
 ]);
-const rewrittenQuery = await rewriter.rewriteQuery(provenanceCapturingQuery(
-  'PREFIX : <ex://> SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }',
-));
-const bindings = await new QueryEngine().queryBindings(rewrittenQuery, {
+const capture = provenanceCapturingQuery('PREFIX : <ex://> SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }');
+const bindings = await new QueryEngine().queryBindings(await rewriter.rewriteQuery(capture.query), {
   sources,
   extensionFunctions: internalBnodeExtensionFunctions(),
 });
+const answers = decodeProvenance(await bindings.toArray(), capture.provenanceVariablePrefix);
+for (const { answer, polynomial, isAnswer } of answers) {
+  // e.g. c=carol: ((d1 ⊕ d2) ⊗ d3), Carol a colleague through two derivations of Bob's, whom Alice knows (d3).
+  console.log(answer, polynomialToString(polynomial), isAnswer);
+}
 ```
 
-It answers one row per combination of derivations an answer has; querying `derivedFrom` of a derivation gives
-the source triples behind it. A derivation is identified by the position of its CONSTRUCT and the values of its
-body's variables. Beyond that:
+A polynomial is built from derivations with ⊕ (UNION, and the derivations of one view triple), ⊗ (join), ⊖
+(OPTIONAL, MINUS, NOT EXISTS) and δ (an aggregated group). `evaluatePolynomial` evaluates it in an spm-semiring,
+such as `countingSpmSemiring` for multiplicities; `lineageOf` lists its derivations, whose `derivedFrom` gives the
+source triples. A difference keeps the solutions it removes, so that their polynomial explains why they are not
+answers: `isAnswer` tells them apart. Beyond SPARQLprov:
 
-- `OPTIONAL`, `MINUS` and `EXISTS` get positive provenance only: an `OPTIONAL` selects its derivations where it
-  matched, and a pattern under a `MINUS` or an `EXISTS` selects none. SPARQLprov (Def. 4.12) and NPCS annotate
-  them with ⊖ instead; SPARQLprov (p. 3400) shows the positive annotation of an `OPTIONAL` query,
-  u3 ⊗ (u1 ⊕ u2), to be incorrect, as it does not commute with homomorphisms.
-- Under a `GROUP BY`, `LIMIT` or `OFFSET`, the answers are computed over the view as a set, as with
-  `preserveCardinality`, and then joined with the derivations of every solution with the same values, including
-  those a `LIMIT` or `OFFSET` leaves out.
-  The order of an `ORDER BY` is lost.
+- `EXISTS` is `P ⊖ (P ⊖ P2)`, which keeps a solution exactly when a compatible one exists. An `EXISTS` or
+  `NOT EXISTS` other than a top-level conjunct of a `FILTER` stays a filter, contributing no provenance.
+- `LIMIT` and `OFFSET` are rewritten as an aggregate is (Def. 4.17): the answers computed without provenance, then
+  joined with the provenance of every solution with the same values, including those left out. The order of an
+  `ORDER BY` is lost. `DISTINCT` is dropped, as the decoding sums the rows of an answer anyway.
+- Answers of a `GROUP BY`, `LIMIT` or `OFFSET` are computed over the view as a set, as with `preserveCardinality`.
+- `VALUES` and `SERVICE` read no view triple, so their solutions are annotated with `1`.
 - `derivedFrom` lists the body's triple patterns every solution matches: none under a `UNION`, the right side
   of an `OPTIONAL` or `MINUS`, a sub-SELECT, `GROUP`, `GRAPH` or `SERVICE`, nor a property path.
 - Only a `SELECT` is supported.
@@ -237,8 +242,11 @@ The tables below are the short version; the generated
 | `rewriter.rewriteQuery(query)` | Rewrites a SPARQL query string, asynchronously. |
 | `rewriter.rewriteOperation(operation)` | The same over SPARQL algebra, for callers already holding some. |
 | `provenanceMappingFromConstructQueries(constructQueries, options?)` | Builds the mapping of the provenance view the CONSTRUCT queries define. |
-| `provenanceCapturingQuery(query)` | Rewrites a SELECT over the view to also select the derivation every triple pattern matched. |
+| `provenanceCapturingQuery(query)` | Rewrites a SELECT over the view to also select the how-provenance of its answers, and gives its provenance variable prefix. |
 | `provenanceCapturingOperation(operation)` | The same over SPARQL algebra. |
+| `decodeProvenance(bindings, provenanceVariablePrefix)` | Decodes the answers of a provenance capturing query into their polynomials. |
+| `evaluatePolynomial(polynomial, semiring, valueOf)` | Evaluates a polynomial in an spm-semiring, like `booleanSpmSemiring` or `countingSpmSemiring`. |
+| `lineageOf(polynomial)`, `polynomialToString(polynomial, labelOf?)` | The derivations a polynomial mentions, and the polynomial written out. |
 
 | Transformation | Description |
 |---|---|
