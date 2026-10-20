@@ -146,7 +146,7 @@ interface ProvenanceCaptureContext extends TransformationContext {
  * Combinators over these build the rewrites of operators SPARQL has no operation for, like SPARQLprov's `diff`.
  */
 interface ProvenancePattern {
-  /** An operation without provenance whose solutions are exactly those the rewrite has rows for. */
+  /** An operation without provenance, with the in-scope and certainly bound variables of the rewrite's rows. */
   original: Algebra.Operation;
   /**
    * Rewrites the pattern, SPARQLprov's α(Q, z).
@@ -287,15 +287,17 @@ function differenceOf(
     original: minuend.original,
     rewrite: (prefix) => {
       const identity = provenanceNodeVariableName(prefix, 'difference');
-      const subtrahendPrefix = provenanceChildPrefix(prefix, 'difference', 2);
-      const subtrahendRewritten = subtrahend.rewrite(provenanceNodeVariableName(subtrahendPrefix, 'sum'));
+      // The Σ node over the subtrahend's solutions, its variable also the prefix of its child.
+      const subtrahendSum = provenanceChildPrefix(provenanceChildPrefix(prefix, 'difference', 2), 'sum');
+      const subtrahendRewritten = subtrahend.rewrite(subtrahendSum);
       const subtrahendProvenance = provenanceVariablesOf(c, subtrahendRewritten);
-      const minuendRewritten = withIdentity(
+      const minuendWithIdentity = (): Algebra.Extend => withIdentity(
         c,
         minuend.rewrite(provenanceChildPrefix(prefix, 'difference', 1)),
         minuendDomain,
         identity,
       );
+      const minuendRewritten = minuendWithIdentity();
       // A plain left join on the shared variables leaks no binding when the minuend binds them all.
       const leftJoined = loweredCondition === undefined &&
         shared.every(variable => certainlyBound.has(variable.value)) ?
@@ -303,17 +305,18 @@ function differenceOf(
           ...shared,
           ...subtrahendProvenance,
         ])) :
-        // Otherwise, rather than SPARQLprov's conditioned OPTIONAL, the compatible pairs are joined apart.
+        // Otherwise, rather than SPARQLprov's conditioned OPTIONAL, the compatible pairs are joined apart, over the
+        // rows of the minuend's rewrite, as the solutions of its original lack those a nested difference keeps.
         AF.createLeftJoin(minuendRewritten, AF.createProject(
           filteredOperation(c, AF.createJoin([
-            withIdentity(c, withoutProvenance(c, minuend.original), minuendDomain, identity),
+            AF.createDistinct(AF.createProject(minuendWithIdentity(), [ ...minuendDomain, DF.variable(identity) ])),
             subtrahendRewritten,
           ], false), loweredCondition),
           [ DF.variable(identity), ...subtrahendProvenance ],
         ));
       return AF.createExtend(
         leftJoined,
-        DF.variable(provenanceNodeVariableName(subtrahendPrefix, 'sum')),
+        DF.variable(subtrahendSum),
         AF.createTermExpression(DF.variable(identity)),
       );
     },
@@ -620,6 +623,8 @@ Algebra.Operation {
       // The decoding sums the rows of an answer, so it counts each answer once anyway, as SPARQLprov's own
       // implementation, which drops DISTINCT.
       return rewriteWithProvenance(c, operation.input, prefix);
+    case Algebra.Types.FROM:
+      return AF.createFrom(rewriteWithProvenance(c, operation.input, prefix), operation.default, operation.named);
     case Algebra.Types.VALUES:
     case Algebra.Types.SERVICE:
       // Neither reads the view, so neither has derivations: its solutions are produced from no reified data.

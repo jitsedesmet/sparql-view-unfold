@@ -271,6 +271,11 @@ describe('provenanceCapturingQuery', () => {
       .toBe('prov1');
   });
 
+  it('keeps the dataset a FROM selects', ({ expect }) => {
+    expect(provenanceCapturingQuery(`${prefixes} SELECT ?x FROM <ex://graph> WHERE { ?x :knows ?y }`).query)
+      .toContain('FROM <ex://graph>');
+  });
+
   it('rejects a query that is not a SELECT', ({ expect }) => {
     expect(() => provenanceCapturingQuery(`${prefixes} ASK { ?x :worksAt :ugent }`))
       .toThrow('Provenance can only be captured for a SELECT query.');
@@ -426,6 +431,18 @@ describe('provenance captured over the colleagues data', () => {
       '- x=bob: ((bob worksAt ugent ⊖ bob worksAt imec) ⊖ bob worksAt imec)',
       '- x=carol: ((carol worksAt ugent ⊖ carol worksAt imec) ⊖ carol worksAt imec)',
     ]);
+  });
+
+  it('subtracts from every row of a difference whose shared variable the minuend may leave unbound', async(
+    { expect },
+  ) => {
+    const explanations = await explain(
+      'SELECT ?x ?q WHERE { ?x :worksAt :ugent OPTIONAL { ?q :knows ?x } MINUS { ?x :worksAt :imec ' +
+      'OPTIONAL { ?q :knows ?x } } }',
+    );
+    expect(explanations.filter(explanation => explanation.includes('x=bob') && !explanation.includes('q=')))
+      .toEqual([ '- x=bob: ((bob worksAt ugent ⊖ alice knows bob) ⊖ ((alice knows bob ⊗ bob worksAt imec) ⊕ ' +
+        '(bob worksAt imec ⊖ alice knows bob)))' ]);
   });
 
   it('evaluates an EXISTS nested in an expression over the view, contributing no provenance', async({ expect }) => {

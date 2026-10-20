@@ -150,9 +150,11 @@ function childSum(rows: readonly ProvenanceRow[], childPrefix: string): Provenan
 function childIndicesOf(rows: readonly ProvenanceRow[], prefix: string, kind: ProvenanceNodeKind): number[] {
   const childrenPrefix = `${provenanceNodeVariableName(prefix, kind)}_`;
   const indices = new Set<number>();
-  for (const name of new Set(rows.flatMap(row => [ ...row.keys() ]))) {
-    if (name.startsWith(childrenPrefix)) {
-      indices.add(Number.parseInt(name.slice(childrenPrefix.length), 10));
+  for (const row of rows) {
+    for (const name of row.keys()) {
+      if (name.startsWith(childrenPrefix)) {
+        indices.add(Number.parseInt(name.slice(childrenPrefix.length), 10));
+      }
     }
   }
   return [ ...indices ].sort((left, right) => left - right);
@@ -220,7 +222,9 @@ export function decodeProvenance(
     for (const [ variable, term ] of binding) {
       (variable.value.startsWith(`${provenanceVariablePrefix}_`) ? row : answer).set(variable.value, term);
     }
-    const key = [ ...answer ].map(([ name, term ]) => `${name}=${termToString(term)}`).sort().join(' ');
+    // JSON keeps a term's quotes and spaces from running into the next variable's.
+    const key = JSON.stringify([ ...answer ].map(([ name, term ]) => [ name, termToString(term) ])
+      .sort(([ left ], [ right ]) => left.localeCompare(right)));
     const group = rowsByAnswer.get(key) ?? { answer, rows: []};
     group.rows.push(row);
     rowsByAnswer.set(key, group);
