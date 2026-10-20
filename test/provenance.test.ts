@@ -420,6 +420,20 @@ describe('provenance captured over the colleagues data', () => {
       ]);
   });
 
+  it('conditions an OPTIONAL\'s difference on a filter over both sides', async(
+    { expect },
+  ) => {
+    expect(await explain('SELECT ?x ?y WHERE { ?x :worksAt :imec OPTIONAL { ?y :worksAt :ugent FILTER(?x != ?y) } }'))
+      .toEqual([
+        '+ x=bob y=carol: (bob worksAt imec ⊗ carol worksAt ugent)',
+        '+ x=bob y=dave: (bob worksAt imec ⊗ dave worksAt ugent)',
+        '+ x=carol y=bob: (bob worksAt ugent ⊗ carol worksAt imec)',
+        '+ x=carol y=dave: (carol worksAt imec ⊗ dave worksAt ugent)',
+        '- x=bob: (bob worksAt imec ⊖ (carol worksAt ugent ⊕ dave worksAt ugent))',
+        '- x=carol: (carol worksAt imec ⊖ (bob worksAt ugent ⊕ dave worksAt ugent))',
+      ]);
+  });
+
   it('subtracts from every row of an OPTIONAL, its unmatched left side included', async({ expect }) => {
     expect(await explain(
       'SELECT ?x ?o WHERE { { ?x :worksAt :ugent OPTIONAL { ?x :worksAt ?o FILTER(?o != :ugent) } } ' +
@@ -433,7 +447,7 @@ describe('provenance captured over the colleagues data', () => {
     ]);
   });
 
-  it('subtracts from every row of a difference whose shared variable the minuend may leave unbound', async(
+  it('subtracts from every row of a difference over a variable the minuend may not bind', async(
     { expect },
   ) => {
     const explanations = await explain(

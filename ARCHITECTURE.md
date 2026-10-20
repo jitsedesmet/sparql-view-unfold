@@ -138,11 +138,9 @@ encoding from the evaluated arguments instead, at any depth, and the same materi
 
 OPTIONAL is normalised to `(P1 ⊗ P2) ⊕ (P1 ⊖ P2)` (Def. 3.1), MINUS and NOT EXISTS are ⊖, and EXISTS is
 `P1 ⊖ (P1 ⊖ P2)`; each repeats P1, so a chain of OPTIONALs or EXISTS grows the query exponentially. A difference keeps
-every solution of its minuend, each with the provenance of the subtrahend's compatible solutions. Where the minuend
-binds every shared variable, that is a plain left join on them. Otherwise SPARQLprov renames the shared variables
-apart and conditions the OPTIONAL on their compatibility, which Comunica only evaluates as a bind join, and that
-cannot bind through the BIND of a side sharing no variable; here the compatible pairs are joined apart instead,
-keyed by the minuend's identity, and left-joined back on it, which gives the same table. An expression's EXISTS
+every solution of its minuend, each with the provenance of the subtrahend's compatible solutions: as SPARQLprov
+writes it, an OPTIONAL over the subtrahend with the shared variables the minuend may leave unbound renamed apart
+and compared in its condition, which needs Comunica master (comunica/comunica#1835) to evaluate. An expression's EXISTS
 outside a top-level conjunct of a FILTER is evaluated over the view, contributing no provenance.
 
 Every other operator is rewritten in place. A GROUP or SLICE counts solutions rather than derivations, so it

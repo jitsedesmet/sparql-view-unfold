@@ -142,11 +142,11 @@ interface ProvenanceCaptureContext extends TransformationContext {
 }
 
 /**
- * A query being rewritten: an operation with the solutions the rewrite has rows for, and the rewrite itself.
+ * A query being rewritten: the original operation, and its rewrite under a provenance variable prefix.
  * Combinators over these build the rewrites of operators SPARQL has no operation for, like SPARQLprov's `diff`.
  */
 interface ProvenancePattern {
-  /** An operation without provenance, with the in-scope and certainly bound variables of the rewrite's rows. */
+  /** The original operation, whose in-scope and certainly bound variables the rewrite reads. */
   original: Algebra.Operation;
   /**
    * Rewrites the pattern, SPARQLprov's α(Q, z).
@@ -262,80 +262,112 @@ ProvenancePattern {
   };
 }
 
+/** Which solutions of a difference's subtrahend remove a solution of its minuend. */
+interface DifferenceOptions {
+  /** What a compatible pair must also satisfy, merged, as an OPTIONAL's condition. */
+  condition?: Algebra.Expression;
+  /** Only a solution sharing a bound variable removes one, as for MINUS. */
+  sharingABoundVariable?: boolean;
+}
+
 /**
  * The difference (⊖) of two patterns, SPARQLprov's `diff` (Def. 4.12 (5)): the minuend's solutions, each with the
- * provenance of the subtrahend's solutions compatible with it. See ARCHITECTURE.md for how it is encoded.
+ * provenance of the subtrahend's compatible solutions, its shared variables the minuend may leave unbound renamed apart
+ * in the subtrahend and compared in the OPTIONAL's condition.
  * @param c - The provenance capture context
  * @param minuend - The pattern whose solutions are kept
  * @param subtrahend - The pattern whose compatible solutions annotate them
- * @param pairCondition - What a compatible pair must also satisfy, merged, as an OPTIONAL's condition
+ * @param options - Which solutions of the subtrahend count
  * @returns the difference
  */
 function differenceOf(
   c: ProvenanceCaptureContext,
   minuend: ProvenancePattern,
   subtrahend: ProvenancePattern,
-  pairCondition?: Algebra.Expression,
+  options: DifferenceOptions = {},
 ): ProvenancePattern {
   const { AF } = c;
   const minuendDomain = algebraUtils.inScopeVariables(minuend.original);
   const subtrahendDomain = new Set(algebraUtils.inScopeVariables(subtrahend.original).map(variable => variable.value));
   const shared = minuendDomain.filter(variable => subtrahendDomain.has(variable.value));
   const certainlyBound = certainlyBoundVariablesOf(minuend.original);
-  const loweredCondition = pairCondition && withoutProvenance(c, pairCondition);
+  // A MINUS needs to tell which side bound a shared variable, so it renames them all.
+  const problematic = shared.filter(variable => options.sharingABoundVariable ?? !certainlyBound.has(variable.value));
+  const loweredCondition = options.condition && withoutProvenance(c, options.condition);
   return {
     original: minuend.original,
     rewrite: (prefix) => {
-      const identity = provenanceNodeVariableName(prefix, 'difference');
-      // The Σ node over the subtrahend's solutions, its variable also the prefix of its child.
+      const renamed = problematic.map(variable => <const> [ variable, c.coinInternalVariable() ]);
       const subtrahendSum = provenanceChildPrefix(provenanceChildPrefix(prefix, 'difference', 2), 'sum');
-      const subtrahendRewritten = subtrahend.rewrite(subtrahendSum);
-      const subtrahendProvenance = provenanceVariablesOf(c, subtrahendRewritten);
-      const minuendWithIdentity = (): Algebra.Extend => withIdentity(
+      const subtrahendRewritten = renameVariables(
         c,
-        minuend.rewrite(provenanceChildPrefix(prefix, 'difference', 1)),
-        minuendDomain,
-        identity,
+        subtrahend.rewrite(subtrahendSum),
+        new Map(renamed.map(([ variable, rename ]) => [ variable.value, rename.value ])),
       );
-      const minuendRewritten = minuendWithIdentity();
-      // A plain left join on the shared variables leaks no binding when the minuend binds them all.
-      const leftJoined = loweredCondition === undefined &&
-        shared.every(variable => certainlyBound.has(variable.value)) ?
-        AF.createLeftJoin(minuendRewritten, AF.createProject(subtrahendRewritten, [
-          ...shared,
-          ...subtrahendProvenance,
-        ])) :
-        // Otherwise, rather than SPARQLprov's conditioned OPTIONAL, the compatible pairs are joined apart, over the
-        // rows of the minuend's rewrite, as the solutions of its original lack those a nested difference keeps.
-        AF.createLeftJoin(minuendRewritten, AF.createProject(
-          filteredOperation(c, AF.createJoin([
-            AF.createDistinct(AF.createProject(minuendWithIdentity(), [ ...minuendDomain, DF.variable(identity) ])),
-            subtrahendRewritten,
-          ], false), loweredCondition),
-          [ DF.variable(identity), ...subtrahendProvenance ],
-        ));
-      return AF.createExtend(
-        leftJoined,
-        DF.variable(subtrahendSum),
-        AF.createTermExpression(DF.variable(identity)),
+      const conditions = renamed.map(([ variable, rename ]) => disjunctionOf(c, [
+        unboundAssertionAsExpression(c, variable.value),
+        unboundAssertionAsExpression(c, rename.value),
+        sameTermExpression(c, AF.createTermExpression(variable), rename),
+      ]));
+      if (options.sharingABoundVariable) {
+        conditions.push(disjunctionOf(c, renamed.map(([ variable, rename ]) => conjunctionOf(c, [
+          boundAssertionAsExpression(c, variable.value),
+          boundAssertionAsExpression(c, rename.value),
+        ]))));
+      }
+      if (loweredCondition) {
+        // The merged solution takes a renamed variable's value from whichever side binds it.
+        conditions.push(substitutedByCoalesce(c, loweredCondition, renamed));
+      }
+      const minuendRewritten = minuend.rewrite(provenanceChildPrefix(prefix, 'difference', 1));
+      const optional = AF.createProject(
+        AF.createLeftJoin(
+          minuendRewritten,
+          subtrahendRewritten,
+          conditions.length === 0 ? undefined : conjunctionOf(c, conditions),
+        ),
+        [ ...algebraUtils.inScopeVariables(minuendRewritten), ...provenanceVariablesOf(c, subtrahendRewritten) ],
+      );
+      return withIdentity(
+        c,
+        withIdentity(c, optional, minuendDomain, provenanceNodeVariableName(prefix, 'difference')),
+        minuendDomain,
+        subtrahendSum,
       );
     },
   };
 }
 
 /**
- * Filters an operation by an expression, if any.
+ * Substitutes, in an expression, every renamed variable `?x` by `COALESCE(?x, ?renamed)`.
  * @param c - The provenance capture context
- * @param operation - The operation
- * @param expression - The filter expression, or `undefined` for none
- * @returns the filtered operation
+ * @param expression - The expression
+ * @param renamed - The renamed variables, with their renames
+ * @returns the substituted expression
  */
-function filteredOperation(
+function substitutedByCoalesce(
   c: ProvenanceCaptureContext,
-  operation: Algebra.Operation,
-  expression: Algebra.Expression | undefined,
-): Algebra.Operation {
-  return expression === undefined ? operation : c.AF.createFilter(operation, expression);
+  expression: Algebra.Expression,
+  renamed: readonly (readonly [ RDF.Variable, RDF.Variable ])[],
+): Algebra.Expression {
+  const renameOf = new Map(renamed.map(([ variable, rename ]) => [ variable.value, rename ]));
+  const substitute = (operand: Algebra.Expression): Algebra.Expression => {
+    switch (operand.subType) {
+      case Algebra.ExpressionTypes.TERM: {
+        const rename = operand.term.termType === 'Variable' ? renameOf.get(operand.term.value) : undefined;
+        return rename === undefined ?
+          operand :
+          c.AF.createOperatorExpression('coalesce', [ operand, c.AF.createTermExpression(rename) ]);
+      }
+      case Algebra.ExpressionTypes.OPERATOR:
+        return c.AF.createOperatorExpression(operand.operator, operand.args.map(substitute));
+      case Algebra.ExpressionTypes.NAMED:
+        return c.AF.createNamedExpression(operand.name, operand.args.map(substitute));
+      default:
+        return operand;
+    }
+  };
+  return substitute(expression);
 }
 
 /**
@@ -353,29 +385,15 @@ function minusPatternOf(c: ProvenanceCaptureContext, minus: Algebra.Minus): Prov
     return patternOf(c, left);
   }
   const leftBound = certainlyBoundVariablesOf(left);
-  if (shared.every(variable => leftBound.has(variable.value))) {
-    // The left side binds every shared variable, so a right solution shares one exactly when it binds one too.
-    const rightBound = certainlyBoundVariablesOf(right);
-    const rightSharingABoundVariable = shared.some(variable => rightBound.has(variable.value)) ?
-      right :
-      c.AF.createFilter(right, disjunctionOf(c, shared.map(variable => boundAssertionAsExpression(c, variable.value))));
-    return differenceOf(c, patternOf(c, left), patternOf(c, rightSharingABoundVariable));
+  if (!shared.every(variable => leftBound.has(variable.value))) {
+    return differenceOf(c, patternOf(c, left), patternOf(c, right), { sharingABoundVariable: true });
   }
-  // A join cannot tell which side bound a shared variable, so the right side's are renamed apart and compared.
-  const renamed = shared.map(variable => <const> [ variable, c.coinInternalVariable() ]);
-  const renamedRight = renameVariables(c, right, new Map(renamed.map(([ variable, rename ]) =>
-    [ variable.value, rename.value ])));
-  return differenceOf(c, patternOf(c, left), patternOf(c, renamedRight), conjunctionOf(c, [
-    ...renamed.map(([ variable, rename ]) => disjunctionOf(c, [
-      unboundAssertionAsExpression(c, variable.value),
-      unboundAssertionAsExpression(c, rename.value),
-      sameTermExpression(c, c.AF.createTermExpression(variable), rename),
-    ])),
-    disjunctionOf(c, renamed.map(([ variable, rename ]) => conjunctionOf(c, [
-      boundAssertionAsExpression(c, variable.value),
-      boundAssertionAsExpression(c, rename.value),
-    ]))),
-  ]));
+  // The left side binds every shared variable, so a right solution shares one exactly when it binds one too.
+  const rightBound = certainlyBoundVariablesOf(right);
+  const rightSharingABoundVariable = shared.some(variable => rightBound.has(variable.value)) ?
+    right :
+    c.AF.createFilter(right, disjunctionOf(c, shared.map(variable => boundAssertionAsExpression(c, variable.value))));
+  return differenceOf(c, patternOf(c, left), patternOf(c, rightSharingABoundVariable));
 }
 
 /**
@@ -408,7 +426,7 @@ function optionalPatternOf(c: ProvenanceCaptureContext, leftJoin: Algebra.LeftJo
   const joined = combinationOf(c, 'product', [ left, right ]);
   return combinationOf(c, 'osum', [
     leftJoin.expression ? filteredBy(c, joined, leftJoin.expression) : joined,
-    differenceOf(c, left, right, leftJoin.expression),
+    differenceOf(c, left, right, { condition: leftJoin.expression }),
   ]);
 }
 
