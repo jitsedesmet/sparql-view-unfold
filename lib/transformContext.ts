@@ -9,6 +9,9 @@ import { AstFactory, AstTransformer } from '@traqula/rules-sparql-1-2';
 import { DataFactory } from 'rdf-data-factory';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
+import type { RangeSet } from './RangeSet.js';
+import type { CPMeta } from './utils/certainlyBoundVars.js';
+import { standardExpressionRange } from './utils/certainlyBoundVars.js';
 import { freshVarGenerator } from './utils.js';
 
 /**
@@ -45,10 +48,20 @@ export interface TransformationContext {
    * A more deeply nested one leaves the node unbound, and the encoding grows quadratically with it.
    */
   tripleTermArgumentDepth: number;
+  /**
+   * The term types an expression can evaluate to, reading its subexpressions back through the context. Replace it for
+   * an engine that turns an error into a value, falling back to {@link standardExpressionRange} for the rest.
+   */
+  expressionRange: (
+    c: Pick<TransformationContext, 'expressionRange'>,
+    expression: Algebra.Expression,
+    input?: CPMeta,
+  ) => RangeSet;
 }
 
 /** What a rewrite configures of its {@link TransformationContext}. */
-export type TransformationContextOptions = Partial<Pick<TransformationContext, 'tripleTermArgumentDepth'>>;
+export type TransformationContextOptions =
+  Partial<Pick<TransformationContext, 'expressionRange' | 'tripleTermArgumentDepth'>>;
 
 /**
  * Parses a SPARQL query or update string into its algebra representation, with blank nodes converted to
@@ -75,16 +88,16 @@ export function parseQuery(
 /**
  * Checks what a {@link TransformationContext} is configured with and fills in the defaults.
  * @param options - What to configure.
- * @returns The options, with a `tripleTermArgumentDepth` of 2 by default.
+ * @returns The options, with a `tripleTermArgumentDepth` of 2 and the {@link standardExpressionRange} by default.
  * @throws Error if the `tripleTermArgumentDepth` is not a non-negative integer
  */
 export function resolveTransformationContextOptions(
-  { tripleTermArgumentDepth = 2 }: TransformationContextOptions = {},
+  { tripleTermArgumentDepth = 2, expressionRange = standardExpressionRange }: TransformationContextOptions = {},
 ): Required<TransformationContextOptions> {
   if (!Number.isInteger(tripleTermArgumentDepth) || tripleTermArgumentDepth < 0) {
     throw new Error(`The tripleTermArgumentDepth must be a non-negative integer, not ${tripleTermArgumentDepth}.`);
   }
-  return { tripleTermArgumentDepth };
+  return { tripleTermArgumentDepth, expressionRange };
 }
 
 /**
@@ -94,7 +107,7 @@ export function resolveTransformationContextOptions(
  * @throws Error if the options are invalid
  */
 export function createTransformationContext(options: TransformationContextOptions = {}): TransformationContext {
-  const { tripleTermArgumentDepth } = resolveTransformationContextOptions(options);
+  const { tripleTermArgumentDepth, expressionRange } = resolveTransformationContextOptions(options);
   const DF = new DataFactory();
   const usedVariableNames = new Set<string>();
   return {
@@ -108,5 +121,6 @@ export function createTransformationContext(options: TransformationContextOption
     usedVariableNames,
     coinExistenceVariable: freshVarGenerator(usedVariableNames, 'mExists'),
     tripleTermArgumentDepth,
+    expressionRange,
   };
 }

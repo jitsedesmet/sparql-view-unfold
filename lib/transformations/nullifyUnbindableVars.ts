@@ -59,7 +59,7 @@ export function nullifyUnbindableVars<T extends Algebra.Operation>(c: Transforma
  * an operation without solutions being able to contribute any
  */
 function nullifyIfProvenEmpty(c: TransformationContext, op: Algebra.Operation): PreOrderMappingReturn {
-  const { cVars, vRanges } = withCpVars(op).metadata;
+  const { cVars, vRanges } = withCpVars(c, op).metadata;
   for (const name of cVars) {
     if (vRanges.neverBinds(name)) {
       return { ...keepMetadata, newValue: createFilterFalse(c, op), continue: false };

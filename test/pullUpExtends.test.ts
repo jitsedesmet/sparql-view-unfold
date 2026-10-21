@@ -31,7 +31,7 @@ describe('pullUpExtends', () => {
 
   /** What an operation puts in scope: the variables every solution binds, and what `SELECT *` expands to. */
   function scopeOf(op: Algebra.Operation): { cVars: string[]; pVars: string[] } {
-    const { cVars, vRanges } = withCpVars(withoutCpVars(op)).metadata;
+    const { cVars, vRanges } = withCpVars(c, withoutCpVars(op)).metadata;
     return { cVars: [ ...cVars ].sort(), pVars: [ ...vRanges.keys() ].sort() };
   }
 
