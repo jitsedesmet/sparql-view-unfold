@@ -28,6 +28,8 @@ dist/cjs/*
 # from the repo root (e.g. via JenaEngine / test/bench) with no --base override.
 /run
 bench-*.json
+# Raw per-run materialisation timings; the rows are merged into materialization.json.
+test/bench/results/materialization-native*.json
 # Benchmark figures are regenerated from the results JSON with `node test/bench/plot.mjs`.
 test/bench/results/figures/
 
