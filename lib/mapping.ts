@@ -5,7 +5,7 @@ import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_MERGED_HEAD } from './consts.js';
 import { triplePositions } from './datastructures/TermClusterSet.js';
 import type { RangeSet } from './RangeSet.js';
-import { rangeOfPosition } from './RangeSet.js';
+import { objectRange, rangeOfPosition } from './RangeSet.js';
 import type { TransformationContext } from './transformContext.js';
 import { createTransformationContext, parseQuery } from './transformContext.js';
 import type { Mapping, MappingHead } from './types.js';
@@ -60,7 +60,8 @@ export interface MappingOptions {
    * Off by default, and a head variable the body could bind outside the range its position admits then
    * costs a type test, since a CONSTRUCT instantiates no triple for a solution that would make an illegal
    * one (SPARQL 1.1 §16.2). Turn it on where the source is read as generalized RDF and those solutions
-   * keep their triples; the tests are cheap, but they are wrong for a view that wants them.
+   * keep their triples; the tests are cheap, but they are wrong for a view that wants them. The positions
+   * inside a head triple term stay tested, SPARQL building no triple term out of terms they do not admit.
    */
   generalizedRdfView?: boolean;
 }
@@ -164,10 +165,13 @@ function mappingOfSingleTemplateTriple(
   const conditions: AssertionConjunct[] = headVariableNames
     .filter(name => !certainlyBoundVariableNames.has(name))
     .map(name => ({ access: access(name), assertion: assertBound() }));
-  if (options.generalizedRdfView !== true) {
-    conditions.push(...triplePositions.flatMap(position =>
-      headPositionTypeTests(head[position], rangeOfPosition(position), bodyRanges)));
-  }
+  // A generalized view admits any term in a position, but SPARQL builds no triple term out of terms its positions do
+  // not admit: a BIND of one would raise and leave its variable unbound, so what one is built of stays tested.
+  conditions.push(...triplePositions.flatMap(position => headPositionTypeTests(
+    head[position],
+    options.generalizedRdfView === true ? objectRange : rangeOfPosition(position),
+    bodyRanges,
+  )));
   let body: Algebra.Operation = constructBody;
   if (conditions.length > 0) {
     body = AF.createFilter(body, conjunctionOf(tools, conditions
