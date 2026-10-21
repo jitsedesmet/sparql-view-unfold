@@ -17,6 +17,7 @@ import {
   subjectRange,
   tripleTermRange,
 } from '../RangeSet.js';
+import type { TransformationContext } from '../transformContext.js';
 import { constructedTermOf } from './expressionHelpers.js';
 import { xsd } from './rdfDatatypes.js';
 import type { SSet } from './setUtils.js';
@@ -193,13 +194,18 @@ const operatorRanges = new Map(([
 ] satisfies [RangeSet, string][]).flatMap(([ range, operators ]) =>
   operators.trim().split(/\s+/u).map(operator => <const> [ operator, range ])));
 
+/** What the range analysis reads of a {@link TransformationContext}. */
+export type RangeContext = Pick<TransformationContext, 'expressionRange'>;
+
 /**
- * The term types an expression can evaluate to, like the target of a `BIND(e AS ?t)` can be bound to.
+ * The term types an expression can evaluate to for an engine that replaces no error with a value, reading its
+ * subexpressions through the context.
+ * @param c - The context whose `expressionRange` reads the subexpressions
  * @param expression - The expression, like `?v`, `STR(?v)` or `COUNT(?v)`
  * @param input - The metadata of the solutions it is evaluated over; where it is absent, a variable can be any term
  * @returns the range, the top where the expression does not decide a term type
  */
-export function expressionRange(expression: Algebra.Expression, input?: CPMeta): RangeSet {
+export function standardExpressionRange(c: RangeContext, expression: Algebra.Expression, input?: CPMeta): RangeSet {
   switch (expression.subType) {
     case ExpressionTypes.TERM: {
       if (expression.term.termType !== 'Variable') {
@@ -213,14 +219,14 @@ export function expressionRange(expression: Algebra.Expression, input?: CPMeta):
       // COALESCE gives one of its arguments, IF one of its branches. As such we UNION the ranges of the branches.
       if (expression.operator === 'coalesce' || expression.operator === 'if') {
         const choices = expression.operator === 'if' ? expression.args.slice(1) : expression.args;
-        return new RangeSet(choices.flatMap(choice => [ ...expressionRange(choice, input) ]));
+        return new RangeSet(choices.flatMap(choice => [ ...c.expressionRange(c, choice, input) ]));
       }
       return operatorRanges.get(expression.operator) ?? objectRange;
     }
     case ExpressionTypes.AGGREGATE: {
       // MIN, MAX and SAMPLE give one of the values they aggregate, the others compute a literal.
       return [ 'max', 'min', 'sample' ].includes(expression.aggregator) ?
-        expressionRange(expression.expression, input) :
+        c.expressionRange(c, expression.expression, input) :
         literalRange;
     }
     case ExpressionTypes.EXISTENCE: {
@@ -300,10 +306,11 @@ export function termCertainlyEvaluates(term: RDF.Term, input: CPMeta): boolean {
 /**
  * The operation with its certainly and possibly bound variables assigned, computed by dynamic programming:
  * callers are responsible for keeping the metadata up to date when they manipulate the operation.
+ * @param c - The context whose `expressionRange` gives what a BIND or an aggregate binds
  * @param op - The operation to annotate
  * @returns the same operation, with its metadata attached
  */
-export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
+export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPOp<T> {
   function asCPVars<T extends Algebra.Operation>(op: T): CPOp<T> {
     const casted = <CPOp<T>> op;
     if (!Object.hasOwn(op, 'metadata')) {
@@ -325,7 +332,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
   const resOp = asCPVars<T>(op);
   switch (resOp.type) {
     case Types.BGP: {
-      const patterns = resOp.patterns.map(pattern => withCpVars(pattern).metadata);
+      const patterns = resOp.patterns.map(pattern => withCpVars(c, pattern).metadata);
       resOp.metadata.cVars = unionSets(patterns.map(pattern => pattern.cVars));
       // Every pattern of a BGP has to match at once, so a variable occurring in several of them takes
       // the one type all of its occurrences admit.
@@ -348,7 +355,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.JOIN: {
-      const inputs = resOp.input.map(input => withCpVars(input));
+      const inputs = resOp.input.map(input => withCpVars(c, input));
       resOp.metadata.cVars = unionSets(inputs.map(input => input.metadata.cVars));
       // Note the inversion against `cVars`: a join *merges* compatible mappings, so a variable several
       // operands can bind holds one value satisfying all of them - the ranges intersect where the
@@ -357,7 +364,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       return resOp;
     } case Types.UNION: {
       // A variable is only certain when every branch binds it, but any branch may bind it.
-      const inputs = resOp.input.map(input => withCpVars(input));
+      const inputs = resOp.input.map(input => withCpVars(c, input));
       resOp.metadata.cVars = intersectSets(inputs.map(input => input.metadata.cVars));
       // The other half of the inversion: a solution comes from exactly *one* branch, so the value of a
       // variable is whatever that branch gave it - the ranges unite where the certainties intersect.
@@ -366,13 +373,13 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
     } case Types.MINUS: {
       // The right-hand side of a MINUS contributes no binding at all to the result, not even a
       // possible one - its variables are out of scope above it.
-      const left = withCpVars(resOp.input[0]);
+      const left = withCpVars(c, resOp.input[0]);
       resOp.metadata.cVars = new Set(left.metadata.cVars);
       resOp.metadata.vRanges = new VRanges(left.metadata.vRanges);
       return resOp;
     } case Types.LEFT_JOIN: {
       // OPTIONAL only certainly binds whatever its left-hand (required) side binds.
-      const [ left, right ] = resOp.input.map(input => withCpVars(input));
+      const [ left, right ] = resOp.input.map(input => withCpVars(c, input));
       resOp.metadata.cVars = new Set(left.metadata.cVars);
       // Where the left binds the variable *certainly* it is the left that decides its value in every
       // solution, the right hand side only ever contributing a compatible mapping. Where it does not, a
@@ -389,7 +396,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       return resOp;
     } case Types.PROJECT: {
       const projected = new Set(resOp.variables.map(variable => variable.value));
-      const input = withCpVars(resOp.input);
+      const input = withCpVars(c, resOp.input);
       resOp.metadata.cVars = intersectSets([ input.metadata.cVars, projected ]);
       // A projection only drops variables, so what it keeps still takes the values the input gave it -
       // and dropping one is now dropping its key, which is what takes it out of scope.
@@ -402,7 +409,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       // when the input binds it certainly: grouping on an unbound variable yields a group in which it
       // stays unbound. An aggregate may raise an evaluation error, so its target is never certain.
       const keys = new Set(resOp.variables.map(variable => variable.value));
-      const input = withCpVars(resOp.input);
+      const input = withCpVars(c, resOp.input);
       // COUNT is the one aggregate that cannot fail: it counts the bound, non-error values of its
       // argument, so it yields an integer.
       // All others can end up with an error value leaving their target unbound.
@@ -416,7 +423,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins.
       const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
       for (const aggregate of resOp.aggregates) {
-        ranges.set(aggregate.variable.value, expressionRange(aggregate, input.metadata));
+        ranges.set(aggregate.variable.value, c.expressionRange(c, aggregate, input.metadata));
       }
       resOp.metadata.vRanges = ranges;
       return resOp;
@@ -437,7 +444,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.EXTEND: {
-      const input = withCpVars(resOp.input);
+      const input = withCpVars(c, resOp.input);
       const certain = new Set(input.metadata.cVars);
       const ranges = new VRanges(input.metadata.vRanges);
       // Maybe the var we will create is also certain. Read through {@link constructedTermOf}, so that the
@@ -450,7 +457,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       resOp.metadata.cVars = certain;
       // The EXTEND brings its target into scope, and what the expression yields overrides whatever the
       // input had to say about it - binding an already bound variable is an error, not a narrowing.
-      ranges.set(resOp.variable.value, expressionRange(resOp.expression, input.metadata));
+      ranges.set(resOp.variable.value, c.expressionRange(c, resOp.expression, input.metadata));
       resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.FILTER: {
@@ -458,7 +465,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       // However: depending on the filter, we can say something on vars being present.
       // Also filters pVars and cVars for `!bound(?x)`
       // Keep in mind: Filter False is a special case.
-      const input = withCpVars(resOp.input);
+      const input = withCpVars(c, resOp.input);
       const unbound = variablesImpliedUnboundBy(resOp.expression);
       resOp.metadata.cVars = differenceSets(unionSets([
         input.metadata.cVars,
@@ -476,7 +483,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       return resOp;
     } case Types.GRAPH: {
       // Asserting on the graph variable selects one graph, so it is in scope above the GRAPH.
-      const input = withCpVars(resOp.input);
+      const input = withCpVars(c, resOp.input);
       const graphVars = termVars(resOp.name);
       resOp.metadata.cVars = unionSets([ input.metadata.cVars, graphVars ]);
       // The graph variable is bound to the name of a graph, which is a NamedNode or a BlankNode - the
@@ -498,7 +505,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       return resOp;
     } case Types.SERVICE: {
       // A SILENT service that fails is replaced by a single empty solution, so no variable is certain.
-      const input = withCpVars(resOp.input);
+      const input = withCpVars(c, resOp.input);
       resOp.metadata.cVars = resOp.silent ? new Set<string>() : new Set(input.metadata.cVars);
       const ranges = new VRanges(input.metadata.vRanges);
       for (const name of termVars(resOp.name)) {
@@ -513,7 +520,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
     case Types.ORDER_BY:
     case Types.FROM: {
       // These only drop or reorder solutions, they never change which variables a solution binds.
-      const input = withCpVars((<A.Single> <A.Operation> resOp).input);
+      const input = withCpVars(c, (<A.Single> <A.Operation> resOp).input);
       resOp.metadata.cVars = new Set(input.metadata.cVars);
       resOp.metadata.vRanges = new VRanges(input.metadata.vRanges);
       return resOp;
@@ -550,11 +557,12 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
 /**
  * What an operation binds, which is {@link withCpVars} read for its answer rather than for its side effect
  * of caching one - what every pass reading licences off the plan actually wants.
+ * @param c - The context whose `expressionRange` gives what a BIND or an aggregate binds
  * @param op - The operation to read
  * @returns its metadata
  */
-export function cpMetaOf(op: Algebra.Operation): CPMeta {
-  return withCpVars(op).metadata;
+export function cpMetaOf(c: RangeContext, op: Algebra.Operation): CPMeta {
+  return withCpVars(c, op).metadata;
 }
 
 /**

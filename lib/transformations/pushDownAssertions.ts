@@ -171,7 +171,7 @@ function pushAssertions(
   assertions: AssertionConjunction,
   op: Algebra.Operation,
 ): PreOrderMappingReturn {
-  const normalised = assertions.normalisedFor(cpMetaOf(op));
+  const normalised = assertions.normalisedFor(cpMetaOf(c, op));
   if (normalised === undefined) {
     return empty(c, op);
   }
@@ -231,7 +231,7 @@ function swapWith(
     }
     case Algebra.Types.FILTER: {
       // The conjunction we manage absorbs the assertions of the filter we pass (SDecompI),
-      const collected = collectAssertions(c, op.expression, assertions, cpMetaOf(op.input).cVars);
+      const collected = collectAssertions(c, op.expression, assertions, cpMetaOf(c, op.input).cVars);
       if (collected === undefined) {
         return empty(c, op);
       }
@@ -389,7 +389,7 @@ function rewritePattern(
   // for it. So it reads what the pattern itself binds, and belongs as deep as that goes.
   const condition = residual.size === 0 ?
     undefined :
-    substituteInExpression(c, residual.toExpression(c), asWritten, cpMetaOf(pattern).cVars);
+    substituteInExpression(c, residual.toExpression(c), asWritten, cpMetaOf(c, pattern).cVars);
   // A conjunct the values decide - `bound(?x)` of a variable the pattern writes, say - leaves nothing to
   // ask. `false` is not the mirror of this and keeps its filter: that is the empty operation, which
   // {@link transformFilterFalse} normalises away afterwards.
@@ -549,7 +549,7 @@ function pushIntoExtend(
   const expression = extend.expression;
   const assertionOfTarget = assertions.get(target);
   // The expression is evaluated over the input of the EXTEND, wherever this rewrite ends up putting it.
-  const { cVars } = cpMetaOf(extend.input);
+  const { cVars } = cpMetaOf(c, extend.input);
   // A BIND of something Θ can name carries below the EXTEND whatever the target carries above it, so Θ
   // transfers onto it. A source *reading the target* is not one of them: `BIND(?x AS ?x)` binds nothing,
   // the target being unbound below itself, and a construction mentioning it reads a variable that is
@@ -653,7 +653,7 @@ function pushIntoGraph(
     // the second falls through to the general path below rather than being treated as an emptiness.
     assertedGraphName.term.termType === 'NamedNode') {
     // Read before the rewrite, which preserves the scope exactly and never shrinks `cVars`.
-    const { cVars, vRanges } = cpMetaOf(graph.input);
+    const { cVars, vRanges } = cpMetaOf(c, graph.input);
     // `?g` travels on into the pattern, in the *weak* form: `P` need not bind it at all, and the join
     // with `{?g ↦ c}` is what would have dropped the solutions binding it to anything else.
     const graphIndependentAssertions = assertions.split(name => name !== graphVar).inside;
@@ -739,7 +739,7 @@ function pushIntoJoin(
 
   // Read before any rewriting: every rewrite preserves pVars and never shrinks cVars, so these licences
   // stay valid while the operands are rewritten.
-  const operands = join.input.map(operand => cpMetaOf(operand));
+  const operands = join.input.map(operand => cpMetaOf(c, operand));
   // Memoization for binderCountOf
   const binderCounts = new Map<string, number>();
   const binderCountOf = (name: string): number => {
@@ -823,7 +823,7 @@ function pushIntoLeftJoin(
 ): PreOrderMappingReturn {
   const { AF } = c;
   const [ left, right ] = leftJoin.input;
-  const leftVars = cpMetaOf(left);
+  const leftVars = cpMetaOf(c, left);
 
   if ([ ...assertions.boundImpliedBy() ].some(name => leftVars.vRanges.neverBinds(name))) {
     // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
@@ -832,7 +832,7 @@ function pushIntoLeftJoin(
     return { ...keepMetadata, newValue: assertionFilter(c, rebuilt, assertions), reTransform: true };
   }
 
-  const rightVars = cpMetaOf(right);
+  const rightVars = cpMetaOf(c, right);
   // (FLPush) on the left, and `?x ∈ cVars(A₁) ∩ cVars(A₂)` on the right - which implies the left's
   // licence, so the replication only ever happens beside a push the LHS already took.
   //

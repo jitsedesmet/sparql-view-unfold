@@ -9,7 +9,6 @@ import { componentOf } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import {
   cpMetaOf,
-  expressionRange,
   termCertainlyEvaluates,
   withoutCpVars,
 } from '../utils/certainlyBoundVars.js';
@@ -169,7 +168,7 @@ function encodeInternalBnode(
       AF.createOperatorExpression(position, [ termExpression ]) :
       AF.createTermExpression(component);
     // Only encoded once constructed, so the component is a term its position admits.
-    return [ componentExpression, expressionRange(componentExpression, scope).meet(rangeOfPosition(position)) ];
+    return [ componentExpression, c.expressionRange(c, componentExpression, scope).meet(rangeOfPosition(position)) ];
   }
 
   /**
@@ -226,7 +225,7 @@ function encodeInternalBnode(
   function encodeArgument(argument: Algebra.Expression): Algebra.Expression {
     const term = constructedTermOf(argument);
     const termExpression = term === undefined ? argument : AF.createTermExpression(term);
-    const encoding = encodeTerm(termExpression, expressionRange(termExpression, scope), c.tripleTermArgumentDepth);
+    const encoding = encodeTerm(termExpression, c.expressionRange(c, termExpression, scope), c.tripleTermArgumentDepth);
     return term !== undefined && scope !== undefined && termCertainlyEvaluates(term, scope) ?
       encoding :
       orUnbound(termExpression, encoding);
@@ -296,7 +295,7 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
         operation.input = AF.createExtend(operation.input, variable, argument);
         return AF.createTermExpression(variable);
       });
-      const scope = withRanges ? cpMetaOf(operation.input) : undefined;
+      const scope = withRanges ? cpMetaOf(c, operation.input) : undefined;
       return encodeInternalBnode(c, AF.createNamedExpression(named.name, args), scope);
     });
   }

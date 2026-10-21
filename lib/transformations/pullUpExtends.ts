@@ -243,8 +243,8 @@ function peelInputs(c: TransformationContext, inputs: readonly Algebra.Operation
       chainPosition,
       expressionIsStable: isStableExpression(c, bind.expression),
       constructedTerm: constructedTermOf(bind.expression),
-      bindsCertainly: cpMetaOf(bind.extendNode).cVars.has(bind.variable.value),
-      scopeBelowBind: cpMetaOf(bind.extendNode.input),
+      bindsCertainly: cpMetaOf(c, bind.extendNode).cVars.has(bind.variable.value),
+      scopeBelowBind: cpMetaOf(c, bind.extendNode.input),
       disposition: 'stay',
       mustLeaveWith: [],
     };
@@ -577,7 +577,7 @@ function floatThroughFilter(c: TransformationContext, filter: Algebra.Filter): A
       // sit on a subtree that is structurally what it was when the metadata was computed. The one thing
       // that *would* be stale is metadata left by an earlier pass, which entering through
       // `withoutCpVars` has already cleared.
-      substituteDepartedBinds(c, filter.expression, risers, cpMetaOf(rewrittenInputs[0]).cVars),
+      substituteDepartedBinds(c, filter.expression, risers, cpMetaOf(c, rewrittenInputs[0]).cVars),
     ));
 }
 
@@ -599,7 +599,7 @@ function floatThroughOrderBy(c: TransformationContext, orderBy: Algebra.OrderBy)
   return noBindLeaves(peeled) ?
     cleanStaticFromOrder(c, orderBy) :
     assembleRewrittenNode(c, peeled, (rewrittenInputs, risers) => {
-      const cVars = cpMetaOf(rewrittenInputs[0]).cVars;
+      const cVars = cpMetaOf(c, rewrittenInputs[0]).cVars;
       // Cleaned *after* the substitution, which is what turns a comparator over a risen `?x` into the
       // constant it was reading and so into one this can throw away.
       return cleanStaticFromOrder(c, c.AF.createOrderBy(
@@ -777,7 +777,7 @@ function floatThroughGraph(c: TransformationContext, graph: Algebra.Graph): Alge
 function floatThroughJoin(c: TransformationContext, join: Algebra.Join): Algebra.Operation {
   const peeled = peelInputs(c, join.input);
   // Read before any rewriting: the licences are about the operands as they stand.
-  const operands = join.input.map(input => cpMetaOf(input));
+  const operands = join.input.map(input => cpMetaOf(c, input));
   groupIdenticalBinds(c, peeled);
   for (const floatingBind of peeled.allBinds) {
     if (floatingBind.expressionIsStable && floatingBind.disposition === 'stay') {
@@ -838,7 +838,7 @@ function floatThroughJoin(c: TransformationContext, join: Algebra.Join): Algebra
  */
 function floatThroughLeftJoin(c: TransformationContext, leftJoin: Algebra.LeftJoin): Algebra.Operation {
   const peeled = peelInputs(c, leftJoin.input);
-  const operands = leftJoin.input.map(input => cpMetaOf(input));
+  const operands = leftJoin.input.map(input => cpMetaOf(c, input));
   // Hoisting out of the right-hand side would bind `?x` on the unmatched left rows, where it has to stay
   // unbound; dropping one there needs to know that nothing above reads it, which is the analysis phase 2
   // brings. Out of the left, the anti-join half computes `e` on `μ_L` either way and the matched half is
@@ -871,7 +871,7 @@ function floatThroughLeftJoin(c: TransformationContext, leftJoin: Algebra.LeftJo
         // The condition is evaluated on `μ_L ⋈ μ_R`, so what is certainly bound where it stands is a
         // superset of the left operand's `cVars`. Handing it the left alone is the conservative half:
         // fewer folds than could be made, never one that could not.
-        substituteDepartedBinds(c, leftJoin.expression, risers, cpMetaOf(rewrittenInputs[0]).cVars),
+        substituteDepartedBinds(c, leftJoin.expression, risers, cpMetaOf(c, rewrittenInputs[0]).cVars),
     ));
 }
 
@@ -883,7 +883,7 @@ function floatThroughLeftJoin(c: TransformationContext, leftJoin: Algebra.LeftJo
  */
 function floatThroughMinus(c: TransformationContext, minus: Algebra.Minus): Algebra.Operation {
   const peeled = peelInputs(c, minus.input);
-  const operands = minus.input.map(input => cpMetaOf(input));
+  const operands = minus.input.map(input => cpMetaOf(c, input));
   // `pVars(Minus) = pVars(L)`, so the output mapping *is* `μ_L` and (C2) is vacuous, as it is for a UNION.
   // What the licence has to rule out is the right-hand side binding `?x`: it would change both the
   // compatibility test and the domain-disjointness test, neither of which the hoisted bind is above.

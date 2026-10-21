@@ -1494,7 +1494,7 @@ function withAssertionConjunction(c: TransformationContext, filter: Algebra.Filt
   const known = casted.metadata?.assertions;
   if (known === undefined) {
     // The condition is evaluated over the solutions of the input, so those are the variables bound in it.
-    const collected = collectAssertions(c, filter.expression, undefined, withCpVars(filter.input).metadata.cVars);
+    const collected = collectAssertions(c, filter.expression, undefined, withCpVars(c, filter.input).metadata.cVars);
     casted.metadata ??= {};
     casted.metadata.assertions = collected ?? {
       assertions: new AssertionConjunction(),
