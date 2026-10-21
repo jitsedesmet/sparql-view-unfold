@@ -141,8 +141,35 @@ function joinedMeta(inputs: readonly CPMeta[]): CPMeta {
 }
 
 /**
+ * What an operation binds of some variables only, which is all that stays in scope above a projection of them.
+ * @param meta - The metadata of the operation
+ * @param names - The variables to keep
+ * @returns the restricted metadata
+ */
+function metaRestrictedTo(meta: CPMeta, names: SSet): CPMeta {
+  return {
+    cVars: intersectSets([ meta.cVars, names ]),
+    vRanges: new VRanges([ ...meta.vRanges ].filter(([ name ]) => names.has(name))),
+  };
+}
+
+/**
+ * The range of a variable a BIND or an aggregate writes. One the solution an EXISTS is evaluated for binds already is
+ * written undefined, which the engine leaves out, so it can also keep the value it had.
+ * @param c - The context whose `existenceScope` holds that solution
+ * @param name - The variable written
+ * @param written - The range of what is written
+ * @param input - The metadata of the solutions it is written in
+ * @returns the range of the variable afterwards
+ */
+function writtenRange(c: RangeContext, name: string, written: RangeSet, input: CPMeta): RangeSet {
+  return c.existenceScope?.vRanges.has(name) ? new RangeSet([ ...input.vRanges.rangeOf(name), ...written ]) : written;
+}
+
+/**
  * Joins the solution an EXISTS is evaluated for into what an operation in its pattern binds, by the rule of
- * {@link joinedMeta} for the variables of that solution alone.
+ * {@link joinedMeta} for the variables of that solution alone, in place so that an operation already holding the join
+ * allocates nothing.
  * @param meta - The metadata of the operation, which is changed in place
  * @param scope - What the solution may bind
  */
@@ -446,13 +473,9 @@ function computeCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPO
       return resOp;
     } case Types.PROJECT: {
       const projected = new Set(resOp.variables.map(variable => variable.value));
-      const input = withCpVars(c, resOp.input);
-      resOp.metadata.cVars = intersectSets([ input.metadata.cVars, projected ]);
       // A projection only drops variables, so what it keeps still takes the values the input gave it -
       // and dropping one is now dropping its key, which is what takes it out of scope.
-      resOp.metadata.vRanges = new VRanges(
-        [ ...input.metadata.vRanges ].filter(([ name ]) => projected.has(name)),
-      );
+      Object.assign(resOp.metadata, metaRestrictedTo(cpMetaOf(c, resOp.input), projected));
       return resOp;
     } case Types.GROUP: {
       // Only the grouping keys and the aggregate targets survive the grouping. A key is certain only
@@ -473,7 +496,8 @@ function computeCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPO
       // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins.
       const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
       for (const aggregate of resOp.aggregates) {
-        ranges.set(aggregate.variable.value, c.expressionRange(c, aggregate, input.metadata));
+        const target = aggregate.variable.value;
+        ranges.set(target, writtenRange(c, target, c.expressionRange(c, aggregate, input.metadata), input.metadata));
       }
       resOp.metadata.vRanges = ranges;
       return resOp;
@@ -507,7 +531,8 @@ function computeCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPO
       resOp.metadata.cVars = certain;
       // The EXTEND brings its target into scope, and what the expression yields overrides whatever the
       // input had to say about it - binding an already bound variable is an error, not a narrowing.
-      ranges.set(resOp.variable.value, c.expressionRange(c, resOp.expression, input.metadata));
+      const written = c.expressionRange(c, resOp.expression, input.metadata);
+      ranges.set(resOp.variable.value, writtenRange(c, resOp.variable.value, written, input.metadata));
       resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.FILTER: {
@@ -657,16 +682,16 @@ function rewriteExistencePatterns<C extends ExistenceScopeContext>(
   if (expressions.length === 0) {
     return;
   }
-  // What a pass cached describes the plan it was handed, so the inputs are read afresh.
-  const inputs = [ (<A.Single | A.Multi> op).input ].flat().map(input => cpMetaOf(c, withoutCpVars(input)));
+  const inputs = [ (<A.Single | A.Multi> op).input ].flat().map(input => cpMetaOf(c, input));
   const solutions = inputs.length === 1 ? inputs[0] : joinedMeta(inputs);
+  // A pass may write one EXISTS into an expression more than once, and its pattern is rewritten once.
+  const rewritten = new Set<Algebra.ExistenceExpression>();
   const rewrite = (existence: Algebra.ExistenceExpression): { continue: false } => {
-    const mentioned = collectVariableNames(c.astTransformer, existence.input);
-    const existenceScope = {
-      cVars: intersectSets([ solutions.cVars, mentioned ]),
-      vRanges: new VRanges([ ...solutions.vRanges ].filter(([ name ]) => mentioned.has(name))),
-    };
-    existence.input = rewritePattern({ ...c, existenceScope }, existence.input);
+    if (!rewritten.has(existence)) {
+      rewritten.add(existence);
+      const existenceScope = metaRestrictedTo(solutions, collectVariableNames(c.astTransformer, existence.input));
+      existence.input = rewritePattern({ ...c, existenceScope }, existence.input);
+    }
     // A nested EXISTS is the business of the rewrite of the pattern holding it.
     return { continue: false };
   };
@@ -694,9 +719,16 @@ export function rewriteInExistenceScopes<C extends ExistenceScopeContext, T exte
   const rewritten = rewrite(c, op);
   const rewritePattern = (patternContext: C, pattern: Algebra.Operation): Algebra.Operation =>
     rewriteInExistenceScopes(patternContext, pattern, rewrite);
-  const visitor = { visitor: (operation: Algebra.Operation) => rewriteExistencePatterns(c, operation, rewritePattern) };
+  const callbacks = {
+    // What the pass cached describes the plan it was handed, and the visitor below reads the plan it hands back.
+    preVisitor: (operation: { metadata?: unknown }) => {
+      delete operation.metadata;
+      return {};
+    },
+    visitor: (operation: Algebra.Operation) => rewriteExistencePatterns(c, operation, rewritePattern),
+  };
   algebraUtils.visitOperation(rewritten, {
-    ...Object.fromEntries(Object.values(Types).map(type => [ type, visitor ])),
+    ...Object.fromEntries(Object.values(Types).map(type => [ type, callbacks ])),
     [Types.EXPRESSION]: { preVisitor: () => ({ continue: false }) },
   });
   return <T> rewritten;

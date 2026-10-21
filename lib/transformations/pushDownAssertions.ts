@@ -180,6 +180,15 @@ function pushAssertions(
   if (normalised === undefined) {
     return empty(c, op);
   }
+  // A conjunct about the solution an EXISTS is evaluated for holds of all the pattern alike, so it stays here: below, a
+  // rule could write a term for its variable, which binds it again, or carry it past a sub-SELECT not projecting it.
+  const scope = c.existenceScope?.vRanges;
+  if (scope !== undefined) {
+    const { inside, outside } = normalised.split(name => !scope.has(name));
+    if (outside.size > 0) {
+      return keep(assertionFilter(c, assertionFilter(c, op, inside), outside));
+    }
+  }
   if (normalised.size === 0) {
     return keep(op);
   }
@@ -214,12 +223,10 @@ function swapWith(
     // be restated over it. A pattern settles what a pattern can state - a term, an equality, a shape -
     // and no more, `isIRI(?x)` staying; a VALUES row settles everything at once ({@link pruneValues}).
     case Algebra.Types.BGP: {
-      return keep(restatingExistenceScope(c, assertions, writable =>
-        rewritePattern(c, writable, namer, substitution => substituteIntoPatterns(c, op, substitution))));
+      return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPatterns(c, op, substitution)));
     }
     case Algebra.Types.PATH: {
-      return keep(restatingExistenceScope(c, assertions, writable =>
-        rewritePattern(c, writable, namer, substitution => substituteIntoPath(c, op, substitution))));
+      return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPath(c, op, substitution)));
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
@@ -227,10 +234,8 @@ function swapWith(
       // not declare can never be bound here - but the split makes that a fact of this rewrite rather
       // than an invariant read off another one.
       const columns = new Set(op.variables.map(variable => variable.value));
-      return keep(restatingExistenceScope(c, assertions, (writable) => {
-        const { inside, outside } = writable.split(name => columns.has(name));
-        return assertionFilter(c, pruneValues(c, op, inside), outside);
-      }));
+      const { inside, outside } = assertions.split(name => columns.has(name));
+      return keep(assertionFilter(c, pruneValues(c, op, inside), outside));
     }
 
     // (FUPush) holds unconditionally for every form - a solution of a union comes from exactly one
@@ -654,9 +659,7 @@ function pushIntoGraph(
   }
   const assertedGraphName = assertions.get(graphVar);
 
-  // The solution an EXISTS is evaluated for may bind `?g` already, and binding it again is undefined.
-  if (!c.existenceScope?.vRanges.has(graphVar) && assertedGraphName?.subType === 'strong' &&
-    !targetIsAccess(assertedGraphName.term) &&
+  if (assertedGraphName?.subType === 'strong' && !targetIsAccess(assertedGraphName.term) &&
     isAssertableTerm(assertedGraphName.term) &&
     // A term outside `?g`'s range has already emptied the plan in `normalisedFor`, so what can still be
     // asserted here is a graph name: a NamedNode, or the BlankNode a dataset may equally name a graph by.
@@ -1155,27 +1158,6 @@ function bindAssertedTerms(
     result = c.AF.createExtend(result, c.DF.variable(name), c.AF.createTermExpression(term));
   }
   return result;
-}
-
-/**
- * Rewrites a leaf that writes a term for what it asserts, restating over it what it may not write: a conjunct about a
- * variable of the `existenceScope`, which the solution an EXISTS is evaluated for binds already.
- * @param c - The transformation context
- * @param assertions - The conjunction reaching the leaf
- * @param rewriteLeaf - Rewrites the leaf under the conjunction it may write
- * @returns the rewritten leaf
- */
-function restatingExistenceScope(
-  c: TransformationContext,
-  assertions: AssertionConjunction,
-  rewriteLeaf: (writable: AssertionConjunction) => Algebra.Operation,
-): Algebra.Operation {
-  const scope = c.existenceScope?.vRanges;
-  if (scope === undefined) {
-    return rewriteLeaf(assertions);
-  }
-  const { inside, outside } = assertions.split(name => !scope.has(name));
-  return assertionFilter(c, rewriteLeaf(inside), outside);
 }
 
 /**

@@ -3677,6 +3677,49 @@ HAVING SAMETERM( ?y , SAMPLE( ?x ) )`,
       }`, 4);
     });
 
+    it('keeps a condition on a variable a sub-SELECT in an EXISTS does not project above it', async({ expect }) => {
+      // The ?y of the sub-SELECT is its own, and the condition reads the one of the solution, which the OPTIONAL leaves
+      // unbound for :a.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?o OPTIONAL { ?x :q ?y }
+        FILTER EXISTS { { SELECT ?a WHERE { ?a :r ?y } } FILTER(!bound(?y)) }
+      }`, 1);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?o OPTIONAL { ?x :q ?y }
+        FILTER EXISTS { { SELECT ?a WHERE { ?a :r ?y } } FILTER(sameTerm(?y, :rd)) }
+      }`, 0);
+    });
+
+    it('keeps a condition on a BIND in an EXISTS of a variable the solution binds above it', async({ expect }) => {
+      // SPARQL 1.2 leaves that BIND undefined, and the engine leaves it out, so ?y keeps the value of the solution.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w BIND(?z AS ?y) FILTER(sameTerm(?y, :b)) }
+      }`, 0);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w BIND(?z AS ?y) FILTER(sameTerm(?y, :shared)) }
+      }`, 1);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?y :p ?o
+        FILTER EXISTS { ?z :q ?w BIND("l" AS ?y) FILTER(isIRI(?y)) }
+      }`, 1);
+    });
+
+    it('matches a condition in a nested EXISTS against the outermost solution', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w FILTER EXISTS { ?a :q ?b FILTER(sameTerm(?b, ?y)) } }
+      }`, 1);
+    });
+
+    it('matches a condition in an EXISTS of an OPTIONAL against both of its sides', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        OPTIONAL { ?x :r ?v FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) } }
+      }`, 1);
+    });
+
     it('keeps one solution per row of a VALUES the assertion strips every column from', async({ expect }) => {
       // The empty BGP is one empty solution mapping, so it may only replace a *single* remaining row.
       await assertEquivalent(expect, `SELECT * WHERE {

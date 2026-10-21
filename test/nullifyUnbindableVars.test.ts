@@ -52,6 +52,11 @@ describe('nullifyUnbindableVars', () => {
     expect(c.generator.generate(toAst(nullifyUnbindableVars(c, parseQuery(c, query))))).not.toContain('FALSE');
   });
 
+  it('leaves a BIND in an EXISTS of a variable its solution binds alone, which the engine leaves out', ({ expect }) => {
+    const query = 'SELECT * WHERE { ?y <ex://p> ?o FILTER EXISTS { ?z <ex://q> ?w BIND("l" AS ?y) } }';
+    expect(c.generator.generate(toAst(nullifyUnbindableVars(c, parseQuery(c, query))))).not.toContain('FALSE');
+  });
+
   it('nullifies a `FILTER(bound(?v))` in an EXISTS where nothing can bind ?v', ({ expect }) => {
     const query = 'SELECT * WHERE { ?x <ex://p> ?y FILTER EXISTS { ?z <ex://q> ?w FILTER(BOUND(?v)) } }';
     expect(c.generator.generate(toAst(nullifyUnbindableVars(c, parseQuery(c, query))))).toContain('FALSE');
