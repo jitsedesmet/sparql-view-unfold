@@ -114,7 +114,7 @@ export const expectedQuery = `SELECT ?name ?o ?o1 ?p ?s ?s1 WHERE {
         }
         FILTER ( SAMETERM( <https://example.com/name> , PREDICATE( ?m_o ) ) )
       }
-      FILTER ( SAMETERM( OBJECT( ?m_o ) , OBJECT( ?m_o ) ) )
+      FILTER ( ISTRIPLE( ?m_o ) )
     }
   }
   {
@@ -250,7 +250,7 @@ export const expectedQueryToValues = `SELECT ?name ?o ?o1 ?p ?s ?s1 WHERE {
         }
         FILTER ( SAMETERM( <https://example.com/name> , PREDICATE( ?m_o ) ) )
       }
-      FILTER ( SAMETERM( OBJECT( ?m_o ) , OBJECT( ?m_o ) ) )
+      FILTER ( ISTRIPLE( ?m_o ) )
     }
   }
   {

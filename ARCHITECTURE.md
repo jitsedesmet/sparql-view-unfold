@@ -22,8 +22,8 @@ RDF 1.2 pattern and its RDF 1.1 representation. `mappingFromConstructQueries`
 
 The body also gets what SPARQL 1.1 §16.2 asks of a CONSTRUCT: a `FILTER(bound(?x))` per head variable the
 body does not certainly bind, and a type test per head variable whose `vRanges` range exceeds what its head
-position admits (`generalizedRdfView` turns those off, except inside a head triple term). Both read one template triple, so both happen
-*before* the merge — after it the head is three plain variables and a triple term is a BIND whose interior
+position admits (`generalizedRdfView` turns those off, except inside a head triple term). Both read one
+template triple, so both happen *before* the merge — after it the head is three plain variables and a triple term is a BIND whose interior
 nothing re-reads, which is exactly the case the type tests are for.
 
 ## The rewriting, step by step
@@ -36,9 +36,10 @@ Given a query Q without recursive paths and a mapping with head H and body B:
       term variables (`lib/ClusterSolver.ts`);
    2. `B' = FILTER(B)` with the equality between head variables that have to be equal;
    3. `B' = FILTER(B')` with the other constraints found on those variables (equality with a static term);
-   4. `B' = FILTER(B')` with `sameTerm(e, e)` per expression `e` a pattern variable is bound to, holding
-      exactly when `e` does not raise — a raising BIND would leave its target unbound rather than reject
-      the solution;
+   4. `B' = FILTER(B')` asserting the pattern's variables will be assigned — reading `SUBJECT`/`PREDICATE`/
+      `OBJECT` of a non-triple-term raises, which would leave the BIND target unbound rather than reject the
+      solution, so each argument read is tested with `isTRIPLE`. A head variable or triple term needs no
+      test: the mapping ensures both evaluate;
    5. `B' = EXTEND(B')` with how the pattern's variables are constructed from the head variables;
    6. `B' = PROJECT(B')` onto the pattern's own variables.
 

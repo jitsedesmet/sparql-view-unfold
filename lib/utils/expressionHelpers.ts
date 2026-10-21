@@ -3,7 +3,6 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
-import { deepCopy } from '../utils.js';
 import { termFalse, termTrue } from './operationhelpers.js';
 import { DF } from './rdfDatatypes.js';
 import { termIsStaticTerm } from './typeGuards.js';
@@ -340,17 +339,4 @@ export function sameTermExpression(
   term: RDF.Term,
 ): Algebra.Expression {
   return c.AF.createOperatorExpression('sameterm', [ expression, c.AF.createTermExpression(term) ]);
-}
-
-/**
- * Creates `sameTerm(e, e)`, which holds exactly when `e` evaluates without raising.
- * @param c - The transformation context
- * @param expression - The expression to test, copied twice so that the test does not alias it
- * @returns the condition
- */
-export function evaluationTestOf(
-  c: Pick<TransformationContext, 'AF' | 'astTransformer'>,
-  expression: Algebra.Expression,
-): Algebra.Expression {
-  return c.AF.createOperatorExpression('sameterm', [ deepCopy(c, expression), deepCopy(c, expression) ]);
 }

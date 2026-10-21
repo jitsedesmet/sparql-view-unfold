@@ -16,7 +16,6 @@ import {
 import {
   constructedTermOf,
   createBooleanExpression,
-  evaluationTestOf,
 } from '../utils/expressionHelpers.js';
 import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
 import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
@@ -208,10 +207,14 @@ function encodeInternalBnode(
    */
   function orUnbound(argument: Algebra.Expression, encoding: Algebra.Expression): Algebra.Expression {
     // Not COALESCE(<encoding>, ...): that would also take an error encoding a value, like a triple term nested too
-    // deeply, for one of the argument. BOUND is false exactly when a variable is unbound.
+    // deeply, for one of the argument. BOUND is false exactly when a variable is unbound, and SAMETERM of an
+    // expression and itself only errors when the expression does.
     const evaluates = argument.subType === Algebra.ExpressionTypes.TERM && argument.term.termType === 'Variable' ?
       AF.createOperatorExpression('bound', [ argument ]) :
-      AF.createOperatorExpression('coalesce', [ evaluationTestOf(c, argument), createBooleanExpression(c, false) ]);
+      AF.createOperatorExpression('coalesce', [
+        AF.createOperatorExpression('sameterm', [ argument, argument ]),
+        createBooleanExpression(c, false),
+      ]);
     const unbound = expressionLiteral(internalBnodeEncodingTags.unbound);
     return AF.createOperatorExpression('if', [ evaluates, encoding, unbound ]);
   }
