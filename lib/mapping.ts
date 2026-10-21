@@ -6,7 +6,7 @@ import { VAR_PREFIX_MERGED_HEAD } from './consts.js';
 import { triplePositions } from './datastructures/TermClusterSet.js';
 import type { RangeSet } from './RangeSet.js';
 import { rangeOfPosition } from './RangeSet.js';
-import type { TransformationContext } from './transformContext.js';
+import type { TransformationContext, TransformationContextOptions } from './transformContext.js';
 import { createTransformationContext, parseQuery } from './transformContext.js';
 import type { Mapping, MappingHead } from './types.js';
 import type { AssertionConjunct } from './utils/assertions.js';
@@ -52,7 +52,7 @@ import { claimVariableName, collectVariableNames, deepCopy } from './utils.js';
  */
 
 /** What building a mapping may be configured with. */
-export interface MappingOptions {
+export interface MappingOptions extends Pick<TransformationContextOptions, 'expressionRange'> {
   /**
    * Whether the graph the mapping denotes is a *generalized* RDF graph, one that admits a literal as a
    * subject and a blank node as a predicate.
@@ -66,7 +66,8 @@ export interface MappingOptions {
 }
 
 /** The factories building a mapping needs; the solver and the generator of a full context play no part. */
-type MappingConstructionTools = Pick<TransformationContext, 'parser' | 'AF' | 'DF' | 'astTransformer'>;
+type MappingConstructionTools =
+  Pick<TransformationContext, 'parser' | 'AF' | 'DF' | 'astTransformer' | 'expressionRange'>;
 
 /** The term types each position of a mapping head admits, in subject / predicate / object order. */
 const admissibleHeadTermTypes: [
@@ -160,7 +161,7 @@ function mappingOfSingleTemplateTriple(
   // A CONSTRUCT only instantiates its template when every variable in it is bound and every term it writes
   // is one its position can hold, so the solutions failing either do not belong to the mapping. Variables
   // that are certainly bound, or certainly of a term type the position admits, already need no condition.
-  const { cVars: certainlyBoundVariableNames, vRanges: bodyRanges } = withCpVars(constructBody).metadata;
+  const { cVars: certainlyBoundVariableNames, vRanges: bodyRanges } = withCpVars(tools, constructBody).metadata;
   const conditions: AssertionConjunct[] = headVariableNames
     .filter(name => !certainlyBoundVariableNames.has(name))
     .map(name => ({ access: access(name), assertion: assertBound() }));
@@ -254,7 +255,7 @@ export function mappingFromConstructQueries(
   constructQueries: readonly string[],
   options: MappingOptions = {},
 ): Mapping {
-  const tools = createTransformationContext();
+  const tools = createTransformationContext({ expressionRange: options.expressionRange });
   const mappings = constructQueries
     .flatMap(constructQuery => mappingsOfConstructQuery(tools, options, constructQuery));
 

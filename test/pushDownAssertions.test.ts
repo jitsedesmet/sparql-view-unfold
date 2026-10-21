@@ -1266,9 +1266,8 @@ GROUP BY ?x ( ?x AS ?y )`,
       );
     });
 
-    it('keeps a clique above a BIND whose expression is compound', ({ expect }) => {
-      // `sameTerm(e, ?y)` over a compound `e` is a multi-variable condition, which this pass has no
-      // licence for - so nothing transfers and the edge stays where it was.
+    it('empties a clique whose BIND gives a term type no other member can take', ({ expect }) => {
+      // CONCAT gives a literal, which the subject ?y is never.
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND(CONCAT(?w, "x") AS ?t) FILTER(sameTerm(?t, ?y)) }',
@@ -1276,6 +1275,22 @@ GROUP BY ?x ( ?x AS ?y )`,
   {
     ?y <ex://p> ?w .
     BIND( CONCAT( ?w , "x" ) AS ?t )
+  }
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('keeps a clique above a BIND whose expression is compound', ({ expect }) => {
+      // `sameTerm(e, ?y)` over a compound `e` is a multi-variable condition, which this pass has no
+      // licence for - so nothing transfers and the edge stays where it was.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?w BIND(IRI(CONCAT(?w, "x")) AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        `SELECT ?t ?w ?y WHERE {
+  {
+    ?y <ex://p> ?w .
+    BIND( IRI( CONCAT( ?w , "x" ) ) AS ?t )
   }
   FILTER ( SAMETERM( ?y , ?t ) )
 }`,
@@ -1477,14 +1492,29 @@ GROUP BY ?x ( ?x AS ?y )`,
       );
     });
 
-    it('turns the assertion on a fallible BIND target into a condition on its expression', ({ expect }) => {
+    it('empties the plan where a BIND gives a term type the assertion rules out', ({ expect }) => {
       expectTransform(
         expect,
         'SELECT * WHERE { { SELECT ?x ?a WHERE { ?a :p ?b BIND(?a + ?b AS ?x) } } FILTER(sameTerm(?x, :c)) }',
         `SELECT ?a ?x WHERE {
+  {
+    SELECT ( ( ?a + ?b ) AS ?x ) ?a WHERE {
+      ?a <ex://p> ?b .
+    }
+  }
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('turns the assertion on a fallible BIND target into a condition on its expression', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { SELECT ?x ?a WHERE { ?a :p ?b BIND(IRI(?b) AS ?x) } } FILTER(sameTerm(?x, :c)) }',
+        `SELECT ?a ?x WHERE {
   SELECT ( <ex://c> AS ?x ) ?a WHERE {
     ?a <ex://p> ?b .
-    FILTER ( SAMETERM( ( ?a + ?b ) , <ex://c> ) )
+    FILTER ( SAMETERM( IRI( ?b ) , <ex://c> ) )
   }
 }`,
       );
@@ -1781,14 +1811,14 @@ GROUP BY ?x ( ?x AS ?y )`,
 
   describe('soundness guards', () => {
     it('demotes rather than pushes into a join operand whose BIND may leave the variable unbound', ({ expect }) => {
-      // ?x is not certainly bound in the left operand (`?a / ?b` errors when ?b is 0), and it is
+      // ?x is not certainly bound in the left operand (`IRI(?b)` errors when ?b is a blank node), and it is
       // possible in the right one, so L fails for the left: only the right operand may take the strong
       // assertion. The left still gets the weak one, which is what prunes it - and which stops above
-      // the BIND, since it does not say `?a / ?b` evaluated to anything.
+      // the BIND, since it does not say `IRI(?b)` evaluated to anything.
       expectTransform(
         expect,
         `SELECT * WHERE {
-          { SELECT ?x ?a ?b WHERE { ?a :p ?b BIND(?a / ?b AS ?x) } }
+          { SELECT ?x ?a ?b WHERE { ?a :p ?b BIND(IRI(?b) AS ?x) } }
           { SELECT ?x ?d WHERE { ?x :q ?d } }
           FILTER(sameTerm(?x, :c))
         }`,
@@ -1797,7 +1827,7 @@ GROUP BY ?x ( ?x AS ?y )`,
     SELECT ?x ?a ?b WHERE {
       {
         ?a <ex://p> ?b .
-        BIND( ( ?a / ?b ) AS ?x )
+        BIND( IRI( ?b ) AS ?x )
       }
       FILTER ( ( ! BOUND( ?x ) || SAMETERM( ?x , <ex://c> ) ) )
     }
@@ -3307,14 +3337,14 @@ GROUP BY ?x ( ?x AS ?y )`,
     });
 
     it('puts the type below a BIND the clique cannot pass, onto the member bound there', ({ expect }) => {
-      // `CONCAT(...)` is nothing Θ can name, so the edge stays above the BIND. The type holds of ?o as much as
+      // `COALESCE(...)` is nothing Θ can name, so the edge stays above the BIND. The type holds of ?o as much as
       // of the target, and ?o is bound below - whether or not the target is the representative of the group,
       // which ?t is not and ?a is.
       expectStableTransform(
         expect,
         `SELECT * WHERE {
           ?s :p ?o
-          BIND(CONCAT(STR(?s), "x") AS ?t)
+          BIND(COALESCE(?s, "x") AS ?t)
           FILTER(sameTerm(?t, ?o) && (isIRI(?t) || isLITERAL(?t)))
         }`,
         `SELECT ?o ?s ?t WHERE {
@@ -3323,7 +3353,7 @@ GROUP BY ?x ( ?x AS ?y )`,
       ?s <ex://p> ?o .
       FILTER ( ( ISIRI( ?o ) || ISLITERAL( ?o ) ) )
     }
-    BIND( CONCAT( STR( ?s ) , "x" ) AS ?t )
+    BIND( COALESCE( ?s , "x" ) AS ?t )
   }
   FILTER ( SAMETERM( ?t , ?o ) )
 }`,
@@ -3332,7 +3362,7 @@ GROUP BY ?x ( ?x AS ?y )`,
         expect,
         `SELECT * WHERE {
           ?s :p ?o
-          BIND(CONCAT(STR(?s), "x") AS ?a)
+          BIND(COALESCE(?s, "x") AS ?a)
           FILTER(sameTerm(?a, ?o) && (isIRI(?a) || isLITERAL(?a)))
         }`,
         `SELECT ?a ?o ?s WHERE {
@@ -3341,7 +3371,7 @@ GROUP BY ?x ( ?x AS ?y )`,
       ?s <ex://p> ?o .
       FILTER ( ( ISIRI( ?o ) || ISLITERAL( ?o ) ) )
     }
-    BIND( CONCAT( STR( ?s ) , "x" ) AS ?a )
+    BIND( COALESCE( ?s , "x" ) AS ?a )
   }
   FILTER ( SAMETERM( ?o , ?a ) )
 }`,

@@ -1,7 +1,8 @@
 import { describe, it } from 'vitest';
+import { iriRange } from '../lib/RangeSet.js';
 import type { TransformationContext } from '../lib/transformContext.js';
-import { createTransformationContext } from '../lib/transformContext.js';
-import { withCpVars } from '../lib/utils/certainlyBoundVars.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import { standardExpressionRange, withCpVars } from '../lib/utils/certainlyBoundVars.js';
 import { constructedTermOf } from '../lib/utils/expressionHelpers.js';
 
 const c = createTransformationContext();
@@ -14,8 +15,8 @@ function column(bound: boolean): ReturnType<TransformationContext['AF']['createV
 }
 
 /** The term types `?x` can take in `op`, sorted so the assertion does not depend on insertion order. */
-function rangeOfX(op: Parameters<typeof withCpVars>[0]): string[] {
-  return [ ...withCpVars(op).metadata.vRanges.rangeOf('x') ].sort();
+function rangeOfX(op: Parameters<typeof withCpVars>[1]): string[] {
+  return [ ...withCpVars(c, op).metadata.vRanges.rangeOf('x') ].sort();
 }
 
 describe('withCpVars', () => {
@@ -57,10 +58,51 @@ describe('withCpVars', () => {
 
   describe('an all-UNDEF column', () => {
     it('is in scope yet never bound, which the scope alone could not say', ({ expect }) => {
-      const meta = withCpVars(column(false)).metadata;
+      const meta = withCpVars(c, column(false)).metadata;
       expect(meta.vRanges.has('x')).toBe(true);
       expect(meta.vRanges.neverBinds('x')).toBe(true);
     });
+  });
+});
+
+describe('the range of what an expression gives', () => {
+  const top = [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ];
+  const subject = [ 'BlankNode', 'NamedNode' ];
+
+  it.for<[string, string[]]>([
+    [ 'STR(?o)', [ 'Literal' ]],
+    [ '?o + 1', [ 'Literal' ]],
+    [ 'EXISTS { ?o ?p ?s }', [ 'Literal' ]],
+    [ '<http://www.w3.org/2001/XMLSchema#integer>(?o)', [ 'Literal' ]],
+    [ 'IRI(?o)', [ 'NamedNode' ]],
+    [ 'DATATYPE(?o)', [ 'NamedNode' ]],
+    [ 'BNODE()', [ 'BlankNode' ]],
+    [ '<internal://blank>(?o)', [ 'BlankNode' ]],
+    [ 'SUBJECT(?o)', subject ],
+    [ 'COALESCE(?s, "x")', [ 'BlankNode', 'Literal', 'NamedNode' ]],
+    [ 'IF(BOUND(?o), ?s, IRI(?o))', subject ],
+    [ 'COALESCE(?unbound)', []],
+    [ '<ex://f>(?o)', top ],
+  ])('is read through the operators of a BIND of %s', ([ expression, range ], { expect }) => {
+    expect(rangeOfX(parseQuery(c, `SELECT * WHERE { ?s ?p ?o BIND(${expression} AS ?x) }`))).toEqual(range);
+  });
+
+  it.for<[string, string[]]>([
+    [ 'COUNT(*)', [ 'Literal' ]],
+    [ 'GROUP_CONCAT(?o)', [ 'Literal' ]],
+    [ 'SAMPLE(?s)', subject ],
+    [ 'MAX(?o)', top ],
+  ])('is read through the aggregate of %s', ([ aggregate, range ], { expect }) => {
+    expect(rangeOfX(parseQuery(c, `SELECT (${aggregate} AS ?x) WHERE { ?s ?p ?o }`))).toEqual(range);
+  });
+
+  it('is read through the expressionRange of the context, down to a subexpression', ({ expect }) => {
+    const extended = createTransformationContext({ expressionRange: (context, expression, input) =>
+      expression.subType === 'named' && expression.name.value === 'ex://f' ?
+        iriRange :
+        standardExpressionRange(context, expression, input) });
+    const op = parseQuery(c, 'SELECT * WHERE { ?s ?p ?o BIND(COALESCE(<ex://f>(?o)) AS ?x) }');
+    expect([ ...withCpVars(extended, op).metadata.vRanges.rangeOf('x') ]).toEqual([ 'NamedNode' ]);
   });
 });
 
@@ -75,9 +117,9 @@ describe('the target of a triple-term BIND', () => {
   const ground = c.DF.quad(c.DF.namedNode('ex://a'), c.DF.namedNode('ex://b'), c.DF.namedNode('ex://c'));
 
   /** Whether `BIND(<<( … )>> AS ?t)` over `input` binds `?t` in every solution. */
-  function bindsCertainly(input: Parameters<typeof withCpVars>[0], term: Parameters<typeof c.DF.quad>[2]): boolean {
+  function bindsCertainly(input: Parameters<typeof withCpVars>[1], term: Parameters<typeof c.DF.quad>[2]): boolean {
     const extend = c.AF.createExtend(input, t, c.AF.createTermExpression(term));
-    return withCpVars(extend).metadata.cVars.has('t');
+    return withCpVars(c, extend).metadata.cVars.has('t');
   }
 
   it('is certain for a ground construction, which no range can spoil', ({ expect }) => {
@@ -161,8 +203,8 @@ describe('the target of a nested TRIPLE() BIND', () => {
 
   /** The certainty and the range of `?t` after `BIND(expression AS ?t)` over `input`. */
   type Target = { certain: boolean; range: string[] };
-  function target(input: Parameters<typeof withCpVars>[0], expression: Expression): Target {
-    const meta = withCpVars(c.AF.createExtend(input, t, expression)).metadata;
+  function target(input: Parameters<typeof withCpVars>[1], expression: Expression): Target {
+    const meta = withCpVars(c, c.AF.createExtend(input, t, expression)).metadata;
     return { certain: meta.cVars.has('t'), range: [ ...meta.vRanges.rangeOf('t') ].sort() };
   }
 
@@ -233,7 +275,7 @@ describe('the range of a graph variable', () => {
       c.AF.createBgp([ c.AF.createPattern(x, c.DF.variable('p'), c.DF.variable('o')) ]),
       c.AF.createValues([ x, g ], [{ x: c.DF.namedNode('ex://a'), g: c.DF.literal('l') }]),
     );
-    const meta = withCpVars(c.AF.createGraph(inner, g)).metadata;
+    const meta = withCpVars(c, c.AF.createGraph(inner, g)).metadata;
     expect([ ...meta.vRanges.rangeOf('g') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
     // `?g ∈ cVars` and an empty range would be a contradiction the pruning would act on.
     expect(meta.cVars.has('g')).toBe(true);
@@ -241,7 +283,7 @@ describe('the range of a graph variable', () => {
 
   it('narrows by what the pattern certainly binds it to', ({ expect }) => {
     const inner = c.AF.createValues([ g ], [{ g: c.DF.namedNode('ex://c') }]);
-    const meta = withCpVars(c.AF.createGraph(inner, g)).metadata;
+    const meta = withCpVars(c, c.AF.createGraph(inner, g)).metadata;
     expect([ ...meta.vRanges.rangeOf('g') ]).toEqual([ 'NamedNode' ]);
   });
 });
@@ -265,13 +307,13 @@ describe('the metadata of an operation', () => {
   const pattern = c.AF.createPattern(x, c.DF.namedNode('ex://p'), c.DF.variable('o'), g);
 
   /** The variables the metadata says are bound in every solution and bindable to nothing. */
-  function unbindableCertainVars(op: Parameters<typeof withCpVars>[0]): string[] {
-    const { cVars, vRanges } = withCpVars(op).metadata;
+  function unbindableCertainVars(op: Parameters<typeof withCpVars>[1]): string[] {
+    const { cVars, vRanges } = withCpVars(c, op).metadata;
     return [ ...cVars ].filter(variable => vRanges.neverBinds(variable)).sort();
   }
 
   describe('where it has solutions', () => {
-    const shapes: [ string, Parameters<typeof withCpVars>[0] ][] = [
+    const shapes: [ string, Parameters<typeof withCpVars>[1] ][] = [
       [ 'a join over an all-UNDEF column', c.AF.createJoin([ undefCol, literal ], false) ],
       [ 'a join over a partly bound column', c.AF.createJoin([ partial, literal ], false) ],
       [ 'an optional over an all-UNDEF left', c.AF.createLeftJoin(undefCol, literal) ],
@@ -315,7 +357,7 @@ describe('the range of a service variable', () => {
   const pattern = c.AF.createPattern(x, c.DF.variable('p'), c.DF.variable('o'), c.DF.defaultGraph());
 
   it('keeps what the pattern says, the endpoint evaluating the same algebra', ({ expect }) => {
-    const meta = withCpVars(c.AF.createService(pattern, endpoint, false)).metadata;
+    const meta = withCpVars(c, c.AF.createService(pattern, endpoint, false)).metadata;
     expect([ ...meta.vRanges.rangeOf('p') ]).toEqual([ 'NamedNode' ]);
     expect([ ...meta.vRanges.rangeOf('x') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
   });
@@ -323,7 +365,7 @@ describe('the range of a service variable', () => {
   it('takes a variable endpoint for an IRI, which is an assumption and not the spec', ({ expect }) => {
     // See the TODO on `serviceNameRange`: Federated Query §4 is informative and requires nothing.
     const variable = c.DF.variable('e');
-    const meta = withCpVars(c.AF.createService(pattern, variable, false)).metadata;
+    const meta = withCpVars(c, c.AF.createService(pattern, variable, false)).metadata;
     expect([ ...meta.vRanges.rangeOf('e') ]).toEqual([ 'NamedNode' ]);
   });
 
@@ -331,13 +373,13 @@ describe('the range of a service variable', () => {
     // `SERVICE ?e { ?e ?p ?o }`: a subject *and* an endpoint, so it has to satisfy both.
     const variable = c.DF.variable('e');
     const inner = c.AF.createPattern(variable, c.DF.variable('p'), c.DF.variable('o'), c.DF.defaultGraph());
-    const meta = withCpVars(c.AF.createService(inner, variable, false)).metadata;
+    const meta = withCpVars(c, c.AF.createService(inner, variable, false)).metadata;
     expect([ ...meta.vRanges.rangeOf('e') ]).toEqual([ 'NamedNode' ]);
   });
 
   it('leaves the endpoint variable out of cVars, the SERVICE reading it rather than binding it', ({ expect }) => {
     const variable = c.DF.variable('e');
-    expect(withCpVars(c.AF.createService(pattern, variable, false)).metadata.cVars.has('e')).toBe(false);
+    expect(withCpVars(c, c.AF.createService(pattern, variable, false)).metadata.cVars.has('e')).toBe(false);
   });
 
   it('cannot prove a SILENT service empty, a failing one yielding an empty solution', ({ expect }) => {
@@ -346,7 +388,7 @@ describe('the range of a service variable', () => {
       [ c.AF.createValues([ x ], [{ x: c.DF.namedNode('ex://c') }]), column(true) ],
       false,
     );
-    const meta = withCpVars(c.AF.createService(impossible, endpoint, true)).metadata;
+    const meta = withCpVars(c, c.AF.createService(impossible, endpoint, true)).metadata;
     expect(meta.vRanges.neverBinds('x')).toBe(true);
     expect(meta.cVars.has('x')).toBe(false);
   });

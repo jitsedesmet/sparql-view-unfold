@@ -126,6 +126,13 @@ and the assertion pushdown drops it wherever the rewritten query already guarant
 `mappingFromConstructQueries(constructs, { generalizedRdfView: true })` keeps those triples instead, for a
 view that means to present generalized RDF.
 
+### Extended engines
+
+The rewriting reads the term type an expression gives off the SPARQL operator tables: `STR(?x)` gives a literal,
+`IRI(?x)` an IRI. An engine may extend an operator to give a value where SPARQL raises a type error (SPARQL 1.1
+§17.3.1). For such an engine, pass an `expressionRange` to `createQueryRewriter` and `mappingFromConstructQueries`
+that answers for what it extends and calls `standardExpressionRange` for the rest.
+
 ### Blank nodes
 
 An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to construct a
@@ -185,7 +192,7 @@ The tables below are the short version; the generated
 | Function | Description |
 |---|---|
 | `mappingFromConstructQueries(constructQueries, options?)` | Builds the `Mapping` a set of CONSTRUCT query strings denotes. The only way to build one. |
-| `createQueryRewriter(transformations)` | Builds a `QueryRewriter` running those transformations, in order. |
+| `createQueryRewriter(transformations, options?)` | Builds a `QueryRewriter` running those transformations, in order. |
 | `createDefaultTransformationPipeline(mapping, options?)` | The pipeline to use when you have no reason to build your own. |
 | `rewriter.rewriteQuery(query)` | Rewrites a SPARQL query string, asynchronously. |
 | `rewriter.rewriteOperation(operation)` | The same over SPARQL algebra, for callers already holding some. |
