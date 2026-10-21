@@ -28,7 +28,7 @@ import {
   variablesOfTransferSource,
   asWeakenedConjunct,
 } from '../utils/assertions.js';
-import { cpMetaOf, rewriteExistencePatterns, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { cpMetaOf, rewriteInExistenceScopes, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
@@ -121,33 +121,20 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: Transformatio
   // wherever it is written, and a name coined against a part of the tree would collide with a variable
   // in the part that has not been met yet - which is also why this takes the root, see above.
   const namer = derivedVarNamer(markVariableNamesUsed(c, rootOp));
+  const pushDown = (context: TransformationContext, op: Algebra.Operation): Algebra.Operation => {
+    const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>>[1] =
+      Object.fromEntries(Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]));
+    callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(context, namer, filter);
+    // The pattern of an EXISTS is pushed down in its own scope, by `rewriteInExistenceScopes`.
+    callbacks[Algebra.Types.EXPRESSION] = (expression: Algebra.Expression) =>
+      ({ ...keep(expression), continue: false });
+    return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(op, callbacks);
+  };
   // Starting from a copy without metadata gives both a tree of our own to rewrite and the guarantee that
   // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out
   // for the same reason, the rewrites having since changed what the traversal cached. Not *inside*
   // `mapOperationPreOrder`: `keepMetadata` is how a filter hands its conjunction to the next `pushFilter`.
-  return withoutCpVars(pushAssertionFilters(c, namer, withoutCpVars(rootOp)));
-}
-
-/**
- * Pushes every assertion filter in an operation down, and in the pattern of each EXISTS it evaluates, with the scope
- * of the solutions it evaluates that for.
- * @param c - The transformation context
- * @param namer - Coins the variables a materialised shape needs
- * @param op - The operation to rewrite, a tree of the pass's own
- * @returns the rewritten operation
- */
-function pushAssertionFilters<T extends Algebra.Operation>(c: TransformationContext, namer: DerivedVarNamer, op: T): T {
-  const pushInPattern = (patternContext: TransformationContext, pattern: Algebra.Operation): Algebra.Operation =>
-    pushAssertionFilters(patternContext, namer, pattern);
-  const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
-    Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => {
-      rewriteExistencePatterns(c, copy, pushInPattern);
-      return copy.type === Algebra.Types.FILTER ? pushFilter(c, namer, copy) : keep(copy);
-    } ]),
-  );
-  // The pattern of an EXISTS is rewritten by the operation evaluating it, above.
-  callbacks[Algebra.Types.EXPRESSION] = (expression: Algebra.Expression) => ({ ...keep(expression), continue: false });
-  return algebraUtils.mapOperationPreOrder<'unsafe', T>(op, callbacks);
+  return withoutCpVars(rewriteInExistenceScopes(c, withoutCpVars(rootOp), pushDown));
 }
 
 /**
@@ -227,10 +214,12 @@ function swapWith(
     // be restated over it. A pattern settles what a pattern can state - a term, an equality, a shape -
     // and no more, `isIRI(?x)` staying; a VALUES row settles everything at once ({@link pruneValues}).
     case Algebra.Types.BGP: {
-      return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPatterns(c, op, substitution)));
+      return keep(restatingExistenceScope(c, assertions, writable =>
+        rewritePattern(c, writable, namer, substitution => substituteIntoPatterns(c, op, substitution))));
     }
     case Algebra.Types.PATH: {
-      return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPath(c, op, substitution)));
+      return keep(restatingExistenceScope(c, assertions, writable =>
+        rewritePattern(c, writable, namer, substitution => substituteIntoPath(c, op, substitution))));
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
@@ -238,8 +227,10 @@ function swapWith(
       // not declare can never be bound here - but the split makes that a fact of this rewrite rather
       // than an invariant read off another one.
       const columns = new Set(op.variables.map(variable => variable.value));
-      const { inside, outside } = assertions.split(name => columns.has(name));
-      return keep(assertionFilter(c, pruneValues(c, op, inside), outside));
+      return keep(restatingExistenceScope(c, assertions, (writable) => {
+        const { inside, outside } = writable.split(name => columns.has(name));
+        return assertionFilter(c, pruneValues(c, op, inside), outside);
+      }));
     }
 
     // (FUPush) holds unconditionally for every form - a solution of a union comes from exactly one
@@ -663,7 +654,9 @@ function pushIntoGraph(
   }
   const assertedGraphName = assertions.get(graphVar);
 
-  if (assertedGraphName?.subType === 'strong' && !targetIsAccess(assertedGraphName.term) &&
+  // The solution an EXISTS is evaluated for may bind `?g` already, and binding it again is undefined.
+  if (!c.existenceScope?.vRanges.has(graphVar) && assertedGraphName?.subType === 'strong' &&
+    !targetIsAccess(assertedGraphName.term) &&
     isAssertableTerm(assertedGraphName.term) &&
     // A term outside `?g`'s range has already emptied the plan in `normalisedFor`, so what can still be
     // asserted here is a graph name: a NamedNode, or the BlankNode a dataset may equally name a graph by.
@@ -1162,6 +1155,27 @@ function bindAssertedTerms(
     result = c.AF.createExtend(result, c.DF.variable(name), c.AF.createTermExpression(term));
   }
   return result;
+}
+
+/**
+ * Rewrites a leaf that writes a term for what it asserts, restating over it what it may not write: a conjunct about a
+ * variable of the `existenceScope`, which the solution an EXISTS is evaluated for binds already.
+ * @param c - The transformation context
+ * @param assertions - The conjunction reaching the leaf
+ * @param rewriteLeaf - Rewrites the leaf under the conjunction it may write
+ * @returns the rewritten leaf
+ */
+function restatingExistenceScope(
+  c: TransformationContext,
+  assertions: AssertionConjunction,
+  rewriteLeaf: (writable: AssertionConjunction) => Algebra.Operation,
+): Algebra.Operation {
+  const scope = c.existenceScope?.vRanges;
+  if (scope === undefined) {
+    return rewriteLeaf(assertions);
+  }
+  const { inside, outside } = assertions.split(name => !scope.has(name));
+  return assertionFilter(c, rewriteLeaf(inside), outside);
 }
 
 /**

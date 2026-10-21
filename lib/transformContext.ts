@@ -10,7 +10,7 @@ import { DataFactory } from 'rdf-data-factory';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
 import type { RangeSet } from './RangeSet.js';
-import type { CPMeta, VRanges } from './utils/certainlyBoundVars.js';
+import type { CPMeta } from './utils/certainlyBoundVars.js';
 import { standardExpressionRange } from './utils/certainlyBoundVars.js';
 import { freshVarGenerator } from './utils.js';
 
@@ -58,10 +58,11 @@ export interface TransformationContext {
     input?: CPMeta,
   ) => RangeSet;
   /**
-   * The ranges of what the solution an EXISTS is evaluated for may bind, set while a pass works in its pattern: that
-   * solution is substituted into the pattern, so its variables can be bound anywhere there.
+   * What the solution an EXISTS is evaluated for binds of the variables its pattern mentions, while a pass rewrites
+   * that pattern. SPARQL 1.2 joins the solution into every group of the pattern, its ContextSolution, and leaves a BIND
+   * of one of those variables undefined.
    */
-  existenceScope?: VRanges;
+  existenceScope?: CPMeta;
 }
 
 /** What a rewrite configures of its {@link TransformationContext}. */

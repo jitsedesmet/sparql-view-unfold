@@ -1618,7 +1618,7 @@ GROUP BY ?x ( ?x AS ?y )`,
   FILTER ( EXISTS {
     {
       ?z <ex://q> ?w .
-      FILTER ( SAMETERM( ?w , ?y ) )
+      FILTER ( SAMETERM( ?y , ?w ) )
     }
   }
   )
@@ -1636,6 +1636,44 @@ GROUP BY ?x ( ?x AS ?y )`,
     {
       ?z <ex://q> <ex://c> .
       BIND( <ex://c> AS ?w )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('pushes into an EXISTS whose filter the pushdown rebuilt', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, :d)) } } FILTER(sameTerm(?x, :c)) }',
+        `SELECT ?x ?y WHERE {
+  {
+    <ex://c> <ex://p> ?y .
+    BIND( <ex://c> AS ?x )
+  }
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> <ex://d> .
+      BIND( <ex://d> AS ?w )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('decides a condition on a variable of the solution of an EXISTS by its range', ({ expect }) => {
+      // ?y is a subject outside, so no solution the EXISTS is evaluated for makes it a literal.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?o FILTER EXISTS { ?z :q ?w FILTER(isLiteral(?y)) } }',
+        `SELECT ?o ?y WHERE {
+  ?y <ex://p> ?o .
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> ?w .
+      FILTER ( FALSE )
     }
   }
   )

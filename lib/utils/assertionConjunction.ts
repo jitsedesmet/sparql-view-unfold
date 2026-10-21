@@ -1574,11 +1574,8 @@ export function collectAssertions(
       }
       // Each form has its own top level shape, so at most one of these recognizes a conjunct.
       const met = asAssertionConjuncts(conjunct);
-      // Not an assertion we recognize, so goes into the residuals. Neither is one giving a term or a range to a
-      // variable the solution an EXISTS is evaluated for may bind: what the pass writes for it would bind it again,
-      // which SPARQL 1.2 leaves undefined. Only whether it is bound travels.
-      if (met === undefined || met.some(read => ![ 'bound', 'unbound' ].includes(read.assertion.subType) &&
-        variablesReadByConjunct(read).some(name => c.existenceScope?.has(name)))) {
+      if (met === undefined) {
+        // Not an assertion we recognize, so goes into the residuals
         residual.push(conjunct);
         continue;
       }

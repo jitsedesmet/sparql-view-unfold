@@ -533,8 +533,8 @@ describe('bnode skolem', () => {
 }`);
     });
 
-    // An EXISTS substitutes the solution it is asked for, so the ranges of its own pattern do not hold.
-    it('encodes an argument in an EXISTS with every branch', async({ expect }) => {
+    // SPARQL 1.2 joins the solution an EXISTS is evaluated for into its pattern, so ?s holds what it holds outside.
+    it('encodes an argument in an EXISTS with the ranges of the solution it is evaluated for', async({ expect }) => {
       expect((await rewriter.rewriteQuery(`SELECT * WHERE {
         ?s ?p ?o .
         FILTER EXISTS { BIND(<internal://blank>(?s) AS ?node) }
@@ -542,7 +542,7 @@ describe('bnode skolem', () => {
   ?s ?p ?o .
   FILTER ( EXISTS {
     {
-      BIND( ${materialised(orUnbound('BOUND( ?s )', termEncoding('?s')))} AS ?node )
+      BIND( ${materialised(iriEncoding('?s'))} AS ?node )
     }
   }
   )

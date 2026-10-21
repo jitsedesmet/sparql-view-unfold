@@ -5,7 +5,7 @@ import type { QueryTransformation } from '../types.js';
 import type { Access } from '../utils/assertions.js';
 import { componentOf } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
-import { cpMetaOf, rewriteExistencePatterns, termVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { cpMetaOf, rewriteInExistenceScopes, termVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import {
   asksBoundOfVariable,
   constructedTermOf,
@@ -179,36 +179,33 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformationCont
   // SPARQL has nowhere to write a `BIND` in the chain. It excludes `ORDER_BY`, so a bind can still rise
   // past an ordering to the projection that discards it.
   const sealed = solutionModifierChainOf(entered);
-  return withoutCpVars(floatBinds(c, sealed, entered));
+  return withoutCpVars(rewriteInExistenceScopes(c, entered, (context, input) => floatBinds(context, sealed, input)));
 }
 
 /**
- * Floats every `BIND` in an operation, and in the pattern of each EXISTS it evaluates, with the scope of the solutions
- * it evaluates that for.
+ * Floats every `BIND` in an operation, leaving the pattern of an EXISTS to {@link rewriteInExistenceScopes}.
  * @param c - The transformation context
  * @param sealed - The solution modifier chain of the query, which no bind is written into
- * @param op - The operation to rewrite, a tree of the pass's own
+ * @param op - The operation to rewrite
  * @returns the rewritten operation
  */
-function floatBinds<T extends Algebra.Operation>(c: TransformationContext, sealed: Set<Algebra.Operation>, op: T): T {
-  const floatInPattern = (patternContext: TransformationContext, pattern: Algebra.Operation): Algebra.Operation =>
-    floatBinds(patternContext, sealed, pattern);
-  const withPatternsFloated = <O extends Algebra.Operation>(operation: O): O => {
-    rewriteExistencePatterns(c, operation, floatInPattern);
-    return operation;
-  };
-  return algebraUtils.mapOperation<'unsafe', T>(op, {
+function floatBinds(
+  c: TransformationContext,
+  sealed: Set<Algebra.Operation>,
+  op: Algebra.Operation,
+): Algebra.Operation {
+  return algebraUtils.mapOperation<'unsafe', Algebra.Operation>(op, {
     [Algebra.Types.FILTER]: {
-      transform: filter => floatThroughFilter(c, withPatternsFloated(filter)),
+      transform: filter => floatThroughFilter(c, filter),
     },
     [Algebra.Types.PROJECT]: {
       transform: (project, original) => floatThroughProject(c, project, sealed.has(original)),
     },
     [Algebra.Types.GROUP]: {
-      transform: group => floatThroughGroup(c, withPatternsFloated(group)),
+      transform: group => floatThroughGroup(c, group),
     },
     [Algebra.Types.ORDER_BY]: {
-      transform: orderBy => floatThroughOrderBy(c, withPatternsFloated(orderBy)),
+      transform: orderBy => floatThroughOrderBy(c, orderBy),
     },
     [Algebra.Types.GRAPH]: {
       transform: graph => floatThroughGraph(c, graph),
@@ -217,7 +214,7 @@ function floatBinds<T extends Algebra.Operation>(c: TransformationContext, seale
       transform: join => floatThroughJoin(c, join),
     },
     [Algebra.Types.LEFT_JOIN]: {
-      transform: leftJoin => floatThroughLeftJoin(c, withPatternsFloated(leftJoin)),
+      transform: leftJoin => floatThroughLeftJoin(c, leftJoin),
     },
     [Algebra.Types.MINUS]: {
       transform: minus => floatThroughMinus(c, minus),
@@ -241,10 +238,9 @@ function floatBinds<T extends Algebra.Operation>(c: TransformationContext, seale
       transform: (from, original) => floatThroughCongruentOperation(c, from, sealed.has(original), input =>
         c.AF.createFrom(input, from.default, from.named)),
     },
-    // An EXTEND floats nothing of its own: a chain is one unit, decided by whatever it stands under.
-    [Algebra.Types.EXTEND]: { transform: withPatternsFloated },
-    // The pattern of an EXISTS is rewritten by the operation evaluating it, above.
+    // The pattern of an EXISTS is floated through in its own scope, by `rewriteInExistenceScopes`.
     [Algebra.Types.EXPRESSION]: { preVisitor: () => ({ continue: false }) },
+    // An EXTEND needs no callback of its own: a chain is one unit, decided by whatever it stands under.
     // Everything else is a leaf or a barrier, and a type without a callback is exactly a barrier.
   });
 }
