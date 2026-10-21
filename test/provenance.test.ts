@@ -2,14 +2,14 @@ import { readFileSync } from 'node:fs';
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
-import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { Parser, Store } from 'n3';
 import { termToString } from 'rdf-string';
 import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
 import { PREDICATE_DERIVATION_OF, PREDICATE_DERIVED_FROM, PROVENANCE_NAMESPACE } from '../lib/consts.js';
-import { mappingFromConstructQueries } from '../lib/mapping.js';
+import { mappingFromConstructQueries, parseConstructQuery } from '../lib/mapping.js';
 import {
+  provenanceCapturingOperation,
   provenanceCapturingQuery,
   provenanceConstructOf,
   provenanceMappingFromConstructQueries,
@@ -90,7 +90,7 @@ describe('provenanceConstructOf', () => {
   const c = createTransformationContext();
 
   function expectProvenanceConstruct(expect: typeof Expect, constructQuery: string, expected: string): void {
-    const construct = <Algebra.Construct> parseQuery(c, prefixes + constructQuery);
+    const construct = parseConstructQuery(c, prefixes + constructQuery);
     const provenanceConstruct = provenanceConstructOf(c, construct, DF.namedNode(`${PROVENANCE_NAMESPACE}construct0`));
     expect(c.generator.generate(toAst(provenanceConstruct)).trim()).toEqual(expected.trim());
   }
@@ -271,6 +271,15 @@ describe('provenanceCapturingQuery', () => {
       .toBe('prov1');
   });
 
+  it('rewrites a query in algebra form as it rewrites one written out', ({ expect }) => {
+    const query = `${prefixes} SELECT ?x WHERE { ?x :worksAt :ugent }`;
+    const c = createTransformationContext();
+    const { query: operation, provenanceVariablePrefix } = provenanceCapturingOperation(parseQuery(c, query));
+
+    expect(provenanceVariablePrefix).toBe('prov');
+    expect(c.generator.generate(toAst(operation))).toBe(provenanceCapturingQuery(query).query);
+  });
+
   it('keeps the dataset a FROM selects', ({ expect }) => {
     expect(provenanceCapturingQuery(`${prefixes} SELECT ?x FROM <ex://graph> WHERE { ?x :knows ?y }`).query)
       .toContain('FROM <ex://graph>');
@@ -340,7 +349,7 @@ describe('provenance captured over the colleagues data', () => {
     }).sort();
   }
 
-  // FILTER (NOT) EXISTS is left out: the rewrite without provenance gets a correlated one wrong on main.
+  // FILTER (NOT) EXISTS is left out: the rewrite without provenance currently gets a correlated one wrong.
   it.for(<const> [
     'SELECT DISTINCT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }',
     'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :worksAt ?o FILTER(?o != :ugent) } }',
@@ -356,6 +365,8 @@ describe('provenance captured over the colleagues data', () => {
     'SELECT (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x ORDER BY ?x LIMIT 1',
     'SELECT ?x WHERE { { SELECT ?x WHERE { ?x :worksAt ?o } GROUP BY ?x } } ORDER BY ?x LIMIT 1',
     'SELECT ?x (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x VALUES ?x { :bob }',
+    'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?o } ' +
+    'OPTIONAL { ?x :worksAt ?o FILTER(!BOUND(?o)) } }',
   ])('answers %s as the query without provenance does', async(query, { expect }) => {
     const [ decodedAnswers, rows ] = await Promise.all([
       decodedAnswersOf(query),
@@ -460,7 +471,7 @@ describe('provenance captured over the colleagues data', () => {
   });
 
   it('evaluates an EXISTS nested in an expression over the view, contributing no provenance', async({ expect }) => {
-    // Uncorrelated: the rewrite without provenance loses a correlated EXISTS in an expression on main.
+    // Uncorrelated: the rewrite without provenance currently loses a correlated EXISTS in an expression.
     expect(await explain('SELECT ?x ?e WHERE { ?x :worksAt :imec BIND(EXISTS { :dave :worksAt :ugent } AS ?e) }'))
       .toEqual([
         '+ e="true"^^http://www.w3.org/2001/XMLSchema#boolean x=bob: bob worksAt imec',

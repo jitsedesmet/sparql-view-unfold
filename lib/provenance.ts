@@ -8,7 +8,11 @@ import {
 } from './consts.js';
 import type { MappingConstructionTools, MappingOptions } from './mapping.js';
 import { mappingFromConstructs, parseConstructQuery } from './mapping.js';
-import { provenanceChildPrefix, provenanceNodeVariableName } from './provenancePolynomial.js';
+import {
+  isProvenanceVariableName,
+  provenanceChildPrefix,
+  provenanceNodeVariableName,
+} from './provenancePolynomial.js';
 import { boundOrUnboundArgumentExpression } from './transformations/bnodeExtensionFunction.js';
 import { internalBnodeExpression } from './transformations/internalBnodeMaterialisation.js';
 import { rewriteNonRecursivePaths } from './transformations/pathTransformation.js';
@@ -34,21 +38,47 @@ const derivationOfPredicate = DF.namedNode(PREDICATE_DERIVATION_OF);
 const derivedFromPredicate = DF.namedNode(PREDICATE_DERIVED_FROM);
 
 /**
- * Creates the triple term a triple pattern writes.
- * @param triple - The triple pattern
- * @returns the triple term
+ * Creates the pattern linking a derivation to the triple term a triple (pattern) writes.
+ * @param AF - The algebra factory to create it with
+ * @param derivation - The variable the derivation is bound to
+ * @param predicate - `derivationOf` or `derivedFrom`
+ * @param triple - The triple (pattern)
+ * @returns the pattern
  */
-function tripleTermOf(triple: RDF.BaseQuad): RDF.Quad {
-  return tripleTerm(triple.subject, triple.predicate, triple.object);
+function derivationLink(
+  AF: TransformationContext['AF'],
+  derivation: RDF.Variable,
+  predicate: RDF.NamedNode,
+  triple: RDF.BaseQuad,
+): Algebra.Pattern {
+  return AF.createPattern(derivation, predicate, tripleTerm(triple.subject, triple.predicate, triple.object));
 }
 
 /**
- * Reads the variables every solution of an operation binds, without caching that on the operation.
+ * The in-scope variables of one operation that another has in scope too.
+ * @param left - The operation whose variables are kept
+ * @param right - The other operation
+ * @returns those variables
+ */
+function sharedVariables(left: Algebra.Operation, right: Algebra.Operation): RDF.Variable[] {
+  const rightNames = new Set(algebraUtils.inScopeVariables(right).map(variable => variable.value));
+  return algebraUtils.inScopeVariables(left).filter(variable => rightNames.has(variable.value));
+}
+
+const certainlyBoundVariablesByOperation = new WeakMap<Algebra.Operation, Set<string>>();
+
+/**
+ * Reads the variables every solution of an operation binds, without caching that on the operation itself.
  * @param operation - The operation to read
  * @returns the names of those variables
  */
 function certainlyBoundVariablesOf(operation: Algebra.Operation): Set<string> {
-  return cpMetaOf(withoutCpVars(operation)).cVars;
+  let certainlyBound = certainlyBoundVariablesByOperation.get(operation);
+  if (certainlyBound === undefined) {
+    certainlyBound = cpMetaOf(withoutCpVars(operation)).cVars;
+    certainlyBoundVariablesByOperation.set(operation, certainlyBound);
+  }
+  return certainlyBound;
 }
 
 /**
@@ -100,11 +130,10 @@ export function provenanceConstructOf(
     AF.createTermExpression(constructIdentifier),
     ...algebraUtils.inScopeVariables(body).map(variable => AF.createTermExpression(variable)),
   ]);
-  const derivationLink = (predicate: RDF.NamedNode, triple: RDF.BaseQuad): Algebra.Pattern =>
-    AF.createPattern(derivation, predicate, tripleTermOf(triple));
   return AF.createConstruct(AF.createExtend(body, derivation, derivationIdentity), [
-    ...construct.template.map(triple => derivationLink(derivationOfPredicate, triple)),
-    ...triplePatternsEverySolutionMatches(body).map(pattern => derivationLink(derivedFromPredicate, pattern)),
+    ...construct.template.map(triple => derivationLink(AF, derivation, derivationOfPredicate, triple)),
+    ...triplePatternsEverySolutionMatches(body)
+      .map(pattern => derivationLink(AF, derivation, derivedFromPredicate, pattern)),
   ]);
 }
 
@@ -167,7 +196,7 @@ const constantOne = DF.literal('1', datatypeInteger);
  */
 function provenanceVariablesOf(c: ProvenanceCaptureContext, operation: Algebra.Operation): RDF.Variable[] {
   return algebraUtils.inScopeVariables(operation)
-    .filter(variable => variable.value.startsWith(`${c.provenanceVariablePrefix}_`));
+    .filter(variable => isProvenanceVariableName(c.provenanceVariablePrefix, variable.value));
 }
 
 /**
@@ -217,6 +246,29 @@ function withConstantOne(c: ProvenanceCaptureContext, operation: Algebra.Operati
  */
 function patternOf(c: ProvenanceCaptureContext, operation: Algebra.Operation): ProvenancePattern {
   return { original: operation, rewrite: prefix => rewriteWithProvenance(c, operation, prefix) };
+}
+
+/**
+ * A triple pattern as the sum (Σ) of the derivations of the view triple it matches: SPARQLprov, Def. 4.12 (2).
+ * @param c - The provenance capture context
+ * @param pattern - The triple pattern
+ * @returns the pattern
+ */
+function triplePatternOf(c: ProvenanceCaptureContext, pattern: Algebra.Pattern): ProvenancePattern {
+  const original = c.AF.createBgp([ pattern ]);
+  const domain = algebraUtils.inScopeVariables(original);
+  return {
+    original,
+    rewrite: (prefix) => {
+      const derivation = DF.variable(provenanceNodeVariableName(provenanceChildPrefix(prefix, 'sum'), 'statement'));
+      return withIdentity(
+        c,
+        c.AF.createBgp([ derivationLink(c.AF, derivation, derivationOfPredicate, pattern) ]),
+        domain,
+        provenanceNodeVariableName(prefix, 'sum'),
+      );
+    },
+  };
 }
 
 /**
@@ -288,22 +340,23 @@ function differenceOf(
 ): ProvenancePattern {
   const { AF } = c;
   const minuendDomain = algebraUtils.inScopeVariables(minuend.original);
-  const subtrahendDomain = new Set(algebraUtils.inScopeVariables(subtrahend.original).map(variable => variable.value));
-  const shared = minuendDomain.filter(variable => subtrahendDomain.has(variable.value));
   const certainlyBound = certainlyBoundVariablesOf(minuend.original);
   // A MINUS needs to tell which side bound a shared variable, so it renames them all.
-  const problematic = shared.filter(variable => options.sharingABoundVariable ?? !certainlyBound.has(variable.value));
+  const renamedApart = sharedVariables(minuend.original, subtrahend.original)
+    .filter(variable => options.sharingABoundVariable === true || !certainlyBound.has(variable.value));
   const loweredCondition = options.condition && withoutProvenance(c, options.condition);
   return {
     original: minuend.original,
     rewrite: (prefix) => {
-      const renamed = problematic.map(variable => <const> [ variable, c.coinInternalVariable() ]);
+      const renamed = renamedApart.map(variable => <const> [ variable, c.coinInternalVariable() ]);
       const subtrahendSum = provenanceChildPrefix(provenanceChildPrefix(prefix, 'difference', 2), 'sum');
-      const subtrahendRewritten = renameVariables(
-        c,
-        subtrahend.rewrite(subtrahendSum),
-        new Map(renamed.map(([ variable, rename ]) => [ variable.value, rename.value ])),
-      );
+      const subtrahendRewritten = renamed.length === 0 ?
+        subtrahend.rewrite(subtrahendSum) :
+        renameVariables(
+          c,
+          subtrahend.rewrite(subtrahendSum),
+          new Map(renamed.map(([ variable, rename ]) => [ variable.value, rename.value ])),
+        );
       const conditions = renamed.map(([ variable, rename ]) => disjunctionOf(c, [
         unboundAssertionAsExpression(c, variable.value),
         unboundAssertionAsExpression(c, rename.value),
@@ -328,41 +381,63 @@ function differenceOf(
         ),
         [ ...algebraUtils.inScopeVariables(minuendRewritten), ...provenanceVariablesOf(c, subtrahendRewritten) ],
       );
-      return withIdentity(
-        c,
-        withIdentity(c, optional, minuendDomain, provenanceNodeVariableName(prefix, 'difference')),
-        minuendDomain,
-        subtrahendSum,
+      const identity = provenanceNodeVariableName(prefix, 'difference');
+      // The Σ over the subtrahend has the minuend's solution as its identity too.
+      return AF.createExtend(
+        withIdentity(c, optional, minuendDomain, identity),
+        DF.variable(subtrahendSum),
+        AF.createTermExpression(DF.variable(identity)),
       );
     },
   };
 }
 
 /**
- * Substitutes, in an expression, every renamed variable `?x` by `COALESCE(?x, ?renamed)`.
+ * Substitutes, in an OPTIONAL's condition, every renamed variable `?x` by `COALESCE(?x, ?renamed)`, its value in the
+ * merged solution; `BOUND(?x)`, whose grammar takes a variable, becomes `BOUND(?x) || BOUND(?renamed)`.
  * @param c - The provenance capture context
- * @param expression - The expression
+ * @param expression - The condition; an EXISTS in it is left as is
  * @param renamed - The renamed variables, with their renames
- * @returns the substituted expression
+ * @returns the substituted condition
  */
 function substitutedByCoalesce(
   c: ProvenanceCaptureContext,
   expression: Algebra.Expression,
   renamed: readonly (readonly [ RDF.Variable, RDF.Variable ])[],
 ): Algebra.Expression {
+  const { AF } = c;
   const renameOf = new Map(renamed.map(([ variable, rename ]) => [ variable.value, rename ]));
+  const holdsRenamed = (term: RDF.Term): boolean => term.termType === 'Variable' ?
+    renameOf.has(term.value) :
+    term.termType === 'Quad' && [ term.subject, term.predicate, term.object ].some(holdsRenamed);
+  const substitutedTerm = (term: RDF.Term): Algebra.Expression => {
+    if (!holdsRenamed(term)) {
+      return AF.createTermExpression(term);
+    }
+    if (term.termType === 'Variable') {
+      return AF.createOperatorExpression('coalesce', [
+        AF.createTermExpression(term),
+        AF.createTermExpression(renameOf.get(term.value)!),
+      ]);
+    }
+    const quad = <RDF.Quad> term;
+    return AF.createOperatorExpression('triple', [ quad.subject, quad.predicate, quad.object ].map(substitutedTerm));
+  };
   const substitute = (operand: Algebra.Expression): Algebra.Expression => {
     switch (operand.subType) {
-      case Algebra.ExpressionTypes.TERM: {
-        const rename = operand.term.termType === 'Variable' ? renameOf.get(operand.term.value) : undefined;
-        return rename === undefined ?
-          operand :
-          c.AF.createOperatorExpression('coalesce', [ operand, c.AF.createTermExpression(rename) ]);
+      case Algebra.ExpressionTypes.TERM:
+        return substitutedTerm(operand.term);
+      case Algebra.ExpressionTypes.OPERATOR: {
+        const [ argument ] = operand.args;
+        const renamedBound = operand.operator === 'bound' && argument?.subType === Algebra.ExpressionTypes.TERM ?
+          renameOf.get(argument.term.value) :
+          undefined;
+        return renamedBound === undefined ?
+          AF.createOperatorExpression(operand.operator, operand.args.map(substitute)) :
+          disjunctionOf(c, [ operand, boundAssertionAsExpression(c, renamedBound.value) ]);
       }
-      case Algebra.ExpressionTypes.OPERATOR:
-        return c.AF.createOperatorExpression(operand.operator, operand.args.map(substitute));
       case Algebra.ExpressionTypes.NAMED:
-        return c.AF.createNamedExpression(operand.name, operand.args.map(substitute));
+        return AF.createNamedExpression(operand.name, operand.args.map(substitute));
       default:
         return operand;
     }
@@ -379,8 +454,7 @@ function substitutedByCoalesce(
  */
 function minusPatternOf(c: ProvenanceCaptureContext, minus: Algebra.Minus): ProvenancePattern {
   const [ left, right ] = minus.input;
-  const rightDomain = new Set(algebraUtils.inScopeVariables(right).map(variable => variable.value));
-  const shared = algebraUtils.inScopeVariables(left).filter(variable => rightDomain.has(variable.value));
+  const shared = sharedVariables(left, right);
   if (shared.length === 0) {
     return patternOf(c, left);
   }
@@ -388,7 +462,8 @@ function minusPatternOf(c: ProvenanceCaptureContext, minus: Algebra.Minus): Prov
   if (!shared.every(variable => leftBound.has(variable.value))) {
     return differenceOf(c, patternOf(c, left), patternOf(c, right), { sharingABoundVariable: true });
   }
-  // The left side binds every shared variable, so a right solution shares one exactly when it binds one too.
+  // The left side binds every shared variable, so a right solution shares one exactly when it binds one too: a filter
+  // on the right side, which keeps the OPTIONAL plain, with nothing to rename apart.
   const rightBound = certainlyBoundVariablesOf(right);
   const rightSharingABoundVariable = shared.some(variable => rightBound.has(variable.value)) ?
     right :
@@ -431,18 +506,6 @@ function optionalPatternOf(c: ProvenanceCaptureContext, leftJoin: Algebra.LeftJo
 }
 
 /**
- * Creates the lookup of the derivations of the view triple a triple pattern matches.
- * @param c - The provenance capture context
- * @param derivation - The variable the derivation is bound to
- * @param pattern - The triple pattern
- * @returns the lookup
- */
-function derivationLookupOf(c: ProvenanceCaptureContext, derivation: RDF.Variable, pattern: RDF.BaseQuad):
-Algebra.Pattern {
-  return c.AF.createPattern(derivation, derivationOfPredicate, tripleTermOf(pattern));
-}
-
-/**
  * Replaces every BGP outside a SERVICE, expressions' included, by the distinct solutions of its derivation lookups on
  * the BGP's own variables: the BGP's solutions over the view as a set, selecting no provenance (this repo's choice).
  * @param c - The provenance capture context
@@ -453,7 +516,8 @@ function withoutProvenance<T extends object>(c: ProvenanceCaptureContext, object
   return algebraUtils.mapOperation<'unsafe', T>(object, {
     [Algebra.Types.BGP]: { transform: bgp => c.AF.createDistinct(projectOntoVariablesOrExistence(
       c,
-      c.AF.createBgp(bgp.patterns.map(pattern => derivationLookupOf(c, c.coinInternalVariable(), pattern))),
+      c.AF.createBgp(bgp.patterns.map(pattern =>
+        derivationLink(c.AF, c.coinInternalVariable(), derivationOfPredicate, pattern))),
       algebraUtils.inScopeVariables(bgp),
     )) },
     [Algebra.Types.SERVICE]: { preVisitor: () => ({ continue: false }) },
@@ -590,23 +654,7 @@ Algebra.Operation {
       if (operation.patterns.length === 0) {
         return withConstantOne(c, operation, prefix);
       }
-      // A triple pattern is the sum of the derivations of the view triple it matches.
-      const triplePatterns = operation.patterns.map((pattern) => {
-        const original = AF.createBgp([ pattern ]);
-        return {
-          original,
-          rewrite: (triplePrefix: string) => withIdentity(
-            c,
-            AF.createBgp([ derivationLookupOf(
-              c,
-              DF.variable(provenanceNodeVariableName(provenanceChildPrefix(triplePrefix, 'sum'), 'statement')),
-              pattern,
-            ) ]),
-            algebraUtils.inScopeVariables(original),
-            provenanceNodeVariableName(triplePrefix, 'sum'),
-          ),
-        };
-      });
+      const triplePatterns = operation.patterns.map(pattern => triplePatternOf(c, pattern));
       return triplePatterns.length === 1 ?
         triplePatterns[0].rewrite(prefix) :
         combinationOf(c, 'product', triplePatterns).rewrite(prefix);

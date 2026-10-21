@@ -15,7 +15,6 @@ import { DF } from '../lib/utils/rdfDatatypes.js';
 
 const BF = new BindingsFactory(DF);
 const source = (name: string): ProvenancePolynomial => ({ type: 'source', term: DF.namedNode(name) });
-const labelOf = (term: RDF.Term): string => term.value;
 
 /**
  * Creates a row of a rewritten query's answers.
@@ -45,7 +44,7 @@ describe('decodeProvenance', () => {
     }));
 
     expect(decodeProvenance(rows, 'prov').map(({ answer, polynomial, isAnswer }) =>
-      `${answer.get('person')!.value}: ${polynomialToString(polynomial, labelOf)} ${isAnswer}`)).toEqual([
+      `${answer.get('person')!.value}: ${polynomialToString(polynomial)} ${isAnswer}`)).toEqual([
       'GM: (s11 ⊖ s12) false',
       'OT: (s21 ⊖ (s22 ⊕ s24)) false',
     ]);
@@ -62,7 +61,7 @@ describe('decodeProvenance', () => {
     }) ];
 
     const [ annotated ] = decodeProvenance(rows, 'prov');
-    expect(polynomialToString(annotated.polynomial, labelOf)).toBe('(s13 ⊖ 0)');
+    expect(polynomialToString(annotated.polynomial)).toBe('(s13 ⊖ 0)');
     expect(annotated.isAnswer).toBe(true);
   });
 
@@ -82,7 +81,7 @@ describe('decodeProvenance', () => {
     }));
 
     const [ annotated ] = decodeProvenance(rows, 'prov');
-    expect(polynomialToString(annotated.polynomial, labelOf)).toBe('((s22 ⊕ s24) ⊗ s21 ⊗ s23)');
+    expect(polynomialToString(annotated.polynomial)).toBe('((s22 ⊕ s24) ⊗ s21 ⊗ s23)');
   });
 });
 
@@ -95,7 +94,7 @@ describe('simplifyPolynomial', () => {
       { type: 'difference', minuend: source('d'), subtrahend: { type: 'sum', operands: []}},
     ]};
 
-    expect(polynomialToString(simplifyPolynomial(polynomial), labelOf)).toBe('((d ⊖ 0) ⊕ a ⊕ b)');
+    expect(polynomialToString(simplifyPolynomial(polynomial))).toBe('((d ⊖ 0) ⊕ a ⊕ b)');
   });
 });
 

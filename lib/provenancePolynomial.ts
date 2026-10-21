@@ -88,6 +88,16 @@ export function provenanceNodeVariableName(prefix: string, kind: ProvenanceNodeK
 }
 
 /**
+ * Whether a variable is a provenance variable of a capture.
+ * @param prefix - The capture's provenance variable prefix.
+ * @param name - The variable's name.
+ * @returns Whether it starts with the prefix.
+ */
+export function isProvenanceVariableName(prefix: string, name: string): boolean {
+  return name.startsWith(`${prefix}_`);
+}
+
+/**
  * The prefix of a node's child: a Σ or δ node's one child, or an n-ary node's child at an index from 1.
  * @param prefix - The prefix of the node.
  * @param kind - The node's kind.
@@ -220,7 +230,7 @@ export function decodeProvenance(
     const answer = new Map<string, RDF.Term>();
     const row = new Map<string, RDF.Term>();
     for (const [ variable, term ] of binding) {
-      (variable.value.startsWith(`${provenanceVariablePrefix}_`) ? row : answer).set(variable.value, term);
+      (isProvenanceVariableName(provenanceVariablePrefix, variable.value) ? row : answer).set(variable.value, term);
     }
     // JSON keeps a term's quotes and spaces from running into the next variable's.
     const key = JSON.stringify([ ...answer ].map(([ name, term ]) => [ name, termToString(term) ])
@@ -304,7 +314,7 @@ export function simplifyPolynomial(polynomial: ProvenancePolynomial): Provenance
 /**
  * Writes a polynomial in infix notation, a source by a label, and the operands of a sum or product in sorted order.
  * @param polynomial - The polynomial to write.
- * @param labelOf - Gives the label of a source; by default its N-Triples form.
+ * @param labelOf - Gives the label of a source; by default its rdf-string form.
  * @returns The written polynomial.
  */
 export function polynomialToString(
@@ -329,12 +339,16 @@ export function polynomialToString(
 }
 
 /** The sources of a polynomial, keyed by their string form: every operation is their union. */
+function sourceUnion(left: ReadonlyMap<string, RDF.Term>, right: ReadonlyMap<string, RDF.Term>):
+ReadonlyMap<string, RDF.Term> {
+  return new Map([ ...left, ...right ]);
+}
 const lineageSpmSemiring: SpmSemiring<ReadonlyMap<string, RDF.Term>> = {
   zero: new Map(),
   one: new Map(),
-  plus: (left, right) => new Map([ ...left, ...right ]),
-  times: (left, right) => new Map([ ...left, ...right ]),
-  monus: (left, right) => new Map([ ...left, ...right ]),
+  plus: sourceUnion,
+  times: sourceUnion,
+  monus: sourceUnion,
   aggregate: operand => operand,
 };
 

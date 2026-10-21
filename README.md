@@ -199,9 +199,6 @@ for (const { answer, polynomial, isAnswer } of answers) {
 }
 ```
 
-Comunica evaluates the OPTIONAL with a condition that a difference becomes only from
-[comunica/comunica#1835](https://github.com/comunica/comunica/pull/1835) on, which no release holds yet.
-
 A polynomial is built from derivations with ⊕ (UNION, and the derivations of one view triple), ⊗ (join), ⊖
 (OPTIONAL, MINUS, NOT EXISTS) and δ (an aggregated group). `evaluatePolynomial` evaluates it in an spm-semiring,
 such as `countingSpmSemiring` for multiplicities; `lineageOf` lists its derivations, whose `derivedFrom` gives the
