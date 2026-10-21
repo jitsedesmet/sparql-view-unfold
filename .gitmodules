@@ -1,0 +1,3 @@
+[submodule "comunica"]
+	path = comunica
+	url = https://github.com/comunica/comunica.git

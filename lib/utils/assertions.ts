@@ -700,7 +700,7 @@ function weakAssertionAsExpression(
  * @param name - The variable
  * @returns the condition
  */
-function boundAssertionAsExpression(c: Pick<TransformationContext, 'AF'>, name: string): Algebra.Expression {
+export function boundAssertionAsExpression(c: Pick<TransformationContext, 'AF'>, name: string): Algebra.Expression {
   return c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(DF.variable(name)) ]);
 }
 
@@ -710,7 +710,7 @@ function boundAssertionAsExpression(c: Pick<TransformationContext, 'AF'>, name: 
  * @param name - The variable
  * @returns the condition
  */
-function unboundAssertionAsExpression(c: Pick<TransformationContext, 'AF'>, name: string): Algebra.Expression {
+export function unboundAssertionAsExpression(c: Pick<TransformationContext, 'AF'>, name: string): Algebra.Expression {
   return c.AF.createOperatorExpression('!', [ boundAssertionAsExpression(c, name) ]);
 }
 

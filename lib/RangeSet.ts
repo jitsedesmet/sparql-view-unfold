@@ -44,6 +44,9 @@ export const graphRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
 /** Valid term types for a triple term, which only ever occupies an object position. */
 export const tripleTermRange = new RangeSet([ 'Quad' ]);
 
+/** The term types of a blank node, including an internal one `<internal://blank>(…)` constructs. */
+export const blankNodeRange = new RangeSet([ 'BlankNode' ]);
+
 /** The term types of a literal: Literals only. */
 export const literalRange = new RangeSet([ 'Literal' ]);
 

@@ -1,3 +1,4 @@
+import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import { datatypeBoolean, DF } from './rdfDatatypes.js';
@@ -41,15 +42,42 @@ export function createFilterFalse(c: TransformationContext, op?: Algebra.Operati
 }
 
 /**
- * Projects an operation onto a coined variable it never binds, keeping one empty solution per solution.
- * Stands in for the empty projection SPARQL lacks.
+ * Projects an operation onto variables, or onto a coined variable it never binds when there are none, standing in for
+ * the empty projection SPARQL lacks.
  * @param c - Object containing the factories and the existence variable generator
- * @param operation - The operation to ask about
+ * @param operation - The operation to project
+ * @param variables - The variables to project onto
  * @returns the projection
  */
-export function projectSolutionExistence(
+export function projectOntoVariablesOrExistence(
   c: Pick<TransformationContext, 'AF' | 'coinExistenceVariable'>,
   operation: Algebra.Operation,
+  variables: RDF.Variable[] = [],
 ): Algebra.Project {
-  return c.AF.createProject(operation, [ c.coinExistenceVariable() ]);
+  return c.AF.createProject(operation, variables.length === 0 ? [ c.coinExistenceVariable() ] : variables);
+}
+
+/**
+ * Finds the GROUP a projection writes its GROUP BY on: its input, below the binds of its aggregates, its HAVING, its
+ * ORDER BY and the join with a trailing VALUES.
+ * @param project - The projection to read
+ * @returns the GROUP, or `undefined` when the projection groups nothing
+ */
+export function groupProjectedBy(project: Algebra.Project): Algebra.Group | undefined {
+  let input = project.input;
+  while (input.type === Algebra.Types.EXTEND || input.type === Algebra.Types.FILTER ||
+    input.type === Algebra.Types.ORDER_BY || isJoinWithTrailingValues(input)) {
+    input = input.type === Algebra.Types.JOIN ? input.input[0] : input.input;
+  }
+  return input.type === Algebra.Types.GROUP ? input : undefined;
+}
+
+/**
+ * Whether an operation is the join a VALUES after the WHERE clause writes, which comes after the GROUP and its HAVING.
+ * @param operation - The operation to read
+ * @returns whether it joins one operation with a VALUES
+ */
+function isJoinWithTrailingValues(operation: Algebra.Operation): operation is Algebra.Join {
+  return operation.type === Algebra.Types.JOIN && operation.input.length === 2 &&
+    operation.input[1].type === Algebra.Types.VALUES;
 }

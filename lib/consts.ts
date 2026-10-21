@@ -24,3 +24,15 @@ export const VAR_PREFIX_MERGED_HEAD = 'm_';
 
 /** Extension function IRI giving the encoding of an internal blank node, from arguments wrapped as below. */
 export const EXTENSION_FUNCTION_BNODE_ENCODING = 'internal://blank/encoding';
+
+/** Namespace of the predicates of the provenance view. */
+export const PROVENANCE_NAMESPACE = 'https://sparql-extension.knows.idlab.ugent.be/provenance#';
+
+/**
+ * Predicate of the provenance view linking a derivation, one solution of a mapping body, to the view triple
+ * it produces.
+ */
+export const PREDICATE_DERIVATION_OF = `${PROVENANCE_NAMESPACE}derivationOf`;
+
+/** Predicate of the provenance view linking a derivation to a source triple it matched. */
+export const PREDICATE_DERIVED_FROM = `${PROVENANCE_NAMESPACE}derivedFrom`;

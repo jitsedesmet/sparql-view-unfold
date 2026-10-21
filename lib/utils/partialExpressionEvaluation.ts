@@ -7,7 +7,7 @@ import type { TransformationContext } from '../transformContext.js';
 import type { Access } from './assertions.js';
 import { asAccess, asAssertableTermType, asTermTypeTest, componentOf, isAssertableTerm } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
-import { DF } from './rdfDatatypes.js';
+import { DF, tripleTerm } from './rdfDatatypes.js';
 import { isSubsetOf, unionSets } from './setUtils.js';
 
 /**
@@ -250,11 +250,7 @@ export function constantFoldOperator(
       const ranges = [ subjectRange, predicateRange, objectRange ];
       if (groundedTerms.length === 3 && groundedTerms.every((term, index) => term !== undefined &&
         ranges[index].has(term.termType))) {
-        return c.AF.createTermExpression(DF.quad(
-          <RDF.Quad_Subject> groundedTerms[0]!,
-          <RDF.Quad_Predicate> groundedTerms[1]!,
-          <RDF.Quad_Object> groundedTerms[2]!,
-        ));
+        return c.AF.createTermExpression(tripleTerm(groundedTerms[0]!, groundedTerms[1]!, groundedTerms[2]!));
       }
       break;
     }

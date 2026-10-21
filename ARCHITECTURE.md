@@ -118,6 +118,40 @@ encoding from the evaluated arguments instead, at any depth, and the same materi
 (`lib/transformations/bnodeExtensionFunction.ts`). An engine errors the call when an argument errors, so each argument
 `e` is wrapped as `COALESCE(TRIPLE(<internal://blank/argument>, <internal://blank/argument>, e), <internal://blank/unbound>)`.
 
+## Provenance
+
+`lib/provenance.ts`, in two halves that meet in an ordinary unfolding.
+
+- **The mapping** (`provenanceMappingFromConstructQueries`) rewrites every CONSTRUCT into one over the same body,
+  extended with `BIND(<internal://blank>(<construct IRI>, <the body's variables>) AS ?derivation)`, an unbound
+  variable still telling derivations apart as an argument of its own. Its template links that derivation by
+  `derivationOf` to every template triple and by `derivedFrom` to every body triple pattern each solution
+  matches. The result goes through `mappingFromConstructs` like any other.
+- **The query** (`provenanceCapturingQuery`) is a query-to-query rewrite over the view, run *before* the
+  rewriter: it changes the projection, which the runner rebuilds as the user wrote it. It is SPARQLprov's rewrite
+  α(Q, z) (Hernández et al., "Computing How-Provenance for SPARQL Queries via Query Rewriting",
+  https://doi.org/10.14778/3484224.3484235, Def. 4.12), with `?z_sum_statement derivationOf <<( s p o )>>` as the
+  reification of a triple pattern. Every operator encodes its node of the polynomial in variables named by the
+  node's path, `?prov_sum_product_1_sum_statement`, as SPARQLprov's implementation names them, and binds the node to
+  an identity of its solution, `<internal://blank>("<variable>", <the solution's variables>)`, by which
+  `decodeProvenance` (`lib/provenancePolynomial.ts`, Def. 4.10) groups the rows into sums.
+
+OPTIONAL is normalised to `(P1 ⊗ P2) ⊕ (P1 ⊖ P2)` (Def. 3.1), MINUS and NOT EXISTS are ⊖, and EXISTS is
+`P1 ⊖ (P1 ⊖ P2)`; each repeats P1, so a chain of OPTIONALs or EXISTS grows the query exponentially. A difference keeps
+every solution of its minuend, each with the provenance of the subtrahend's compatible solutions: as SPARQLprov
+writes it, an OPTIONAL over the subtrahend with the shared variables the minuend may leave unbound renamed apart
+and compared in its condition, which needs Comunica master (comunica/comunica#1835) to evaluate. An expression's EXISTS
+outside a top-level conjunct of a FILTER is evaluated over the view, contributing no provenance.
+
+Every other operator is rewritten in place. A GROUP or SLICE counts solutions rather than derivations, so it
+duplicates its subtree: once without provenance to compute the answers, once with it for the solutions whose
+provenance is left-joined onto those answers; the subtree is thus evaluated twice, and nested GROUPs and SLICEs grow
+the query exponentially. That duplication is the paper's aggregate rewrite for a GROUP (Def. 4.17), under the
+lineage δ (Def. 4.15); applying it to LIMIT and OFFSET, computing the answers over each BGP's distinct lookups (the
+view's set semantics), and joining a variable that may be unbound on the extension function's wrapped key,
+`COALESCE(TRIPLE(<…argument>, <…argument>, ?x), <…unbound>)`, rather than on SPARQLprov's cautious compatibility
+filter, are this repo's own choices.
+
 ## SPARQL quirks worth knowing
 
 There is a [working draft for RDF 1.2 interoperability](https://w3c.github.io/rdf-interop/spec/) describing
@@ -143,3 +177,13 @@ So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
   run after `removeProjections`.
 - **Merging SERVICE calls.** A service can absorb a variable amount of computation, so there is a
   composition to choose; `transformServiceCallPushUp` makes one choice.
+- **Pruning a derivation lookup.** Every provenance mapping head has the predicate `derivationOf` or
+  `derivedFrom`, so a provenance mapping is nearly always several merged behind the generic head, whose triple
+  term is a `BIND` nothing re-reads. A lookup then unfolds against every mapping, the mismatch of a constant
+  inside the triple term only caught at run time by `sameTerm(c, PREDICATE(?m_o))`. Folding
+  `SUBJECT`/`PREDICATE`/`OBJECT` of a bound triple term into the term it reads would prune those branches and
+  leave plain SPARQL 1.1.
+- **Provenance across SERVICE.** A SERVICE pattern is annotated with `1`, and `derivedFrom` stops at one.
+  Asma et al., "Native Provenance Computation for Federated and Non-Federated SPARQL Queries"
+  (https://doi.org/10.4230/TGDK.4.1.4), Def. 62, annotates provenance per endpoint (`y ⊛ x`) by shipping the
+  rewrite into the SERVICE: the reference for extending it.
