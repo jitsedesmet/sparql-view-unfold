@@ -210,7 +210,7 @@ export function expressionRange(expression: Algebra.Expression, input?: CPMeta):
       return input?.vRanges.rangeOf(expression.term.value) ?? objectRange;
     }
     case ExpressionTypes.OPERATOR: {
-      // COALESCE gives one of its arguments, IF one of its branches.
+      // COALESCE gives one of its arguments, IF one of its branches. As such we UNION the ranges of the branches.
       if (expression.operator === 'coalesce' || expression.operator === 'if') {
         const choices = expression.operator === 'if' ? expression.args.slice(1) : expression.args;
         return new RangeSet(choices.flatMap(choice => [ ...expressionRange(choice, input) ]));
@@ -233,10 +233,8 @@ export function expressionRange(expression: Algebra.Expression, input?: CPMeta):
       // A function of the XSD namespace is a cast to one of its datatypes.
       return expression.name.value.startsWith(xsd) ? literalRange : objectRange;
     }
-    case ExpressionTypes.WILDCARD: {
-      return objectRange;
-    }
   }
+  return objectRange;
 }
 
 /** Drops the `metadata` of the operation it is applied to, whatever that metadata holds. */
