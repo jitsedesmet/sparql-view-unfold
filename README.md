@@ -144,6 +144,22 @@ through its subject, predicate and object, up to two triple terms deep or the `t
 `internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed literal or
 as a prefixed IRI respectively.
 
+Evaluating the rewritten query with Comunica, the engine can encode those identities itself, for a triple term of any
+depth too: pass `{ encodedByExtensionFunction: true }` to the transformation and `internalBnodeExtensionFunctions()` as
+`extensionFunctions`. Both give the same nodes, except where the SPARQL encoding falls short: a triple term deeper
+than it unrolls, a blank node, or an unstable argument in an `OPTIONAL` condition, which it evaluates repeatedly.
+
+```typescript
+const query = await createQueryRewriter([
+  ...createDefaultTransformationPipeline(mapping),
+  internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
+]).rewriteQuery('SELECT * WHERE { ?s ?p ?o }');
+const bindings = await new QueryEngine().queryBindings(query, {
+  sources,
+  extensionFunctions: internalBnodeExtensionFunctions(),
+});
+```
+
 ## Restrictions
 
 | Restriction | What happens when you break it |

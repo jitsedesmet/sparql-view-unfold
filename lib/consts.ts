@@ -21,3 +21,6 @@ export const VAR_PREFIX_MAPPING = 'mi_';
 
 /** Prefix of the variables `?m_s ?m_p ?m_o` of the generic head several mappings are merged into. */
 export const VAR_PREFIX_MERGED_HEAD = 'm_';
+
+/** Extension function IRI giving the encoding of an internal blank node, from arguments wrapped as below. */
+export const EXTENSION_FUNCTION_BNODE_ENCODING = 'internal://blank/encoding';
