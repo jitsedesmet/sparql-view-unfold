@@ -1,8 +1,15 @@
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
 import { iriRange } from '../lib/RangeSet.js';
 import type { TransformationContext } from '../lib/transformContext.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
-import { standardExpressionRange, withCpVars } from '../lib/utils/certainlyBoundVars.js';
+import type { CPMeta } from '../lib/utils/certainlyBoundVars.js';
+import {
+  cpMetaOf,
+  rewriteExistencePatterns,
+  standardExpressionRange,
+  withCpVars,
+} from '../lib/utils/certainlyBoundVars.js';
 import { constructedTermOf } from '../lib/utils/expressionHelpers.js';
 
 const c = createTransformationContext();
@@ -391,5 +398,43 @@ describe('the range of a service variable', () => {
     const meta = withCpVars(c, c.AF.createService(impossible, endpoint, true)).metadata;
     expect(meta.vRanges.neverBinds('x')).toBe(true);
     expect(meta.cVars.has('x')).toBe(false);
+  });
+});
+
+describe('the pattern of an EXISTS', () => {
+  /**
+   * What the pattern of the one EXISTS in a query binds, read in the context {@link rewriteExistencePatterns} gives it.
+   * @param query - The WHERE clause, whose top operation evaluates the EXISTS
+   * @returns the metadata of the pattern
+   */
+  function patternMeta(query: string): CPMeta {
+    const project = <Algebra.Project> parseQuery(c, `SELECT * WHERE { ${query} }`);
+    let meta: CPMeta | undefined;
+    rewriteExistencePatterns(c, project.input, (patternContext, pattern) => {
+      meta = cpMetaOf(patternContext, pattern);
+      return pattern;
+    });
+    return meta!;
+  }
+
+  it('can bind what the solution it is evaluated for may bind, though not certainly', ({ expect }) => {
+    const { cVars, vRanges } = patternMeta('?s ?p ?o FILTER EXISTS { ?w ?q ?v }');
+    expect([ ...vRanges.rangeOf('s') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
+    expect(cVars.has('s')).toBe(false);
+  });
+
+  it('unites that range with the one it binds itself', ({ expect }) => {
+    const { vRanges } = patternMeta('?s <ex://p> ?o FILTER EXISTS { ?o ?q ?v }');
+    expect([ ...vRanges.rangeOf('o') ].sort()).toEqual([ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]);
+  });
+
+  it('reads a BIND over a variable of that solution with its range', ({ expect }) => {
+    const { vRanges } = patternMeta('?s ?p ?o FILTER EXISTS { ?w ?q ?v BIND(COALESCE(?s, "x") AS ?t) }');
+    expect([ ...vRanges.rangeOf('t') ].sort()).toEqual([ 'BlankNode', 'Literal', 'NamedNode' ]);
+  });
+
+  it('sees both sides of the OPTIONAL whose condition it is in', ({ expect }) => {
+    const { vRanges } = patternMeta('?s ?p ?o OPTIONAL { ?s ?q ?v FILTER EXISTS { ?w ?r ?u } }');
+    expect(vRanges.canBind('v')).toBe(true);
   });
 });

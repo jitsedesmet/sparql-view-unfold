@@ -10,7 +10,7 @@ import { DataFactory } from 'rdf-data-factory';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
 import type { RangeSet } from './RangeSet.js';
-import type { CPMeta } from './utils/certainlyBoundVars.js';
+import type { CPMeta, VRanges } from './utils/certainlyBoundVars.js';
 import { standardExpressionRange } from './utils/certainlyBoundVars.js';
 import { freshVarGenerator } from './utils.js';
 
@@ -57,6 +57,11 @@ export interface TransformationContext {
     expression: Algebra.Expression,
     input?: CPMeta,
   ) => RangeSet;
+  /**
+   * The ranges of what the solution an EXISTS is evaluated for may bind, set while a pass works in its pattern: that
+   * solution is substituted into the pattern, so its variables can be bound anywhere there.
+   */
+  existenceScope?: VRanges;
 }
 
 /** What a rewrite configures of its {@link TransformationContext}. */

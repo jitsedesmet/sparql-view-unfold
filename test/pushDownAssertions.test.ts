@@ -1608,6 +1608,41 @@ GROUP BY ?x ( ?x AS ?y )`,
       );
     });
 
+    it('keeps a condition on a variable the solution of an EXISTS binds inside its pattern', ({ expect }) => {
+      // SPARQL 1.2 joins that solution into the pattern, so ?y is bound there, and a BIND of it is undefined.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) } }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> ?w .
+      FILTER ( SAMETERM( ?w , ?y ) )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('still pushes a condition on a variable only the pattern of an EXISTS binds', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, :c)) } }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> <ex://c> .
+      BIND( <ex://c> AS ?w )
+    }
+  }
+  )
+}`,
+      );
+    });
+
     it('re-serialises to valid SPARQL, never emitting BOUND of a term', ({ expect }) => {
       // What may not happen is substituting the term into the `BOUND` - `BOUND(<ex://c>)` does not parse -
       // so it folds to `true` instead, and that is what takes the whole `BOUND(?z) || BOUND(?x)` conjunct
@@ -3572,6 +3607,36 @@ HAVING SAMETERM( ?y , SAMPLE( ?x ) )`,
         VALUES (?x) { (:a) (:b) }
         FILTER(sameTerm(?x, :a))
       }`, 1);
+    });
+
+    it('matches a condition in an EXISTS against the solution it is evaluated for', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) }
+      }`, 1);
+    });
+
+    it('rejects a solution that matches no row of the pattern of an EXISTS', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :r ?y
+        FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) }
+      }`, 0);
+    });
+
+    it('writes no term for a variable of the pattern of an EXISTS the solution binds too', async({ expect }) => {
+      // The engine leaves out a BIND of ?w, so `BIND(:shared AS ?w)` would stop comparing it to the ?w of the solution.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :r ?w
+        FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, :shared)) }
+      }`, 0);
+    });
+
+    it('reads a BIND in an EXISTS over a variable of the solution with its range', async({ expect }) => {
+      // `COALESCE(?y, "x")` gives the IRI ?y holds, which a literal range would rule out as a subject.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :step ?y
+        FILTER EXISTS { ?z :onwards ?w BIND(COALESCE(?y, "x") AS ?t) FILTER(sameTerm(?t, ?z)) }
+      }`, 4);
     });
 
     it('keeps one solution per row of a VALUES the assertion strips every column from', async({ expect }) => {
