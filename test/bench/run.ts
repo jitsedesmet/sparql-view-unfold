@@ -53,8 +53,8 @@
  * Usage:
  *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena,qlever,blazegraph,virtuoso,graphdb]
  *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,u50,u100,u250,u500,d100,eswc] [--reps 1]
- *     [--approaches materialized,rewriting,...] [--cases lubm/Q06,...] [--preserve-cardinality]
- *     [--rdf-views generalized,standard] [--changed-only]
+ *     [--reps-below 10000] [--approaches materialized,rewriting,...] [--cases lubm/Q06,...]
+ *     [--preserve-cardinality | --paired-cardinality] [--rdf-views generalized,standard] [--changed-only]
  *     [--timeout 60000] [--out results.json]
  * `--scales` keeps, of each scheme's own scales, those it lists; without it StarBench runs xs,s,m and
  * the workloads run all of theirs.
@@ -92,8 +92,11 @@ interface RunOptions {
   approaches: string[] | undefined;
   /** Cases to run, by id (`lubm/Q06`); `undefined` runs them all. */
   cases: string[] | undefined;
-  /** Whether the rewritings run with `preserveCardinality`, counting each triple of the views once. */
-  preserveCardinality: boolean;
+  /**
+   * With which `preserveCardinality` settings the rewritings run (`true` counts each triple of the views
+   * once). Given both, each rewriting runs under both, back to back, like {@link rdfViews}.
+   */
+  cardinalities: boolean[];
   /**
    * How the mappings read the views: `generalized` keeps head terms a standard graph would not admit,
    * `standard` filters them out (`generalizedRdfView: false`). Given both, each rewriting runs under both,
@@ -103,6 +106,8 @@ interface RunOptions {
   /** With both {@link rdfViews}, whether to skip the rewritings that come out the same under both. */
   changedOnly: boolean;
   reps: number;
+  /** Repeats a query only while its first run took less than this; `undefined` always runs all `reps`. */
+  repsBelowMs: number | undefined;
   timeoutMs: number;
   out: string;
 }
@@ -154,10 +159,11 @@ function parseArgs(argv: string[]): RunOptions {
     scales: undefined,
     approaches: undefined,
     cases: undefined,
-    preserveCardinality: false,
+    cardinalities: [ false ],
     rdfViews: [ 'generalized' ],
     changedOnly: false,
     reps: 1,
+    repsBelowMs: undefined,
     timeoutMs: 60_000,
     out: join(RESULTS_DIR, 'results.json'),
   };
@@ -186,7 +192,10 @@ function parseArgs(argv: string[]): RunOptions {
         opts.cases = next().split(',');
         break;
       case '--preserve-cardinality':
-        opts.preserveCardinality = true;
+        opts.cardinalities = [ true ];
+        break;
+      case '--paired-cardinality':
+        opts.cardinalities = [ false, true ];
         break;
       case '--rdf-views':
         opts.rdfViews = next().split(',').map((view) => {
@@ -201,6 +210,9 @@ function parseArgs(argv: string[]): RunOptions {
         break;
       case '--reps':
         opts.reps = Number.parseInt(next(), 10);
+        break;
+      case '--reps-below':
+        opts.repsBelowMs = Number.parseInt(next(), 10);
         break;
       case '--timeout':
         opts.timeoutMs = Number.parseInt(next(), 10);
@@ -260,13 +272,18 @@ function makeEngine(name: string): BenchEngine {
   }
 }
 
-/** Runs a query `reps` times, returning timings + last result or a failure status. */
+/**
+ * Runs a query `reps` times, returning timings + last result or a failure status. With `repsBelowMs`, a
+ * query whose first run took that long or longer runs once: repeating it costs much and buys little,
+ * since its run-to-run noise is a small share of its time.
+ */
 async function timedRun(
   engine: BenchEngine,
   query: string,
   source: EngineSource,
   reps: number,
   timeoutMs: number,
+  repsBelowMs?: number,
 ): Promise<{ status: 'ok' | 'timeout' | 'error'; durations: number[]; result?: SelectResult; error?: string }> {
   const durations: number[] = [];
   let result: SelectResult | undefined;
@@ -274,6 +291,9 @@ async function timedRun(
     try {
       result = await engine.runSelect(query, source, timeoutMs);
       durations.push(result.durationMs);
+      if (repsBelowMs !== undefined && durations[0] >= repsBelowMs) {
+        break;
+      }
     } catch (error: unknown) {
       if (error instanceof BenchTimeoutError) {
         return { status: 'timeout', durations, error: `timeout>${timeoutMs}ms` };
@@ -461,6 +481,7 @@ async function runEngine(
         query: string;
         source: EngineSource;
         view?: RdfView;
+        preserveCardinality?: boolean;
       }
       const references: Job[] = [];
       const rewritings: Job[] = [];
@@ -481,15 +502,18 @@ async function runEngine(
         ]) {
           const pair: Job[] = [];
           for (const view of opts.rdfViews) {
-            const query = await rewrite(benchCase, variant, opts.preserveCardinality, view);
-            pair.push({ benchCase, approach, query, source, view });
+            for (const preserveCardinality of opts.cardinalities) {
+              const query = await rewrite(benchCase, variant, preserveCardinality, view);
+              pair.push({ benchCase, approach, query, source, view, preserveCardinality });
+            }
           }
           if (opts.changedOnly && pair.length > 1 && pair.every(job => job.query === pair[0].query)) {
             continue;
           }
-          // Every other case runs the pair the other way round, so that at every step neither view is always
-          // the one running on caches the near-identical query before it warmed.
-          rewritings.push(...caseIndex % 2 === 1 ? pair.reverse() : pair);
+          // Each case starts the pair one configuration further along, so that at every step no configuration
+          // is always the one running on caches the near-identical query before it warmed.
+          const shift = caseIndex % pair.length;
+          rewritings.push(...pair.slice(shift), ...pair.slice(0, shift));
         }
       }
       // Where the reference runs on data of its own (the materialised views), every reference goes first
@@ -504,12 +528,12 @@ async function runEngine(
       // JSON) and are graded once the whole block is in — the reference is whichever of
       // `materialized`/`rewriting` actually produced an answer, which is not known until both have run.
       const caseRows = new Map<string, CaseRow[]>();
-      for (const { benchCase, approach, query, source: jobSource, view } of jobs) {
-        const cell = `${benchCase.id} ${approach} ${view}`;
+      for (const { benchCase, approach, query, source: jobSource, view, preserveCardinality } of jobs) {
+        const cell = `${benchCase.id} ${approach} ${view} ${preserveCardinality}`;
         // A nested scale's data contains the earlier one's, so a query that timed out there would here too.
         const earlierTimeout = nestedScales ? timedOut.get(cell) : undefined;
         const run = earlierTimeout === undefined ?
-          await timedRun(engine, query, jobSource, opts.reps, opts.timeoutMs) :
+          await timedRun(engine, query, jobSource, opts.reps, opts.timeoutMs, opts.repsBelowMs) :
             { status: <const> 'timeout', durations: [], error: `skipped: timed out at ${earlierTimeout}` };
         if (run.status === 'timeout' && !timedOut.has(cell)) {
           timedOut.set(cell, scale);
@@ -531,7 +555,7 @@ async function runEngine(
           referenceApproach: null,
           timeoutMs: opts.timeoutMs,
           error: run.error,
-          ...opts.preserveCardinality ? { preserveCardinality: <const> true } : {},
+          ...preserveCardinality ? { preserveCardinality: <const> true } : {},
           ...view === 'standard' ? { generalizedRdfView: <const> false } : {},
         };
         rows.push(row);
@@ -540,7 +564,7 @@ async function runEngine(
         }
         caseRows.get(benchCase.id)!.push({ row, result });
         process.stderr.write(
-            `  ${benchCase.id.padEnd(22)} ${approach.padEnd(30)} ${view === 'standard' ? 'std ' : ''}${run.status.padEnd(7)} ` +
+            `  ${benchCase.id.padEnd(22)} ${approach.padEnd(30)} ${view === 'standard' ? 'std ' : ''}${preserveCardinality ? 'pc ' : ''}${run.status.padEnd(7)} ` +
             `${run.durations.length > 0 ? `${Math.round(median(run.durations))}ms` : '-'} ` +
             `rows=${result?.count ?? '-'}\n`,
         );
