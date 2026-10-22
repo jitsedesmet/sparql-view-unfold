@@ -266,7 +266,9 @@ With vectors, a join over UNIONs whose branches BIND the join variable uses, in 
 branch computed. It loses and invents rows: LUBM Q04, Q08 and Q09 after pushDownAssertions, for example. The
 wrong answers change with the vector size, and only 1 gives the right ones. Unvectorised, the rewritten queries
 run about 5× slower on LUBM and about 20× slower on OAEI. The setting applies to every store, the materialised
-views' included.
+views' included. Unvectorised execution has a bug of its own, which only the `preserveCardinality` rewrites hit:
+a join of three or more `SELECT DISTINCT` subqueries loses rows (see "Known issues"). No vector size answers
+every rewrite correctly, and the benchmark keeps 1, which gets every answer right without `preserveCardinality`.
 
 A second bug has no setting that fixes it. A `FILTER(sameTerm(?v, C))` over a UNION whose branches BIND `?v` to
 different constants is compiled as if every branch had bound `C`, so the filter keeps all the branches. The
@@ -385,6 +387,22 @@ listed here because every one of them can be misread as one.
   `VectorSize = 1` is right. With the default (1000), LUBM Q04, Q08 and Q09 after the pushdown lose and
   invent rows: Q04 at `u1` gives 672 rows where the reference has 306. The benchmark runs Virtuoso
   unvectorised (see "Setting up the engines"), which costs it 5–20× on these queries.
+- **Unvectorised, Virtuoso joins three or more `SELECT DISTINCT` subqueries wrongly, and loses rows.**
+  Over OAEI `eswc`,
+
+  ```sparql
+  SELECT DISTINCT ?s ?o WHERE {
+    { SELECT DISTINCT ?s    WHERE { ?s a conference:Track } }
+    { SELECT DISTINCT ?o ?s WHERE { ?o conference:has_tracks ?s } }
+    { SELECT DISTINCT ?o    WHERE { ?o a conference:Conference_volume } }
+  }
+  ```
+
+  returns 1 row at `VectorSize = 1` and the right 4 at the default 1000, as Oxigraph does. Any two of the
+  three subqueries are joined correctly, and so are the three without their `DISTINCT`s. Only the
+  `preserveCardinality` rewrites are built this way: with it, the pushdown's answers to LUBM Q02, Q07 and
+  Q09 and to four OAEI queries (`is_author_of_paper`, `track_of_conference`, `tutorial_of_conference`,
+  `workshop_of_conference`) lose rows, 38 cells in all. They are measured and graded wrong.
 - **Virtuoso has limits compiled in that the unoptimised rewrites exceed:**
   - the SQL a query is translated into may have at most 10,000 lines (SP031);
   - a compiled query may hold about 65,000 state slots (SQ156, "Query too large");
@@ -678,6 +696,12 @@ NODE_OPTIONS="--max-old-space-size=12000 --expose-gc" npx tsx test/bench/run.ts 
   --out test/bench/results/bench-pc-starbench.json
 NODE_OPTIONS=--max-old-space-size=12000 npx tsx test/bench/run.ts --preserve-cardinality --reps 1 \
   --engines oxigraph,jena,qlever,comunica --schemes oaei --timeout 60000 --out test/bench/results/bench-pc-oaei.json
+# Virtuoso, GraphDB and Blazegraph, one engine at a time (appended to the same file).
+for engine in virtuoso graphdb blazegraph; do
+  NODE_OPTIONS=--max-old-space-size=12000 npx tsx test/bench/run.ts --preserve-cardinality --reps 1 \
+    --engines $engine --schemes lubm,oaei --scales u1,u10,u50,u100,eswc,d100 --timeout 60000 \
+    --out test/bench/results/bench-pc-native3-$engine.json
+done
 ```
 
 ### Results
@@ -958,6 +982,16 @@ counts in parentheses):
   - But it loses 7 LUBM cells the plain rewriting answers, and rescues 4. Q02, Q05, Q07, Q08 and Q09 time out after
     the pushdown at `u1`.
   - From `u50` on, the plain rewriting answers nothing and the optimised ones answer 3–5 queries.
+  - The losses come from how GraphDB plans the flattened rewrite, as its query plan (`FROM onto:explain`)
+    shows for Q05. The rewrite joins top-level `UNION`s on a variable that each branch sets with
+    `BIND(?v AS ?uq_x)` and no triple pattern uses. GraphDB distributes the join over the `UNION`s (24 × 7 =
+    168 joins for Q05), and in each one the two sides share no variable, only the `BIND`s, so it builds
+    their cross product and compares afterwards. One of those joins takes 6.3 s, against 0.05 s written as
+    a join on a shared variable, and Q05 takes 109 s against the plain rewriting's 2.9 s. A
+    subquery boundary stops the distribution: with each top-level group wrapped in `SELECT *`, the
+    pushdown answers all 13 queries at `u1` (Q05 in 0.5 s) and 12 at `u10`, faster than the plain
+    rewriting. The `SELECT DISTINCT`s of `preserveCardinality` are such boundaries, which is why GraphDB
+    answers every LUBM query with them (see "With `preserveCardinality`").
   - `removeProjections` is GraphDB's worst pipeline: it loses 11 LUBM and 53 OAEI cells to the plain
     rewriting. Some of them ran it out of heap in the smoke tests; in this run they timed out first.
 - **Blazegraph answers nothing without the pushdown on LUBM, and nothing with the plain rewriting on
@@ -987,7 +1021,8 @@ duplicates in the first place:
 
 All three were re-run that way on 2026-10-05/06 with the same engines, scales and budgets: 4,490 rows
 in `results/results-preserve-cardinality.json` (LUBM 1,170, StarBench 720, OAEI 2,600), each marked
-`preserveCardinality: true`. The rewrites are 5–35% longer, with 2–6 `DISTINCT`s in a StarBench
+`preserveCardinality: true`; the three engines added later bring the file to 7,220 rows (see "Virtuoso,
+GraphDB and Blazegraph" below). The rewrites are 5–35% longer, with 2–6 `DISTINCT`s in a StarBench
 rewrite, and take no longer to rewrite. The `materialized` rows, whose query does not change, were
 measured again in the same runs as a control for drift between runs. Their median ratio to the
 earlier run is 0.96–1.02 on LUBM and OAEI, except Oxigraph's LUBM at 1.17. On StarBench it is 1.17
@@ -1122,6 +1157,34 @@ The `DISTINCT`s mostly eat what the later steps gain.
   8.5-million-row answer takes most of the 300 s to send (Oxigraph's go both ways). Every one of
   Comunica's eleven losses over the four steps took 215–295 s before, except `singleton/B-Q2` above.
 
+### Virtuoso, GraphDB and Blazegraph
+
+The three engines added on 2026-10-14 were run the same way on 2026-10-21, over LUBM `u1`–`u100` and
+both OAEI datasets with a 60 s budget: 2,730 rows, appended to `results/results-preserve-cardinality.json`.
+The full pipeline against itself without `preserveCardinality`:
+
+| Engine | Workload | answered | rescued – lost | paired | median time ratio | faster · slower | total, paired cells | `materialized` control |
+|---|---|---|---|---|---|---|---|---|
+| Virtuoso | LUBM | 47 → 51 | 4 – 0 | 47 | 0.50 | 34 · 1 | 166 s → 73 s | 0.81 |
+| GraphDB | LUBM | 23 → 52 | 29 – 0 | 23 | 0.47 | 15 · 5 | 146 s → 67 s | 1.06 |
+| Blazegraph | LUBM | 16 → 19 | 3 – 0 | 16 | 1.01 | 5 · 3 | 140 s → 86 s | 1.00 |
+| Virtuoso | OAEI | 126 → 127 | 1 – 0 | 126 | 0.85 | 24 · 14 | 72 s → 32 s | 0.83 |
+| GraphDB | OAEI | 122 → 129 | 8 – 1 | 121 | 0.67 | 77 · 5 | 66 s → 4.5 s | 0.89 |
+| Blazegraph | OAEI | 115 → 118 | 3 – 0 | 115 | 1.04 | 16 · 25 | 156 s → 102 s | 0.98 |
+
+- **GraphDB answers every LUBM query at every scale.** Its full pipeline answered 8, 5, 5 and 5 of 13
+  from `u1` to `u100`; with `preserveCardinality` it answers 13 at each. The pushdown alone goes from 8, 5,
+  4 and 3 to 13, 13, 13 and 11.
+  Each `SELECT DISTINCT` is a subquery boundary, so GraphDB can no longer distribute the joins over the
+  `UNION`s into cross products (see GraphDB under "Three more engines"). `removeProjections` gains as
+  much (8 → 21 LUBM cells, 75 → 127 OAEI cells), though slower than before where both finish.
+- **Virtuoso gets faster and loses rows.** Half the time on LUBM in median, but 38 of the pushdown's
+  answers lose rows to a Virtuoso bug in joining `SELECT DISTINCT` subqueries (see "Known issues"):
+  11 per pipeline on LUBM (Q02, Q07, Q09) and 8 on OAEI. Every other engine answers these rewrites
+  correctly.
+- **Blazegraph barely moves.** A few rescues, and its LUBM plain and `removeProjections` rewrites
+  still answer nothing.
+
 So `preserveCardinality` buys correct multiplicities where views overlap, and there it often pays for
 itself. Where the views are already a set, it has nothing to buy, yet the full pipeline still pays
 1.3–1.55× for it in median, partly drift, and loses much of what `pullUpExtends` gains.
@@ -1154,6 +1217,7 @@ figures from any results JSON. In summary:
 | 2026-10-05 | LUBM run once with `preserveCardinality` on all four engines (`--preserve-cardinality`): every graded answer exactly right, Q09 answered on Oxigraph and QLever at every scale, Q05 and Q13 up to 4× slower on QLever. The pay-off point barely moves (QLever 23 queries at `u50`, at most 90 at `u500`), which shows that the drop after streaming came from the large answers entering the average, not from duplicates. |
 | 2026-10-05 → 10-06 | StarBench and OAEI run once with `preserveCardinality` too. StarBench's views are already a set, so its `DISTINCT`s only cost: the full pipeline is 1.31–1.55× slower in median (up to a quarter of it drift between runs), mostly because each `DISTINCT` subquery is a boundary filters and joins cannot cross. OAEI's views overlap, so deduplicating mostly wins (`is_author_of_paper` 28× faster on Jena) and the pay-off point moves later (Jena 13 → 117 queries at `d100`). No answer changed. |
 | 2026-10-13 → 10-14 | Virtuoso 7.2.17, GraphDB 11.5.1 Free and Blazegraph 2.1.6 RC added on LUBM and OAEI, with server-wide settings only (Virtuoso unvectorised, because its vectorised joins give wrong answers; GraphDB's heap at 36 GB). The only wrong answers in the benchmark are Virtuoso's: 105 from its `sameTerm` bug, all without the pushdown. With the pushdown, Virtuoso runs at 1.4–2.5× its materialised views on LUBM and at parity on OAEI; GraphDB and Blazegraph run at up to 41× and 73× on LUBM and pay off within 14 queries. |
+| 2026-10-21 | Virtuoso, GraphDB and Blazegraph run once with `preserveCardinality` too. GraphDB's pushdown then answers all 13 LUBM queries at every scale (23 → 52 cells): its query plans show it splitting the flattened rewrite's joins into cross products, which the `DISTINCT` subqueries prevent. Virtuoso halves its LUBM time but loses rows on 38 cells, to a bug in joining three `SELECT DISTINCT` subqueries unvectorised. Blazegraph barely moves. |
 
 ## Extending
 
