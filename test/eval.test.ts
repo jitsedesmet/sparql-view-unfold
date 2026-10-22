@@ -2,12 +2,12 @@ import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import * as arrayifyStreamNS from 'arrayify-stream';
-import { Store } from 'n3';
+import { Parser, Store } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 import type { ExpectStatic } from 'vitest';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createQueryRewriter } from '../lib/queryRewriter.js';
+import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import { filterFalseTransformation } from '../lib/transformations/filterFalse.js';
 import {
   nullifyJoinOverIncompatibleBoundsTransformation,
@@ -58,6 +58,15 @@ describe('evaluation tests', () => {
     return result;
   }
 
+  async function bindings(query: string, source: string | Store = './test/statics/assertionPushdown.ttl'):
+  Promise<string[]> {
+    const rows: RDF.Bindings[] = await arrayifyStream(await engine.queryBindings(query, { sources: [ source ]}));
+    // Sorted, but duplicates kept: the multiplicity of every row is part of the answer.
+    return rows
+      .map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${value.value}`).sort().join('|'))
+      .sort();
+  }
+
   describe('rdf reification', () => {
     it ('fails without mapping', async({ expect }) => {
       const store11 = await sourceToStore([ './test/statics/singleRdfReifiedTriple.ttl' ]);
@@ -101,16 +110,6 @@ describe('evaluation tests', () => {
      */
     const pullUpPrefixes = 'PREFIX : <ex://>\n';
     const c = createTransformationContext();
-
-    async function bindings(query: string): Promise<string[]> {
-      const rows: RDF.Bindings[] = await arrayifyStream(
-        await engine.queryBindings(query, { sources: [ './test/statics/assertionPushdown.ttl' ]}),
-      );
-      // Sorted, but duplicates kept: the multiplicity of every row is part of the answer.
-      return rows
-        .map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${value.value}`).sort().join('|'))
-        .sort();
-    }
 
     async function assertEquivalent(
       expect: ExpectStatic,
@@ -220,6 +219,49 @@ describe('evaluation tests', () => {
         ?x :p ?y
         BIND(:a AS ?b)
       }`, 1);
+    });
+  });
+
+  describe('unfolding in an EXISTS', () => {
+    const prefixes = 'PREFIX : <ex://>\n';
+    const view = `${prefixes}CONSTRUCT { ?s :q ?o } WHERE { ?s :p ?o }`;
+    const data = new Store(new Parser().parse('@prefix : <ex://> . :a :p :b . :b :p :c . :c :p :d . :x :p "l" .'));
+    const viewData = sourceToStore([ data ], view);
+    const mapping = mappingFromConstructQueries([ view ]);
+    const rewriters = [
+      createQueryRewriter([ unfoldingTransformation(mapping) ]),
+      createQueryRewriter(createDefaultTransformationPipeline(mapping)),
+    ];
+
+    /**
+     * Asserts that the unfolded query over the data, optimised or not, answers what the query answers over the view.
+     * @param expect - The assertion API of the running test
+     * @param query - The query, without its prefixes
+     * @param expectedRows - The number of rows it returns
+     */
+    async function assertUnfoldsLikeView(expect: ExpectStatic, query: string, expectedRows: number): Promise<void> {
+      const overView = await bindings(prefixes + query, await viewData);
+      for (const rewriter of rewriters) {
+        expect(await bindings(await rewriter.rewriteQuery(prefixes + query), data)).toEqual(overView);
+      }
+      expect(overView).toHaveLength(expectedRows);
+    }
+
+    it('compares a variable the solution binds to the view', async({ expect }) => {
+      await assertUnfoldsLikeView(expect, 'SELECT * { ?s :q ?o FILTER EXISTS { ?o :q ?x } }', 2);
+      await assertUnfoldsLikeView(expect, 'SELECT * { ?s :q ?o FILTER NOT EXISTS { ?o :q ?x } }', 2);
+    });
+
+    it('compares it in a nested EXISTS', async({ expect }) => {
+      await assertUnfoldsLikeView(
+        expect,
+        'SELECT * { ?s :q ?o FILTER EXISTS { ?x :q ?o FILTER EXISTS { ?o :q ?y } } }',
+        2,
+      );
+    });
+
+    it('matches a variable the solution leaves unbound to anything', async({ expect }) => {
+      await assertUnfoldsLikeView(expect, 'SELECT * { ?s :q ?o OPTIONAL { ?o :q ?z } FILTER EXISTS { ?z :q ?x } }', 3);
     });
   });
 });

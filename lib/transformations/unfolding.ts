@@ -47,12 +47,14 @@ export interface UnfoldingOptions {
  * @param c - The transformation context
  * @param mapping - The mapping to unfold, its variables named apart from the operation's
  * @param input - The operation to rewrite
+ * @param inExistence - Whether the operation is in the pattern of an EXISTS
  * @returns the rewritten operation
  */
 function unfoldTriplePatternsAgainstMapping(
   c: TransformationContext,
   mapping: Mapping,
   input: Algebra.Operation,
+  inExistence = false,
 ): Algebra.Operation {
   return algebraUtils.mapOperation<'unsafe', typeof input>(
     input,
@@ -61,11 +63,21 @@ function unfoldTriplePatternsAgainstMapping(
       [Algebra.Types.BGP]: { transform: input => input.patterns.length === 0 ?
         input :
         c.AF.createJoin(
-          input.patterns.map(pattern => rewriteSinglePattern(c, pattern, mapping)),
+          input.patterns.map(pattern => rewriteSinglePattern(c, pattern, mapping, inExistence)),
           true,
         ),
       },
       [Algebra.Types.SERVICE]: { preVisitor: () => ({ continue: false }) },
+      // The pattern of an EXISTS is unfolded here, knowing it is one.
+      [Algebra.Types.EXPRESSION]: {
+        preVisitor: expression => expression.subType === Algebra.ExpressionTypes.EXISTENCE ? { continue: false } : {},
+        transform: (expression) => {
+          if (expression.subType === Algebra.ExpressionTypes.EXISTENCE) {
+            expression.input = unfoldTriplePatternsAgainstMapping(c, mapping, expression.input, true);
+          }
+          return expression;
+        },
+      },
     },
   );
 }

@@ -137,7 +137,8 @@ So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
 pattern ([spec](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution)), and leaves a BIND of a variable it
 binds undefined. So a pass reading ranges leaves EXISTS patterns to `rewriteInExistenceScopes`, which rewrites each
 with that solution as its `existenceScope`. The pushdown writes no term for one of its variables, and
-`pullUpExtends` moves no BIND of one.
+`pullUpExtends` moves no BIND of one. The unfolding follows each BIND of a pattern variable in an EXISTS with
+`FILTER(sameTerm(...))`, which compares it to the value of the solution where the engine leaves that BIND out.
 
 ## Still to settle
 
