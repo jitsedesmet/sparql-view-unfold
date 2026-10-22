@@ -9,6 +9,7 @@ import { componentOf } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import {
   cpMetaOf,
+  rewriteInExistenceScopes,
   termCertainlyEvaluates,
   withoutCpVars,
 } from '../utils/certainlyBoundVars.js';
@@ -241,7 +242,7 @@ function encodeInternalBnode(
 /**
  * Materialises every internal blank node in an operation and rewrites `ISBLANK` to recognise what they became.
  * One in an expression over the input of an EXTEND, FILTER, ORDER BY or GROUP is encoded with the ranges of that input,
- * except inside an EXISTS, which binds what it is asked for beyond those ranges.
+ * which in the pattern of an EXISTS include the solution it is evaluated for.
  * @param c - The transformation context
  * @param op - The operation to transform
  * @param materialisation - What the internal blank nodes become.
@@ -266,10 +267,8 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
     encodeArguments: (named: Algebra.NamedExpression) => Algebra.Expression,
   ): Algebra.Expression {
     return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: {
-      existence: { preVisitor: () => ({ continue: false }), transform: (existence) => {
-        existence.input = materialiseAll(existence.input, false);
-        return existence;
-      } },
+      // The pattern of an EXISTS is materialised in its own scope, by `rewriteInExistenceScopes`.
+      existence: { preVisitor: () => ({ continue: false }) },
       ...internalBnodeExpressionCallbacks(c, materialisation, encodeArguments),
     }});
   }
@@ -278,13 +277,13 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
    * Materialises the internal blank nodes in an expression over the input of an operation, binding each argument that
    * is no term to a fresh variable of that input first, so it is evaluated once rather than in every branch of its
    * encoding.
+   * @param context - The context to read the ranges of the input in.
    * @param operation - The operation, a copy of its own whose input is changed in place.
-   * @param withRanges - Whether the ranges of the input hold for the expression, not so in an EXISTS.
    * @returns What materialises an expression over the input.
    */
   function materialiserOverInputOf(
+    context: TransformationContext,
     operation: Algebra.Single,
-    withRanges: boolean,
   ): (expression: Algebra.Expression) => Algebra.Expression {
     return expression => materialiseInExpression(expression, (named) => {
       const args = named.args.map((argument) => {
@@ -295,18 +294,18 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
         operation.input = AF.createExtend(operation.input, variable, argument);
         return AF.createTermExpression(variable);
       });
-      const scope = withRanges ? cpMetaOf(c, operation.input) : undefined;
-      return encodeInternalBnode(c, AF.createNamedExpression(named.name, args), scope);
+      const scope = cpMetaOf(context, operation.input);
+      return encodeInternalBnode(context, AF.createNamedExpression(named.name, args), scope);
     });
   }
 
   /**
-   * Materialises the internal blank nodes in an operation or in the pattern of an EXISTS.
+   * Materialises the internal blank nodes in an operation, leaving an EXISTS pattern to `rewriteInExistenceScopes`.
+   * @param context - The context to read ranges in.
    * @param operation - The operation to transform.
-   * @param withRanges - Whether the ranges of an input hold for the expression over it, not so in an EXISTS.
    * @returns The transformed operation.
    */
-  function materialiseAll<O extends Algebra.Operation>(operation: O, withRanges: boolean): O {
+  function materialiseAll(context: TransformationContext, operation: Algebra.Operation): Algebra.Operation {
     /**
      * Materialises what the expressions an operation evaluates over its input hold.
      * @param key - Where the operation holds them, one expression or a list.
@@ -321,14 +320,14 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
         preVisitor: () => ({ ignoreKeys }),
         transform: (copy) => {
           const holder = <Record<typeof key, Algebra.Expression | Algebra.Expression[]>> <unknown> copy;
-          const materialise = materialiserOverInputOf(copy, withRanges);
+          const materialise = materialiserOverInputOf(context, copy);
           const held = holder[key];
           holder[key] = Array.isArray(held) ? held.map(materialise) : materialise(held);
           return copy;
         },
       };
     }
-    return algebraUtils.mapOperation<'unsafe', O>(operation, {
+    return algebraUtils.mapOperation<'unsafe', Algebra.Operation>(operation, {
       [Algebra.Types.EXTEND]: overInput('expression'),
       [Algebra.Types.FILTER]: overInput('expression'),
       [Algebra.Types.ORDER_BY]: overInput('expressions'),
@@ -338,13 +337,13 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
       [Algebra.Types.EXPRESSION]: {
         preVisitor: () => ({ continue: false }),
         transform: expression =>
-          materialiseInExpression(expression, named => encodeInternalBnode(c, named)),
+          materialiseInExpression(expression, named => encodeInternalBnode(context, named)),
       },
     });
   }
 
   // The ranges cache metadata on the copy, so it starts and ends without any.
-  return withoutCpVars(materialiseAll(withoutCpVars(op), true));
+  return withoutCpVars(rewriteInExistenceScopes(c, withoutCpVars(op), materialiseAll));
 }
 
 /** How a pipeline step materialises internal blank nodes. */

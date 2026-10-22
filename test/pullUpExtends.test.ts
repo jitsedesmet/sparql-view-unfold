@@ -881,6 +881,51 @@ ORDER BY ASC ( ?x )`,
       );
     });
 
+    it('leaves a bind in an EXISTS whose target a sibling binds to the solution of the EXISTS', ({ expect }) => {
+      // `COALESCE(?y)` gives the ?y of that solution, so ?t is bound on the left and the bind may not rise past it.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?x :p ?y FILTER EXISTS { { ?a :p ?b BIND(COALESCE(?y) AS ?t) } { ?c :q ?d BIND(:k AS ?t) } }
+        }`,
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      ?a <ex://p> ?b .
+      BIND( COALESCE( ?y ) AS ?t )
+    }
+    {
+      ?c <ex://q> ?d .
+      BIND( <ex://k> AS ?t )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('leaves a bind in an EXISTS of a variable the solution of the EXISTS binds', ({ expect }) => {
+      // The engine leaves that bind out, so ?y keeps the value of the solution, which `sameTerm(?z, ?z)` misses.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w BIND(?z AS ?y) FILTER(sameTerm(?y, ?z)) } }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      {
+        ?z <ex://q> ?w .
+        BIND( ?z AS ?y )
+      }
+      FILTER ( SAMETERM( ?y , ?z ) )
+    }
+  }
+  )
+}`,
+      );
+    });
+
     it('is a barrier at a FILTER whose EXISTS reads the variable', ({ expect }) => {
       // A term may not be written into a nested pattern: an unbound `?x` there is a variable matching
       // anything, where the term it would be replaced by matches one thing.
