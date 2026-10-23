@@ -2,8 +2,9 @@ import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
-import { triplePositions } from '../datastructures/TermClusterSet.js';
+import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import {
+  asAssertableTermType,
   blankNodeRange,
   emptyRange,
   graphRange,
@@ -18,7 +19,7 @@ import {
   tripleTermRange,
 } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
-import { constructedTermOf } from './expressionHelpers.js';
+import { constructedTermOf, splitConjunction, splitDisjunction } from './expressionHelpers.js';
 import { xsd } from './rdfDatatypes.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
@@ -123,7 +124,7 @@ function intersectRanges(inputs: readonly CPMeta[]): VRanges {
       }
     } else {
       const binders = inputs.filter(input => input.vRanges.has(name));
-      result.set(name, new RangeSet(binders.flatMap(input => [ ...input.vRanges.rangeOf(name) ])));
+      result.set(name, RangeSet.join(binders.map(input => input.vRanges.rangeOf(name))));
     }
   }
   return result;
@@ -141,7 +142,7 @@ function unionRanges(inputs: readonly CPMeta[]): VRanges {
   const names = unionSets(inputs.map(input => new Set(input.vRanges.keys())));
   for (const name of names) {
     const binders = inputs.filter(input => input.vRanges.has(name));
-    result.set(name, new RangeSet(binders.flatMap(input => [ ...input.vRanges.rangeOf(name) ])));
+    result.set(name, RangeSet.join(binders.map(input => input.vRanges.rangeOf(name))));
   }
   return result;
 }
@@ -219,7 +220,7 @@ export function standardExpressionRange(c: RangeContext, expression: Algebra.Exp
       // COALESCE gives one of its arguments, IF one of its branches, so the range is the union of theirs.
       if (expression.operator === 'coalesce' || expression.operator === 'if') {
         const choices = expression.operator === 'if' ? expression.args.slice(1) : expression.args;
-        return new RangeSet(choices.flatMap(choice => [ ...c.expressionRange(c, choice, input) ]));
+        return RangeSet.join(choices.map(choice => c.expressionRange(c, choice, input)));
       }
       return operatorRanges.get(expression.operator) ?? objectRange;
     }
@@ -300,9 +301,36 @@ function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
  * @param input - The metadata of the operation it is evaluated over
  * @returns whether it certainly evaluates
  */
-export function termCertainlyEvaluates(term: RDF.Term, input: CPMeta): boolean {
+function termCertainlyEvaluates(term: RDF.Term, input: CPMeta): boolean {
   return isSubsetOf(termVars(term), input.cVars) &&
     (term.termType !== 'Quad' || constructionCannotFail(term, input.vRanges));
+}
+
+/**
+ * Whether an expression evaluates in every solution of an operation: a term it constructs certainly evaluates, or it
+ * is `SUBJECT`, `PREDICATE` or `OBJECT` of an expression that certainly evaluates to a triple term.
+ * @param c - The context whose `expressionRange` gives what an accessor reads
+ * @param expression - The expression, like `?v`, `<<( ?s ?p ?o )>>` or `SUBJECT(?v)`
+ * @param input - The metadata of the operation it is evaluated over
+ * @returns whether it certainly evaluates, `false` where it cannot tell
+ */
+export function expressionCertainlyEvaluates(c: RangeContext, expression: Algebra.Expression, input: CPMeta): boolean {
+  // Read through {@link constructedTermOf}, so that `<<( s p o )>>` and `TRIPLE(s, p, o)` are the same fact here.
+  const constructed = constructedTermOf(expression);
+  if (constructed !== undefined) {
+    return termCertainlyEvaluates(constructed, input);
+  }
+  if (expression.subType !== ExpressionTypes.OPERATOR || !isTriplePosition(expression.operator) ||
+    expression.args.length !== 1) {
+    return false;
+  }
+  // An accessor only raises on an argument that is no triple term.
+  const [ argument ] = expression.args;
+  if (!expressionCertainlyEvaluates(c, argument, input)) {
+    return false;
+  }
+  const range = c.expressionRange(c, argument, input);
+  return range.size > 0 && isSubsetOf(range, tripleTermRange);
 }
 
 /**
@@ -391,7 +419,7 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
       const ranges = new VRanges(left.metadata.vRanges);
       for (const [ name, range ] of right.metadata.vRanges) {
         if (!left.metadata.cVars.has(name)) {
-          ranges.set(name, new RangeSet([ ...ranges.rangeOf(name), ...range ]));
+          ranges.set(name, RangeSet.join([ ranges.rangeOf(name), range ]));
         }
       }
       resOp.metadata.vRanges = ranges;
@@ -449,11 +477,7 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
       const input = withCpVars(c, resOp.input);
       const certain = new Set(input.metadata.cVars);
       const ranges = new VRanges(input.metadata.vRanges);
-      // Maybe the var we will create is also certain. Read through {@link constructedTermOf}, so that the
-      // two spellings of one construction - `<<( s p o )>>` and the `TRIPLE(s, p, o)` the parser keeps
-      // distinct from it - are the same fact here.
-      const constructed = constructedTermOf(resOp.expression);
-      if (constructed !== undefined && termCertainlyEvaluates(constructed, input.metadata)) {
+      if (expressionCertainlyEvaluates(c, resOp.expression, input.metadata)) {
         certain.add(resOp.variable.value);
       }
       resOp.metadata.cVars = certain;
@@ -469,15 +493,18 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
       // Keep in mind: Filter False is a special case.
       const input = withCpVars(c, resOp.input);
       const unbound = variablesImpliedUnboundBy(resOp.expression);
-      resOp.metadata.cVars = differenceSets(unionSets([
-        input.metadata.cVars,
-        variablesImpliedBoundBy(resOp.expression),
-      ]), unbound);
-      // A filter only drops solutions, so what survives still holds what the input put there. What the
-      // *condition* narrows is the business of the pushdown, which reads it into an assertion instead.
+      const implied = rangesImpliedBy(c, resOp.expression, input.metadata);
+      resOp.metadata.cVars = differenceSets(unionSets([ input.metadata.cVars, new Set(implied.keys()) ]), unbound);
+      // A filter only drops solutions, so what survives holds what the input put there, narrowed by what the
+      // condition confines it to. A variable out of scope stays out: the condition never holds for it.
       // A `!bound(?x)` takes `?x` out of scope entirely, as it did out of `pVars` - see the note in the
       // file header on why this is not the bottom range instead.
       const ranges = new VRanges(input.metadata.vRanges);
+      for (const [ name, range ] of implied) {
+        if (ranges.has(name)) {
+          ranges.narrow(name, range);
+        }
+      }
       for (const name of unbound) {
         ranges.delete(name);
       }
@@ -568,30 +595,68 @@ export function cpMetaOf(c: RangeContext, op: Algebra.Operation): CPMeta {
 }
 
 /**
- * Collects the variables a filter condition can only hold for when they are bound.
- * @param expression - The condition to read
- * @param agg - The variables collected so far, filled in by the recursion
- * @returns those variables
+ * The term types an operator confines a variable argument to where it holds.
+ * @param c - The context whose `expressionRange` reads the other argument of a `SAMETERM`
+ * @param expression - The operator, like `ISIRI(?x)` or `SAMETERM(?x, ?y)`
+ * @param index - The position of the variable among its arguments
+ * @param input - The metadata of the solutions it is evaluated over
+ * @returns the range, `undefined` where the operator does not confine its argument
  */
-function variablesImpliedBoundBy(expression: A.Expression, agg = new Set<string>()): Set<string> {
-  if (expression.subType !== ExpressionTypes.OPERATOR) {
-    return agg;
-  }
-  // Every conjunct of a `&&` has to hold, so each of them contributes.
-  if (expression.operator === '&&') {
-    for (const arg of expression.args) {
-      variablesImpliedBoundBy(arg, agg);
+function rangeConfinedBy(c: RangeContext, expression: A.OperatorExpression, index: number, input: CPMeta):
+RangeSet | undefined {
+  switch (expression.operator) {
+    case 'bound': {
+      // Bound to any term.
+      return objectRange;
     }
-    return agg;
+    case 'sameterm': {
+      // The same term as the other argument.
+      return c.expressionRange(c, expression.args[1 - index], input);
+    }
+    default: {
+      const termType = asAssertableTermType(expression.operator);
+      return termType === undefined ? undefined : new RangeSet([ termType ]);
+    }
   }
-  if (expression.operator === 'bound' || expression.operator === 'sameterm') {
-    for (const arg of expression.args) {
-      if (arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
-        agg.add(arg.term.value);
+}
+
+/**
+ * The variables a filter condition can only hold for when they are bound, each with the term types it confines them to.
+ * @param c - The context whose `expressionRange` reads the other argument of a `SAMETERM`
+ * @param expression - The condition to read
+ * @param input - The metadata of the solutions it is evaluated over
+ * @returns those variables with their range, a disjunction keeping only what every disjunct confines
+ */
+function rangesImpliedBy(c: RangeContext, expression: A.Expression, input: CPMeta): VRanges {
+  const implied = new VRanges();
+  const conjuncts = splitConjunction(expression);
+  if (conjuncts.length > 1) {
+    for (const conjunct of conjuncts) {
+      for (const [ name, range ] of rangesImpliedBy(c, conjunct, input)) {
+        implied.narrow(name, range);
       }
     }
+    return implied;
   }
-  return agg;
+  const disjuncts = splitDisjunction(expression);
+  if (disjuncts.length > 1) {
+    // An erroring disjunct does not fail the disjunction where another one holds.
+    const disjunctRanges = disjuncts.map(disjunct => rangesImpliedBy(c, disjunct, input));
+    for (const name of intersectSets(disjunctRanges.map(ranges => new Set(ranges.keys())))) {
+      implied.set(name, RangeSet.join(disjunctRanges.map(ranges => ranges.rangeOf(name))));
+    }
+    return implied;
+  }
+  if (expression.subType !== ExpressionTypes.OPERATOR) {
+    return implied;
+  }
+  for (const [ index, arg ] of expression.args.entries()) {
+    const range = rangeConfinedBy(c, expression, index, input);
+    if (range !== undefined && arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
+      implied.narrow(arg.term.value, range);
+    }
+  }
+  return implied;
 }
 
 /**
