@@ -15,6 +15,15 @@ export class RangeSet extends Set<RDF.Term['termType']> {
   public meet(other: RangeSet): RangeSet {
     return new RangeSet([ ...other.values() ].filter(x => this.has(x)));
   }
+
+  /**
+   * The term types any of some ranges admits.
+   * @param ranges - The ranges to join
+   * @returns a new range holding their union
+   */
+  public static join(ranges: Iterable<RangeSet>): RangeSet {
+    return new RangeSet([ ...ranges ].flatMap(range => [ ...range ]));
+  }
 }
 
 /** The term types the subject position of a triple admits: BlankNodes and NamedNodes. */

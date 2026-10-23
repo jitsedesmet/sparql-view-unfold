@@ -18,7 +18,8 @@ import {
   tripleTermRange,
 } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
-import { constructedTermOf } from './expressionHelpers.js';
+import { asAssertableTermType } from './assertions.js';
+import { constructedTermOf, splitConjunction, splitDisjunction } from './expressionHelpers.js';
 import { xsd } from './rdfDatatypes.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
@@ -123,7 +124,7 @@ function intersectRanges(inputs: readonly CPMeta[]): VRanges {
       }
     } else {
       const binders = inputs.filter(input => input.vRanges.has(name));
-      result.set(name, new RangeSet(binders.flatMap(input => [ ...input.vRanges.rangeOf(name) ])));
+      result.set(name, RangeSet.join(binders.map(input => input.vRanges.rangeOf(name))));
     }
   }
   return result;
@@ -141,7 +142,7 @@ function unionRanges(inputs: readonly CPMeta[]): VRanges {
   const names = unionSets(inputs.map(input => new Set(input.vRanges.keys())));
   for (const name of names) {
     const binders = inputs.filter(input => input.vRanges.has(name));
-    result.set(name, new RangeSet(binders.flatMap(input => [ ...input.vRanges.rangeOf(name) ])));
+    result.set(name, RangeSet.join(binders.map(input => input.vRanges.rangeOf(name))));
   }
   return result;
 }
@@ -219,7 +220,7 @@ export function standardExpressionRange(c: RangeContext, expression: Algebra.Exp
       // COALESCE gives one of its arguments, IF one of its branches, so the range is the union of theirs.
       if (expression.operator === 'coalesce' || expression.operator === 'if') {
         const choices = expression.operator === 'if' ? expression.args.slice(1) : expression.args;
-        return new RangeSet(choices.flatMap(choice => [ ...c.expressionRange(c, choice, input) ]));
+        return RangeSet.join(choices.map(choice => c.expressionRange(c, choice, input)));
       }
       return operatorRanges.get(expression.operator) ?? objectRange;
     }
@@ -325,8 +326,11 @@ export function expressionCertainlyEvaluates(c: RangeContext, expression: Algebr
   }
   // An accessor only raises on an argument that is no triple term.
   const [ argument ] = expression.args;
+  if (!expressionCertainlyEvaluates(c, argument, input)) {
+    return false;
+  }
   const range = c.expressionRange(c, argument, input);
-  return range.size > 0 && isSubsetOf(range, tripleTermRange) && expressionCertainlyEvaluates(c, argument, input);
+  return range.size > 0 && isSubsetOf(range, tripleTermRange);
 }
 
 /**
@@ -415,7 +419,7 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
       const ranges = new VRanges(left.metadata.vRanges);
       for (const [ name, range ] of right.metadata.vRanges) {
         if (!left.metadata.cVars.has(name)) {
-          ranges.set(name, new RangeSet([ ...ranges.rangeOf(name), ...range ]));
+          ranges.set(name, RangeSet.join([ ranges.rangeOf(name), range ]));
         }
       }
       resOp.metadata.vRanges = ranges;
@@ -590,16 +594,6 @@ export function cpMetaOf(c: RangeContext, op: Algebra.Operation): CPMeta {
   return withCpVars(c, op).metadata;
 }
 
-/** The term types a type test confines its argument to. */
-const typeTestRanges = new Map<string, RangeSet>([
-  [ 'isiri', iriRange ],
-  [ 'isuri', iriRange ],
-  [ 'isblank', blankNodeRange ],
-  [ 'isliteral', literalRange ],
-  [ 'isnumeric', literalRange ],
-  [ 'istriple', tripleTermRange ],
-]);
-
 /**
  * The variables a filter condition can only hold for when they are bound, each with the term types it confines them to.
  * @param expression - The condition to read
@@ -607,31 +601,35 @@ const typeTestRanges = new Map<string, RangeSet>([
  */
 function rangesImpliedBy(expression: A.Expression): VRanges {
   const implied = new VRanges();
+  const conjuncts = splitConjunction(expression);
+  if (conjuncts.length > 1) {
+    for (const conjunct of conjuncts) {
+      for (const [ name, range ] of rangesImpliedBy(conjunct)) {
+        implied.narrow(name, range);
+      }
+    }
+    return implied;
+  }
+  const disjuncts = splitDisjunction(expression);
+  if (disjuncts.length > 1) {
+    // An erroring disjunct does not fail the disjunction where another one holds.
+    const disjunctRanges = disjuncts.map(rangesImpliedBy);
+    for (const name of intersectSets(disjunctRanges.map(ranges => new Set(ranges.keys())))) {
+      implied.set(name, RangeSet.join(disjunctRanges.map(ranges => ranges.rangeOf(name))));
+    }
+    return implied;
+  }
   if (expression.subType !== ExpressionTypes.OPERATOR) {
     return implied;
   }
-  if (expression.operator === '&&') {
-    for (const [ name, range ] of expression.args.flatMap(arg => [ ...rangesImpliedBy(arg) ])) {
-      implied.narrow(name, range);
-    }
+  const termType = asAssertableTermType(expression.operator);
+  if (termType === undefined && expression.operator !== 'bound' && expression.operator !== 'sameterm') {
     return implied;
   }
-  if (expression.operator === '||') {
-    // An erroring disjunct does not fail the disjunction where another one holds.
-    const disjuncts = expression.args.map(rangesImpliedBy);
-    for (const name of intersectSets(disjuncts.map(disjunct => new Set(disjunct.keys())))) {
-      implied.set(name, new RangeSet(disjuncts.flatMap(disjunct => [ ...disjunct.rangeOf(name) ])));
-    }
-    return implied;
-  }
-  const range = expression.operator === 'bound' || expression.operator === 'sameterm' ?
-    objectRange :
-    typeTestRanges.get(expression.operator);
-  if (range !== undefined) {
-    for (const arg of expression.args) {
-      if (arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
-        implied.narrow(arg.term.value, range);
-      }
+  const range = termType === undefined ? objectRange : new RangeSet([ termType ]);
+  for (const arg of expression.args) {
+    if (arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
+      implied.narrow(arg.term.value, range);
     }
   }
   return implied;
