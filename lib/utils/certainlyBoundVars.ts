@@ -493,7 +493,7 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
       // Keep in mind: Filter False is a special case.
       const input = withCpVars(c, resOp.input);
       const unbound = variablesImpliedUnboundBy(resOp.expression);
-      const implied = rangesImpliedBy(resOp.expression);
+      const implied = rangesImpliedBy(c, resOp.expression, input.metadata);
       resOp.metadata.cVars = differenceSets(unionSets([ input.metadata.cVars, new Set(implied.keys()) ]), unbound);
       // A filter only drops solutions, so what survives holds what the input put there, narrowed by what the
       // condition confines it to. A variable out of scope stays out: the condition never holds for it.
@@ -595,27 +595,44 @@ export function cpMetaOf(c: RangeContext, op: Algebra.Operation): CPMeta {
 }
 
 /**
- * The term types a `SAMETERM` confines one argument to, given the other.
- * @param other - The other argument, absent for `BOUND`
- * @returns the type of a ground term, the top otherwise
+ * The term types an operator confines a variable argument to where it holds.
+ * @param c - The context whose `expressionRange` reads the other argument of a `SAMETERM`
+ * @param expression - The operator, like `ISIRI(?x)` or `SAMETERM(?x, ?y)`
+ * @param index - The position of the variable among its arguments
+ * @param input - The metadata of the solutions it is evaluated over
+ * @returns the range, `undefined` where the operator does not confine its argument
  */
-function sameTermRange(other: A.Expression | undefined): RangeSet {
-  return other?.subType === ExpressionTypes.TERM && other.term.termType !== 'Variable' ?
-    new RangeSet([ other.term.termType ]) :
-    objectRange;
+function rangeConfinedBy(c: RangeContext, expression: A.OperatorExpression, index: number, input: CPMeta):
+RangeSet | undefined {
+  switch (expression.operator) {
+    case 'bound': {
+      // Bound to any term.
+      return objectRange;
+    }
+    case 'sameterm': {
+      // The same term as the other argument.
+      return c.expressionRange(c, expression.args[1 - index], input);
+    }
+    default: {
+      const termType = asAssertableTermType(expression.operator);
+      return termType === undefined ? undefined : new RangeSet([ termType ]);
+    }
+  }
 }
 
 /**
  * The variables a filter condition can only hold for when they are bound, each with the term types it confines them to.
+ * @param c - The context whose `expressionRange` reads the other argument of a `SAMETERM`
  * @param expression - The condition to read
+ * @param input - The metadata of the solutions it is evaluated over
  * @returns those variables with their range, a disjunction keeping only what every disjunct confines
  */
-function rangesImpliedBy(expression: A.Expression): VRanges {
+function rangesImpliedBy(c: RangeContext, expression: A.Expression, input: CPMeta): VRanges {
   const implied = new VRanges();
   const conjuncts = splitConjunction(expression);
   if (conjuncts.length > 1) {
     for (const conjunct of conjuncts) {
-      for (const [ name, range ] of rangesImpliedBy(conjunct)) {
+      for (const [ name, range ] of rangesImpliedBy(c, conjunct, input)) {
         implied.narrow(name, range);
       }
     }
@@ -624,7 +641,7 @@ function rangesImpliedBy(expression: A.Expression): VRanges {
   const disjuncts = splitDisjunction(expression);
   if (disjuncts.length > 1) {
     // An erroring disjunct does not fail the disjunction where another one holds.
-    const disjunctRanges = disjuncts.map(rangesImpliedBy);
+    const disjunctRanges = disjuncts.map(disjunct => rangesImpliedBy(c, disjunct, input));
     for (const name of intersectSets(disjunctRanges.map(ranges => new Set(ranges.keys())))) {
       implied.set(name, RangeSet.join(disjunctRanges.map(ranges => ranges.rangeOf(name))));
     }
@@ -633,13 +650,9 @@ function rangesImpliedBy(expression: A.Expression): VRanges {
   if (expression.subType !== ExpressionTypes.OPERATOR) {
     return implied;
   }
-  const termType = asAssertableTermType(expression.operator);
-  if (termType === undefined && expression.operator !== 'bound' && expression.operator !== 'sameterm') {
-    return implied;
-  }
   for (const [ index, arg ] of expression.args.entries()) {
-    if (arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
-      const range = termType === undefined ? sameTermRange(expression.args[1 - index]) : new RangeSet([ termType ]);
+    const range = rangeConfinedBy(c, expression, index, input);
+    if (range !== undefined && arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
       implied.narrow(arg.term.value, range);
     }
   }
