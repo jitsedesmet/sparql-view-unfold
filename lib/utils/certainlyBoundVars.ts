@@ -2,7 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
-import { triplePositions } from '../datastructures/TermClusterSet.js';
+import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import {
   blankNodeRange,
   emptyRange,
@@ -300,9 +300,33 @@ function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
  * @param input - The metadata of the operation it is evaluated over
  * @returns whether it certainly evaluates
  */
-export function termCertainlyEvaluates(term: RDF.Term, input: CPMeta): boolean {
+function termCertainlyEvaluates(term: RDF.Term, input: CPMeta): boolean {
   return isSubsetOf(termVars(term), input.cVars) &&
     (term.termType !== 'Quad' || constructionCannotFail(term, input.vRanges));
+}
+
+/**
+ * Whether an expression evaluates in every solution of an operation: a term it constructs certainly evaluates, or it
+ * is `SUBJECT`, `PREDICATE` or `OBJECT` of an expression that certainly evaluates to a triple term.
+ * @param c - The context whose `expressionRange` gives what an accessor reads
+ * @param expression - The expression, like `?v`, `<<( ?s ?p ?o )>>` or `SUBJECT(?v)`
+ * @param input - The metadata of the operation it is evaluated over
+ * @returns whether it certainly evaluates, `false` where it cannot tell
+ */
+export function expressionCertainlyEvaluates(c: RangeContext, expression: Algebra.Expression, input: CPMeta): boolean {
+  // Read through {@link constructedTermOf}, so that `<<( s p o )>>` and `TRIPLE(s, p, o)` are the same fact here.
+  const constructed = constructedTermOf(expression);
+  if (constructed !== undefined) {
+    return termCertainlyEvaluates(constructed, input);
+  }
+  if (expression.subType !== ExpressionTypes.OPERATOR || !isTriplePosition(expression.operator) ||
+    expression.args.length !== 1) {
+    return false;
+  }
+  // An accessor only raises on an argument that is no triple term.
+  const [ argument ] = expression.args;
+  const range = c.expressionRange(c, argument, input);
+  return range.size > 0 && isSubsetOf(range, tripleTermRange) && expressionCertainlyEvaluates(c, argument, input);
 }
 
 /**
@@ -449,11 +473,7 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
       const input = withCpVars(c, resOp.input);
       const certain = new Set(input.metadata.cVars);
       const ranges = new VRanges(input.metadata.vRanges);
-      // Maybe the var we will create is also certain. Read through {@link constructedTermOf}, so that the
-      // two spellings of one construction - `<<( s p o )>>` and the `TRIPLE(s, p, o)` the parser keeps
-      // distinct from it - are the same fact here.
-      const constructed = constructedTermOf(resOp.expression);
-      if (constructed !== undefined && termCertainlyEvaluates(constructed, input.metadata)) {
+      if (expressionCertainlyEvaluates(c, resOp.expression, input.metadata)) {
         certain.add(resOp.variable.value);
       }
       resOp.metadata.cVars = certain;
@@ -469,15 +489,18 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
       // Keep in mind: Filter False is a special case.
       const input = withCpVars(c, resOp.input);
       const unbound = variablesImpliedUnboundBy(resOp.expression);
-      resOp.metadata.cVars = differenceSets(unionSets([
-        input.metadata.cVars,
-        variablesImpliedBoundBy(resOp.expression),
-      ]), unbound);
-      // A filter only drops solutions, so what survives still holds what the input put there. What the
-      // *condition* narrows is the business of the pushdown, which reads it into an assertion instead.
+      const implied = rangesImpliedBy(resOp.expression);
+      resOp.metadata.cVars = differenceSets(unionSets([ input.metadata.cVars, new Set(implied.keys()) ]), unbound);
+      // A filter only drops solutions, so what survives holds what the input put there, narrowed by what the
+      // condition confines it to. A variable out of scope stays out: the condition never holds for it.
       // A `!bound(?x)` takes `?x` out of scope entirely, as it did out of `pVars` - see the note in the
       // file header on why this is not the bottom range instead.
       const ranges = new VRanges(input.metadata.vRanges);
+      for (const [ name, range ] of implied) {
+        if (ranges.has(name)) {
+          ranges.narrow(name, range);
+        }
+      }
       for (const name of unbound) {
         ranges.delete(name);
       }
@@ -567,31 +590,51 @@ export function cpMetaOf(c: RangeContext, op: Algebra.Operation): CPMeta {
   return withCpVars(c, op).metadata;
 }
 
+/** The term types a type test confines its argument to. */
+const typeTestRanges = new Map<string, RangeSet>([
+  [ 'isiri', iriRange ],
+  [ 'isuri', iriRange ],
+  [ 'isblank', blankNodeRange ],
+  [ 'isliteral', literalRange ],
+  [ 'isnumeric', literalRange ],
+  [ 'istriple', tripleTermRange ],
+]);
+
 /**
- * Collects the variables a filter condition can only hold for when they are bound.
+ * The variables a filter condition can only hold for when they are bound, each with the term types it confines them to.
  * @param expression - The condition to read
- * @param agg - The variables collected so far, filled in by the recursion
- * @returns those variables
+ * @returns those variables with their range, a disjunction keeping only what every disjunct confines
  */
-function variablesImpliedBoundBy(expression: A.Expression, agg = new Set<string>()): Set<string> {
+function rangesImpliedBy(expression: A.Expression): VRanges {
+  const implied = new VRanges();
   if (expression.subType !== ExpressionTypes.OPERATOR) {
-    return agg;
+    return implied;
   }
-  // Every conjunct of a `&&` has to hold, so each of them contributes.
   if (expression.operator === '&&') {
-    for (const arg of expression.args) {
-      variablesImpliedBoundBy(arg, agg);
+    for (const [ name, range ] of expression.args.flatMap(arg => [ ...rangesImpliedBy(arg) ])) {
+      implied.narrow(name, range);
     }
-    return agg;
+    return implied;
   }
-  if (expression.operator === 'bound' || expression.operator === 'sameterm') {
+  if (expression.operator === '||') {
+    // An erroring disjunct does not fail the disjunction where another one holds.
+    const disjuncts = expression.args.map(rangesImpliedBy);
+    for (const name of intersectSets(disjuncts.map(disjunct => new Set(disjunct.keys())))) {
+      implied.set(name, new RangeSet(disjuncts.flatMap(disjunct => [ ...disjunct.rangeOf(name) ])));
+    }
+    return implied;
+  }
+  const range = expression.operator === 'bound' || expression.operator === 'sameterm' ?
+    objectRange :
+    typeTestRanges.get(expression.operator);
+  if (range !== undefined) {
     for (const arg of expression.args) {
       if (arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
-        agg.add(arg.term.value);
+        implied.narrow(arg.term.value, range);
       }
     }
   }
-  return agg;
+  return implied;
 }
 
 /**

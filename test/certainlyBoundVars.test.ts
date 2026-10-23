@@ -393,3 +393,45 @@ describe('the range of a service variable', () => {
     expect(meta.cVars.has('x')).toBe(false);
   });
 });
+
+describe('what a filter confines', () => {
+  /** The certainty and the range of `?x` after `FILTER(condition)` over `?s ?p ?x`. */
+  function filtered(condition: string): { certain: boolean; range: string[] } {
+    const meta = withCpVars(c, parseQuery(c, `SELECT * { OPTIONAL { ?s ?p ?x } FILTER(${condition}) }`)).metadata;
+    return { certain: meta.cVars.has('x'), range: [ ...meta.vRanges.rangeOf('x') ].sort() };
+  }
+
+  it.for<[string, boolean, string[]]>([
+    [ 'ISTRIPLE(?x)', true, [ 'Quad' ]],
+    [ 'ISIRI(?x) || ISBLANK(?x)', true, [ 'BlankNode', 'NamedNode' ]],
+    [ 'BOUND(?x) && ISLITERAL(?x)', true, [ 'Literal' ]],
+    [ 'SAMETERM(?x, ?s) || ISIRI(?x)', true, [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]],
+    [ 'ISIRI(?x) || BOUND(?s)', false, [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]],
+    [ '!ISIRI(?x)', false, [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]],
+  ])('reads %s', ([ condition, certain, range ], { expect }) => {
+    expect(filtered(condition)).toEqual({ certain, range });
+  });
+
+  it('leaves a variable out of scope out of scope', ({ expect }) => {
+    const meta = withCpVars(c, parseQuery(c, 'SELECT * { ?s ?p ?o FILTER(ISIRI(?x)) }')).metadata;
+    expect(meta.vRanges.has('x')).toBe(false);
+  });
+});
+
+describe('the target of an accessor BIND', () => {
+  /** Whether `?a` is certain in `query`. */
+  function certain(query: string): boolean {
+    return withCpVars(c, parseQuery(c, query)).metadata.cVars.has('a');
+  }
+
+  it.for<[string, boolean]>([
+    [ 'SELECT * { { ?t ?p ?o FILTER(ISTRIPLE(?o)) } BIND(SUBJECT(?o) AS ?a) }', true ],
+    [ 'SELECT * { { ?t ?p ?o FILTER(ISTRIPLE(?o)) } BIND(SUBJECT(OBJECT(?o)) AS ?a) }', false ],
+    [ 'SELECT * { ?t ?p ?o BIND(SUBJECT(?o) AS ?a) }', false ],
+    [ 'SELECT * { OPTIONAL { ?t ?p ?o } BIND(SUBJECT(?o) AS ?a) }', false ],
+    [ 'SELECT * { { ?x ?p ?s FILTER(ISIRI(?s)) } BIND(SUBJECT(<<( ?s <ex://q> ?x )>>) AS ?a) }', true ],
+    [ 'SELECT * { ?x ?p ?s BIND(SUBJECT(<<( ?s <ex://q> ?x )>>) AS ?a) }', false ],
+  ])('reads %s', ([ query, expected ], { expect }) => {
+    expect(certain(query)).toBe(expected);
+  });
+});
