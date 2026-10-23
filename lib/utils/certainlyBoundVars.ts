@@ -4,6 +4,7 @@ import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transform
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
 import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import {
+  asAssertableTermType,
   blankNodeRange,
   emptyRange,
   graphRange,
@@ -18,7 +19,6 @@ import {
   tripleTermRange,
 } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
-import { asAssertableTermType } from './assertions.js';
 import { constructedTermOf, splitConjunction, splitDisjunction } from './expressionHelpers.js';
 import { xsd } from './rdfDatatypes.js';
 import type { SSet } from './setUtils.js';
@@ -595,6 +595,17 @@ export function cpMetaOf(c: RangeContext, op: Algebra.Operation): CPMeta {
 }
 
 /**
+ * The term types a `SAMETERM` confines one argument to, given the other.
+ * @param other - The other argument, absent for `BOUND`
+ * @returns the type of a ground term, the top otherwise
+ */
+function sameTermRange(other: A.Expression | undefined): RangeSet {
+  return other?.subType === ExpressionTypes.TERM && other.term.termType !== 'Variable' ?
+    new RangeSet([ other.term.termType ]) :
+    objectRange;
+}
+
+/**
  * The variables a filter condition can only hold for when they are bound, each with the term types it confines them to.
  * @param expression - The condition to read
  * @returns those variables with their range, a disjunction keeping only what every disjunct confines
@@ -626,9 +637,9 @@ function rangesImpliedBy(expression: A.Expression): VRanges {
   if (termType === undefined && expression.operator !== 'bound' && expression.operator !== 'sameterm') {
     return implied;
   }
-  const range = termType === undefined ? objectRange : new RangeSet([ termType ]);
-  for (const arg of expression.args) {
+  for (const [ index, arg ] of expression.args.entries()) {
     if (arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
+      const range = termType === undefined ? sameTermRange(expression.args[1 - index]) : new RangeSet([ termType ]);
       implied.narrow(arg.term.value, range);
     }
   }

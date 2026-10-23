@@ -405,7 +405,9 @@ describe('what a filter confines', () => {
     [ 'ISTRIPLE(?x)', true, [ 'Quad' ]],
     [ 'ISIRI(?x) || ISBLANK(?x)', true, [ 'BlankNode', 'NamedNode' ]],
     [ 'BOUND(?x) && ISLITERAL(?x)', true, [ 'Literal' ]],
+    [ 'SAMETERM(?x, "l")', true, [ 'Literal' ]],
     [ 'SAMETERM(?x, ?s) || ISIRI(?x)', true, [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]],
+    [ 'SAMETERM(?x, <ex://a>) || ISBLANK(?x)', true, [ 'BlankNode', 'NamedNode' ]],
     [ 'ISIRI(?x) || BOUND(?s)', false, [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]],
     [ '!ISIRI(?x)', false, [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]],
   ])('reads %s', ([ condition, certain, range ], { expect }) => {

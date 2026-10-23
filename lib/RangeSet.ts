@@ -97,3 +97,30 @@ export function rangeOfPosition(position: 'object' | 'predicate' | 'subject'): R
     }
   }
 }
+
+/**
+ * The term types a SPARQL condition names with a predicate of its own, and so the ones an assertion can be
+ * about. `isNUMERIC` is not one: it asks after the datatype of a literal rather than after a kind of term.
+ */
+export type AssertableTermType = 'BlankNode' | 'Literal' | 'NamedNode' | 'Quad';
+
+/** The predicate a condition states a term type with, which is also how one is written back. */
+export const termTypePredicates: Readonly<Record<AssertableTermType, string>> = {
+  NamedNode: 'isiri',
+  BlankNode: 'isblank',
+  Literal: 'isliteral',
+  Quad: 'istriple',
+};
+
+/** The term types, in the order a term type test writes them, so that one range is always written one way. */
+export const assertableTermTypes = <AssertableTermType[]> Object.keys(termTypePredicates);
+
+/**
+ * The term type a predicate states, `isURI` reading as the `isIRI` it is a synonym of.
+ * @param operator - The operator of a unary condition
+ * @returns the term type it states, or `undefined` for anything that is not one of them
+ */
+export function asAssertableTermType(operator: string): AssertableTermType | undefined {
+  const termAssertion = operator === 'isuri' ? 'isiri' : operator;
+  return assertableTermTypes.find(termType => termTypePredicates[termType] === termAssertion);
+}
