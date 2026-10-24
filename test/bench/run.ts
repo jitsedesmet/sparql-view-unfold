@@ -59,6 +59,7 @@
  * `--scales` keeps, of each scheme's own scales, those it lists; without it StarBench runs xs,s,m and
  * the workloads run all of theirs.
  */
+import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,7 +77,7 @@ import {
 } from './engines.js';
 import type { BenchEngine, EngineSource, SelectResult } from './engines.js';
 import type { BenchCase, RewriteVariant } from './runner.js';
-import { rewriteToSparql11, sameSolutions } from './runner.js';
+import { rewriteToSparql11 } from './runner.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SUBSET_DIR = join(HERE, 'subsets');
@@ -336,36 +337,56 @@ async function main(): Promise<void> {
  */
 interface CaseRow {
   row: ResultRow;
-  result?: SelectResult;
+  answer?: AnswerDigest;
 }
 
 function grade(caseRows: CaseRow[]): void {
-  let reference: (CaseRow & { result: SelectResult }) | undefined;
+  let reference: (CaseRow & { answer: AnswerDigest }) | undefined;
   for (const approach of <const>[ 'materialized', 'rewriting' ]) {
     const candidate = caseRows.find(r => r.row.approach === approach);
-    if (candidate?.result) {
-      reference = { ...candidate, result: candidate.result };
+    if (candidate?.answer) {
+      reference = { ...candidate, answer: candidate.answer };
       break;
     }
   }
   if (!reference) {
     return;
   }
-  const referenceSet = distinct(reference.result.rows);
-  for (const { row, result } of caseRows) {
+  for (const { row, answer } of caseRows) {
     row.referenceApproach = reference.row.approach;
-    const judged = row !== reference.row && result !== undefined;
-    row.correct = judged ? sameSolutions(result, reference.result) : null;
-    row.correctAsSet = judged ? sameRowSet(distinct(result.rows), referenceSet) : null;
+    const judged = row !== reference.row && answer !== undefined;
+    row.correct = judged ? answer.count === reference.answer.count && answer.bag === reference.answer.bag : null;
+    row.correctAsSet = judged ? answer.set === reference.answer.set : null;
   }
 }
 
-function distinct(rows: string[]): Set<string> {
-  return new Set(rows);
+/**
+ * What grading keeps of an answer until its case is graded: its size, and a hash of its rows as a bag and as
+ * a set. Keeping the rows themselves ran out of memory: a block's answers are all held until its last case
+ * has run, and StarBench's F-Q3 answers 8.5 million rows for each of the nine approaches.
+ * The rows come canonicalised and sorted (see `engines.ts`), so equal bag hashes mean the element-wise
+ * equality `sameSolutions` tests, and skipping a row equal to the one before it hashes the distinct rows.
+ */
+interface AnswerDigest {
+  count: number;
+  bag: string;
+  set: string;
 }
 
-function sameRowSet(a: Set<string>, b: Set<string>): boolean {
-  return a.size === b.size && [ ...a ].every(row => b.has(row));
+function digest(result: SelectResult): AnswerDigest {
+  const bag = createHash('sha256');
+  const set = createHash('sha256');
+  let previous: string | undefined;
+  for (const row of result.rows) {
+    // Length-prefixed, so no two different row lists hash the same input.
+    const entry = `${row.length}:${row}`;
+    bag.update(entry);
+    if (row !== previous) {
+      set.update(entry);
+      previous = row;
+    }
+  }
+  return { count: result.count, bag: bag.digest('hex'), set: set.digest('hex') };
 }
 
 /** StarBench's default scales, as before the other workloads were added. */
@@ -562,7 +583,7 @@ async function runEngine(
         if (!caseRows.has(benchCase.id)) {
           caseRows.set(benchCase.id, []);
         }
-        caseRows.get(benchCase.id)!.push({ row, result });
+        caseRows.get(benchCase.id)!.push({ row, answer: result && digest(result) });
         process.stderr.write(
             `  ${benchCase.id.padEnd(22)} ${approach.padEnd(30)} ${view === 'standard' ? 'std ' : ''}${preserveCardinality ? 'pc ' : ''}${run.status.padEnd(7)} ` +
             `${run.durations.length > 0 ? `${Math.round(median(run.durations))}ms` : '-'} ` +
