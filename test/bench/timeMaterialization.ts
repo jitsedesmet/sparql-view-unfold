@@ -19,6 +19,7 @@
  * neither approach errored. A timed-out row counts at its budget. Where the rewriting timed out the saving is
  * understated, so the count is an upper bound (`rewritingCensored`); where the materialised query did, the
  * saving is overstated and the count a lower bound (`materializedCensored`). With both, it is neither.
+ * Rewritings run with and without `preserveCardinality` get a count each (`off`, `on`).
  *
  * Comunica's materialisation of LUBM's larger scales is skipped unless asked for with `--include-slow`: it
  * took 4 hours at `u50` and over 13 at `u100` (2026-09-30), where the other engines need minutes, and the
@@ -85,6 +86,7 @@ interface ResultRow {
   status: 'ok' | 'timeout' | 'error';
   medianMs: number;
   timeoutMs: number;
+  preserveCardinality?: boolean;
 }
 
 function option(name: string, fallback: string): string {
@@ -265,14 +267,20 @@ async function measure(): Promise<void> {
   }
 }
 
-/** Queries after which building the views once and querying them beats `pullUpExtends`, or null if never. */
-function breakEven(rows: ResultRow[], buildMs: number): {
+/**
+ * Queries after which building the views once and querying them beats `pullUpExtends` with or without
+ * `preserveCardinality`, or null if never.
+ */
+function breakEven(rows: ResultRow[], buildMs: number, preserveCardinality: boolean): {
   queries: number | null;
   rewritingCensored: boolean;
   materializedCensored: boolean;
 } {
   const byCase = new Map<string, Record<string, ResultRow>>();
   for (const row of rows) {
+    if (row.approach !== 'materialized' && Boolean(row.preserveCardinality) !== preserveCardinality) {
+      continue;
+    }
     byCase.set(row.caseId, { ...byCase.get(row.caseId), [row.approach]: row });
   }
   const time = (row: ResultRow): number => row.status === 'ok' ? row.medianMs : row.timeoutMs;
@@ -318,7 +326,7 @@ function analyse(resultsFile: string): void {
       fastestMethod: fastest.method,
       buildMs: Math.round(fastest.totalMs),
       storeBytes: fastest.storeBytes,
-      breakEven: breakEven(rows, fastest.totalMs),
+      breakEven: { off: breakEven(rows, fastest.totalMs, false), on: breakEven(rows, fastest.totalMs, true) },
     };
   });
   process.stdout.write(`${JSON.stringify(analysis, null, 2)}\n`);

@@ -54,7 +54,7 @@
  *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena,qlever,blazegraph,virtuoso,graphdb]
  *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,u50,u100,u250,u500,d100,eswc] [--reps 1]
  *     [--reps-below 10000] [--approaches materialized,rewriting,...] [--cases lubm/Q06,...]
- *     [--preserve-cardinality | --paired-cardinality] [--rdf-views generalized,standard] [--changed-only]
+ *     [--preserve-cardinality | --paired-cardinality] [--rdf-views standard,generalized] [--changed-only]
  *     [--timeout 60000] [--out results.json]
  * `--scales` keeps, of each scheme's own scales, those it lists; without it StarBench runs xs,s,m and
  * the workloads run all of theirs.
@@ -99,9 +99,9 @@ interface RunOptions {
    */
   cardinalities: boolean[];
   /**
-   * How the mappings read the views: `generalized` keeps head terms a standard graph would not admit,
-   * `standard` filters them out (`generalizedRdfView: false`). Given both, each rewriting runs under both,
-   * back to back.
+   * How the mappings read the views: `standard` (the library's default, `generalizedRdfView: false`)
+   * filters out head terms a standard graph would not admit, `generalized` keeps them. Given both, each
+   * rewriting runs under both, back to back.
    */
   rdfViews: RdfView[];
   /** With both {@link rdfViews}, whether to skip the rewritings that come out the same under both. */
@@ -161,7 +161,7 @@ function parseArgs(argv: string[]): RunOptions {
     approaches: undefined,
     cases: undefined,
     cardinalities: [ false ],
-    rdfViews: [ 'generalized' ],
+    rdfViews: [ 'standard' ],
     changedOnly: false,
     reps: 1,
     repsBelowMs: undefined,
