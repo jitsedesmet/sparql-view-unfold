@@ -37,3 +37,6 @@ test/bench/results/figures/
 test/bench/workloads/*/data/
 # StarBench's subsets, and the stores the engines bulk-load beside them (see ManagedServerEngine).
 test/bench/subsets/
+# The overview page is built from results.json by test/bench/overview/{analyse,build}.mjs.
+test/bench/overview/overview-data.json
+test/bench/overview/*.out.html

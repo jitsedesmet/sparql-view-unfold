@@ -1,0 +1,1112 @@
+<title>SPARQL Bench Diff</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap">
+<style>
+:root {
+  --bg: #f4f5f2;
+  --surface: #fdfdfb;
+  --surface-2: #eceeea;
+  --line: #dde0da;
+  --line-strong: #c3c7c0;
+  --ink: #14181a;
+  --ink-2: #4b5350;
+  --muted: #767e7a;
+  --accent: #0f6f63;
+  --accent-soft: #dcefe9;
+  --ok: #0ca30c;
+  --dup: #9bd59b;
+  --wrong: #d03b3b;
+  --err: #ec835a;
+  --to: #bcc0ba;
+  --ungraded: #8fb3d9;
+  --n4: #0d366b; --n4f: #ffffff;
+  --n3: #1c5cab; --n3f: #ffffff;
+  --n2: #5598e7; --n2f: #0b0b0b;
+  --n1: #c6dcf6; --n1f: #0b0b0b;
+  --z:  #e7e6e1; --zf: #0b0b0b;
+  --p1: #f6cfc6; --p1f: #0b0b0b;
+  --p2: #e8907c; --p2f: #0b0b0b;
+  --p3: #c4493a; --p3f: #ffffff;
+  --p4: #861f17; --p4f: #ffffff;
+  --s1: #d6ede7; --s1f: #0b0b0b;
+  --s2: #a2d5c9; --s2f: #0b0b0b;
+  --s3: #4fae9c; --s3f: #0b0b0b;
+  --s4: #1d7a6b; --s4f: #ffffff;
+  --shadow: 0 1px 2px rgba(20, 24, 26, 0.05), 0 6px 20px rgba(20, 24, 26, 0.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0e1110;
+    --surface: #161a19;
+    --surface-2: #1d2220;
+    --line: #2a302d;
+    --line-strong: #3b423f;
+    --ink: #e8ecea;
+    --ink-2: #b9c1bd;
+    --muted: #89928e;
+    --accent: #52d1bd;
+    --accent-soft: #143430;
+    --ok: #0ca30c;
+    --dup: #3f7d3f;
+    --wrong: #e66767;
+    --err: #ec835a;
+    --to: #4a504d;
+    --ungraded: #4f78a6;
+    --n4: #a9cbf5; --n4f: #0b0b0b;
+    --n3: #4a8fe0; --n3f: #0b0b0b;
+    --n2: #22508f; --n2f: #ffffff;
+    --n1: #1b2d44; --n1f: #e8ecea;
+    --z:  #2b2e2b; --zf: #e8ecea;
+    --p1: #45251f; --p1f: #e8ecea;
+    --p2: #8c3527; --p2f: #ffffff;
+    --p3: #dd6150; --p3f: #0b0b0b;
+    --p4: #f6b0a3; --p4f: #0b0b0b;
+    --s1: #17332e; --s1f: #e8ecea;
+    --s2: #1f5a4f; --s2f: #ffffff;
+    --s3: #2f8d7c; --s3f: #0b0b0b;
+    --s4: #74d3c0; --s4f: #0b0b0b;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.3);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e1110;
+  --surface: #161a19;
+  --surface-2: #1d2220;
+  --line: #2a302d;
+  --line-strong: #3b423f;
+  --ink: #e8ecea;
+  --ink-2: #b9c1bd;
+  --muted: #89928e;
+  --accent: #52d1bd;
+  --accent-soft: #143430;
+  --ok: #0ca30c;
+  --dup: #3f7d3f;
+  --wrong: #e66767;
+  --err: #ec835a;
+  --to: #4a504d;
+  --ungraded: #4f78a6;
+  --n4: #a9cbf5; --n4f: #0b0b0b;
+  --n3: #4a8fe0; --n3f: #0b0b0b;
+  --n2: #22508f; --n2f: #ffffff;
+  --n1: #1b2d44; --n1f: #e8ecea;
+  --z:  #2b2e2b; --zf: #e8ecea;
+  --p1: #45251f; --p1f: #e8ecea;
+  --p2: #8c3527; --p2f: #ffffff;
+  --p3: #dd6150; --p3f: #0b0b0b;
+  --p4: #f6b0a3; --p4f: #0b0b0b;
+  --s1: #17332e; --s1f: #e8ecea;
+  --s2: #1f5a4f; --s2f: #ffffff;
+  --s3: #2f8d7c; --s3f: #0b0b0b;
+  --s4: #74d3c0; --s4f: #0b0b0b;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+body::before {
+  content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10;
+  background: var(--surface);
+}
+code, .mono, .num { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+code { font-size: 0.88em; background: var(--surface-2); border-radius: 4px; padding: 0.06em 0.3em; }
+a { color: var(--accent); }
+h1, h2, h3 { text-wrap: balance; line-height: 1.2; margin: 0; }
+p { margin: 0; }
+
+.gutter {
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1180px; margin: 0 auto; }
+
+/* Sticky bar: section nav and the one global switch. */
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.bar .wrap { display: flex; align-items: center; gap: 16px; padding-block: 8px; }
+.bar .brand { font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 13px; white-space: nowrap; }
+.bar nav { flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.bar nav::-webkit-scrollbar { display: none; }
+.bar nav ul { display: flex; gap: 2px; list-style: none; margin: 0; padding: 0; }
+.bar nav a {
+  display: block; padding: 6px 9px; border-radius: 6px; font-size: 13px; color: var(--ink-2);
+  text-decoration: none; white-space: nowrap;
+}
+.bar nav a:hover { background: var(--surface-2); color: var(--ink); }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; padding: 2px; gap: 2px; flex: none; }
+.seg button {
+  font: inherit; font-size: 12.5px; border: 0; background: transparent; color: var(--ink-2);
+  padding: 4px 9px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+}
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--surface); }
+.seg-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.switch { display: flex; align-items: center; gap: 8px; flex: none; }
+@media (max-width: 720px) {
+  .bar .wrap { flex-wrap: wrap; gap: 6px 12px; }
+  .bar nav { order: 3; flex-basis: 100%; }
+  .bar .brand { display: none; }
+}
+
+header.top { padding-block: 44px 28px; }
+.eyebrow { font-family: "IBM Plex Mono", monospace; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+header.top h1 { font-size: clamp(28px, 4.2vw, 42px); font-weight: 600; margin-top: 12px; max-width: 24ch; letter-spacing: -0.01em; }
+.lead { font-size: 17px; color: var(--ink-2); max-width: 68ch; margin-top: 16px; }
+
+section.block { padding-block: 40px; border-top: 1px solid var(--line); scroll-margin-top: 64px; }
+section.block > .wrap > h2 { font-size: 24px; font-weight: 600; letter-spacing: -0.005em; }
+.kicker { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--accent); letter-spacing: 0.04em; margin-bottom: 8px; text-transform: uppercase; }
+.intro { color: var(--ink-2); max-width: 70ch; margin-top: 10px; }
+.intro + .intro { margin-top: 8px; }
+.prose { max-width: 70ch; display: grid; gap: 10px; color: var(--ink-2); }
+.prose strong { color: var(--ink); font-weight: 600; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+/* Findings */
+.findings { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 14px; margin-top: 22px; }
+.finding { padding: 18px 20px 16px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.finding .big { font-size: 34px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.05; }
+.finding .big small { font-size: 15px; font-weight: 500; color: var(--muted); letter-spacing: 0; margin-left: 4px; }
+.finding h3 { font-size: 15.5px; font-weight: 600; }
+.finding p { color: var(--ink-2); font-size: 14.5px; }
+.finding a.more { font-size: 13px; text-decoration: none; margin-top: 2px; }
+.finding a.more::after { content: " →"; }
+.finding.wide { grid-column: 1 / -1; }
+@media (min-width: 760px) {
+  .finding.wide { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); column-gap: 32px; }
+  .finding.wide .big { grid-column: 1; grid-row: 1; }
+  .finding.wide h3 { grid-column: 1; grid-row: 2; }
+  .finding.wide p { grid-column: 2; grid-row: 1 / span 2; align-self: start; }
+  .finding.wide a.more { grid-column: 2; grid-row: 3; }
+}
+
+/* Setup */
+.setup { display: grid; gap: 14px; margin-top: 22px; grid-template-columns: repeat(12, 1fr); }
+.setup > * { min-width: 0; }
+.setup .approaches { grid-column: span 12; padding: 20px; }
+.setup .workloads { grid-column: span 7; padding: 20px; }
+.setup .protocol { grid-column: span 5; padding: 20px; }
+@media (max-width: 900px) { .setup .workloads, .setup .protocol { grid-column: span 12; } }
+.setup h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+.ladder { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr; gap: 8px; align-items: stretch; }
+.ladder .step { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--surface-2); min-width: 0; }
+.ladder .step b { display: block; font-family: "IBM Plex Mono", monospace; font-size: 12.5px; font-weight: 600; word-break: break-word; }
+.ladder .step span { display: block; font-size: 13px; color: var(--ink-2); margin-top: 4px; }
+.ladder .step i { display: block; font-style: normal; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+.ladder .arrow { align-self: center; color: var(--muted); font-size: 18px; }
+.ladder .step.key { border-color: var(--accent); background: var(--accent-soft); }
+@media (max-width: 760px) {
+  .ladder { grid-template-columns: 1fr; }
+  .ladder .arrow { transform: rotate(90deg); justify-self: center; }
+}
+.versus { display: flex; gap: 12px; align-items: flex-start; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.versus .step { border: 1px dashed var(--line-strong); border-radius: 10px; padding: 10px 12px; min-width: 0; flex: 1 1 260px; }
+.versus .step b { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; }
+.versus .step span { display: block; font-size: 13px; color: var(--ink-2); margin-top: 2px; }
+.engine-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.chip { font-size: 12.5px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; background: var(--surface-2); white-space: nowrap; }
+.chip.dim { color: var(--muted); }
+ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--ink-2); font-size: 14px; }
+
+/* Tables and grids */
+.scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 18px; }
+table { border-collapse: separate; border-spacing: 0; font-size: 13.5px; }
+table.grid { min-width: 100%; }
+.grid th, .grid td { padding: 0; }
+.grid thead th { font-weight: 500; color: var(--muted); font-size: 12px; text-align: center; padding: 4px 2px 6px; vertical-align: bottom; white-space: nowrap; }
+.grid thead th.group { color: var(--ink-2); font-weight: 600; font-size: 12.5px; border-bottom: 1px solid var(--line-strong); padding-bottom: 5px; }
+.grid thead th .q { display: block; font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--muted); font-weight: 400; }
+.grid tbody th { text-align: left; font-weight: 500; padding: 0 14px 0 0; white-space: nowrap; font-size: 13.5px; }
+.grid tbody th small { display: block; color: var(--muted); font-weight: 400; font-size: 11.5px; }
+.grid td.gap, .grid th.gap { width: 14px; min-width: 14px; }
+.cell {
+  margin: 1px; border-radius: 6px; min-width: 70px; height: 46px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center; cursor: default; outline-offset: 1px;
+  background: var(--surface-2); color: var(--ink);
+}
+.cell:focus-visible { outline: 2px solid var(--accent); }
+.cell .v { font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 13.5px; line-height: 1.15; }
+.cell .s { font-size: 10.5px; line-height: 1.2; opacity: 0.85; font-family: "IBM Plex Mono", monospace; }
+.cell.empty { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
+.cell.none { background: transparent; color: var(--muted); }
+.d-4 { background: var(--n4); color: var(--n4f); } .d-3 { background: var(--n3); color: var(--n3f); }
+.d-2 { background: var(--n2); color: var(--n2f); } .d-1 { background: var(--n1); color: var(--n1f); }
+.d0 { background: var(--z); color: var(--zf); }
+.d1 { background: var(--p1); color: var(--p1f); } .d2 { background: var(--p2); color: var(--p2f); }
+.d3 { background: var(--p3); color: var(--p3f); } .d4 { background: var(--p4); color: var(--p4f); }
+.q1 { background: var(--s1); color: var(--s1f); } .q2 { background: var(--s2); color: var(--s2f); }
+.q3 { background: var(--s3); color: var(--s3f); } .q4 { background: var(--s4); color: var(--s4f); }
+
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 14px; font-size: 12.5px; color: var(--ink-2); }
+.legend .scale { display: inline-flex; gap: 2px; align-items: center; }
+.legend .sw { width: 30px; height: 14px; border-radius: 3px; display: inline-block; }
+.legend .ticks { display: flex; gap: 2px; font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--muted); }
+.legend .ticks span { width: 30px; text-align: center; }
+.legend .key { display: inline-flex; align-items: center; gap: 6px; }
+.legend .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.note { font-size: 13px; color: var(--muted); max-width: 80ch; margin-top: 10px; }
+
+/* Answered bars */
+.ans { margin: 1px; padding: 6px 8px; border-radius: 6px; min-width: 104px; background: var(--surface-2); display: grid; gap: 5px; }
+.ans .v { font-family: "IBM Plex Mono", monospace; font-size: 13px; font-weight: 600; }
+.ans .v small { font-weight: 400; color: var(--muted); }
+.bars { display: flex; gap: 2px; height: 7px; }
+.bars span { border-radius: 2px; min-width: 0; }
+.ans.ref { background: transparent; border: 1px solid var(--line); }
+.flag { color: var(--wrong); font-weight: 600; }
+
+/* Correctness table */
+table.plain { width: 100%; }
+table.plain th, table.plain td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+table.plain th:first-child, table.plain td:first-child { text-align: left; }
+table.plain thead th { font-size: 12px; font-weight: 500; color: var(--muted); }
+table.plain thead th.group { color: var(--ink-2); font-weight: 600; text-align: center; border-bottom: 1px solid var(--line-strong); }
+table.plain td.num { font-variant-numeric: tabular-nums; }
+table.plain tr.wl td { font-weight: 600; color: var(--ink-2); background: var(--surface-2); text-align: left; font-size: 12.5px; }
+td.bad { color: var(--wrong); font-weight: 600; }
+td.zero { color: var(--muted); }
+
+/* Explorer */
+.controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: end; margin-top: 18px; }
+.controls label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.controls select {
+  font: inherit; font-size: 14px; padding: 6px 28px 6px 10px; border-radius: 8px; border: 1px solid var(--line-strong);
+  background: var(--surface); color: var(--ink); min-width: 150px;
+}
+table.qx th, table.qx td { padding: 0; }
+table.qx thead th { font-size: 12px; font-weight: 500; color: var(--muted); text-align: center; padding: 4px 4px 6px; white-space: nowrap; }
+table.qx tbody th { text-align: left; font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: 12.5px; padding-right: 12px; white-space: nowrap; }
+table.qx td.ref { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-2); text-align: right; padding-right: 10px; white-space: nowrap; }
+.qc { margin: 1px; height: 34px; min-width: 96px; border-radius: 5px; display: flex; align-items: center; justify-content: center; gap: 5px; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+:where(.qc) { background: var(--surface-2); }
+.qc.base { background: transparent; border: 1px solid var(--line); }
+.qc .b { font-size: 10.5px; font-weight: 600; border-radius: 3px; padding: 0 4px; background: var(--surface); color: var(--ink); }
+.dag { color: var(--muted); font-weight: 400; }
+.qc .b.w { background: var(--wrong); color: #fff; }
+.qc.to, .qc.sk { color: var(--muted); background: transparent; border: 1px dashed var(--line-strong); }
+.qc.er { color: var(--err); background: transparent; border: 1px dashed var(--err); }
+.qsum { font-size: 13px; color: var(--ink-2); margin-top: 12px; }
+
+/* Engines */
+.engines { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); gap: 14px; margin-top: 22px; }
+.engine { padding: 16px 18px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.engine h3 { font-size: 16px; font-weight: 600; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.engine h3 small { font-family: "IBM Plex Mono", monospace; font-weight: 400; font-size: 12px; color: var(--muted); }
+.engine .cfg { font-size: 13px; color: var(--muted); }
+.engine ul { margin: 0; padding-left: 18px; display: grid; gap: 5px; font-size: 13.5px; color: var(--ink-2); }
+.tag { display: inline-block; font-size: 11px; font-weight: 600; border-radius: 4px; padding: 0 5px; margin-right: 4px; vertical-align: 1px; }
+.tag.bug { background: var(--wrong); color: #fff; }
+.tag.limit { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line-strong); }
+
+details.method { margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+details.method summary { cursor: pointer; padding: 12px 16px; font-weight: 600; font-size: 14.5px; }
+details.method > div { padding: 0 16px 16px; display: grid; gap: 10px; color: var(--ink-2); max-width: 78ch; font-size: 14px; }
+pre.cmd { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; margin: 0; }
+
+footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); }
+
+#tip {
+  position: fixed; z-index: 50; pointer-events: none; max-width: min(340px, calc(100vw - 24px));
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 8px;
+  box-shadow: var(--shadow); padding: 9px 11px; font-size: 12.5px; line-height: 1.45;
+}
+#tip b { font-weight: 600; }
+#tip .t { font-weight: 600; margin-bottom: 4px; }
+#tip .m { color: var(--muted); }
+#tip table td { padding: 1px 10px 1px 0; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; }
+</style>
+
+<div class="bar gutter">
+  <div class="wrap">
+    <span class="brand">SPARQL Bench Diff</span>
+    <nav aria-label="Sections"><ul>
+      <li><a href="#findings">Findings</a></li>
+      <li><a href="#setup">Setup</a></li>
+      <li><a href="#passes">Passes</a></li>
+      <li><a href="#answered">Answered</a></li>
+      <li><a href="#cost">Cost</a></li>
+      <li><a href="#payoff">Pay-off</a></li>
+      <li><a href="#correct">Correctness</a></li>
+      <li><a href="#cardinality">preserveCardinality</a></li>
+      <li><a href="#queries">Per query</a></li>
+      <li><a href="#engines">Engines</a></li>
+      <li><a href="#method">Method</a></li>
+    </ul></nav>
+    <div class="switch" title="Which rewrites the Passes, Answered, Cost, Pay-off and Per query views show">
+      <span class="seg-label">preserveCardinality</span>
+      <div class="seg" role="group" aria-label="preserveCardinality">
+        <button type="button" data-pc="off" aria-pressed="true">off</button>
+        <button type="button" data-pc="on" aria-pressed="false">on</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<header class="top gutter">
+  <div class="wrap">
+    <div class="eyebrow" id="provenance">Benchmark overview</div>
+    <h1>Pushing assertions down makes the rewrite usable; the engine decides the rest</h1>
+    <p class="lead">
+      A query over virtual RDF views can be answered by <b>rewriting</b> it into a query over the source data,
+      or by <b>materialising</b> the views first and querying those. This page compares the two on three
+      workloads and seven SPARQL engines: one consistent run of every engine, rewriter version and setting,
+      measured 22–26 October 2026.
+    </p>
+  </div>
+</header>
+
+<section class="block gutter" id="findings">
+  <div class="wrap">
+    <div class="kicker">Findings</div>
+    <h2>What the run shows</h2>
+    <div class="findings" id="findings-grid">
+      <div class="card finding">
+        <div class="big">÷24 – ÷1,150 <small>on OAEI</small></div>
+        <h3>Pushing assertions down is the pass that makes the rewrite work</h3>
+        <p>On OAEI it makes every engine 24 to 1,150 times faster than the pipeline before it; on LUBM 2 to 80 times. On QLever, and on Virtuoso and Blazegraph for LUBM, the pipelines before it answer nothing at all.</p>
+        <a class="more" href="#passes">Each pass, per engine</a>
+      </div>
+      <div class="card finding">
+        <div class="big">×0.7 – ×3.2 <small>on OAEI</small></div>
+        <h3>Translating vocabularies costs little over materialised views</h3>
+        <p>On OAEI the full pipeline runs within about three times the materialised views on every engine, and on Oxigraph and Jena at par. Each query touches a few of 148 views, and the pushdown turns them into indexed lookups.</p>
+        <a class="more" href="#cost">Cost per engine and scale</a>
+      </div>
+      <div class="card finding">
+        <div class="big">×0.8 – ×362 <small>on LUBM</small></div>
+        <h3>Reasoning by rewriting depends on the engine</h3>
+        <p>On LUBM the same rewrites run at par with the materialised views on Oxigraph, about five times slower on Virtuoso, and 13 to 76 times slower on QLever as data grows to 500 universities. Jena goes from 6 times slower at one university to 362 times at a hundred.</p>
+        <a class="more" href="#cost">Cost per engine and scale</a>
+      </div>
+      <div class="card finding">
+        <div class="big">≈14 <small>queries, median</small></div>
+        <h3>Materialising usually pays off within tens of queries</h3>
+        <p>Building the views once beats rewriting after a median of about 14 queries across the 44 engine-and-scale cells. Oxigraph is the exception: on LUBM from 50 universities up, the rewrite is faster on average, so the build never pays off.</p>
+        <a class="more" href="#payoff">Pay-off per engine and scale</a>
+      </div>
+      <div class="card finding">
+        <div class="big">0 <small>wrong answers from the rewriter</small></div>
+        <h3>Every wrong answer is a Virtuoso bug</h3>
+        <p>All 283 wrong answers come from two Virtuoso bugs, both reproduced in isolation. With <code>preserveCardinality</code> on, every other answer is exact, except on StarBench queries whose hand-written reference is itself broken; there all engines return the same row count. With it off, LUBM answers repeat rows the views derive more than once.</p>
+        <a class="more" href="#correct">Correctness per engine</a>
+      </div>
+      <div class="card finding">
+        <div class="big">23 → 52 <small>GraphDB, LUBM</small></div>
+        <h3><code>preserveCardinality</code> rescues GraphDB, is neutral on LUBM and OAEI, and costs on StarBench</h3>
+        <p>Its <code>DISTINCT</code> subqueries stop GraphDB from turning the joins into cross products, so it answers every LUBM query. On LUBM and OAEI it changes other engines' times by ÷1.2 to ×1.2, and it speeds Virtuoso up only on the plans that hit its row-losing bug. On StarBench it makes every engine 1.2 to 1.4 times slower and changes no answer.</p>
+        <a class="more" href="#cardinality">The option per engine</a>
+      </div>
+      <div class="card finding wide">
+        <div class="big">÷4 – ÷8 <small>on StarBench</small></div>
+        <h3>On StarBench the pushdown matters as much, and hand-written SPARQL stays ahead</h3>
+        <p>Pushing assertions down makes Oxigraph, Jena and Comunica 4 to 8 times faster on SPARQL 1.2 queries over reification and singleton properties. Comunica then answers 22 of 24 reification queries instead of 12. The full pipeline still runs 4 to 10 times behind a hand-written query on Oxigraph and Jena (reification), and 25 to 33 times on Comunica.</p>
+        <a class="more" href="#passes">Each pass, per engine</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="block gutter" id="setup">
+  <div class="wrap">
+    <div class="kicker">Setup</div>
+    <h2>What is compared, on what, and how</h2>
+    <div class="setup">
+      <div class="card approaches">
+        <h3>Four rewrite pipelines, each the one before plus one pass</h3>
+        <div class="ladder">
+          <div class="step"><i>1</i><b>rewriting</b><span>Unfold every view the query touches into a UNION of its CONSTRUCT bodies, with <code>FILTER(sameTerm(…))</code> for every constant.</span></div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="step"><i>2</i><b>+removeProjections</b><span>Flatten the sub-<code>SELECT</code> each view branch is wrapped in.</span></div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="step key"><i>3</i><b>+pushDownAssertions</b><span>Push each <code>sameTerm</code> filter into the triple patterns, turning a scan into an indexed lookup.</span></div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="step"><i>4</i><b>+pullUpExtends</b><span>Float the <code>BIND</code>s the pushdown leaves at every leaf back up, or drop them.</span></div>
+        </div>
+        <div class="versus">
+          <div class="step"><b>materialised</b> <span>The reference. LUBM and OAEI: the original query over the views, materialised ahead of time (the build time is measured separately). StarBench: a hand-written SPARQL 1.1 query over the source.</span></div>
+          <div class="step"><b>preserveCardinality</b> <span>A rewriter option that wraps each view pattern in <code>SELECT DISTINCT</code>, so duplicates the views would not produce do not appear. Every rewrite runs with it off and on, back to back.</span></div>
+        </div>
+      </div>
+      <div class="card workloads">
+        <h3>Three workloads</h3>
+        <div class="scroll" style="margin-top:0"><table class="plain" id="workload-table"></table></div>
+      </div>
+      <div class="card protocol">
+        <h3>Protocol</h3>
+        <ul class="plain">
+          <li><b>Engines:</b> <span class="engine-chips" id="engine-chips"></span></li>
+          <li>StarBench needs SPARQL 1.2, so it runs on Oxigraph, Jena and Comunica only. LUBM <code>u250</code>/<code>u500</code> run on QLever only.</li>
+          <li><b>Budget:</b> 60 s per query for LUBM and OAEI, 300 s for StarBench. A query that timed out at one LUBM scale is not run at the larger ones (the data nests).</li>
+          <li><b>Repeats:</b> a query that finishes under 10 s runs 3 times and reports the median; a slower one runs once. Timeouts are never repeated.</li>
+          <li><b>Views:</b> the standard RDF view (<code>generalizedRdfView: false</code>), the library's default.</li>
+          <li><b>Grading:</b> every answer is compared with the reference as a bag (<i>exact</i>) and as a set (<i>same rows</i>, possibly repeated). StarBench ships some broken reference queries; answers that differ from those are marked as such, not as wrong.</li>
+          <li>Materialisation build times are from the earlier measurement (<code>materialization.json</code>); the rewriter does not affect them.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="block gutter" id="passes">
+  <div class="wrap">
+    <div class="kicker">Question 1</div>
+    <h2>Does each pass help?</h2>
+    <p class="intro">Each pass against the pipeline without it, on the same queries: the geometric mean of the time ratio over the queries both answered, all scales of a workload pooled. Where the earlier pipeline answered none of them there is no ratio, and the cell shows how many more queries the pass made answerable.</p>
+    <div class="scroll"><table class="grid" id="passes-grid"></table></div>
+    <div class="legend" data-legend="div"></div>
+    <p class="note" id="passes-note"></p>
+  </div>
+</section>
+
+<section class="block gutter" id="answered">
+  <div class="wrap">
+    <div class="kicker">Question 2</div>
+    <h2>What can each engine answer within the budget?</h2>
+    <p class="intro">Queries answered, timed out or failed, per pipeline, all scales of a workload pooled (a query at two scales counts twice). Wrong answers are marked in red; they are counted as answered.</p>
+    <div class="scroll"><table class="grid" id="answered-grid"></table></div>
+    <div class="legend">
+      <span class="key"><span class="dot" style="background:var(--ok)"></span>answered</span>
+      <span class="key"><span class="dot" style="background:var(--wrong)"></span>answered, wrong</span>
+      <span class="key"><span class="dot" style="background:var(--to)"></span>timed out</span>
+      <span class="key"><span class="dot" style="background:var(--err)"></span>engine error</span>
+    </div>
+  </div>
+</section>
+
+<section class="block gutter" id="cost">
+  <div class="wrap">
+    <div class="kicker">Question 3</div>
+    <h2>How far is the full pipeline from the materialised reference?</h2>
+    <p class="intro">The full pipeline (<code>+pullUpExtends</code>) against the reference, per scale: the geometric mean of the time ratio over the queries both answered. Below it, how many queries the rewrite answered. For StarBench the reference is the hand-written query over the same data, so there is no build to amortise.</p>
+    <div class="scroll"><table class="grid" id="cost-grid"></table></div>
+    <div class="legend" data-legend="div"></div>
+    <p class="note">StarBench singleton: nine of the twelve reference queries ask a different question, so only <code>B-Q1</code>, <code>B-Q3</code> and <code>F-Q2</code> are compared. A mean over the queries both answered flatters the side that answers fewer: hard queries the other side fails to answer drop out. Compare the two <code>preserveCardinality</code> settings in the <a href="#cardinality">preserveCardinality</a> section, where they are paired query by query.</p>
+  </div>
+</section>
+
+<section class="block gutter" id="payoff">
+  <div class="wrap">
+    <div class="kicker">Question 4</div>
+    <h2>After how many queries does materialising pay off?</h2>
+    <p class="intro">The build time (the faster of CONSTRUCT-then-load and INSERT, per engine) divided by the average time each query saves over the full pipeline. Timeouts count at the budget, so where the rewrite timed out the saving is understated and the count is an upper bound (≤); where the materialised query did, a lower bound (≥).</p>
+    <div class="scroll"><table class="grid" id="payoff-grid"></table></div>
+    <div class="legend">
+      <span class="key"><span class="sw q4" style="width:18px;height:12px;border-radius:3px;display:inline-block"></span>under 10 queries</span>
+      <span class="key"><span class="sw q3" style="width:18px;height:12px;border-radius:3px;display:inline-block"></span>10–99</span>
+      <span class="key"><span class="sw q2" style="width:18px;height:12px;border-radius:3px;display:inline-block"></span>100–999</span>
+      <span class="key"><span class="sw q1" style="width:18px;height:12px;border-radius:3px;display:inline-block"></span>1,000 or more</span>
+      <span class="key"><span class="sw" style="width:18px;height:12px;border-radius:3px;display:inline-block;border:1px dashed var(--line-strong)"></span>never: the rewrite is faster on average</span>
+    </div>
+  </div>
+</section>
+
+<section class="block gutter" id="correct">
+  <div class="wrap">
+    <div class="kicker">Question 5</div>
+    <h2>Are the answers right?</h2>
+    <div class="prose" id="correct-prose">
+      <p><strong>The rewriter gave no wrong answer on any engine but Virtuoso, and Virtuoso's come from two bugs, each reproduced on a minimal query.</strong></p>
+      <p><strong>A filter dropped (pipelines 1–2).</strong> Virtuoso drops <code>FILTER(sameTerm(?o, C))</code> over a <code>UNION</code> whose branches bind <code>?o</code> to different constants, and returns the whole union: many OAEI queries come back with 8,699 or 80,393 rows whatever they ask. <code>?o = C</code> is answered correctly, and the pushdown removes these filters.</p>
+      <p><strong>Rows lost (pipelines 3–4, <code>preserveCardinality</code> on).</strong> Joining three or more <code>SELECT DISTINCT</code> subqueries loses rows at <code>VectorSize = 1</code>. The default vector size answers those correctly but has a bug of its own on the rewrites without the option, so no setting is right for every rewrite. The benchmark keeps 1.</p>
+      <p><strong>Repeats are expected.</strong> With <code>preserveCardinality</code> off, a LUBM fact the ontology derives in several ways appears several times. The rows are right; their multiplicity is not.</p>
+      <p><strong>Some of StarBench's references are broken.</strong> Nine of its twelve hand-written singleton queries ask a different question than the SPARQL 1.2 query: other IRIs or concepts, or a missing pattern. The <code>F-Q1</code> and <code>F-Q2</code> references of both encodings return one variable too many (<code>SELECT *</code>). Answers that differ from these references are counted as <i>broken ref.</i>, not wrong. All 373 such answers return the same number of rows on every engine and every pipeline. The nine singleton queries are also left out of every time comparison with the reference.</p>
+    </div>
+    <div class="scroll"><table class="plain" id="correct-table"></table></div>
+    <p class="note">All four pipelines counted together. <i>Exact</i>: the same rows the same number of times. <i>Repeats</i>: the same rows, some repeated (expected with <code>preserveCardinality</code> off, as the views overlap). <i>Ungraded</i>: the reference itself timed out; the row count is then checked against the other engines' references. <i>Broken ref.</i>: differs from a StarBench reference known to be broken.</p>
+  </div>
+</section>
+
+<section class="block gutter" id="cardinality">
+  <div class="wrap">
+    <div class="kicker">Question 6</div>
+    <h2>What does <code>preserveCardinality</code> change?</h2>
+    <div class="prose" id="pc-prose">
+      <p>The option wraps each view's pattern in <code>SELECT DISTINCT</code>, so an answer holds a row as often as the virtual graph would. Every rewrite ran both ways, back to back.</p>
+      <p><strong>GraphDB is where it matters.</strong> Without it, GraphDB distributes a join over the top-level <code>UNION</code>s of the rewrite. Each distributed join then shares no variable, only two <code>BIND</code>s, and becomes a cross product. The subqueries block that, and GraphDB answers all 52 LUBM queries instead of 23.</p>
+      <p><strong>On LUBM and OAEI it is otherwise close to neutral.</strong> It helps where the views overlap and duplicates multiply, and costs a little where a large pattern meets a selective one. Virtuoso runs LUBM 2.7 times faster with it, but in the form that loses rows.</p>
+      <p><strong>On StarBench it only costs.</strong> With it on, the full pipeline is 1.2 to 1.4 times slower on all three engines, and it changes no answer: StarBench's views never produce a row twice, so there are no repeats to remove. Most of the difference shows at the last pass: <code>+pullUpExtends</code> gains ÷1.1 to ÷1.6 with the option off, but only ÷1.05 to ÷1.3 with it on.</p>
+    </div>
+    <div class="scroll"><table class="grid" id="pc-grid"></table></div>
+    <div class="legend" data-legend="div" data-faster="on is faster" data-slower="on is slower"></div>
+    <p class="note">The full pipeline with the option on against off, paired query by query: the geometric mean over the queries both settings answered, all scales pooled. Below it, queries answered off → on.</p>
+  </div>
+</section>
+
+<section class="block gutter" id="queries">
+  <div class="wrap">
+    <div class="kicker">Detail</div>
+    <h2>Every query</h2>
+    <p class="intro">One engine, workload and scale at a time. Each cell is the median time, coloured by its ratio to the reference. Hover or tap a cell for the row counts and the engine's message.</p>
+    <div class="controls">
+      <label>Engine <select id="qx-engine"></select></label>
+      <label>Workload <select id="qx-workload"></select></label>
+      <label>Scale <select id="qx-scale"></select></label>
+    </div>
+    <p class="qsum" id="qx-sum"></p>
+    <div class="scroll"><table class="qx" id="qx-table"></table></div>
+    <div class="legend" data-legend="div" data-faster="faster than the reference" data-slower="slower"></div>
+    <div class="legend">
+      <span class="key"><span class="b" style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;background:var(--surface-2);border-radius:3px;padding:0 4px">rep</span>same rows, some repeated</span>
+      <span class="key"><span class="b" style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;background:var(--wrong);color:#fff;border-radius:3px;padding:0 4px">wrong</span>wrong answer</span>
+      <span class="key"><span class="b" style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;background:var(--surface-2);border-radius:3px;padding:0 4px">?</span>ungraded: the reference timed out</span>
+      <span class="key"><span class="b" style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;background:var(--surface-2);border-radius:3px;padding:0 4px">†</span>differs from a broken StarBench reference</span>
+    </div>
+  </div>
+</section>
+
+<section class="block gutter" id="engines">
+  <div class="wrap">
+    <div class="kicker">Engines</div>
+    <h2>Configuration, limits and bugs</h2>
+    <p class="intro">Every engine runs with server-wide settings only: no per-query hints or pragmas.</p>
+    <div class="engines" id="engine-cards">
+      <div class="card engine">
+        <h3>Oxigraph <small>0.5.11</small></h3>
+        <div class="cfg">RocksDB store built with <code>oxigraph load</code>, served read-only.</div>
+        <ul>
+          <li><span class="tag limit">limit</span>Its own materialised reference times out on six LUBM queries at <code>u50</code>/<code>u100</code> (the views graph is 1.4 times the source), where the rewrite answers. Those answers are ungraded; with <code>preserveCardinality</code> on their row counts match QLever's and Jena's references.</li>
+        </ul>
+      </div>
+      <div class="card engine">
+        <h3>Jena Fuseki <small>6.3.0-SNAPSHOT</small></h3>
+        <div class="cfg">TDB2 store built with <code>tdb2.tdbloader --loader=parallel</code>. A nightly: no release has the ARQ triple-term fix StarBench needs.</div>
+        <ul>
+          <li><span class="tag limit">limit</span>The two pipelines before the pushdown time out on 9 of 13 LUBM queries from <code>u50</code> up.</li>
+        </ul>
+      </div>
+      <div class="card engine">
+        <h3>QLever <small>build 8303d22 · 30 Sep 2026</small></h3>
+        <div class="cfg">Index built with <code>qlever-index</code>; query memory capped at 12 GB.</div>
+        <ul>
+          <li><span class="tag limit">limit</span>No <code>sameTerm</code>, so pipelines 1–2 fail on every query; the pushdown removes the function.</li>
+          <li><span class="tag limit">limit</span>LUBM Q09 without <code>preserveCardinality</code> runs out of the 12 GB query memory from <code>u10</code> up.</li>
+          <li>No RDF 1.2, so no StarBench. The only engine run at <code>u250</code> and <code>u500</code>.</li>
+        </ul>
+      </div>
+      <div class="card engine">
+        <h3>Virtuoso <small>7.2.17 open source</small></h3>
+        <div class="cfg"><code>VectorSize = 1</code>, <code>MaxMemPoolSize = 16G</code>, 50 M result rows allowed. Data in a named graph, which every query sets as its default graph.</div>
+        <ul>
+          <li><span class="tag bug">bug</span><code>FILTER(sameTerm(?o, C))</code> over a <code>UNION</code> that binds <code>?o</code> to different constants is dropped: wrong answers at pipelines 1–2.</li>
+          <li><span class="tag bug">bug</span>At <code>VectorSize = 1</code>, a join of three or more <code>SELECT DISTINCT</code> subqueries loses rows: 38 wrong answers with <code>preserveCardinality</code> on.</li>
+          <li><span class="tag bug">bug</span>At the default vector size, a join over <code>UNION</code>s that bind the join variable takes another branch's values; this is why it runs at 1, costing 5 to 20 times the speed.</li>
+          <li><span class="tag limit">limit</span>Compiled-in limits: generated SQL over 10,000 lines (SP031), too many state slots (SQ156). These reject the larger rewrites before the pushdown.</li>
+        </ul>
+      </div>
+      <div class="card engine">
+        <h3>GraphDB <small>11.5.1 Free</small></h3>
+        <div class="cfg">RDF4J 5.3.1 underneath; empty ruleset (no inference); 36 GB heap.</div>
+        <ul>
+          <li><span class="tag limit">limit</span>Distributes a join over top-level <code>UNION</code>s (24 × 7 = 168 groups for LUBM Q05). Where the join key is only set by <code>BIND</code>, each group becomes a cross product. <code>preserveCardinality</code>'s subqueries stop it.</li>
+          <li>Without the option, <code>+removeProjections</code> exposes that shape: on OAEI it answers fewer queries than plain rewriting.</li>
+        </ul>
+      </div>
+      <div class="card engine">
+        <h3>Blazegraph <small>2.1.6 RC</small></h3>
+        <div class="cfg">Triples mode, default settings, on Java 21.</div>
+        <ul>
+          <li><span class="tag limit">limit</span>The optimiser puts patterns joined only through <code>BIND</code>-computed variables first, which makes cross products: most LUBM queries time out even after the pushdown.</li>
+          <li><span class="tag limit">limit</span>Its stack overflows on the deeply nested plans before the pushdown.</li>
+        </ul>
+      </div>
+      <div class="card engine">
+        <h3>Comunica <small>5.4.0</small></h3>
+        <div class="cfg">A long-lived worker per dataset: HDT (5.0.1) for LUBM and OAEI, an in-memory N3 store for StarBench.</div>
+        <ul>
+          <li><span class="tag limit">limit</span>Materialising is very slow: 4 hours at <code>u50</code> and 13 at <code>u100</code>, against minutes elsewhere. That is why its pay-off counts run into the hundreds.</li>
+          <li><span class="tag limit">limit</span>On StarBench it answers 4 to 12 of 24 queries before the pushdown and 18 to 22 after it. Many answers sit near the 300 s budget: re-running the singleton <code>s</code> block turned 5 of its first run's timeouts into answers taking 108 to 288 s.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="block gutter" id="method">
+  <div class="wrap">
+    <div class="kicker">Method</div>
+    <h2>How the numbers are made</h2>
+    <details class="method" open>
+      <summary>How a cell is computed</summary>
+      <div>
+        <p><b>Paired, per query.</b> Every comparison is between two variants on the same query at the same scale. The cell shows the geometric mean of the time ratio over the queries both answered; the tooltip adds the median, the 10th–90th percentiles, and a win count.</p>
+        <p><b>Timeouts are censored, not dropped.</b> A query one side answered and the other timed out on counts as a win for the side that answered, but adds no ratio. A query either side failed on with an engine error is left out and counted.</p>
+        <p><b>Ties.</b> Within 10% counts as a tie: about the drift seen between runs of the same query.</p>
+        <p><b>Pooling.</b> Where a cell pools scales, each query at each scale counts once. LUBM queries skipped at a larger scale, because they timed out at a smaller one, count as timeouts.</p>
+        <p><b>Pay-off.</b> Build time divided by the mean saving per query of the materialised query over the full pipeline, over the queries neither errored on, with timeouts at the budget.</p>
+      </div>
+    </details>
+    <details class="method">
+      <summary>What is new in this version of the page</summary>
+      <div>
+        <p>Every number now comes from one run: the same rewriter (commit <code>20181c2</code>), the same harness and the same settings for every engine, measured 22–26 October 2026. The earlier page combined runs from late September to mid-October across rewriter versions, with drift of up to 1.25 times between runs.</p>
+        <ul class="plain">
+          <li><b>Standard RDF view</b> (<code>generalizedRdfView: false</code>), the library's default, where earlier numbers used the generalised view.</li>
+          <li><b><code>preserveCardinality</code> on and off back to back</b> per query, alternating which goes first, rather than in separate runs.</li>
+          <li><b>Median of three</b> for queries under 10 s. Absolute times are lower than in earlier runs, the materialised reference's included. Compare ratios within this page, not times across pages.</li>
+          <li>A machine restart cut off Comunica's singleton <code>s</code> block; that block was re-run whole.</li>
+          <li>Grading keeps a hash of each answer instead of its rows. Same verdicts, but StarBench's 8.5-million-row answers no longer exhaust memory (commit <code>9249d80</code>).</li>
+        </ul>
+      </div>
+    </details>
+    <details class="method">
+      <summary>Not measured</summary>
+      <div>
+        <ul class="plain">
+          <li>StarBench on QLever, Virtuoso, GraphDB and Blazegraph: none supports SPARQL 1.2.</li>
+          <li>StarBench's larger scales (<code>m</code>, <code>l</code>), and LUBM above <code>u100</code> on any engine but QLever.</li>
+          <li>The library's default pipeline (<code>createDefaultTransformationPipeline</code>): the ladder isolates one pass at a time instead.</li>
+          <li>Cold-cache timings: every engine is warm after loading, and fast queries report the median of three runs.</li>
+        </ul>
+      </div>
+    </details>
+    <details class="method">
+      <summary>Reproducing it</summary>
+      <div>
+        <p>Per engine, from the repository root, with the engines set up as in <code>test/bench/README.md</code>:</p>
+        <pre class="cmd">npx tsx test/bench/run.ts --engines oxigraph --schemes lubm,oaei \
+  --scales u1,u10,u50,u100,eswc,d100 --timeout 60000 \
+  --rdf-views standard --paired-cardinality --reps 3 --reps-below 10000 \
+  --out test/bench/results/bench-campaign-oxigraph-workloads.json
+
+npx tsx test/bench/run.ts --engines oxigraph --schemes reification,singleton \
+  --scales xs,s --timeout 300000 \
+  --rdf-views standard --paired-cardinality --reps 3 --reps-below 10000 \
+  --out test/bench/results/bench-campaign-oxigraph-starbench.json</pre>
+      </div>
+    </details>
+  </div>
+</section>
+
+<footer class="gutter"><div class="wrap" id="foot"></div></footer>
+<div id="tip" hidden></div>
+
+<script>
+const D = /*__DATA__*/null;
+
+// ---------- labels and lookups ----------
+const ENGINE_ORDER = [ 'oxigraph', 'jena', 'qlever', 'virtuoso', 'graphdb', 'blazegraph', 'comunica' ];
+const ENGINE = { oxigraph: 'Oxigraph', jena: 'Jena', qlever: 'QLever', virtuoso: 'Virtuoso', graphdb: 'GraphDB', blazegraph: 'Blazegraph', comunica: 'Comunica' };
+const WORKLOAD = { lubm: 'LUBM', oaei: 'OAEI Conference', reification: 'StarBench · reification', singleton: 'StarBench · singleton' };
+const WORKLOAD_SHORT = { lubm: 'LUBM', oaei: 'OAEI', reification: 'Star · reif.', singleton: 'Star · single.' };
+const WORKLOAD_ORDER = [ 'lubm', 'oaei', 'reification', 'singleton' ];
+const SCALE_ORDER = D.dict.scales;
+const RUNGS = [ 'rewriting', 'rewriting+removeProjections', 'rewriting+pushDownAssertions', 'rewriting+pullUpExtends' ];
+const RUNG = { 'rewriting': 'rewriting', 'rewriting+removeProjections': '+removeProjections', 'rewriting+pushDownAssertions': '+pushDownAssertions', 'rewriting+pullUpExtends': '+pullUpExtends' };
+const RUNG_SHORT = { 'rewriting': 'rewriting', 'rewriting+removeProjections': '+removeProj.', 'rewriting+pushDownAssertions': '+pushDown', 'rewriting+pullUpExtends': '+pullUp' };
+const FINAL = 'rewriting+pullUpExtends';
+
+const S = {};
+for (const s of D.summary) ((S[s.engine] ??= {})[s.workload] ??= {})[s.scale] = s;
+const P = {};
+for (const p of D.pooled) (P[p.engine] ??= {})[p.workload] = p;
+const scalesOf = w => SCALE_ORDER.filter(sc => D.summary.some(s => s.workload === w && s.scale === sc));
+const enginesOf = w => ENGINE_ORDER.filter(e => P[e]?.[w]);
+const workloads = WORKLOAD_ORDER.filter(w => D.pooled.some(p => p.workload === w));
+const quadsOf = (w, sc) => D.summary.find(s => s.workload === w && s.scale === sc)?.quads;
+
+let pc = 'off';
+try { if (localStorage.getItem('pc') === 'on') pc = 'on'; } catch (e) {}
+
+// ---------- formatting ----------
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const nf = new Intl.NumberFormat('en');
+function compact(n) {
+  if (n == null) return '–';
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'k';
+  return String(n);
+}
+function ratio(r) {
+  if (r == null) return '–';
+  const f = r >= 1 ? r : 1 / r;
+  const s = f >= 100 ? nf.format(Math.round(f)) : f >= 10 ? f.toFixed(0) : f.toFixed(1);
+  if (Math.abs(Math.log10(r)) < Math.log10(1.1)) return '≈1';
+  return (r >= 1 ? '×' : '÷') + s;
+}
+function ms(t) {
+  if (t == null) return '–';
+  if (t < 1000) return t + ' ms';
+  if (t < 60000) return (t / 1000).toFixed(t < 10000 ? 2 : 1) + ' s';
+  return (t / 60000).toFixed(1) + ' min';
+}
+function bin(r) {
+  if (r == null) return null;
+  const l = Math.log10(r), a = Math.abs(l);
+  const step = a < Math.log10(1.1) ? 0 : a < Math.log10(2) ? 1 : a < 1 ? 2 : a < 2 ? 3 : 4;
+  return 'd' + (l < 0 && step ? '-' : '') + step;
+}
+function cmpTip(c, aName, bName) {
+  if (!c) return '';
+  return `<table>
+    <tr><td>queries both answered</td><td>${c.n}</td></tr>
+    ${c.n ? `<tr><td>geometric mean</td><td>${ratio(c.geomean)}</td></tr>
+    <tr><td>median (p10–p90)</td><td>${ratio(c.median)} (${ratio(c.p10)} – ${ratio(c.p90)})</td></tr>` : ''}
+    <tr><td>${esc(aName)} faster</td><td>${c.aWins}</td></tr>
+    <tr><td>within 10%</td><td>${c.ties}</td></tr>
+    <tr><td>${esc(bName)} faster</td><td>${c.bWins}</td></tr>
+    ${c.bothTimeout ? `<tr><td>both timed out</td><td>${c.bothTimeout}</td></tr>` : ''}
+    ${c.errored ? `<tr><td>either errored</td><td>${c.errored}</td></tr>` : ''}
+  </table><div class="m">A query one side answered and the other timed out on counts as a win.</div>`;
+}
+
+// ---------- tooltip ----------
+const tip = document.getElementById('tip');
+let tipOwner = null;
+function showTip(el, x, y) {
+  if (!el._tip) return;
+  tipOwner = el;
+  tip.innerHTML = el._tip;
+  tip.hidden = false;
+  const r = tip.getBoundingClientRect();
+  let left = x + 14, top = y + 14;
+  if (left + r.width > innerWidth - 8) left = Math.max(8, x - r.width - 14);
+  if (top + r.height > innerHeight - 8) top = Math.max(8, y - r.height - 14);
+  tip.style.left = left + 'px';
+  tip.style.top = top + 'px';
+}
+function hideTip() { tip.hidden = true; tipOwner = null; }
+document.addEventListener('pointermove', (e) => {
+  const el = e.target.closest?.('[data-t]');
+  if (e.pointerType !== 'mouse') return;
+  if (el) showTip(el, e.clientX, e.clientY); else if (tipOwner) hideTip();
+});
+document.addEventListener('click', (e) => {
+  const el = e.target.closest?.('[data-t]');
+  if (el && el !== tipOwner) { const r = el.getBoundingClientRect(); showTip(el, r.left + r.width / 2, r.bottom); }
+  else if (!el || e.pointerType !== 'mouse') hideTip();
+});
+document.addEventListener('focusin', (e) => {
+  const el = e.target.closest?.('[data-t]');
+  if (el) { const r = el.getBoundingClientRect(); showTip(el, r.left + r.width / 2, r.bottom); }
+});
+document.addEventListener('focusout', hideTip);
+addEventListener('scroll', () => { if (tipOwner) hideTip(); }, { passive: true });
+function cellEl(cls, html, tipHtml) {
+  const d = document.createElement('div');
+  d.className = cls;
+  d.innerHTML = html;
+  if (tipHtml) { d._tip = tipHtml; d.dataset.t = ''; d.tabIndex = 0; }
+  return d;
+}
+
+// ---------- legends ----------
+function renderLegends() {
+  for (const el of document.querySelectorAll('[data-legend="div"]')) {
+    const faster = el.dataset.faster ?? 'faster', slower = el.dataset.slower ?? 'slower';
+    const bins = [ 'd-4', 'd-3', 'd-2', 'd-1', 'd0', 'd1', 'd2', 'd3', 'd4' ];
+    const ticks = [ '÷100', '÷10', '÷2', '÷1.1', '', '×1.1', '×2', '×10', '×100' ];
+    el.innerHTML = `<span>${esc(faster)}</span>
+      <span style="display:inline-grid;gap:2px">
+        <span class="scale">${bins.map(b => `<span class="sw ${b}"></span>`).join('')}</span>
+        <span class="ticks">${ticks.map((t, i) => `<span style="transform:translateX(${i === 4 ? 0 : i < 4 ? 16 : -16}px)">${t}</span>`).join('')}</span>
+      </span>
+      <span>${esc(slower)}</span>
+      <span class="m" style="color:var(--muted)">÷10 = ten times faster · ×10 = ten times slower · grey = within 10%</span>`;
+  }
+}
+
+// ---------- setup ----------
+function renderSetup() {
+  const info = {
+    lubm: { what: 'Reasoning by rewriting: the views add everything the ontology entails.', queries: 13, views: '239 views' },
+    oaei: { what: 'Four source ontologies translated into one target vocabulary (ekaw).', queries: 65, views: '148 views' },
+    reification: { what: 'SPARQL 1.2 queries over RDF 1.1 standard reification.', queries: null, views: 'reifier views' },
+    singleton: { what: 'SPARQL 1.2 queries over singleton properties.', queries: null, views: 'reifier views' },
+  };
+  const rows = workloads.map((w) => {
+    const sc = scalesOf(w);
+    const n = Math.max(...enginesOf(w).map(e => Math.max(...sc.map(s => S[e][w][s]?.cases ?? 0))));
+    return `<tr><td><b>${WORKLOAD[w]}</b><br><span style="color:var(--muted);font-size:12.5px;white-space:normal">${info[w].what}</span></td>
+      <td class="num">${n}</td>
+      <td style="white-space:normal">${sc.map(s => `<code>${s}</code> <span style="color:var(--muted)">${compact(quadsOf(w, s))}</span>`).join(', ')}</td></tr>`;
+  }).join('');
+  document.getElementById('workload-table').innerHTML =
+    `<thead><tr><th>Workload</th><th>Queries</th><th>Scales (source triples)</th></tr></thead><tbody>${rows}</tbody>`;
+  document.getElementById('engine-chips').innerHTML = ENGINE_ORDER.map(e => `<span class="chip">${ENGINE[e]}</span>`).join('');
+}
+
+// ---------- Q1: passes ----------
+function renderPasses() {
+  const t = document.getElementById('passes-grid');
+  const steps = RUNGS.slice(1);
+  let head1 = '<tr><th></th>', head2 = '<tr><th></th>';
+  workloads.forEach((w, i) => {
+    if (i) { head1 += '<th class="gap"></th>'; head2 += '<th class="gap"></th>'; }
+    head1 += `<th class="group" colspan="3">${WORKLOAD_SHORT[w]}</th>`;
+    head2 += steps.map(r => `<th>${RUNG_SHORT[r]}</th>`).join('');
+  });
+  t.innerHTML = `<thead>${head1}</tr>${head2}</tr></thead><tbody></tbody>`;
+  const tb = t.tBodies[0];
+  for (const e of ENGINE_ORDER) {
+    const tr = tb.insertRow();
+    tr.innerHTML = `<th>${ENGINE[e]}</th>`;
+    workloads.forEach((w, wi) => {
+      if (wi) tr.insertCell().className = 'gap';
+      const p = P[e]?.[w];
+      steps.forEach((r, i) => {
+        const td = tr.insertCell();
+        if (!p) { td.append(cellEl('cell empty', '<span class="s">not run</span>')); return; }
+        const c = p.steps[pc][i];
+        const prev = RUNGS[i];
+        const before = p.tally[`${prev}|${pc}`].ok, after = p.tally[`${r}|${pc}`].ok, total = p.tally[`${r}|${pc}`].total;
+        const tipHtml = `<div class="t">${ENGINE[e]} · ${WORKLOAD[w]}</div><div class="m">${RUNG[r]} against ${RUNG[prev]}, preserveCardinality ${pc}</div>
+          ${cmpTip(c, 'with the pass', 'without')}<div>answered: ${before} → ${after} of ${total}</div>`;
+        if (c.n) {
+          const delta = after - before;
+          td.append(cellEl(`cell ${bin(c.geomean)}`, `<span class="v">${ratio(c.geomean)}</span><span class="s">${delta ? (delta > 0 ? '+' : '') + delta + ' ans.' : `${c.n} q`}</span>`, tipHtml));
+        } else {
+          td.append(cellEl('cell none', `<span class="v">${after ? '+' + (after - before) : '–'}</span><span class="s">${before}→${after} ans.</span>`, tipHtml));
+        }
+      });
+    });
+  }
+  document.getElementById('passes-note').innerHTML = `Pooled over ${workloads.map(w => `${WORKLOAD_SHORT[w]} (${scalesOf(w).join(', ')})`).join('; ')}. QLever answers nothing before the pushdown: it has no <code>sameTerm</code>, which only the pushdown removes.`;
+}
+
+// ---------- Q2: answered ----------
+function renderAnswered() {
+  const t = document.getElementById('answered-grid');
+  const cols = [ 'materialized', ...RUNGS ];
+  t.innerHTML = `<thead><tr><th></th>${cols.map(c => `<th>${c === 'materialized' ? 'reference' : RUNG_SHORT[c]}</th>`).join('')}</tr></thead><tbody></tbody>`;
+  const tb = t.tBodies[0];
+  for (const w of workloads) {
+    const hr = tb.insertRow();
+    hr.innerHTML = `<th colspan="${cols.length + 1}" style="padding:14px 0 4px;color:var(--ink-2);font-size:12.5px">${WORKLOAD[w]} <span style="color:var(--muted);font-weight:400">· ${scalesOf(w).join(', ')}</span></th>`;
+    for (const e of enginesOf(w)) {
+      const p = P[e][w];
+      const tr = tb.insertRow();
+      tr.innerHTML = `<th>${ENGINE[e]}</th>`;
+      for (const c of cols) {
+        const v = c === 'materialized' ? c : `${c}|${pc}`;
+        const t = p.tally[v];
+        const good = t.ok - t.wrong;
+        const seg = (n, col) => n ? `<span style="flex:${n};background:var(${col})"></span>` : '';
+        const tipHtml = `<div class="t">${ENGINE[e]} · ${WORKLOAD[w]}</div><div class="m">${c === 'materialized' ? 'reference' : RUNG[c] + ', preserveCardinality ' + pc}</div>
+          <table><tr><td>answered</td><td>${t.ok}${t.wrong ? ` (${t.wrong} wrong)` : ''}</td></tr>
+          ${c !== 'materialized' ? `<tr><td>· exact</td><td>${t.correct}</td></tr><tr><td>· same rows, repeated</td><td>${t.setOnly}</td></tr>${t.ungraded ? `<tr><td>· ungraded</td><td>${t.ungraded}</td></tr>` : ''}${t.refDefect ? `<tr><td>· reference broken</td><td>${t.refDefect}</td></tr>` : ''}` : ''}
+          <tr><td>timed out</td><td>${t.timeout}</td></tr><tr><td>engine error</td><td>${t.error}</td></tr><tr><td>of</td><td>${t.total}</td></tr></table>`;
+        const td = tr.insertCell();
+        td.append(cellEl(`ans${c === 'materialized' ? ' ref' : ''}`,
+          `<span class="v">${t.ok}<small>/${t.total}</small>${t.wrong ? ` <span class="flag">${t.wrong}✕</span>` : ''}</span>
+           <span class="bars">${seg(good, '--ok')}${seg(t.wrong, '--wrong')}${seg(t.timeout, '--to')}${seg(t.error, '--err')}</span>`, tipHtml));
+      }
+    }
+  }
+}
+
+// ---------- Q3: cost ----------
+function scaleHeader(groups) {
+  let h1 = '<tr><th></th>', h2 = '<tr><th></th>';
+  groups.forEach(([ w, scs ], i) => {
+    if (i) { h1 += '<th class="gap"></th>'; h2 += '<th class="gap"></th>'; }
+    h1 += `<th class="group" colspan="${scs.length}">${WORKLOAD_SHORT[w]}</th>`;
+    h2 += scs.map(s => `<th>${s}<span class="q">${compact(quadsOf(w, s))}</span></th>`).join('');
+  });
+  return `<thead>${h1}</tr>${h2}</tr></thead>`;
+}
+function renderCost() {
+  const t = document.getElementById('cost-grid');
+  const groups = workloads.map(w => [ w, scalesOf(w) ]);
+  t.innerHTML = scaleHeader(groups) + '<tbody></tbody>';
+  const tb = t.tBodies[0];
+  for (const e of ENGINE_ORDER) {
+    const tr = tb.insertRow();
+    tr.innerHTML = `<th>${ENGINE[e]}</th>`;
+    groups.forEach(([ w, scs ], gi) => {
+      if (gi) tr.insertCell().className = 'gap';
+      for (const sc of scs) {
+        const td = tr.insertCell();
+        const s = S[e]?.[w]?.[sc];
+        if (!s) { td.append(cellEl('cell empty', '')); continue; }
+        const c = s.vsReference[`${FINAL}|${pc}`];
+        const ta = s.tally[`${FINAL}|${pc}`], tm = s.tally.materialized;
+        const ref = w === 'lubm' || w === 'oaei' ? 'materialised views' : 'hand-written query';
+        const fc = s.finalCommon;
+        const tipHtml = `<div class="t">${ENGINE[e]} · ${WORKLOAD[w]} ${sc}</div><div class="m">+pullUpExtends (preserveCardinality ${pc}) against the ${ref}</div>
+          ${cmpTip(c, 'rewrite', 'reference')}
+          <div>answered: rewrite ${ta.ok}, reference ${tm.ok}, of ${s.cases}</div>
+          ${fc.off.n ? `<div class="m">On the ${fc.off.n} queries all three answered: off ${ratio(fc.off.geomean)}, on ${ratio(fc.on.geomean)}</div>` : ''}`;
+        if (c.n) td.append(cellEl(`cell ${bin(c.geomean)}`, `<span class="v">${ratio(c.geomean)}</span><span class="s">${ta.ok}/${s.cases}</span>`, tipHtml));
+        else td.append(cellEl('cell none', `<span class="v">–</span><span class="s">${ta.ok}/${s.cases}</span>`, tipHtml));
+      }
+    });
+  }
+}
+
+// ---------- Q4: pay-off ----------
+function renderPayoff() {
+  const t = document.getElementById('payoff-grid');
+  const groups = [ 'lubm', 'oaei' ].filter(w => workloads.includes(w)).map(w => [ w, scalesOf(w) ]);
+  t.innerHTML = scaleHeader(groups) + '<tbody></tbody>';
+  const tb = t.tBodies[0];
+  for (const e of ENGINE_ORDER.filter(e => P[e]?.lubm || P[e]?.oaei)) {
+    const tr = tb.insertRow();
+    tr.innerHTML = `<th>${ENGINE[e]}</th>`;
+    groups.forEach(([ w, scs ], gi) => {
+      if (gi) tr.insertCell().className = 'gap';
+      for (const sc of scs) {
+        const td = tr.insertCell();
+        const b = S[e]?.[w]?.[sc]?.breakEven?.[pc];
+        if (!b) { td.append(cellEl('cell empty', '')); continue; }
+        const bound = b.rewritingCensored && !b.materializedCensored ? '≤' : b.materializedCensored && !b.rewritingCensored ? '≥' : b.rewritingCensored ? '~' : '';
+        const q = b.queries;
+        const cls = q == null ? 'cell none' : `cell ${q < 10 ? 'q4' : q < 100 ? 'q3' : q < 1000 ? 'q2' : 'q1'}`;
+        const tipHtml = `<div class="t">${ENGINE[e]} · ${WORKLOAD[w]} ${sc}</div>
+          <table><tr><td>build (${esc(b.method)})</td><td>${ms(b.buildMs)}</td></tr>
+          <tr><td>store size</td><td>${b.storeBytes ? compact(b.storeBytes) + 'B' : '–'}</td></tr>
+          <tr><td>mean saving per query</td><td>${b.meanSavingMs == null ? '–' : ms(Math.round(b.meanSavingMs))}</td></tr>
+          <tr><td>over queries</td><td>${b.queriesUsed}</td></tr></table>
+          ${b.rewritingCensored ? '<div class="m">The rewrite timed out on some: the saving is understated.</div>' : ''}
+          ${b.materializedCensored ? '<div class="m">The materialised query timed out on some: the saving is overstated.</div>' : ''}
+          ${q == null ? '<div class="m">The rewrite is faster on average, so the build never pays off.</div>' : ''}`;
+        td.append(cellEl(cls, `<span class="v">${q == null ? 'never' : bound + nf.format(q)}</span><span class="s">${ms(b.buildMs)}</span>`, tipHtml));
+      }
+    });
+  }
+}
+
+// ---------- Q5: correctness ----------
+function renderCorrect() {
+  const sum = (p, set, f) => RUNGS.reduce((a, r) => a + p.tally[`${r}|${set}`][f], 0);
+  let html = `<thead><tr><th></th><th class="group" colspan="5">preserveCardinality off</th><th class="group" colspan="4">preserveCardinality on</th></tr>
+    <tr><th></th><th>exact</th><th>repeats</th><th>wrong</th><th>ungraded</th><th>broken ref.</th><th>exact</th><th>wrong</th><th>ungraded</th><th>broken ref.</th></tr></thead><tbody>`;
+  for (const w of workloads) {
+    html += `<tr class="wl"><td colspan="10">${WORKLOAD[w]}</td></tr>`;
+    for (const e of enginesOf(w)) {
+      const p = P[e][w];
+      const cell = (n, bad) => `<td class="num${n === 0 ? ' zero' : bad ? ' bad' : ''}">${nf.format(n)}</td>`;
+      html += `<tr><td>${ENGINE[e]}</td>${cell(sum(p, 'off', 'correct'))}${cell(sum(p, 'off', 'setOnly'))}${cell(sum(p, 'off', 'wrong'), true)}${cell(sum(p, 'off', 'ungraded'))}${cell(sum(p, 'off', 'refDefect'))}
+        ${cell(sum(p, 'on', 'correct'))}${cell(sum(p, 'on', 'wrong'), true)}${cell(sum(p, 'on', 'ungraded'))}${cell(sum(p, 'on', 'refDefect'))}</tr>`;
+    }
+  }
+  document.getElementById('correct-table').innerHTML = html + '</tbody>';
+}
+
+// ---------- Q6: preserveCardinality ----------
+function renderPc() {
+  const t = document.getElementById('pc-grid');
+  t.innerHTML = `<thead><tr><th></th>${workloads.map(w => `<th>${WORKLOAD_SHORT[w]}</th>`).join('')}</tr></thead><tbody></tbody>`;
+  const tb = t.tBodies[0];
+  for (const e of ENGINE_ORDER) {
+    const tr = tb.insertRow();
+    tr.innerHTML = `<th>${ENGINE[e]}</th>`;
+    for (const w of workloads) {
+      const td = tr.insertCell();
+      const p = P[e]?.[w];
+      if (!p) { td.append(cellEl('cell empty', '')); continue; }
+      const c = p.pcEffect[FINAL];
+      const off = p.tally[`${FINAL}|off`], on = p.tally[`${FINAL}|on`];
+      const perScale = p.scales.map(sc => { const x = S[e][w][sc].pcEffect[FINAL]; return `<tr><td>${sc}</td><td>${ratio(x.geomean)}</td><td>${S[e][w][sc].tally[`${FINAL}|off`].ok} → ${S[e][w][sc].tally[`${FINAL}|on`].ok}</td></tr>`; }).join('');
+      const tipHtml = `<div class="t">${ENGINE[e]} · ${WORKLOAD[w]}</div><div class="m">+pullUpExtends, preserveCardinality on against off</div>
+        ${cmpTip(c, 'on', 'off')}<div style="margin-top:4px">per scale</div><table>${perScale}</table>`;
+      const cls = c.n ? `cell ${bin(c.geomean)}` : 'cell none';
+      td.append(cellEl(cls, `<span class="v">${ratio(c.geomean)}</span><span class="s">${off.ok}→${on.ok}</span>`, tipHtml));
+    }
+  }
+}
+
+// ---------- detail explorer ----------
+const qx = { engine: 'oxigraph', workload: 'lubm', scale: 'u1' };
+const detailIndex = new Map();
+for (const d of D.detail) {
+  const key = `${D.dict.engines[d[0]]}\t${D.dict.workloads[d[1]]}\t${D.dict.scales[d[2]]}`;
+  if (!detailIndex.has(key)) detailIndex.set(key, []);
+  detailIndex.get(key).push(d);
+}
+function fillSelect(sel, values, labels, current) {
+  sel.innerHTML = values.map(v => `<option value="${v}"${v === current ? ' selected' : ''}>${labels ? labels[v] : v}</option>`).join('');
+}
+function renderExplorer() {
+  const se = document.getElementById('qx-engine'), sw = document.getElementById('qx-workload'), ss = document.getElementById('qx-scale');
+  const engines = ENGINE_ORDER.filter(e => P[e]);
+  if (!engines.includes(qx.engine)) qx.engine = engines[0];
+  const wls = workloads.filter(w => P[qx.engine][w]);
+  if (!wls.includes(qx.workload)) qx.workload = wls[0];
+  const scs = P[qx.engine][qx.workload].scales;
+  if (!scs.includes(qx.scale)) qx.scale = scs[0];
+  fillSelect(se, engines, ENGINE, qx.engine);
+  fillSelect(sw, wls, WORKLOAD, qx.workload);
+  fillSelect(ss, scs, null, qx.scale);
+
+  const rows = (detailIndex.get(`${qx.engine}\t${qx.workload}\t${qx.scale}`) ?? [])
+    .slice().sort((a, b) => D.dict.caseIds[a[3]].localeCompare(D.dict.caseIds[b[3]]));
+  const vIdx = r => D.dict.variants.indexOf(r === 'materialized' ? r : `${r}|${pc}`);
+  const t = document.getElementById('qx-table');
+  const timeout = S[qx.engine][qx.workload][qx.scale].timeoutMs;
+  t.innerHTML = `<thead><tr><th>query</th><th>ref. rows</th><th>reference</th>${RUNGS.map(r => `<th>${RUNG_SHORT[r]}</th>`).join('')}</tr></thead><tbody></tbody>`;
+  const tb = t.tBodies[0];
+  for (const d of rows) {
+    const id = D.dict.caseIds[d[3]].split('/')[1];
+    const vs = d[4], otherRef = d[5], broken = d[6];
+    const base = vs[vIdx('materialized')];
+    const tr = tb.insertRow();
+    tr.innerHTML = `<th>${esc(id)}${broken ? ' <span class="dag" title="The reference query for this case is known to be broken">†</span>' : ''}</th>`;
+    const refRows = base && base[0] === 0 ? base[2] : otherRef;
+    const rc = tr.insertCell(); rc.className = 'ref';
+    rc.textContent = refRows == null ? '–' : nf.format(refRows) + (base && base[0] === 0 ? '' : '*');
+    const cellFor = (v, label, isBase) => {
+      const td = tr.insertCell();
+      if (!v) { td.append(cellEl('qc sk', '–')); return; }
+      const [ st, t, count, grade, err ] = v;
+      const head = `<div class="t">${esc(id)} · ${esc(label)}</div>`;
+      if (st === 1 || st === 3) {
+        td.append(cellEl(`qc ${st === 3 ? 'sk' : 'to'}`, st === 3 ? 'skipped' : '&gt;' + ms(timeout), head + (st === 3 ? '<div>Not run: it timed out at a smaller scale, which this scale contains.</div>' : `<div>Timed out after ${ms(timeout)}.</div>`)));
+        return;
+      }
+      if (st === 2) {
+        td.append(cellEl('qc er', 'error', head + `<div>${esc(D.dict.errors[err] ?? 'engine error')}</div>`));
+        return;
+      }
+      let r = null;
+      if (!isBase && base && base[0] === 0 && broken !== 2) r = Math.max(t, 1) / Math.max(base[1], 1);
+      const badge = grade === 2 ? '<span class="b">rep</span>' : grade === 3 ? '<span class="b w">wrong</span>' : grade === 4 ? '<span class="b">?</span>' : grade === 5 ? '<span class="b">†</span>' : '';
+      const gradeText = { 0: 'the reference', 1: 'exact', 2: 'same rows, some repeated', 3: 'wrong', 4: 'ungraded: the reference timed out', 5: 'differs from a broken reference; same row count on every engine' }[grade];
+      const tipHtml = head + `<table><tr><td>median time</td><td>${ms(t)}</td></tr><tr><td>rows</td><td>${nf.format(count)}</td></tr>
+        ${refRows != null ? `<tr><td>reference rows</td><td>${nf.format(refRows)}${base && base[0] === 0 ? '' : ' (other engines)'}</td></tr>` : ''}
+        ${r != null ? `<tr><td>against reference</td><td>${ratio(r)}</td></tr>` : ''}<tr><td>grade</td><td>${gradeText}</td></tr></table>`;
+      td.append(cellEl(`qc${isBase ? ' base' : r != null ? ' ' + bin(r) : ''}`, `${ms(t)}${badge}`, tipHtml));
+    };
+    cellFor(base, 'reference', true);
+    for (const r of RUNGS) cellFor(vs[vIdx(r)], `${RUNG[r]}, preserveCardinality ${pc}`, false);
+  }
+  const s = S[qx.engine][qx.workload][qx.scale];
+  const c = s.vsReference[`${FINAL}|${pc}`];
+  document.getElementById('qx-sum').innerHTML = `${ENGINE[qx.engine]} on ${WORKLOAD[qx.workload]} ${qx.scale} (${nf.format(s.quads)} source triples), budget ${ms(timeout)}. Full pipeline against the reference: ${c.n ? ratio(c.geomean) + ' over ' + c.n + ' queries' : 'no query both answered'}.${rows.some(d => { const b = d[4][0]; return !b || b[0] !== 0; }) ? ' <span style="color:var(--muted)">* reference rows from the other engines, where this engine\'s reference did not answer.</span>' : ''}${rows.some(d => d[6]) ? ' <span style="color:var(--muted)">† the reference query is known to be broken' + (rows.some(d => d[6] === 2) ? '; for singleton cases marked so it asks a different question, so its time is not a fair comparison' : '') + '.</span>' : ''}`;
+}
+for (const id of [ 'qx-engine', 'qx-workload', 'qx-scale' ]) {
+  document.getElementById(id).addEventListener('change', (e) => { qx[id.slice(3)] = e.target.value; renderExplorer(); });
+}
+
+// ---------- wiring ----------
+function renderPcDependent() {
+  for (const b of document.querySelectorAll('.seg button')) b.setAttribute('aria-pressed', String(b.dataset.pc === pc));
+  renderPasses(); renderAnswered(); renderCost(); renderPayoff(); renderExplorer();
+}
+for (const b of document.querySelectorAll('.seg button')) {
+  b.addEventListener('click', () => {
+    pc = b.dataset.pc;
+    try { localStorage.setItem('pc', pc); } catch (e) {}
+    hideTip();
+    renderPcDependent();
+  });
+}
+document.getElementById('provenance').textContent = `Benchmark overview · ${nf.format(D.rows)} measurements · run 22–26 Oct 2026`;
+document.getElementById('foot').innerHTML = `Generated ${esc(D.generated.slice(0, 16).replace('T', ' '))} UTC from <code>${esc(D.source)}</code>, ${nf.format(D.rows)} rows. Source: <code>test/bench/overview</code> on branch <code>bench/add-starbench-bis</code>.`;
+renderLegends(); renderSetup(); renderCorrect(); renderPc(); renderPcDependent();
+</script>
