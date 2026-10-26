@@ -2,10 +2,10 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
+import { unifyTerms } from '../utils/assertions.js';
 import { termVars } from '../utils/certainlyBoundVars.js';
-import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
-
-import { isRdfVar } from '../utils/typeGuards.js';
+import { bindAssertedTerms, createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
+import { termIsStaticTerm } from '../utils/typeGuards.js';
 import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
 
 /**
@@ -22,7 +22,7 @@ import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
  * - **Seq** (`path1/path2`): JOIN with intermediate variables
  * - **Inv** (`^path`): Swaps subject and object
  * - **NPS** (`!(<p1>|<p2>)`): Negated property set (FILTER NOT IN), DISTINCT over subject and object
- * - **ZeroOrOne** (`path?`): UNION with empty match case, DISTINCT over subject and object
+ * - **ZeroOrOne** (`path?`): UNION with the zero length match, DISTINCT over subject and object
  *
  * Coined variables are claimed against the names in use, and unfold as any other user query variable.
  * A path inside a `SERVICE` is left to its endpoint, the unfolding leaving that pattern as it stands.
@@ -63,21 +63,36 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
   }
 
   /**
-   * Binds a variable to every [node](https://www.w3.org/TR/sparql12-query/#defn_nodeSet) of the graph.
-   * @param variable - The variable to bind
+   * Matches a term against every [node](https://www.w3.org/TR/sparql12-query/#defn_nodeSet) of the graph.
+   * @param term - The variable or triple pattern to match
    * @param graph - The graph to read the nodes from
-   * @returns the distinct nodes
+   * @returns the distinct bindings of the term's variables
    */
-  function nodes(variable: RDF.Variable, graph: RDF.Term): Algebra.Operation {
+  function nodes(term: RDF.Term, graph: RDF.Term): Algebra.Operation {
     const predicate = fresh();
     const other = fresh();
-    return AF.createDistinct(AF.createProject(
-      AF.createUnion([
-        AF.createBgp([ AF.createPattern(variable, predicate, other, graph) ]),
-        AF.createBgp([ AF.createPattern(other, predicate, variable, graph) ]),
-      ]),
-      [ variable ],
-    ));
+    const asObject = AF.createBgp([ AF.createPattern(other, predicate, term, graph) ]);
+    // A triple term is never a subject.
+    const matches = term.termType === 'Quad' ?
+      asObject :
+      AF.createUnion([ AF.createBgp([ AF.createPattern(term, predicate, other, graph) ]), asObject ]);
+    return AF.createDistinct(AF.createProject(matches, [ ...termVars(term) ].map(name => DF.variable(name))));
+  }
+
+  /**
+   * The [zero length match](https://www.w3.org/TR/sparql12-query/#defn_evalPP_ZeroOrOnePath) of a path, generalised
+   * to triple pattern endpoints: the unified endpoints, ranging over the nodes of the graph unless unification
+   * grounds them.
+   * @param path - The path whose endpoints to unify
+   * @returns the match, or `undefined` when the endpoints never denote one term
+   */
+  function zeroLengthMatch(path: Algebra.Path): Algebra.Operation | undefined {
+    const unification = unifyTerms(path.subject, path.object);
+    if (unification === undefined) {
+      return undefined;
+    }
+    const { unifier, unified } = unification;
+    return bindAssertedTerms(c, termIsStaticTerm(unified) ? AF.createBgp([]) : nodes(unified, path.graph), unifier);
   }
 
   function resolvePathOp(pathOp: Algebra.PropertyPathSymbol, path: Algebra.Path): Algebra.Operation {
@@ -125,30 +140,14 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
         ]),
       ), path);
     }
-    // https://www.w3.org/TR/sparql12-query/#defn_evalPP_ZeroOrOnePath
     if (pathOp.type === Algebra.Types.ZERO_OR_ONE_PATH) {
-      if (isRdfVar(subject) && isRdfVar(object)) {
-        // The zero length match binds both to one node; a single shared variable needs no BIND.
-        return overSubjectAndObject(AF.createUnion([
-          resolvePathOp(pathOp.path, path),
-          subject.equals(object) ?
-            nodes(subject, path.graph) :
-            AF.createExtend(nodes(subject, path.graph), object, AF.createTermExpression(subject)),
-        ]), path);
+      // Equal ground endpoints: the zero length match is the one solution the path can give.
+      if (termIsStaticTerm(subject) && subject.equals(object)) {
+        return AF.createBgp([]);
       }
-      if (!isRdfVar(subject) && !isRdfVar(object)) {
-        if (subject.equals(object)) {
-          return AF.createBgp([]);
-        }
-        return overSubjectAndObject(resolvePathOp(pathOp.path, path), path);
-      }
-      // Only one is a var, the other is term
-      const [ variable, term ] =
-        <[RDF.Variable, RDF.Term]> (isRdfVar(subject) ? [ subject, object ] : [ object, subject ]);
-      return overSubjectAndObject(AF.createUnion([
-        resolvePathOp(pathOp.path, path),
-        AF.createExtend(AF.createBgp([]), variable, AF.createTermExpression(term)),
-      ]), path);
+      const oneLength = resolvePathOp(pathOp.path, path);
+      const zeroLength = zeroLengthMatch(path);
+      return overSubjectAndObject(zeroLength ? AF.createUnion([ oneLength, zeroLength ]) : oneLength, path);
     }
     // If (pathOp.type === 'ZeroOrMorePath' || pathOp.type === 'OneOrMorePath') {
     // Throw new Error('Cannot transform recursive paths');

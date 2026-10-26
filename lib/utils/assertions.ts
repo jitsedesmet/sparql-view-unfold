@@ -860,3 +860,55 @@ export function substituteInPattern(
   }
   return c.AF.createPattern(subject, predicate, object, graph);
 }
+
+/**
+ * Unifies two terms, recursing into triple terms.
+ * @param left - The one term
+ * @param right - The other term, whose variable is the one substituted when both are variables
+ * @returns the most general substitution making both the same term, and that term, or `undefined` when none does
+ */
+export function unifyTerms(left: RDF.Term, right: RDF.Term): { unifier: Assertions; unified: RDF.Term } | undefined {
+  const unifier = new Map<string, RDF.Term>();
+  if (!extendUnifier(unifier, left, right)) {
+    return undefined;
+  }
+  // Substituting rejects a term the unifier puts where no triple can hold it.
+  const unified = substituteInTerm(left, unifier, 'object');
+  return unified && { unifier, unified };
+}
+
+/**
+ * Extends a unifier, kept fully substituted, so it also makes two terms equal.
+ * @param unifier - The substitution to extend in place
+ * @param left - The one term
+ * @param right - The other term
+ * @returns whether the terms unify
+ */
+function extendUnifier(unifier: Map<string, RDF.Term>, left: RDF.Term, right: RDF.Term): boolean {
+  const one = substituteInTerm(left, unifier, 'object');
+  const other = substituteInTerm(right, unifier, 'object');
+  if (one === undefined || other === undefined) {
+    return false;
+  }
+  if (one.equals(other)) {
+    return true;
+  }
+  if (one.termType === 'Quad' && other.termType === 'Quad') {
+    return triplePositions.every(position => extendUnifier(unifier, one[position], other[position]));
+  }
+  const [ variable, term ] = other.termType === 'Variable' ? [ other, one ] : [ one, other ];
+  // A term holding the variable it equals would have to contain itself.
+  if (variable.termType !== 'Variable' || termVars(term).has(variable.value)) {
+    return false;
+  }
+  const binding = new Map([[ variable.value, term ]]);
+  for (const [ name, bound ] of unifier) {
+    const substituted = substituteInTerm(bound, binding, 'object');
+    if (substituted === undefined) {
+      return false;
+    }
+    unifier.set(name, substituted);
+  }
+  unifier.set(variable.value, term);
+  return true;
+}

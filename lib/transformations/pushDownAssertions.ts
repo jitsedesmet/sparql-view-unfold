@@ -30,7 +30,7 @@ import {
 } from '../utils/assertions.js';
 import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
-import { createFilterFalse } from '../utils/operationhelpers.js';
+import { bindAssertedTerms, createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import { unionSets } from '../utils/setUtils.js';
 import type { DerivedVarNamer } from '../utils.js';
@@ -1124,26 +1124,6 @@ function empty(c: TransformationContext, replaced: Algebra.Operation): PreOrderM
  */
 function emptyOperation(c: TransformationContext, replaced: Algebra.Operation): Algebra.Operation {
   return createFilterFalse(c, replaced);
-}
-
-/**
- * Re-binds the variables the assertions substituted away, so that the rewrite preserves `pVars` and `cVars`
- * exactly. This EXTEND is mandatory: dropping it breaks the invariant, and breaks `SELECT *`.
- * @param c - The transformation context
- * @param op - The operation the substitution was written into
- * @param assertions - The substitution that was written in
- * @returns the operation with one EXTEND per substituted variable
- */
-function bindAssertedTerms(
-  c: TransformationContext,
-  op: Algebra.Operation,
-  assertions: Assertions,
-): Algebra.Operation {
-  let result = op;
-  for (const [ name, term ] of assertions) {
-    result = c.AF.createExtend(result, c.DF.variable(name), c.AF.createTermExpression(term));
-  }
-  return result;
 }
 
 /**
