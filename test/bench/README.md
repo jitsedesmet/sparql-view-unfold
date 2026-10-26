@@ -20,19 +20,26 @@ physically stored as RDF 1.1 can be answered in two ways:
    representation. This is what people do today, and it is the bar the rewriting has to
    be judged against: it is both the speed target and the correctness oracle.
 
-Four rewrite pipelines are measured, each a superset of the one before it, so the
-difference between two adjacent bars is the contribution of one transformation:
+Four rewrite pipelines are measured, each the one before it plus one transformation, so the
+difference between two adjacent bars is the contribution of that transformation:
 
 | Approach | Pipeline |
 |---|---|
 | `rewriting` | `unfolding` → `filterFalse` → `nullifyJoinOverIncompatibleBounds` → `filterFalse` |
 | `rewriting+removeProjections` | the above, then `removeProjections` (flattens the nested sub-`SELECT`s each mapper branch is wrapped in) |
-| `rewriting+pushDownAssertions` | the above, then `pushDownAssertions` (pushes `FILTER(sameTerm(?x, c))` into the triple patterns that use `?x`, turning a free position into an indexed lookup) |
-| `rewriting+pullUpExtends` | the above, then `pullUpExtends` twice (floats the `BIND`s the pushdown leaves at every leaf back up, or drops them) |
+| `rewriting+pushDownAssertions` | `rewriting`, then `pushDownAssertions` → `filterFalse` → `removeProjections` (pushes `FILTER(sameTerm(?x, c))` into the triple patterns that use `?x`, turning a free position into an indexed lookup) |
+| `rewriting+pullUpExtends` | `rewriting`, then `pushDownAssertions` → `filterFalse` → `pullUpExtends` → `filterFalse` → `removeProjections` → `pullUpExtends` (floats the `BIND`s the pushdown leaves at every leaf back up, or drops them) |
 
 Each name above is the `<stem>Transformation()` factory of that stem; see `runner.ts` for the exact
 composition, and for why `removeProjections` stays a step of the pushdown pipelines even though
 Traqula 1.3.1 no longer needs it to keep their output parseable.
+
+In the two pushdown pipelines `removeProjections` runs after the pushdown, not before it, so it also
+flattens whatever the pushdown leaves. A further `removeProjections` at the end of either pipeline
+(or one more `removeProjections` → `pullUpExtends` round after the last pass) changes none of the 204
+rewrites (102 queries, `preserveCardinality` off and on). The sub-`SELECT`s that remain are the
+`SELECT DISTINCT` that `preserveCardinality` adds around each view pattern, and the aggregates of
+StarBench's A-Q3 and A-Q4, which `removeProjections` keeps by design.
 
 None of the four is the pipeline `createDefaultTransformationPipeline` builds, which is what a user of
 the library gets by default: that one expands property paths first, runs `pullUpExtends` once and

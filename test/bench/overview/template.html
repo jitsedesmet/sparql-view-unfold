@@ -434,9 +434,9 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
           <div class="arrow" aria-hidden="true">→</div>
           <div class="step"><i>2</i><b>+removeProjections</b><span>Flatten the sub-<code>SELECT</code> each view branch is wrapped in.</span></div>
           <div class="arrow" aria-hidden="true">→</div>
-          <div class="step key"><i>3</i><b>+pushDownAssertions</b><span>Push each <code>sameTerm</code> filter into the triple patterns, turning a scan into an indexed lookup.</span></div>
+          <div class="step key"><i>3</i><b>+pushDownAssertions</b><span>Push each <code>sameTerm</code> filter into the triple patterns, turning a scan into an indexed lookup. Step 2's flattening moves after it.</span></div>
           <div class="arrow" aria-hidden="true">→</div>
-          <div class="step"><i>4</i><b>+pullUpExtends</b><span>Float the <code>BIND</code>s the pushdown leaves at every leaf back up, or drop them.</span></div>
+          <div class="step"><i>4</i><b>+pullUpExtends</b><span>Float the <code>BIND</code>s the pushdown leaves at every leaf back up, or drop them: once before the flattening, once after.</span></div>
         </div>
         <div class="versus">
           <div class="step"><b>materialised</b> <span>The reference. LUBM and OAEI: the original query over the views, materialised ahead of time (the build time is measured separately). StarBench: a hand-written SPARQL 1.1 query over the source.</span></div>
