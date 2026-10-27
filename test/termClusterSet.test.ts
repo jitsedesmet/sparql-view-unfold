@@ -1,43 +1,11 @@
-import type * as RDF from '@rdfjs/types';
 import { describe, it } from 'vitest';
-import type { Pin, PinChildren, PinMeet, TriplePin } from '../lib/datastructures/TermClusterSet.js';
-import { TermClusterSet, triplePositions } from '../lib/datastructures/TermClusterSet.js';
+import type { PinChildren } from '../lib/datastructures/TermClusterSet.js';
+import { TermClusterSet } from '../lib/datastructures/TermClusterSet.js';
 import { predicateRange, subjectRange } from '../lib/RangeSet.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
 
-/**
- * The meet the assertion conjunction uses, restated here so that the lattice can be tested without one:
- * two terms are an equality, two shapes decompose, and a ground triple term meeting a shape decides
- * every position of it while the shape is what the group keeps.
- */
-function meetPins(left: Pin<RDF.Term>, right: Pin<RDF.Term>): PinMeet<RDF.Term> | false {
-  if (left.kind === 'triple') {
-    return right.kind === 'triple' ?
-        {
-          pin: left,
-          entailed: triplePositions.map(position =>
-            ({ kind: 'unify', left: left[position], right: right[position] })),
-        } :
-      decomposed(left, right.term);
-  }
-  if (right.kind === 'triple') {
-    return decomposed(right, left.term);
-  }
-  return left.term.equals(right.term) ? { pin: left, entailed: []} : false;
-}
-
-function decomposed(shape: TriplePin, ground: RDF.Term): PinMeet<RDF.Term> | false {
-  return ground.termType === 'Quad' ?
-      {
-        pin: shape,
-        entailed: triplePositions.map(position =>
-          ({ kind: 'pin', group: shape[position], pin: { kind: 'term', term: ground[position] }})),
-      } :
-    false;
-}
-
-function newSet(): TermClusterSet<string, RDF.Term> {
-  return new TermClusterSet<string, RDF.Term>(name => name, meetPins);
+function newSet(): TermClusterSet<string> {
+  return new TermClusterSet<string>(name => name, variable => variable.value);
 }
 
 const termA = DF.namedNode('ex://a');
@@ -162,6 +130,41 @@ describe('termClusterSet', () => {
       const outer = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       const inner = <PinChildren> set.assertTriplePin(outer.object);
       expect(set.unifyGroups(set.getGroup('o'), inner.object)).toBe(false);
+    });
+  });
+
+  describe('terms', () => {
+    const shaped = DF.quad(DF.variable('a'), termB, DF.variable('c'));
+
+    it('shapes a group after a triple term, unifying its positions with the variables there', ({ expect }) => {
+      const set = newSet();
+      const group = <number> set.groupOfTerm(shaped);
+      expect(set.resolvedTermOf(group, undecided => DF.variable(set.valuesOf(undecided)[0]))).toEqual(shaped);
+      expect(set.assertTerm(group, ground)).toBe(true);
+      expect(set.resolvedTermOf(set.getGroup('a'))).toEqual(termA);
+      expect(set.resolvedTermOf(group)).toEqual(ground);
+    });
+
+    it('holds a variable in a position of a triple term to the range of that position', ({ expect }) => {
+      const set = newSet();
+      set.groupOfTerm(shaped);
+      expect(set.assertTerm(set.getGroup('a'), DF.literal('x'))).toBe(false);
+    });
+
+    it('meets a triple term pinned whole with the shape of the same triple term', ({ expect }) => {
+      const set = newSet();
+      expect(set.setTerm(set.getGroup('x'), ground)).toBe(true);
+      expect(set.assertTerm(set.getGroup('x'), ground)).toBe(true);
+    });
+
+    it('refuses a quad naming a graph, no triple term naming one', ({ expect }) => {
+      const set = newSet();
+      expect(set.groupOfTerm(DF.quad(termA, termB, termC, DF.namedNode('ex://g')))).toBe(false);
+    });
+
+    it('leaves a group nothing fixes unresolved without a name for it', ({ expect }) => {
+      const set = newSet();
+      expect(set.resolvedTermOf(<number> set.groupOfTerm(shaped))).toBeUndefined();
     });
   });
 

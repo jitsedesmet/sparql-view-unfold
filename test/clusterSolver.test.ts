@@ -139,5 +139,13 @@ describe('clusterSolver', () => {
       const solver = solverWithShape();
       expect(() => solver.register(termA, varY)).toThrow('Cannot match Term');
     });
+
+    it('refuses to unify two variables fixed to different terms', ({ expect }) => {
+      const solver = new ClusterSolver();
+      solver.register(termA, varY);
+      solver.register(varS, varO);
+      solver.register(termB, varO);
+      expect(() => solver.register(varS, varY)).toThrow('Cannot unify');
+    });
   });
 });

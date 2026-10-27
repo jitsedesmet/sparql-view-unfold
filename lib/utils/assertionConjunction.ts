@@ -391,10 +391,11 @@ export class AssertionConjunction {
    * a pattern where S3 rules the materialised shape out ({@link intoPattern})
    */
   public rebuildingSubstitution(): Assertions {
-    return this.strongMembersReplacedBy(group => this.termDecidedByPin(group, (undecided) => {
+    const nameOf = (undecided: number): RDF.Term | undefined => {
       const representative = this.representativeMemberOf(undecided);
       return representative === undefined ? undefined : DF.variable(representative);
-    }));
+    };
+    return this.strongMembersReplacedBy(group => this.clusters.resolvedTermOrNameOf(group, nameOf));
   }
 
   /**
@@ -1169,53 +1170,6 @@ export class AssertionConjunction {
   }
 
   /**
-   * The term a group is fixed to, which for a shape is the triple term its decided positions make.
-   *
-   * One walk for both callers, so that the two cannot come to disagree about what a shape is. A caller that
-   * always has a value for an undecided group always gets a term back, which the second signature states:
-   * every way out of the walk is a pin's term, a quad built from three of those, or that value.
-   * @param group - The group to resolve
-   * @param valueForUndecidedGroup - What to put where the pins decide nothing; a substitution into an
-   * expression has nothing to offer (S3), a substitution into a pattern has the variable reading the group
-   * @returns the term, or `undefined` where a position is decided by nothing at all
-   */
-  private termDecidedByPin(group: number): RDF.Term | undefined;
-  private termDecidedByPin(group: number, valueForUndecidedGroup: (group: number) => RDF.Term): RDF.Term;
-  private termDecidedByPin(
-    group: number,
-    valueForUndecidedGroup: (group: number) => RDF.Term | undefined,
-  ): RDF.Term | undefined;
-  private termDecidedByPin(
-    group: number,
-    valueForUndecidedGroup?: (group: number) => RDF.Term | undefined,
-  ): RDF.Term | undefined {
-    // The walk is a function of its own so that it recurses on what it *is* rather than on what the
-    // signatures above promise: the two modes are one traversal, and only the promise is per caller.
-    // The positions need no type check: a position carries the range it admits from the moment it is
-    // created ({@link AssertionClusterSet.assertTriplePin}), and a pin the range refuses never gets here.
-    const recurse = (reached: number): RDF.Term | undefined => {
-      const term = this.clusters.termOf(reached);
-      if (term !== undefined) {
-        return term;
-      }
-      const children = this.clusters.childrenOf(reached);
-      if (children === undefined) {
-        return valueForUndecidedGroup?.(reached);
-      }
-      const subject = recurse(children.subject);
-      const predicate = recurse(children.predicate);
-      const object = recurse(children.object);
-      if (subject === undefined || predicate === undefined || object === undefined) {
-        // A position nothing decides leaves the whole shape undecided, so the group is read the way any
-        // other undecided one is - which for the caller that has no reading is the `undefined` above.
-        return valueForUndecidedGroup?.(reached);
-      }
-      return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
-    };
-    return recurse(group);
-  }
-
-  /**
    * The value a pattern holds for every group a variable of Θ names: the term it is pinned to, the triple
    * term its shape is written out as, or the variable that reads it.
    * @param namer - Coins the variable for a position nothing names
@@ -1233,8 +1187,8 @@ export class AssertionConjunction {
       );
     };
 
-    const materialisedTerm = (group: number): RDF.Term =>
-      this.termDecidedByPin(group, undecided => DF.variable(nameOfGroup(undecided)));
+    const nameOf = (undecided: number): RDF.Term => DF.variable(nameOfGroup(undecided));
+    const materialisedTerm = (group: number): RDF.Term => this.clusters.resolvedTermOrNameOf(group, nameOf);
 
     const result = new Map<number, RDF.Term>();
     for (const [ group, [ representative ]] of accessesPerGroup) {
@@ -1329,7 +1283,7 @@ export class AssertionConjunction {
     if (group === undefined) {
       return undefined;
     }
-    const term = this.termDecidedByPin(group);
+    const term = this.clusters.resolvedTermOf(group);
     if (term !== undefined) {
       return term;
     }

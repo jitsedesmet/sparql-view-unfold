@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
-import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
+import { isTriplePosition, TermClusterSet, triplePositions } from '../datastructures/TermClusterSet.js';
 import {
   asAssertableTermType,
   assertableTermTypes,
@@ -862,53 +862,26 @@ export function substituteInPattern(
 }
 
 /**
- * Unifies two terms, recursing into triple terms.
+ * Unifies two terms on the term clusters, so that a triple term unifies position by position.
  * @param left - The one term
- * @param right - The other term, whose variable is the one substituted when both are variables
+ * @param right - The other term
  * @returns the most general substitution making both the same term, and that term, or `undefined` when none does
  */
 export function unifyTerms(left: RDF.Term, right: RDF.Term): { unifier: Assertions; unified: RDF.Term } | undefined {
-  const unifier = new Map<string, RDF.Term>();
-  if (!extendUnifier(unifier, left, right)) {
+  const clusters = new TermClusterSet<string>(name => name, variable => variable.value);
+  const group = clusters.groupOfTerm(left);
+  if (group === false || !clusters.assertTerm(group, right)) {
     return undefined;
   }
-  // Substituting rejects a term the unifier puts where no triple can hold it.
-  const unified = substituteInTerm(left, unifier, 'object');
-  return unified && { unifier, unified };
-}
-
-/**
- * Extends a unifier, kept fully substituted, so it also makes two terms equal.
- * @param unifier - The substitution to extend in place
- * @param left - The one term
- * @param right - The other term
- * @returns whether the terms unify
- */
-function extendUnifier(unifier: Map<string, RDF.Term>, left: RDF.Term, right: RDF.Term): boolean {
-  const one = substituteInTerm(left, unifier, 'object');
-  const other = substituteInTerm(right, unifier, 'object');
-  if (one === undefined || other === undefined) {
-    return false;
-  }
-  if (one.equals(other)) {
-    return true;
-  }
-  if (one.termType === 'Quad' && other.termType === 'Quad') {
-    return triplePositions.every(position => extendUnifier(unifier, one[position], other[position]));
-  }
-  const [ variable, term ] = other.termType === 'Variable' ? [ other, one ] : [ one, other ];
-  // A term holding the variable it equals would have to contain itself.
-  if (variable.termType !== 'Variable' || termVars(term).has(variable.value)) {
-    return false;
-  }
-  const binding = new Map([[ variable.value, term ]]);
-  for (const [ name, bound ] of unifier) {
-    const substituted = substituteInTerm(bound, binding, 'object');
-    if (substituted === undefined) {
-      return false;
+  // Every group the pins leave undecided holds a variable of the two terms.
+  const nameOf = (undecided: number): RDF.Term => DF.variable(clusters.valuesOf(undecided)[0]);
+  const termOf = (reached: number): RDF.Term => clusters.resolvedTermOrNameOf(reached, nameOf);
+  const unifier = new Map<string, RDF.Term>();
+  for (const name of unionSets([ termVars(left), termVars(right) ])) {
+    const term = termOf(clusters.getGroup(name));
+    if (!term.equals(DF.variable(name))) {
+      unifier.set(name, term);
     }
-    unifier.set(name, substituted);
   }
-  unifier.set(variable.value, term);
-  return true;
+  return { unifier, unified: termOf(group) };
 }

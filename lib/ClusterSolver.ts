@@ -1,39 +1,10 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import type { Pin, PinMeet } from './datastructures/TermClusterSet.js';
-import { meetShapes, TermClusterSet, triplePositions } from './datastructures/TermClusterSet.js';
+import { TermClusterSet } from './datastructures/TermClusterSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
 import { RewriteNoMatchError } from './RewriteNoMatchError.js';
 import type { RangedVar } from './utils/RangedVar.js';
-import { DF } from './utils/rdfDatatypes.js';
-import { isRdfQuad, isRdfTerm, isRdfVar } from './utils/typeGuards.js';
-
-/** A raw term that is either a concrete term (not a variable) or a ranged variable. */
-export type RawTerm = Exclude<RDF.Term, RDF.Variable> | RangedVar;
-
-/**
- * A raw term that is not a triple term, which is what a *pin* holds.
- *
- * Not the solver refusing triple terms: one is not a value the way an IRI is but a **shape**, which
- * {@link ClusterSolver.assertTerm} decomposes a group into, so it lives one level up on
- * {@link TermClusterSet}'s lattice rather than in the leaves of it.
- */
-export type RawBasicTerm = Exclude<RawTerm, RDF.BaseQuad>;
-
-/**
- * The meet of the two pins one group of the unfolding is asked to carry at once: two terms are the term
- * equality they always were, and two shapes unify position by position ({@link meetShapes}).
- * @param left - One of the two pins
- * @param right - The other
- * @returns what the group is left with plus what the meet entailed, or `false` on a contradiction - which a
- * shape meeting a term always is, no {@link RawBasicTerm} being a triple term
- */
-function meetSolverPins(left: Pin<RawBasicTerm>, right: Pin<RawBasicTerm>): PinMeet<RawBasicTerm> | false {
-  if (left.kind === 'triple' || right.kind === 'triple') {
-    return left.kind === 'triple' && right.kind === 'triple' ? meetShapes(left, right) : false;
-  }
-  return left.term.equals(right.term) ? { pin: left, entailed: []} : false;
-}
+import { isRdfTerm, isRdfVar } from './utils/typeGuards.js';
 
 /**
  * Solver for determining variable equality clusters during query rewriting.
@@ -44,26 +15,26 @@ function meetSolverPins(left: Pin<RawBasicTerm>, right: Pin<RawBasicTerm>): PinM
  *
  * Since a triple term the mapping head writes is a **shape** whose three positions are groups in their own
  * right ({@link assertTerm}) rather than a value a group is pinned to, the structure is a DAG, which
- * {@link resolvedTermOf} reads a term back off and the occurs check of {@link TermClusterSet} keeps well
+ * {@link fixedTermOf} reads a term back off and the occurs check of {@link TermClusterSet} keeps well
  * founded.
  * @example
  * // Given mapping head: ?t rdf:reifies <<( ?s ?p ?o )>>
  * // And triple pattern: ?x rdf:reifies <<( ?x ?y ?z )>>
  * // The solver determines: ?t = ?x = ?s, ?y = ?p, ?z = ?o
  */
-export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
+export class ClusterSolver extends TermClusterSet<RangedVar> {
   /** Maps group ID to the expressions its value has to satisfy - read through {@link getExpressions}. */
   protected groupToExpressions: Record<number, Algebra.Expression[]>;
   /**
    * Static expression validations where no variable group is involved. These occur when an expression must
    * equal a concrete term.
    */
-  protected staticExpressionValidation: { expression: Algebra.Expression; term: RawTerm }[];
+  protected staticExpressionValidation: { expression: Algebra.Expression; term: RDF.Term }[];
   /** The names of the user query's variables: those {@link register} met on its user query side. */
   private userQueryVariableNames: Set<string>;
 
   public constructor() {
-    super(variable => variable.value, meetSolverPins);
+    super(variable => variable.value, variable => variable);
     this.clear();
   }
 
@@ -93,7 +64,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     const range = variable.range;
     const group = this.getGroup(variable);
     if (range !== undefined && group !== undefined && !this.narrowRange(group, range)) {
-      const groupTerm = this.resolvedTermOf(group);
+      const groupTerm = this.fixedTermOf(group);
       throw new RewriteNoMatchError(`The range [${[ ...range.values() ].join(', ')}] of ${JSON.stringify(variable.value)} leaves nothing for its group, fixed to ${JSON.stringify(groupTerm)}`);
     }
   }
@@ -194,10 +165,10 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * @param term - The term to bind, a triple term included
    * @throws RewriteNoMatchError if the term conflicts with an existing binding or range
    */
-  protected registerTermToGroup(group: number, term: RawTerm): void {
+  protected registerTermToGroup(group: number, term: RDF.Term): void {
     // Read before asserting: a failed assertion leaves the set in a state no caller may read - narrowed
     // ranges and all - so what the message reports is the state the caller handed over.
-    const curTerm = this.resolvedTermOf(group);
+    const curTerm = this.fixedTermOf(group);
     const curRange = this.rangeOf(group);
     if (!this.assertTerm(group, term)) {
       throw new RewriteNoMatchError(curTerm === undefined ?
@@ -207,66 +178,22 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   }
 
   /**
-   * Asserts that every value of the group equals the term.
-   *
-   * A triple term is not pinned but **decomposed**: the group takes the shape of one, and each position is
-   * asserted onto the group that position is - the same unification the rest of the mapping head goes
-   * through. Three things come with that: a second triple term on the group unifies with the first rather
-   * than being reported unequal, every position is held to the range it can have, and the occurs check
-   * refuses `?y ≡ <<( ... ?y )>>`.
-   * @param group - The group to assert on
-   * @param term - The term every value of the group equals
-   * @returns `false` on a contradiction, after which the solver holds no meaningful state
+   * The term a group is fixed to, a shape read back with every position nothing fixes named by its mapping variable:
+   * the one the mapping body binds, so that `BIND(<<( ?s ?p ?o )>> AS ?y)` names values the subselect projects.
+   * @param group - The group to look up
+   * @returns the term, or `undefined` when nothing fixes the group, or a position of its shape is fixed by nothing
+   * and named by nothing
    */
-  private assertTerm(group: number, term: RawTerm): boolean {
-    if (!isRdfQuad(term)) {
-      return this.setTerm(group, term);
-    }
-    // A triple term states no graph, so a quad that names one is not a value any group can take.
-    if (term.graph.termType !== 'DefaultGraph') {
-      return false;
-    }
-    const children = this.assertTriplePin(group);
-    if (children === false) {
-      return false;
-    }
-    return triplePositions.every((position) => {
-      const component = term[position];
-      // Merging a position may merge further groups, so every step reads the ids through the set again -
-      // which `unifyGroups` and `setTerm` both do for the group they are handed.
-      return isRdfVar(component) ?
-        this.unifyGroups(children[position], this.getGroup(component)) :
-        this.assertTerm(children[position], component);
-    });
+  public fixedTermOf(group: number): RDF.Term | undefined {
+    return this.resolvedTermOf(group, this.firstMappingVarOf);
   }
 
   /**
-   * The term every value of the group equals, reading a *shape* back as the triple term it stands for.
-   *
-   * Every position is whatever fixes it, or else the mapping variable naming it - the same variable the
-   * mapping body binds, which is what lets the `BIND(<<( ?s ?p ?o )>> AS ?y)` this feeds name
-   * values the subselect really projects.
-   * @param group - The group to look up
-   * @returns the term, or `undefined` when nothing fixes the group, or when a position of its shape is fixed
-   * by nothing and named by nothing
+   * The mapping variable naming a group.
+   * @param group - The group to name
+   * @returns the variable, or `undefined` when no mapping variable is in it
    */
-  public resolvedTermOf(group: number): RawTerm | undefined {
-    const pin = this.pinOf(group);
-    if (pin?.kind !== 'triple') {
-      return pin?.term;
-    }
-    // Terminates on the occurs check: a group reaching itself through the pins is a contradiction, and
-    // the constraint solving refuses to settle in such a state.
-    const children = this.childrenOf(group)!;
-    const [ subject, predicate, object ] = triplePositions.map(position =>
-      this.resolvedTermOf(children[position]) ?? this.mappingVarsOf(children[position])[0]);
-    if (subject === undefined || predicate === undefined || object === undefined) {
-      return undefined;
-    }
-    // Every position was held to the range it admits while the shape was built, so this really is a
-    // triple term - which the types of a data factory have no way of knowing.
-    return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
-  }
+  private readonly firstMappingVarOf = (group: number): RDF.Variable | undefined => this.mappingVarsOf(group)[0];
 
   /**
    * The variables of the *mapping* in a group, as against the user query variables the rewriting binds from
@@ -310,7 +237,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   /**
    * Sorts the variables within each cluster, mapping variables first and by name within each of the two.
    *
-   * The mapping variables coming first is what {@link resolvedTermOf} and the rewriting read a cluster by:
+   * The mapping variables coming first is what {@link fixedTermOf} and the rewriting read a cluster by:
    * the first variable of a cluster is the one the subselect really projects, so a user query variable
    * landing there would name a variable nothing binds. It is ordered on {@link isUserQueryVar} rather than
    * left to the names, which carry no sign of the side they are on.
@@ -332,10 +259,10 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * @param from - The variable to look up
    * @returns the term its cluster is bound to (if any), the other variables in the cluster, and the group ID
    */
-  public getCluster(from: RDF.Variable): { term: RawTerm | undefined ; vars: RDF.Variable[]; group: number } {
+  public getCluster(from: RDF.Variable): { term: RDF.Term | undefined ; vars: RDF.Variable[]; group: number } {
     const varGroup = this.getGroup(from);
     return {
-      term: this.resolvedTermOf(varGroup),
+      term: this.fixedTermOf(varGroup),
       vars: this.valuesOf(varGroup).filter(value => !value.equals(from)),
       group: varGroup,
     };
