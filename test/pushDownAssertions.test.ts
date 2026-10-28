@@ -1825,6 +1825,26 @@ GROUP BY ?x ( ?x AS ?y )`,
   });
 
   describe('soundness guards', () => {
+    it('keeps that a bind of a triple term its positions do not admit leaves the variable unbound', ({ expect }) => {
+      // What pulling `BIND("x" AS ?v)` up into `BIND(<<( ?v :p :o )>> AS ?t)` gives, which no query text can.
+      const { AF, DF } = c;
+      const bind = (subject: AlgebraTypes.Pattern['subject']): AlgebraTypes.Project => AF.createProject(
+        AF.createFilter(
+          AF.createExtend(
+            AF.createBgp([ AF.createPattern(DF.variable('a'), DF.namedNode('ex://q'), DF.variable('b')) ]),
+            DF.variable('t'),
+            AF.createTermExpression(DF.quad(subject, DF.namedNode('ex://p'), DF.namedNode('ex://o'))),
+          ),
+          AF.createOperatorExpression('bound', [ AF.createTermExpression(DF.variable('t')) ]),
+        ),
+        [ DF.variable('t'), DF.variable('a') ],
+      );
+      const pushed = (subject: AlgebraTypes.Pattern['subject']): string =>
+        c.generator.generate(toAst(pushDownAssertions(newRewriteContext(), bind(subject)))).trim();
+      expect(pushed(DF.literal('x'))).toContain('FILTER ( FALSE )');
+      expect(pushed(DF.namedNode('ex://s'))).not.toContain('FILTER');
+    });
+
     it('demotes rather than pushes into a join operand whose BIND may leave the variable unbound', ({ expect }) => {
       // ?x is not certainly bound in the left operand (`IRI(?b)` errors when ?b is a blank node), and it is
       // possible in the right one, so L fails for the left: only the right operand may take the strong
