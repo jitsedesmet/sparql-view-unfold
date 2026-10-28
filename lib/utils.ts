@@ -3,7 +3,7 @@ import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TriplePosition } from './datastructures/TermClusterSet.js';
 import type { TransformationContext } from './transformContext.js';
 import { DF } from './utils/rdfDatatypes.js';
-import { isRdfTerm, isRdfVar, termIsStaticTerm } from './utils/typeGuards.js';
+import { isRdfTerm, isRdfVar, termIsDataBlockValue } from './utils/typeGuards.js';
 
 /**
  * Renames variables in an object, VALUES binding keys included, handing back a copy.
@@ -167,7 +167,7 @@ export function collectVariableNames(
 
 /**
  * Extracts direct variable assignments from the EXTEND chain at the top of an operation, keeping only the
- * ones whose expression is a ground term.
+ * ones whose expression is a term a VALUES row can hold, so that the bind cannot fail.
  * @param op - The operation to search
  * @returns the term assigned to each variable
  */
@@ -176,7 +176,7 @@ export function directExtensions(op: Algebra.Operation): Map<string, RDF.Term> {
 
   const findAssignments = (op: Algebra.Operation): void => {
     if (op.type === 'extend') {
-      if (op.expression.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(op.expression.term)) {
+      if (op.expression.subType === Algebra.ExpressionTypes.TERM && termIsDataBlockValue(op.expression.term)) {
         assignments.set(op.variable.value, op.expression.term);
       }
       findAssignments(op.input);

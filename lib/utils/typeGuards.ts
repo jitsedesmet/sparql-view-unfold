@@ -41,3 +41,17 @@ export function termIsStaticTerm(term: RDF.Term): boolean {
   }
   return term.termType !== 'Variable';
 }
+
+/**
+ * Whether a term is one a VALUES row can hold: an IRI, a literal, or a triple term of those that its positions
+ * admit. Binding such a term cannot fail.
+ * @param term - The term to check
+ * @returns whether it is such a term
+ */
+export function termIsDataBlockValue(term: RDF.Term): term is RDF.NamedNode | RDF.Literal | RDF.Quad {
+  if (term.termType === 'Quad') {
+    return term.subject.termType === 'NamedNode' && term.predicate.termType === 'NamedNode' &&
+      termIsDataBlockValue(term.object) && term.graph.termType === 'DefaultGraph';
+  }
+  return term.termType === 'NamedNode' || term.termType === 'Literal';
+}

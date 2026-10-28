@@ -1,9 +1,8 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import { cpMetaOf, expressionCertainlyEvaluates } from '../utils/certainlyBoundVars.js';
+import { cpMetaOf, expressionCertainlyEvaluates, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
-import { termIsStaticTerm } from '../utils/typeGuards.js';
 import { directExtensions } from '../utils.js';
 import { VariableSet } from './variableSet.js';
 
@@ -52,8 +51,10 @@ export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
   c: TransformationContext,
   op: T,
 ): T {
-  return algebraUtils.mapOperation<'unsafe', typeof op>(
-    op,
+  // Entered and left through `withoutCpVars`, as the pushdown does: the certainty a bind is read with is cached
+  // on the operations, and this pass changes them after.
+  return withoutCpVars(algebraUtils.mapOperation<'unsafe', typeof op>(
+    withoutCpVars(op),
     { join: {
       transform: (join) => {
         // Find for each member of the join whether variables are bound to known terms
@@ -66,7 +67,7 @@ export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
         return join;
       },
     }},
-  );
+  ));
 }
 
 /**
@@ -86,8 +87,7 @@ function restrictOperations(
       if (op.expression.subType === Algebra.ExpressionTypes.TERM && varSet &&
         !varSet.termIsCompatible(op.expression.term) &&
         // A bind that fails leaves its variable unbound, which joins with anything.
-        (termIsStaticTerm(op.expression.term) ||
-          expressionCertainlyEvaluates(c, op.expression, cpMetaOf(c, op.input)))) {
+        expressionCertainlyEvaluates(c, op.expression, cpMetaOf(c, op.input))) {
         return createFilterFalse(c, op);
       }
       op.input = recurse(op.input);

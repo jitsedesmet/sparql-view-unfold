@@ -1,3 +1,4 @@
+import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
 import { createQueryRewriter } from '../lib/queryRewriter.js';
@@ -6,6 +7,7 @@ import {
   nullifyJoinOverIncompatibleBoundsTransformation,
 } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { createTransformationContext } from '../lib/transformContext.js';
+import { DF } from '../lib/utils/rdfDatatypes.js';
 
 describe('nullifyJoinOverIncompatibleBounds', () => {
   const c = createTransformationContext();
@@ -17,6 +19,17 @@ describe('nullifyJoinOverIncompatibleBounds', () => {
 
   it('leaves a join over a union of no operands as it stands', ({ expect }) => {
     const join = (): Algebra.Join => c.AF.createJoin([ c.AF.createUnion([]), c.AF.createBgp([]) ], false);
+    expect(nullifyJoinOverIncompatibleBounds(c, join())).toEqual(join());
+  });
+
+  it('keeps a bind of a triple term that cannot be built, which leaves its variable unbound', ({ expect }) => {
+    // What pulling `BIND("x" AS ?s)` up into `BIND(<<( ?s :p :o )>> AS ?t)` gives.
+    const bind = (term: RDF.Term): Algebra.Extend =>
+      c.AF.createExtend(c.AF.createBgp([]), DF.variable('t'), c.AF.createTermExpression(term));
+    const join = (): Algebra.Join => c.AF.createJoin([
+      bind(DF.namedNode('ex://a')),
+      bind(DF.quad(DF.literal('x'), DF.namedNode('ex://p'), DF.namedNode('ex://o'))),
+    ]);
     expect(nullifyJoinOverIncompatibleBounds(c, join())).toEqual(join());
   });
 

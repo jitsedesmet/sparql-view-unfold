@@ -853,10 +853,6 @@ export function substituteInPattern(
  * @returns the most general substitution making both the same term, and that term, or `undefined` when none does
  */
 export function unifyTerms(left: RDF.Term, right: RDF.Term): { unifier: Assertions; unified: RDF.Term } | undefined {
-  // Two ground terms unify exactly when they are equal, which needs no clusters.
-  if (termIsStaticTerm(left) && termIsStaticTerm(right)) {
-    return left.equals(right) ? { unifier: new Map(), unified: left } : undefined;
-  }
   const clusters = new TermClusterSet<string>(name => name, variable => variable.value);
   const group = clusters.groupOfTerm(left);
   if (group === false || !clusters.assertTerm(group, right)) {

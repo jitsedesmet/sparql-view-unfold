@@ -10,6 +10,7 @@ const c = DF.variable('c');
 const d = DF.variable('d');
 const q = DF.namedNode('ex://q');
 const s = DF.namedNode('ex://s');
+const x = DF.literal('x');
 
 /**
  * Writes a unification out.
@@ -40,7 +41,8 @@ describe('unifyTerms', () => {
     [ 'a triple pattern and a nested one', DF.quad(a, q, d), DF.quad(b, q, DF.quad(b, q, c)), '<<?a ex://q <<?a ex://q ?c>>>> {b=?a d=<<?a ex://q ?c>>}' ],
     [ 'a triple term into a subject', DF.quad(a, q, DF.quad(b, q, c)), DF.quad(d, q, a), 'none' ],
     [ 'a variable and a triple pattern holding it', a, DF.quad(a, q, b), 'none' ],
-    [ 'a literal into a subject', DF.quad(a, q, DF.literal('x')), DF.quad(b, q, a), 'none' ],
+    [ 'a literal into a subject', DF.quad(a, q, x), DF.quad(b, q, a), 'none' ],
+    [ 'two equal triple terms with a literal subject', DF.quad(x, q, s), DF.quad(x, q, s), 'none' ],
     [ 'a predicate into a subject and object', DF.quad(a, a, b), DF.quad(s, c, c), '<<ex://s ex://s ex://s>> {a=ex://s b=ex://s c=ex://s}' ],
   ])('unifies %s', ([ , left, right, expected ], { expect }) => {
     expect(unified(left, right)).toBe(expected);

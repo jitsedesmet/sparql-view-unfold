@@ -10,9 +10,11 @@ describe('rangeSet', () => {
 
   it('refuses to change once built, a range being shared', ({ expect }) => {
     const range = new RangeSet([ 'NamedNode' ]);
-    expect(() => range.add('Literal')).toThrow('A range is not changed once built');
-    expect(() => range.delete('NamedNode')).toThrow('A range is not changed once built');
-    expect(() => range.clear()).toThrow('A range is not changed once built');
+    // The type refuses the call already, which a range read as a plain Set does not.
+    const asSet: Set<string> = range;
+    expect(() => asSet.add('Literal')).toThrow('A range is not changed once built');
+    expect(() => asSet.delete('NamedNode')).toThrow('A range is not changed once built');
+    expect(() => asSet.clear()).toThrow('A range is not changed once built');
     expect([ ...range ]).toEqual([ 'NamedNode' ]);
   });
 

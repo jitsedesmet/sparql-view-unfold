@@ -20,18 +20,25 @@ export class RangeSet extends Set<RDF.Term['termType']> {
     builtRanges.add(this);
   }
 
-  public override add(termType: RDF.Term['termType']): this {
+  /**
+   * Refused once built, typed so that a call does not compile: the Set constructor alone adds.
+   * @param termType - The term type the constructor adds
+   * @returns this range, while it is being built
+   */
+  public override add(termType: never): never {
     if (builtRanges.has(this)) {
       throw new Error('A range is not changed once built');
     }
-    return super.add(termType);
+    return <never> super.add(termType);
   }
 
-  public override delete(): boolean {
+  /** Refused, typed so that a call does not compile. */
+  public override delete(): never {
     throw new Error('A range is not changed once built');
   }
 
-  public override clear(): void {
+  /** Refused, typed so that a call does not compile. */
+  public override clear(): never {
     throw new Error('A range is not changed once built');
   }
 

@@ -268,10 +268,8 @@ export class AssertionConjunction {
     if (this.bound.has(name)) {
       return assertBound();
     }
-    const group = this.clusters.groupOf(name);
-    if (group === undefined) {
-      return undefined;
-    }
+    // Neither bound nor unbound, so it says something by being in a group.
+    const group = this.clusters.groupOf(name)!;
     const isStrong = this.strength.get(name) !== 'weak';
     const term = this.decidedTermOf(group);
     if (term !== undefined) {

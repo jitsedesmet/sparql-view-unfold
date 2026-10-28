@@ -1,6 +1,11 @@
 import { describe, it } from 'vitest';
 import { createQueryRewriter } from '../lib/queryRewriter.js';
-import { extendsToValuesTransformation } from '../lib/transformations/extendsToValues.js';
+import {
+  extendsToValuesTransformation,
+  transformExtendsToValues,
+} from '../lib/transformations/extendsToValues.js';
+import { createTransformationContext } from '../lib/transformContext.js';
+import { DF } from '../lib/utils/rdfDatatypes.js';
 
 describe('extendsToValues', () => {
   const rewriter = createQueryRewriter([ extendsToValuesTransformation() ]);
@@ -23,5 +28,17 @@ describe('extendsToValues', () => {
     <ex://me>
   }
 }`);
+  });
+
+  it('keeps a bind no VALUES row can hold', ({ expect }) => {
+    const c = createTransformationContext();
+    for (const term of [
+      DF.quad(DF.literal('x'), DF.namedNode('ex://p'), DF.namedNode('ex://o')),
+      DF.quad(DF.blankNode('b'), DF.namedNode('ex://p'), DF.namedNode('ex://o')),
+      DF.blankNode('b'),
+    ]) {
+      const bind = c.AF.createExtend(c.AF.createBgp([]), DF.variable('t'), c.AF.createTermExpression(term));
+      expect(transformExtendsToValues(c, bind)).toEqual(bind);
+    }
   });
 });
