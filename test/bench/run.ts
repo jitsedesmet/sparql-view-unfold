@@ -2,8 +2,8 @@
  * @fileoverview Benchmark orchestration for StarBench (the BKR reification benchmark) and the LUBM and
  * OAEI Conference workloads.
  *
- * For every engine, scheme and dataset scale it measures five ways of answering each
- * benchmark query. On StarBench all five run on the SAME materialized RDF 1.1 data:
+ * For every engine, scheme and dataset scale it measures six ways of answering each
+ * benchmark query. On StarBench all six run on the SAME materialized RDF 1.1 data:
  *   - `rewriting`                  : the SPARQL 1.2 query rewritten to SPARQL 1.1
  *     with the standard pipeline (this library),
  *   - `rewriting+removeProjections`: the same, with the `removeProjections`
@@ -17,6 +17,9 @@
  *     once right after the pushdown and once more after `removeProjections` (see
  *     `runner.ts`'s pipeline comment for why twice) — floats the `BIND`s the pushdown
  *     leaves at every leaf back up to where they cost less, or drops them outright,
+ *   - `rewriting+keepProjections`  : `rewriting+pullUpExtends` without `removeProjections` (and so with a
+ *     single `pullUpExtends`): not a rung but a sibling of the last one, measuring what flattening the
+ *     sub-`SELECT`s is worth once the pushdown has run,
  *   - `materialized`               : the hand-written baseline query (BKR-R / BKR-S).
  * It also checks every approach against a ground-truth answer for the case: the
  * hand-written `materialized` baseline, which is plain SPARQL 1.1 over plain RDF 1.1
@@ -89,7 +92,7 @@ interface RunOptions {
   schemes: string[];
   /** Scales to run, of those each scheme has; `undefined` runs each scheme's defaults. */
   scales: string[] | undefined;
-  /** Approaches to run; `undefined` runs all five. */
+  /** Approaches to run; `undefined` runs all six. */
   approaches: string[] | undefined;
   /** Cases to run, by id (`lubm/Q06`); `undefined` runs them all. */
   cases: string[] | undefined;
@@ -125,7 +128,7 @@ interface ResultRow {
   quads: number;
   caseId: string;
   approach: 'rewriting' | 'rewriting+removeProjections' | 'rewriting+pushDownAssertions' | 'rewriting+pullUpExtends' |
-  'materialized';
+  'rewriting+keepProjections' | 'materialized';
   status: 'ok' | 'timeout' | 'error';
   medianMs: number;
   minMs: number;
@@ -520,6 +523,7 @@ async function runEngine(
           [ 'rewriting+removeProjections', 'removeProjections' ],
           [ 'rewriting+pushDownAssertions', 'pushDownAssertions' ],
           [ 'rewriting+pullUpExtends', 'pullUpExtends' ],
+          [ 'rewriting+keepProjections', 'keepProjections' ],
         ]) {
           const pair: Job[] = [];
           for (const view of opts.rdfViews) {

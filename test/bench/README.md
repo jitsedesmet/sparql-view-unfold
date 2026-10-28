@@ -182,15 +182,15 @@ Comunica, Oxigraph and Jena skip StarBench, which needs SPARQL 1.2.
 Every engine answers from data it has loaded and indexed once, the way it is built to be used, and is then
 queried warm:
 
-| Engine | Server | Store | Loaded with |
-|---|---|---|---|
-| Oxigraph | `oxigraph serve-read-only` | RocksDB on disk | `oxigraph load` (its bulk loader) |
-| Jena | `fuseki-server.jar --tdb2 --loc` | TDB2 on disk | `tdb2.tdbloader --loader=parallel` |
-| QLever | `qlever-server` | its index on disk | `qlever-index` |
-| Blazegraph | `blazegraph.jar` (NanoSparqlServer) | its journal on disk | `DataLoader` |
-| Virtuoso | `virtuoso-t` | its database on disk | `ld_dir` and `rdf_loader_run` |
-| GraphDB | `graphdb -s` | its repository on disk, one GraphDB home per store | `importrdf preload` |
-| Comunica | `comunicaWorker.mjs` | HDT (LUBM, OAEI), in-memory N3 store (StarBench) | `rdf2hdt`, or parsing the Turtle |
+| Engine | Version measured | Server | Store | Loaded with |
+|---|---|---|---|---|
+| Oxigraph | 0.5.11 | `oxigraph serve-read-only` | RocksDB on disk | `oxigraph load` (its bulk loader) |
+| Jena | 6.3.0-SNAPSHOT, the nightly of 2026-09-22 | `fuseki-server.jar --tdb2 --loc` | TDB2 on disk | `tdb2.tdbloader --loader=parallel` |
+| QLever | built from master at `8303d22` (2026-09-30) | `qlever-server` | its index on disk | `qlever-index` |
+| Blazegraph | 2.1.6 RC | `blazegraph.jar` (NanoSparqlServer) | its journal on disk | `DataLoader` |
+| Virtuoso | 7.2.17 (open source) | `virtuoso-t` | its database on disk | `ld_dir` and `rdf_loader_run` |
+| GraphDB | 11.5.1 Free | `graphdb -s` | its repository on disk, one GraphDB home per store | `importrdf preload` |
+| Comunica | 5.4.0 (`@comunica/query-sparql-file`, from `package.json`) | `comunicaWorker.mjs` | HDT (LUBM, OAEI), in-memory N3 store (StarBench) | `rdf2hdt`, or parsing the Turtle |
 
 The servers share `ManagedServerEngine` (`engines.ts`). It bulk-loads a store beside each data file the
 first time that file is queried (`lubm-u10.nt` → `lubm-u10.oxigraph/`, `lubm-u10.tdb2/`, `lubm-u10.qlever/`, ...),
@@ -225,7 +225,8 @@ which brings its own compiler (GCC 13; GCC 14 fails on QLever's concepts) and li
 ```bash
 micromamba create -p ~/opt/qlever-env -c conda-forge gxx_linux-64=13 gcc_linux-64=13 cmake ninja \
   libboost-devel=1.86 icu jemalloc zstd openssl liburing libuuid mold pkg-config
-git clone https://github.com/ad-freiburg/qlever.git && mkdir qlever/build && cd qlever/build
+git clone https://github.com/ad-freiburg/qlever.git && git -C qlever checkout 8303d22   # the commit measured
+mkdir qlever/build && cd qlever/build
 micromamba run -p ~/opt/qlever-env bash -c 'cmake -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO \
   -DUSE_PARALLEL=true -D_NO_TIMING_TESTS=ON -DCOMPILER_SUPPORTS_MARCH_NATIVE=FALSE \
   -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold -Wl,-rpath,$CONDA_PREFIX/lib" -DCMAKE_CXX_FLAGS=-Wno-psabi \

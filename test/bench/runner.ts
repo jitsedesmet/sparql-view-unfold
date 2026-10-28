@@ -136,6 +136,22 @@ function withPullUpExtendsTransformations(mapping: Mapping, options: UnfoldingOp
   ];
 }
 
+/**
+ * {@link withPullUpExtendsTransformations} without `removeProjectionsTransformation`, and so with one
+ * `pullUpExtendsTransformation` (the second pass only exists to see past what the flattening removed): the
+ * sub-`SELECT` each mapper branch is wrapped in stays. It is not a rung of the ladder but a sibling of its
+ * last one, measuring what the flattening is worth once the pushdown has run.
+ */
+function withKeptProjectionsTransformations(mapping: Mapping, options: UnfoldingOptions): QueryTransformation[] {
+  return [
+    ...standardTransformations(mapping, options),
+    pushDownAssertionsTransformation(),
+    filterFalseTransformation(),
+    pullUpExtendsTransformation(),
+    filterFalseTransformation(),
+  ];
+}
+
 /** A single benchmark case: one SPARQL 1.2 query against one reification pattern. */
 export interface BenchCase {
   /** Unique id, e.g. `reification/A-Q1`. */
@@ -183,13 +199,15 @@ export interface BenchRecord {
 }
 
 /** Which optimization pipeline {@link rewriteToSparql11} should apply. */
-export type RewriteVariant = 'standard' | 'removeProjections' | 'pushDownAssertions' | 'pullUpExtends';
+export type RewriteVariant = 'standard' | 'removeProjections' | 'pushDownAssertions' | 'pullUpExtends' |
+  'keepProjections';
 
 function pipelineFor(variant: RewriteVariant, mapping: Mapping, options: UnfoldingOptions): QueryTransformation[] {
   switch (variant) {
     case 'removeProjections': return withProjectionRemovalTransformations(mapping, options);
     case 'pushDownAssertions': return withPushDownAssertionsTransformations(mapping, options);
     case 'pullUpExtends': return withPullUpExtendsTransformations(mapping, options);
+    case 'keepProjections': return withKeptProjectionsTransformations(mapping, options);
     default: return standardTransformations(mapping, options);
   }
 }
