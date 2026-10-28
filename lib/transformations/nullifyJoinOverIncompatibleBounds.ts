@@ -51,10 +51,8 @@ export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
   c: TransformationContext,
   op: T,
 ): T {
-  // Entered and left through `withoutCpVars`, as the pushdown does: the certainty a bind is read with is cached
-  // on the operations, and this pass changes them after.
-  return withoutCpVars(algebraUtils.mapOperation<'unsafe', typeof op>(
-    withoutCpVars(op),
+  return algebraUtils.mapOperation<'unsafe', typeof op>(
+    op,
     { join: {
       transform: (join) => {
         // Find for each member of the join whether variables are bound to known terms
@@ -67,7 +65,7 @@ export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
         return join;
       },
     }},
-  ));
+  );
 }
 
 /**
@@ -86,8 +84,9 @@ function restrictOperations(
       const varSet = varSets.get(op.variable.value);
       if (op.expression.subType === Algebra.ExpressionTypes.TERM && varSet &&
         !varSet.termIsCompatible(op.expression.term) &&
-        // A bind that fails leaves its variable unbound, which joins with anything.
-        expressionCertainlyEvaluates(c, op.expression, cpMetaOf(c, op.input))) {
+        // A bind that fails leaves its variable unbound, which joins with anything. The certainty is read off a
+        // copy, so that none is left cached on operations this pass goes on to change.
+        expressionCertainlyEvaluates(c, op.expression, cpMetaOf(c, withoutCpVars(op.input)))) {
         return createFilterFalse(c, op);
       }
       op.input = recurse(op.input);
