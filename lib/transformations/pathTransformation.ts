@@ -54,8 +54,7 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
    * @returns the projection, or an existence check when there are no variables
    */
   function overSubjectAndObject(operation: Algebra.Operation, path: Algebra.Path): Algebra.Operation {
-    const visible = [ ...new Set([ path.subject, path.object, path.graph ].flatMap(term => [ ...termVars(term) ])) ]
-      .map(name => DF.variable(name));
+    const visible = variablesOf(path.subject, path.object, path.graph);
     if (visible.length === 0) {
       return AF.createDistinct(projectSolutionExistence(c, operation));
     }
@@ -76,7 +75,16 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
     const matches = term.termType === 'Quad' ?
       asObject :
       AF.createUnion([ AF.createBgp([ AF.createPattern(term, predicate, other, graph) ]), asObject ]);
-    return AF.createDistinct(AF.createProject(matches, [ ...termVars(term) ].map(name => DF.variable(name))));
+    return AF.createDistinct(AF.createProject(matches, variablesOf(term)));
+  }
+
+  /**
+   * The variables of some terms, each once.
+   * @param terms - The terms to read
+   * @returns their variables, in the order the terms hold them
+   */
+  function variablesOf(...terms: RDF.Term[]): RDF.Variable[] {
+    return [ ...new Set(terms.flatMap(term => [ ...termVars(term) ])) ].map(name => DF.variable(name));
   }
 
   /**

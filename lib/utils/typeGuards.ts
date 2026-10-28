@@ -1,4 +1,6 @@
 import type * as RDF from '@rdfjs/types';
+import { triplePositions } from '../datastructures/TermClusterSet.js';
+import { rangeOfPosition } from '../RangeSet.js';
 import type { RangedVar } from './RangedVar.js';
 
 /**
@@ -50,8 +52,8 @@ export function termIsStaticTerm(term: RDF.Term): boolean {
  */
 export function termIsDataBlockValue(term: RDF.Term): term is RDF.NamedNode | RDF.Literal | RDF.Quad {
   if (term.termType === 'Quad') {
-    return term.subject.termType === 'NamedNode' && term.predicate.termType === 'NamedNode' &&
-      termIsDataBlockValue(term.object) && term.graph.termType === 'DefaultGraph';
+    return term.graph.termType === 'DefaultGraph' && triplePositions.every(position =>
+      rangeOfPosition(position).has(term[position].termType) && termIsDataBlockValue(term[position]));
   }
   return term.termType === 'NamedNode' || term.termType === 'Literal';
 }

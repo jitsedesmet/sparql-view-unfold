@@ -239,7 +239,7 @@ export class AssertionConjunction {
   }
 
   /**
-   * Whether the conjunction says something about a variable, which is what {@link get} answers for.
+   * Whether the conjunction says something about a variable, which is where {@link get} answers.
    * @param name - The variable to look up
    * @returns whether it does
    */
@@ -259,17 +259,16 @@ export class AssertionConjunction {
    * @returns the assertion, or `undefined` when the conjunction says nothing about it
    */
   public get(name: string): Assertion | undefined {
-    if (!this.saysAbout(name)) {
-      return undefined;
-    }
     if (this.unbound.has(name)) {
       return assertUnbound();
     }
     if (this.bound.has(name)) {
       return assertBound();
     }
-    // Neither bound nor unbound, so it says something by being in a group.
-    const group = this.clusters.groupOf(name)!;
+    const group = this.clusters.groupOf(name);
+    if (group === undefined) {
+      return undefined;
+    }
     const isStrong = this.strength.get(name) !== 'weak';
     const term = this.decidedTermOf(group);
     if (term !== undefined) {
