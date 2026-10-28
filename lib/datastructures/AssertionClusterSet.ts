@@ -1,13 +1,10 @@
-import type * as RDF from '@rdfjs/types';
 import { objectRange } from '../RangeSet.js';
 import type { RangeSet } from '../RangeSet.js';
-import type { Pin, PinMeet, TriplePin } from './TermClusterSet.js';
-import { meetShapes, TermClusterSet, triplePositions } from './TermClusterSet.js';
+import { TermClusterSet } from './TermClusterSet.js';
 
 /**
- * The {@link TermClusterSet} an {@link utils/assertionConjunction!AssertionConjunction} is built on:
- * groups of RDF terms, meeting pins the way a conjunction of `sameTerm` conditions needs them met, and
- * remembering which part of a group's range it was *told* rather than worked out.
+ * The {@link TermClusterSet} an {@link utils/assertionConjunction!AssertionConjunction} is built on: groups of
+ * variable names, remembering which part of a group's range it was *told* rather than worked out.
  *
  * That last part is here rather than in {@link TermClusterSet} because it is not a fact about groups at all
  * - it is about writing them back out as a condition, which only a conjunction ever does. The set narrows a
@@ -18,12 +15,12 @@ import { meetShapes, TermClusterSet, triplePositions } from './TermClusterSet.js
  * everything else relies on: **the asserted range always contains the effective one**. So the asserted half
  * never decides anything the effective half does not.
  */
-export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
+export class AssertionClusterSet extends TermClusterSet<string> {
   /** Maps group ID to the part of its range a condition asserted, rather than the set working it out */
   protected groupToAssertedRange: Record<number, RangeSet>;
 
   public constructor() {
-    super(name => name, meetTermPins);
+    super(name => name, variable => variable.value);
     this.clear();
   }
 
@@ -124,41 +121,4 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
     super.dropGroup(group);
     delete this.groupToAssertedRange[group];
   }
-}
-
-/**
- * The meet of two pins on one group of an assertion conjunction: two terms are the equality they always
- * were, two shapes the pairwise unification {@link meetShapes} is, and a ground triple term meeting a shape
- * decomposes the same way.
- * @param left - One of the two pins
- * @param right - The other
- * @returns what the group is left with plus what the meet entailed, or `false` on a contradiction
- */
-function meetTermPins(left: Pin<RDF.Term>, right: Pin<RDF.Term>): PinMeet<RDF.Term> | false {
-  if (left.kind === 'triple') {
-    return right.kind === 'triple' ? meetShapes(left, right) : decomposedAgainst(left, right.term);
-  }
-  if (right.kind === 'triple') {
-    return decomposedAgainst(right, left.term);
-  }
-  return left.term.equals(right.term) ? { pin: left, entailed: []} : false;
-}
-
-/**
- * A ground triple term meeting a shape: the same decomposition two shapes are, with the components already
- * known.
- * @param shape - The shape the group carries, and the pin it keeps - its positions are groups other things
- * may be equal to, and the term reads back off a shape all of whose positions are decided
- * @param ground - The term it has to agree with
- * @returns the pin and the pins its positions take, or `false` when the term is no triple term at all
- */
-function decomposedAgainst(shape: TriplePin, ground: RDF.Term): PinMeet<RDF.Term> | false {
-  if (ground.termType === 'Quad' && ground.graph.termType === 'DefaultGraph') {
-    return {
-      pin: shape,
-      entailed: triplePositions.map(position =>
-        ({ kind: 'pin', group: shape[position], pin: { kind: 'term', term: ground[position] }})),
-    };
-  }
-  return false;
 }

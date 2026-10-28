@@ -1,11 +1,12 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
-import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
+import { isTriplePosition, TermClusterSet, triplePositions } from '../datastructures/TermClusterSet.js';
 import {
   asAssertableTermType,
   assertableTermTypes,
   RangeSet,
+  rangeOfTermType,
   termTypePredicates,
   tripleTermRange,
 } from '../RangeSet.js';
@@ -14,6 +15,7 @@ import { termVars } from './certainlyBoundVars.js';
 import { disjunctionOf, splitDisjunction } from './expressionHelpers.js';
 import { DF } from './rdfDatatypes.js';
 import { unionSets } from './setUtils.js';
+import { termIsStaticTerm } from './typeGuards.js';
 
 /**
  * @fileoverview The assertion toolbox: recognizing the assertions a filter condition carries, building
@@ -226,23 +228,6 @@ export function entailedByReading(read: Access): AssertionConjunct {
 }
 
 /**
- * Whether an assertion may fix a variable to this *ground* term, i.e. whether it pins a group to it.
- *
- * A triple term is admitted exactly when it is ground: until its components are known it is a *shape*, and
- * that is the business of the pin lattice ({@link datastructures/TermClusterSet!TermClusterSet}) instead.
- * @param term - The term to check
- * @returns whether the term is variable-free
- */
-export function isAssertableTerm(term: RDF.Term): boolean {
-  // Ground *is* variable-free, so the two cases - a variable, and a triple term holding one - are the one
-  // question {@link termVars} already answers, and the one the pull-up asks of a term expression before
-  // it writes it into a reader.
-  // Blank nodes need no exclusion here: by the time this pass runs, the ones in a WHERE clause have
-  // already been converted to variables, so no assertion can ever carry one.
-  return termVars(term).size === 0;
-}
-
-/**
  * The access an expression reads, when that is all it does: a variable, or a chain of `SUBJECT` /
  * `PREDICATE` / `OBJECT` around one.
  * @param expression - The expression to read
@@ -267,7 +252,7 @@ export function asAccess(expression: Algebra.Expression, acc: TriplePosition[] =
 function asAssertionTarget(expression: Algebra.Expression): AssertionTarget | undefined {
   const read = asAccess(expression);
   if (read === undefined) {
-    return expression.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(expression.term) ?
+    return expression.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(expression.term) ?
       expression.term :
       undefined;
   }
@@ -334,15 +319,14 @@ function transferSourceOfTerm(term: RDF.Term): TransferSource | undefined {
   if (term.termType === 'Variable') {
     return access(term.value);
   }
-  if (term.termType === 'Quad' && !isAssertableTerm(term)) {
-    // A quad carrying a graph is a generalised statement rather than a triple term, so no value Θ can
-    // hold is one and nothing is handed down. A *ground* one is a term like any other, and was decided
-    // by the branch above.
-    return term.graph.termType === 'DefaultGraph' ?
-      constructionOf(triplePositions.map(position => transferSourceOfTerm(term[position]))) :
-      undefined;
+  if (termIsStaticTerm(term)) {
+    return term;
   }
-  return isAssertableTerm(term) ? term : undefined;
+  // A quad carrying a graph is a generalised statement rather than a triple term, so no value Θ can hold is one
+  // and nothing is handed down.
+  return term.termType === 'Quad' && term.graph.termType === 'DefaultGraph' ?
+    constructionOf(triplePositions.map(position => transferSourceOfTerm(term[position]))) :
+    undefined;
 }
 
 /**
@@ -494,9 +478,10 @@ function withTermTypePredicate(test: TermTypeConjunct | undefined, expression: A
   if (read === undefined || (test !== undefined && !sameAccessAs(test.access, read))) {
     return undefined;
   }
-  const result = test ?? { access: read, assertion: assertTermType(new RangeSet()) };
-  result.assertion.range.add(termType);
-  return result;
+  const range = test === undefined ?
+    rangeOfTermType(termType) :
+    RangeSet.join([ test.assertion.range, rangeOfTermType(termType) ]);
+  return { access: read, assertion: assertTermType(range) };
 }
 
 /**
@@ -859,4 +844,29 @@ export function substituteInPattern(
     return undefined;
   }
   return c.AF.createPattern(subject, predicate, object, graph);
+}
+
+/**
+ * Unifies two terms on the term clusters, so that a triple term unifies position by position.
+ * @param left - The one term
+ * @param right - The other term
+ * @returns the most general substitution making both the same term, and that term, or `undefined` when none does
+ */
+export function unifyTerms(left: RDF.Term, right: RDF.Term): { unifier: Assertions; unified: RDF.Term } | undefined {
+  const clusters = new TermClusterSet<string>(name => name, variable => variable.value);
+  const group = clusters.groupOfTerm(left);
+  if (group === false || !clusters.assertTerm(group, right)) {
+    return undefined;
+  }
+  // Every group the pins leave undecided holds a variable of the two terms.
+  const nameOf = (undecided: number): RDF.Term => DF.variable(clusters.valuesOf(undecided)[0]);
+  const termOf = (reached: number): RDF.Term => clusters.resolvedTermOrNameOf(reached, nameOf);
+  const unifier = new Map<string, RDF.Term>();
+  for (const name of unionSets([ termVars(left), termVars(right) ])) {
+    const term = termOf(clusters.getGroup(name));
+    if (!term.equals(DF.variable(name))) {
+      unifier.set(name, term);
+    }
+  }
+  return { unifier, unified: termOf(group) };
 }

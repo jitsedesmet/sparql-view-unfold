@@ -172,7 +172,7 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF 
 
     // A shape reads back as the triple term it stands for, so a mapping head writing one is restricted
     // here the way a head writing an IRI is.
-    const groupTerm = clusterSolver.resolvedTermOf(group);
+    const groupTerm = clusterSolver.fixedTermOf(group);
     const groupMappingVars = clusterSolver.mappingVarsOf(group);
 
     // Handle term restrictions first!

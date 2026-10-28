@@ -1,5 +1,6 @@
 import type * as RDF from '@rdfjs/types';
-import type { Patch } from '@traqula/core';
+import { triplePositions } from '../datastructures/TermClusterSet.js';
+import { rangeOfPosition } from '../RangeSet.js';
 import type { RangedVar } from './RangedVar.js';
 
 /**
@@ -31,23 +32,28 @@ export function isRdfVar(obj: object): obj is RangedVar {
   return isRdfTerm(obj) && obj.termType === 'Variable';
 }
 
-type StaticTermPrimitive =
-    | Exclude<RDF.Term, RDF.Quad | RDF.Variable>
-    | Patch<RDF.Quad, {
-      subject: Exclude<RDF.Quad['subject'], RDF.Variable>;
-      predicate: Exclude<RDF.Quad['predicate'], RDF.Variable>;
-      object: Exclude<RDF.Quad['object'], RDF.Variable>;
-      graph: Exclude<RDF.Quad['graph'], RDF.Variable>;
-    }>;
-
 /**
  * Whether a term is fully static, i.e. contains no variables, recursing into Quads.
  * @param term - The term to check
  * @returns whether it is variable-free
  */
-export function termIsStaticTerm(term: RDF.Term): term is StaticTermPrimitive {
+export function termIsStaticTerm(term: RDF.Term): boolean {
   if (term.termType === 'Quad') {
     return termIsStaticTerm(term.subject) && termIsStaticTerm(term.predicate) && termIsStaticTerm(term.object);
   }
   return term.termType !== 'Variable';
+}
+
+/**
+ * Whether a term is one a VALUES row can hold: an IRI, a literal, or a triple term of those that its positions
+ * admit. Binding such a term cannot fail.
+ * @param term - The term to check
+ * @returns whether it is such a term
+ */
+export function termIsDataBlockValue(term: RDF.Term): term is RDF.NamedNode | RDF.Literal | RDF.Quad {
+  if (term.termType === 'Quad') {
+    return term.graph.termType === 'DefaultGraph' && triplePositions.every(position =>
+      rangeOfPosition(position).has(term[position].termType) && termIsDataBlockValue(term[position]));
+  }
+  return term.termType === 'NamedNode' || term.termType === 'Literal';
 }

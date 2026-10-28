@@ -22,7 +22,6 @@ import {
   hasTarget,
   impliesBound,
   targetIsAccess,
-  isAssertableTerm,
   substituteInPattern,
   substituteInTerm,
   variablesOfTransferSource,
@@ -30,9 +29,10 @@ import {
 } from '../utils/assertions.js';
 import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
-import { createFilterFalse } from '../utils/operationhelpers.js';
+import { bindAssertedTerms, createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import { unionSets } from '../utils/setUtils.js';
+import { termIsStaticTerm } from '../utils/typeGuards.js';
 import type { DerivedVarNamer } from '../utils.js';
 import { derivedVarNamer, markVariableNamesUsed } from '../utils.js';
 
@@ -425,9 +425,10 @@ function pruneValues(
     substitution.has(name) || assertions.get(name)?.subType === 'unbound';
   const newBindings: Algebra.Values['bindings'] = [];
   const pins = termPinsOn(assertions, values.variables);
+  const strongPins = new Map(pins.filter(pin => pin.strong).map(pin => [ pin.name, pin.term ]));
   for (const binding of values.bindings) {
     // TermPinsOn is wayyy cheaper then rowSatisfies
-    if (agreesWithPins(pins, binding) && rowSatisfies(assertions, values.variables, binding)) {
+    if (agreesWithPins(pins, binding) && rowSatisfies(assertions, values.variables, binding, strongPins)) {
       newBindings.push(Object.fromEntries(
         Object.entries(binding).filter(([ name ]) => !isRebuilt(name)),
       ));
@@ -452,6 +453,8 @@ interface ColumnPin {
   name: string;
   /** The term every value of it equals */
   term: RDF.Term;
+  /** Whether it holds outright, rather than only where the column is bound */
+  strong: boolean;
 }
 
 /**
@@ -461,8 +464,8 @@ interface ColumnPin {
  * without paying for the clone {@link rowSatisfies} takes. The weak form counts: a row binding the column
  * to a term satisfies the `bound` half of `¬bnd(?x) ∨ ?x ≡ c`, which leaves the pin to answer for.
  *
- * Only a *term* pin is read. A group pinned to a shape, or one that is merely equated with another column,
- * is left to the full check - the pre-filter has to be exact about what it turns away, not complete.
+ * Only a *fixed* term is read. A shape with a position left open, or a group that is merely equated with another
+ * column, is left to the full check - the pre-filter has to be exact about what it turns away, not complete.
  * @param assertions - The conjunction to read the pins off
  * @param variables - The columns of the VALUES
  * @returns the pinned columns and the term each is pinned to
@@ -475,7 +478,7 @@ function termPinsOn(
   for (const variable of variables) {
     const assertion = assertions.get(variable.value);
     if (assertion !== undefined && hasTarget(assertion) && !targetIsAccess(assertion.term)) {
-      pins.push({ name: variable.value, term: assertion.term });
+      pins.push({ name: variable.value, term: assertion.term, strong: assertion.subType === 'strong' });
     }
   }
   return pins;
@@ -486,11 +489,11 @@ function termPinsOn(
  * {@link rowSatisfies}.
  *
  * **Sound because a pin is the same equality either way round.** Asserting the term a row holds onto a group
- * already pinned to a term meets the two pins, and that meet is `term.equals` and nothing else, so a row
- * disagreeing with a pin is a row the full check has to reject - whichever column it reaches first. Nothing
- * a row asserts can move a group off a term pin either: a merge keeps the pin it met, or fails. A row this
- * lets through is still checked in full, so being generous costs only the check it was going to pay for
- * anyway - an unbound column, a column Θ says nothing about, and a shape all go that way.
+ * already fixed to a term is `term.equals` and nothing else - a triple term position by position - so a row
+ * disagreeing with a pin is a row the full check has to reject, whichever column it reaches first. Nothing a
+ * row asserts can move a group off a fixed term either: a merge keeps what it met, or fails. A row this lets
+ * through is still checked in full, so being generous costs only the check it was going to pay for anyway -
+ * an unbound column, a column Θ says nothing about, and a shape with a position left open all go that way.
  * @param pins - The term pins of the columns
  * @param binding - The row to check
  * @returns whether the row agrees with every pin it holds a term for
@@ -510,19 +513,29 @@ function agreesWithPins(
  *
  * Asserted into a copy rather than read against it per variable, which is what makes the rule uniform over
  * the forms. Every column is asserted, the ones Θ says nothing about included, since a column Θ
- * reaches only through the shape of another one is decided by the row that holds it.
+ * reaches only through the shape of another one is decided by the row that holds it - except a column Θ
+ * already fixes outright to the term the row holds, which asks nothing of Θ.
  * @param assertions - The conjunction to satisfy
  * @param variables - The columns of the VALUES
  * @param binding - The row to check
+ * @param strongPins - The term each column Θ fixes outright is fixed to
  * @returns whether the row satisfies the conjunction
  */
 function rowSatisfies(
   assertions: AssertionConjunction,
   variables: readonly RDF.Variable[],
   binding: Algebra.Values['bindings'][number],
+  strongPins: ReadonlyMap<string, RDF.Term>,
 ): boolean {
+  const asked = variables.filter((variable) => {
+    const value = binding[variable.value];
+    return value === undefined || strongPins.get(variable.value)?.equals(value) !== true;
+  });
+  if (asked.length === 0) {
+    return true;
+  }
   const attempt = assertions.clone();
-  return variables.every((variable) => {
+  return asked.every((variable) => {
     const value = binding[variable.value];
     return value === undefined ?
       attempt.assertUnbound(variable.value) :
@@ -582,7 +595,7 @@ function pushIntoExtend(
   const { inside: notAboutTarget, outside: aboutTarget } = assertions.split(name => name !== target);
 
   if (assertionOfTarget?.subType === 'strong' && !targetIsAccess(assertionOfTarget.term) &&
-    isAssertableTerm(assertionOfTarget.term)) {
+    termIsStaticTerm(assertionOfTarget.term)) {
     // BIND(expr as ?x) -- ?x is strongly asserted and pinned to a assertable term.
     // We know we have a strong target assertion, against a ground term, and a compound expression.
     const term = assertionOfTarget.term;
@@ -646,7 +659,7 @@ function pushIntoGraph(
   const assertedGraphName = assertions.get(graphVar);
 
   if (assertedGraphName?.subType === 'strong' && !targetIsAccess(assertedGraphName.term) &&
-    isAssertableTerm(assertedGraphName.term) &&
+    termIsStaticTerm(assertedGraphName.term) &&
     // A term outside `?g`'s range has already emptied the plan in `normalisedFor`, so what can still be
     // asserted here is a graph name: a NamedNode, or the BlankNode a dataset may equally name a graph by.
     // Only the first can be written back - `createGraph` names a graph by a Variable or a NamedNode - so
@@ -1124,26 +1137,6 @@ function empty(c: TransformationContext, replaced: Algebra.Operation): PreOrderM
  */
 function emptyOperation(c: TransformationContext, replaced: Algebra.Operation): Algebra.Operation {
   return createFilterFalse(c, replaced);
-}
-
-/**
- * Re-binds the variables the assertions substituted away, so that the rewrite preserves `pVars` and `cVars`
- * exactly. This EXTEND is mandatory: dropping it breaks the invariant, and breaks `SELECT *`.
- * @param c - The transformation context
- * @param op - The operation the substitution was written into
- * @param assertions - The substitution that was written in
- * @returns the operation with one EXTEND per substituted variable
- */
-function bindAssertedTerms(
-  c: TransformationContext,
-  op: Algebra.Operation,
-  assertions: Assertions,
-): Algebra.Operation {
-  let result = op;
-  for (const [ name, term ] of assertions) {
-    result = c.AF.createExtend(result, c.DF.variable(name), c.AF.createTermExpression(term));
-  }
-  return result;
 }
 
 /**

@@ -137,6 +137,21 @@ describe('pushDownAssertions', () => {
       );
     });
 
+    it('drops the VALUES rows that contradict a ground triple term, UNDEF included', ({ expect }) => {
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          VALUES (?x ?y) { (<<( :a :b :c )>> :a) (UNDEF :b) (<<( :a :b :d )>> :e) }
+          FILTER(sameTerm(?x, <<( :a :b :c )>>))
+        }`,
+        `SELECT ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?x ) ?y WHERE {
+  VALUES ?y {
+    <ex://a>
+  }
+}`,
+      );
+    });
+
     it('replaces a VALUES the assertions leave one empty row of by the empty BGP', ({ expect }) => {
       expectTransform(
         expect,
@@ -517,6 +532,22 @@ GROUP BY ( <ex://c> AS ?x )`,
   });
 
   describe('the weak form', () => {
+    it('reads a ground triple term as one weak conjunct, as it does an IRI', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        `SELECT * WHERE {
+          VALUES ?y { <<( :a :p :o )>> <<( :b :p :o )>> UNDEF }
+          FILTER(!bound(?y) || sameTerm(?y, <<( :a :p :o )>>))
+        }`,
+        `SELECT ?y WHERE {
+  VALUES ?y {
+    <<( <ex://a> <ex://p> <ex://o> )>>
+    UNDEF
+  }
+}`,
+      );
+    });
+
     it('is discharged by the left hand side where the right can never bind the variable', ({ expect }) => {
       // `σ_W(A₁ ⟕ A₂) ≡ σ_W(σ_W(A₁) ⟕ A₂)` keeps W on top because `A₂` may bind `?y` to something else
       // and the merged solution is the one W discards. Where `A₂` has no `?y` to bind, every solution
@@ -1810,6 +1841,26 @@ GROUP BY ?x ( ?x AS ?y )`,
   });
 
   describe('soundness guards', () => {
+    it('keeps that a bind of a triple term its positions do not admit leaves the variable unbound', ({ expect }) => {
+      // What pulling `BIND("x" AS ?v)` up into `BIND(<<( ?v :p :o )>> AS ?t)` gives, which no query text can.
+      const { AF, DF } = c;
+      const bind = (subject: AlgebraTypes.Pattern['subject']): AlgebraTypes.Project => AF.createProject(
+        AF.createFilter(
+          AF.createExtend(
+            AF.createBgp([ AF.createPattern(DF.variable('a'), DF.namedNode('ex://q'), DF.variable('b')) ]),
+            DF.variable('t'),
+            AF.createTermExpression(DF.quad(subject, DF.namedNode('ex://p'), DF.namedNode('ex://o'))),
+          ),
+          AF.createOperatorExpression('bound', [ AF.createTermExpression(DF.variable('t')) ]),
+        ),
+        [ DF.variable('t'), DF.variable('a') ],
+      );
+      const pushed = (subject: AlgebraTypes.Pattern['subject']): string =>
+        c.generator.generate(toAst(pushDownAssertions(newRewriteContext(), bind(subject)))).trim();
+      expect(pushed(DF.literal('x'))).toContain('FILTER ( FALSE )');
+      expect(pushed(DF.namedNode('ex://s'))).not.toContain('FILTER');
+    });
+
     it('demotes rather than pushes into a join operand whose BIND may leave the variable unbound', ({ expect }) => {
       // ?x is not certainly bound in the left operand (`IRI(?b)` errors when ?b is a blank node), and it is
       // possible in the right one, so L fails for the left: only the right operand may take the strong
@@ -1991,7 +2042,7 @@ GROUP BY ?x ( ?x AS ?y )`,
     });
 
     it('meets no blank node, because the parse turned them into variables', ({ expect }) => {
-      // What lets `isAssertableTerm` admit a blank node - and so lets the constant folding decide
+      // What lets `termIsStaticTerm` admit a blank node - and so lets the constant folding decide
       // `sameTerm` between two of them. A blank node label in an expression would be a fresh label
       // rather than a reference to one in the data, so nothing could be concluded from it.
       expect(transform(`SELECT * WHERE {

@@ -1,5 +1,6 @@
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
+import type { Assertions } from './assertions.js';
 import { datatypeBoolean, DF } from './rdfDatatypes.js';
 
 /** The literal `false` with xsd:boolean datatype, used for FILTER(FALSE) patterns */
@@ -52,4 +53,24 @@ export function projectSolutionExistence(
   operation: Algebra.Operation,
 ): Algebra.Project {
   return c.AF.createProject(operation, [ c.coinExistenceVariable() ]);
+}
+
+/**
+ * Re-binds the variables the assertions substituted away, so that the rewrite preserves `pVars` and `cVars`
+ * exactly. This EXTEND is mandatory: dropping it breaks the invariant, and breaks `SELECT *`.
+ * @param c - The transformation context
+ * @param op - The operation the substitution was written into
+ * @param assertions - The substitution that was written in
+ * @returns the operation with one EXTEND per substituted variable
+ */
+export function bindAssertedTerms(
+  c: TransformationContext,
+  op: Algebra.Operation,
+  assertions: Assertions,
+): Algebra.Operation {
+  let result = op;
+  for (const [ name, term ] of assertions) {
+    result = c.AF.createExtend(result, c.DF.variable(name), c.AF.createTermExpression(term));
+  }
+  return result;
 }
