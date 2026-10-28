@@ -1,5 +1,6 @@
 import type * as RDF from '@rdfjs/types';
-import { objectRange, RangeSet, rangeOfPosition, tripleTermRange } from '../RangeSet.js';
+import type { RangeSet } from '../RangeSet.js';
+import { objectRange, rangeOfPosition, rangeOfTermType, tripleTermRange } from '../RangeSet.js';
 import { DF } from '../utils/rdfDatatypes.js';
 import { ClusterSet } from './ClusterSet.js';
 
@@ -503,7 +504,7 @@ export class TermClusterSet<T> extends ClusterSet<T> {
     // A pin is a range statement too, and the sharper one: a group pinned to a NamedNode holds nothing else.
     return this.narrowRange(
       group,
-      keptPin.kind === 'triple' ? tripleTermRange : new RangeSet([ keptPin.term.termType ]),
+      keptPin.kind === 'triple' ? tripleTermRange : rangeOfTermType(keptPin.term.termType),
     );
   }
 

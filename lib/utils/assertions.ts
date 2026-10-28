@@ -494,9 +494,7 @@ function withTermTypePredicate(test: TermTypeConjunct | undefined, expression: A
   if (read === undefined || (test !== undefined && !sameAccessAs(test.access, read))) {
     return undefined;
   }
-  const result = test ?? { access: read, assertion: assertTermType(new RangeSet()) };
-  result.assertion.range.add(termType);
-  return result;
+  return { access: read, assertion: assertTermType(new RangeSet([ ...test?.assertion.range ?? [], termType ])) };
 }
 
 /**

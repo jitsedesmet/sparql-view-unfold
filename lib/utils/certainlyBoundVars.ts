@@ -14,6 +14,7 @@ import {
   predicateRange,
   RangeSet,
   rangeOfPosition,
+  rangeOfTermType,
   serviceNameRange,
   subjectRange,
   tripleTermRange,
@@ -210,7 +211,7 @@ export function standardExpressionRange(c: RangeContext, expression: Algebra.Exp
   switch (expression.subType) {
     case ExpressionTypes.TERM: {
       if (expression.term.termType !== 'Variable') {
-        return new RangeSet([ expression.term.termType ]);
+        return rangeOfTermType(expression.term.termType);
       }
       // A variable the input does not have in scope is never bound, so neither is the target: the bottom
       // {@link VRanges.rangeOf} reports for it is exactly right.
@@ -615,7 +616,7 @@ RangeSet | undefined {
     }
     default: {
       const termType = asAssertableTermType(expression.operator);
-      return termType === undefined ? undefined : new RangeSet([ termType ]);
+      return termType === undefined ? undefined : rangeOfTermType(termType);
     }
   }
 }
