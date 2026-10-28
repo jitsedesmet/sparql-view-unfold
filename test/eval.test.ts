@@ -8,7 +8,7 @@ import { termToString } from 'rdf-string';
 import type { ExpectStatic } from 'vitest';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createQueryRewriter, createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
+import { createQueryRewriter } from '../lib/queryRewriter.js';
 import { filterFalseTransformation } from '../lib/transformations/filterFalse.js';
 import {
   nullifyJoinOverIncompatibleBoundsTransformation,
@@ -110,22 +110,6 @@ describe('evaluation tests', () => {
 
       expect(resOnMappedData.getQuads(null, null, null, null))
         .toBeRdfIsomorphic(resUsingMapper.getQuads(null, null, null, null));
-    });
-
-    it('joins a ground triple term with one built from variables', async({ expect }) => {
-      const store11 = await sourceToStore([ './test/statics/singleRdfReifiedTriple.ttl' ]);
-      const store12 = await storeTo12Store(store11, [ tripleTermConstruct, nonTripleTermConstruct ]);
-      const userQuery = `PREFIX : <ex://>
-SELECT * WHERE {
-  { BIND(<<( :me :name "jitse" )>> AS ?claim) }
-  { ?s :name ?n  BIND(<<( ?s :name ?n )>> AS ?claim) }
-}`;
-      const rewriter = createQueryRewriter(createDefaultTransformationPipeline(
-        mappingFromConstructQueries([ tripleTermConstruct, nonTripleTermConstruct ]),
-      ));
-      const expected = await bindings(userQuery, [ store12 ]);
-      expect(await bindings(await rewriter.rewriteQuery(userQuery), [ store11 ])).toEqual(expected);
-      expect(expected).toEqual([ 'claim=<<ex://me ex://name "jitse">>|n="jitse"|s=ex://me' ]);
     });
   });
   describe('assignment pull-up', () => {

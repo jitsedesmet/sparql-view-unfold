@@ -1991,7 +1991,7 @@ GROUP BY ?x ( ?x AS ?y )`,
     });
 
     it('meets no blank node, because the parse turned them into variables', ({ expect }) => {
-      // What lets `isAssertableTerm` admit a blank node - and so lets the constant folding decide
+      // What lets `termIsStaticTerm` admit a blank node - and so lets the constant folding decide
       // `sameTerm` between two of them. A blank node label in an expression would be a fresh label
       // rather than a reference to one in the data, so nothing could be concluded from it.
       expect(transform(`SELECT * WHERE {

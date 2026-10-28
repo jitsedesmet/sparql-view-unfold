@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { TermClusterSet } from './datastructures/TermClusterSet.js';
-import { objectRange, RangeSet } from './RangeSet.js';
+import { objectRange } from './RangeSet.js';
 import { RewriteNoMatchError } from './RewriteNoMatchError.js';
 import type { RangedVar } from './utils/RangedVar.js';
 import { isRdfTerm, isRdfVar } from './utils/typeGuards.js';
@@ -126,7 +126,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar> {
 
   protected override createGroup(variable: RangedVar): number {
     const group = super.createGroup(variable);
-    this.groupToRange[group] = new RangeSet(variable.range ?? objectRange);
+    this.groupToRange[group] = variable.range ?? objectRange;
     return group;
   }
 

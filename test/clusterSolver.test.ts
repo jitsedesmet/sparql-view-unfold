@@ -30,7 +30,7 @@ describe('clusterSolver', () => {
     it('reads a triple term back off the shape it became', ({ expect }) => {
       const solver = solverWithShape();
       // Nothing *pins* the group: a triple term is a shape, and the term is what reading it back gives.
-      expect(solver.termOf(solver.getGroup(varY))).toBeUndefined();
+      expect(solver.resolvedTermOf(solver.getGroup(varY))).toBeUndefined();
       expect(solver.getCluster(varY).term).toEqual(DF.quad(varS, varP, varO));
     });
 
@@ -60,9 +60,9 @@ describe('clusterSolver', () => {
       const solver = new ClusterSolver();
       solver.register(DF.quad(termA, termB, varO), varY);
       solver.register(DF.quad(varS, varP, termC), varY);
-      expect(solver.termOf(solver.getGroup(varS))).toEqual(termA);
-      expect(solver.termOf(solver.getGroup(varP))).toEqual(termB);
-      expect(solver.termOf(solver.getGroup(varO))).toEqual(termC);
+      expect(solver.resolvedTermOf(solver.getGroup(varS))).toEqual(termA);
+      expect(solver.resolvedTermOf(solver.getGroup(varP))).toEqual(termB);
+      expect(solver.resolvedTermOf(solver.getGroup(varO))).toEqual(termC);
     });
 
     it('takes a nested triple term apart with it', ({ expect }) => {

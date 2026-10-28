@@ -331,6 +331,21 @@ describe('integration tests', () => {
   describe('rdf interop reification - SELECT queries', () => {
     const mappers = [ tripleTermConstruct, nonTripleTermConstruct ];
 
+    it('joins a ground triple term with one built from variables', async({ expect }) => {
+      const store11 = await sourceToStore([ './test/statics/singleRdfReifiedTriple.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        mappers,
+        `PREFIX : <ex://>
+         SELECT * WHERE {
+           { BIND(<<( :me :name "jitse" )>> AS ?claim) }
+           { ?s :name ?n  BIND(<<( ?s :name ?n )>> AS ?claim) }
+         }`,
+      );
+      expect(resUsingRewriter).toEqual(resOnMappedData);
+      expect(resOnMappedData).toHaveLength(1);
+    });
+
     it('selecting all reified triple components returns the same results', async({ expect }) => {
       const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
       const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(

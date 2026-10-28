@@ -17,26 +17,26 @@ describe('termClusterSet', () => {
   describe('term pins', () => {
     it('keeps a term the group is pinned to', ({ expect }) => {
       const set = newSet();
-      expect(set.setTerm(set.getGroup('x'), termA)).toBe(true);
-      expect(set.termOf(set.getGroup('x'))).toEqual(termA);
+      expect(set.assertTerm(set.getGroup('x'), termA)).toBe(true);
+      expect(set.resolvedTermOf(set.getGroup('x'))).toEqual(termA);
     });
 
     it('reports a conflict rather than raising it', ({ expect }) => {
       const set = newSet();
-      set.setTerm(set.getGroup('x'), termA);
-      expect(set.setTerm(set.getGroup('x'), termB)).toBe(false);
+      set.assertTerm(set.getGroup('x'), termA);
+      expect(set.assertTerm(set.getGroup('x'), termB)).toBe(false);
     });
 
     it('carries a pin over a merge, and reports the conflict of two', ({ expect }) => {
       const set = newSet();
-      set.setTerm(set.getGroup('x'), termA);
+      set.assertTerm(set.getGroup('x'), termA);
       set.getGroup('y');
       expect(set.mergeGroups('x', 'y')?.conflict).toBe(false);
-      expect(set.termOf(set.getGroup('y'))).toEqual(termA);
+      expect(set.resolvedTermOf(set.getGroup('y'))).toEqual(termA);
 
       const conflicting = newSet();
-      conflicting.setTerm(conflicting.getGroup('x'), termA);
-      conflicting.setTerm(conflicting.getGroup('y'), termB);
+      conflicting.assertTerm(conflicting.getGroup('x'), termA);
+      conflicting.assertTerm(conflicting.getGroup('y'), termB);
       expect(conflicting.mergeGroups('x', 'y')?.conflict).toBe(true);
     });
   });
@@ -55,32 +55,32 @@ describe('termClusterSet', () => {
       const set = newSet();
       const { subject } = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       expect(set.valuesOf(subject)).toEqual([]);
-      expect(set.setTerm(subject, termA)).toBe(true);
-      expect(set.termOf(subject)).toEqual(termA);
+      expect(set.assertTerm(subject, termA)).toBe(true);
+      expect(set.resolvedTermOf(subject)).toEqual(termA);
     });
 
     it('unifies the positions of two shapes met on one group', ({ expect }) => {
       const set = newSet();
       // `?o ≡ <<( ?a … )>>` and `?o ≡ <<( ?b … )>>` say `?a ≡ ?b`, which is what the decomposition is.
       const first = <PinChildren> set.assertTriplePin(set.getGroup('o'));
-      set.setTerm(first.subject, termA);
+      set.assertTerm(first.subject, termA);
       set.assertTriplePin(set.getGroup('x'));
       expect(set.mergeGroups('o', 'x')?.conflict).toBe(false);
       // Everything known about the subject of `?o` is now known about the subject of `?x`.
-      expect(set.termOf(<number> set.childrenOf(set.getGroup('x'))?.subject)).toEqual(termA);
+      expect(set.resolvedTermOf(<number> set.childrenOf(set.getGroup('x'))?.subject)).toEqual(termA);
     });
 
     it('decomposes a ground triple term against a shape', ({ expect }) => {
       const set = newSet();
       const { subject } = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       expect(set.assertTerm(set.getGroup('o'), ground)).toBe(true);
-      expect(set.termOf(subject)).toEqual(termA);
+      expect(set.resolvedTermOf(subject)).toEqual(termA);
     });
 
     it('contradicts a shape against a term that is not a triple term', ({ expect }) => {
       const set = newSet();
       set.assertTriplePin(set.getGroup('o'));
-      expect(set.setTerm(set.getGroup('o'), termA)).toBe(false);
+      expect(set.assertTerm(set.getGroup('o'), termA)).toBe(false);
     });
 
     it('refuses a shape a group whose range holds no triple term', ({ expect }) => {
@@ -105,15 +105,15 @@ describe('termClusterSet', () => {
       // two decomposes, and merging the objects decomposes again.
       const first = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       const nested = <PinChildren> set.assertTriplePin(first.object);
-      set.setTerm(nested.subject, termA);
+      set.assertTerm(nested.subject, termA);
       const second = <PinChildren> set.assertTriplePin(set.getGroup('x'));
       const otherNested = <PinChildren> set.assertTriplePin(second.object);
-      set.setTerm(otherNested.predicate, termB);
+      set.assertTerm(otherNested.predicate, termB);
       expect(set.mergeGroups('o', 'x')?.conflict).toBe(false);
       const object = <number> set.childrenOf(set.getGroup('o'))?.object;
       const deep = set.childrenOf(object)!;
-      expect(set.termOf(deep.subject)).toEqual(termA);
-      expect(set.termOf(deep.predicate)).toEqual(termB);
+      expect(set.resolvedTermOf(deep.subject)).toEqual(termA);
+      expect(set.resolvedTermOf(deep.predicate)).toEqual(termB);
     });
   });
 

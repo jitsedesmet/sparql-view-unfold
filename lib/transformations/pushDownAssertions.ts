@@ -22,7 +22,6 @@ import {
   hasTarget,
   impliesBound,
   targetIsAccess,
-  isAssertableTerm,
   substituteInPattern,
   substituteInTerm,
   variablesOfTransferSource,
@@ -33,6 +32,7 @@ import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelper
 import { bindAssertedTerms, createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import { unionSets } from '../utils/setUtils.js';
+import { termIsStaticTerm } from '../utils/typeGuards.js';
 import type { DerivedVarNamer } from '../utils.js';
 import { derivedVarNamer, markVariableNamesUsed } from '../utils.js';
 
@@ -427,7 +427,7 @@ function pruneValues(
   const pins = termPinsOn(assertions, values.variables);
   for (const binding of values.bindings) {
     // TermPinsOn is wayyy cheaper then rowSatisfies
-    if (agreesWithPins(pins, binding) && rowSatisfies(assertions, values.variables, binding)) {
+    if (agreesWithPins(pins, binding) && rowSatisfies(assertions, values.variables, binding, pins)) {
       newBindings.push(Object.fromEntries(
         Object.entries(binding).filter(([ name ]) => !isRebuilt(name)),
       ));
@@ -452,6 +452,8 @@ interface ColumnPin {
   name: string;
   /** The term every value of it equals */
   term: RDF.Term;
+  /** Whether it holds outright, rather than only where the column is bound */
+  strong: boolean;
 }
 
 /**
@@ -461,8 +463,8 @@ interface ColumnPin {
  * without paying for the clone {@link rowSatisfies} takes. The weak form counts: a row binding the column
  * to a term satisfies the `bound` half of `¬bnd(?x) ∨ ?x ≡ c`, which leaves the pin to answer for.
  *
- * Only a *term* pin is read. A group pinned to a shape, or one that is merely equated with another column,
- * is left to the full check - the pre-filter has to be exact about what it turns away, not complete.
+ * Only a *fixed* term is read. A shape with a position left open, or a group that is merely equated with another
+ * column, is left to the full check - the pre-filter has to be exact about what it turns away, not complete.
  * @param assertions - The conjunction to read the pins off
  * @param variables - The columns of the VALUES
  * @returns the pinned columns and the term each is pinned to
@@ -475,7 +477,7 @@ function termPinsOn(
   for (const variable of variables) {
     const assertion = assertions.get(variable.value);
     if (assertion !== undefined && hasTarget(assertion) && !targetIsAccess(assertion.term)) {
-      pins.push({ name: variable.value, term: assertion.term });
+      pins.push({ name: variable.value, term: assertion.term, strong: assertion.subType === 'strong' });
     }
   }
   return pins;
@@ -510,19 +512,27 @@ function agreesWithPins(
  *
  * Asserted into a copy rather than read against it per variable, which is what makes the rule uniform over
  * the forms. Every column is asserted, the ones Θ says nothing about included, since a column Θ
- * reaches only through the shape of another one is decided by the row that holds it.
+ * reaches only through the shape of another one is decided by the row that holds it - except a column Θ
+ * already fixes outright to the term the row holds, which asks nothing of Θ.
  * @param assertions - The conjunction to satisfy
  * @param variables - The columns of the VALUES
- * @param binding - The row to check
+ * @param binding - The row to check, which {@link agreesWithPins} already let through
+ * @param pins - The term pins of the columns
  * @returns whether the row satisfies the conjunction
  */
 function rowSatisfies(
   assertions: AssertionConjunction,
   variables: readonly RDF.Variable[],
   binding: Algebra.Values['bindings'][number],
+  pins: readonly ColumnPin[],
 ): boolean {
+  const asked = variables.filter(variable => binding[variable.value] === undefined ||
+    !pins.some(pin => pin.strong && pin.name === variable.value));
+  if (asked.length === 0) {
+    return true;
+  }
   const attempt = assertions.clone();
-  return variables.every((variable) => {
+  return asked.every((variable) => {
     const value = binding[variable.value];
     return value === undefined ?
       attempt.assertUnbound(variable.value) :
@@ -582,7 +592,7 @@ function pushIntoExtend(
   const { inside: notAboutTarget, outside: aboutTarget } = assertions.split(name => name !== target);
 
   if (assertionOfTarget?.subType === 'strong' && !targetIsAccess(assertionOfTarget.term) &&
-    isAssertableTerm(assertionOfTarget.term)) {
+    termIsStaticTerm(assertionOfTarget.term)) {
     // BIND(expr as ?x) -- ?x is strongly asserted and pinned to a assertable term.
     // We know we have a strong target assertion, against a ground term, and a compound expression.
     const term = assertionOfTarget.term;
@@ -646,7 +656,7 @@ function pushIntoGraph(
   const assertedGraphName = assertions.get(graphVar);
 
   if (assertedGraphName?.subType === 'strong' && !targetIsAccess(assertedGraphName.term) &&
-    isAssertableTerm(assertedGraphName.term) &&
+    termIsStaticTerm(assertedGraphName.term) &&
     // A term outside `?g`'s range has already emptied the plan in `normalisedFor`, so what can still be
     // asserted here is a graph name: a NamedNode, or the BlankNode a dataset may equally name a graph by.
     // Only the first can be written back - `createGraph` names a graph by a Variable or a NamedNode - so

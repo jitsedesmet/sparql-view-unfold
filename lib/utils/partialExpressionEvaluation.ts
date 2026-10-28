@@ -5,10 +5,11 @@ import type { RangeSet } from '../RangeSet.js';
 import { objectRange, predicateRange, subjectRange, asAssertableTermType } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Access } from './assertions.js';
-import { asAccess, asTermTypeTest, componentOf, isAssertableTerm } from './assertions.js';
+import { asAccess, asTermTypeTest, componentOf } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
 import { DF } from './rdfDatatypes.js';
 import { isSubsetOf, unionSets } from './setUtils.js';
+import { termIsStaticTerm } from './typeGuards.js';
 
 /**
  * What an {@link utils/assertionConjunction!AssertionConjunction} decides about the expressions it is substituted into.
@@ -187,7 +188,7 @@ function decidedByAccess(
  * @returns the term, or `undefined` for anything else
  */
 function exprAsGroundedTerm(expression: Algebra.Expression): RDF.Term | undefined {
-  return expression.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(expression.term) ?
+  return expression.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(expression.term) ?
     expression.term :
     undefined;
 }
@@ -262,8 +263,8 @@ export function constantFoldOperator(
       // Evaluate sameTerm if LHS and RHS are static terms
       const [ left, right ] = args;
       if (args.length === 2 &&
-                left.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(left.term) &&
-                right.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(right.term)) {
+                left.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(left.term) &&
+                right.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(right.term)) {
         return createBooleanExpression(c, left.term.equals(right.term));
       }
       // The residual a unification leaves behind: substituting `?s ↦ ?o` turns `sameTerm(?s, ?o)` into

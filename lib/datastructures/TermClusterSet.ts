@@ -1,6 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import type { RangeSet } from '../RangeSet.js';
-import { objectRange, rangeOfPosition, rangeOfTermType, tripleTermRange } from '../RangeSet.js';
+import { objectRange, rangeOfPosition, rangeOfTermType } from '../RangeSet.js';
 import { DF } from '../utils/rdfDatatypes.js';
 import { ClusterSet } from './ClusterSet.js';
 
@@ -37,7 +37,7 @@ export type Pin = TriplePin | { kind: 'term'; term: PinnedTerm };
 /** What a `term` pin holds: a triple term is a shape instead, and a variable a group of its own. */
 export type PinnedTerm = Exclude<RDF.Term, RDF.BaseQuad | RDF.Variable>;
 
-/** The shape half of a {@link Pin}, named so that a meet can take one and hand one back. */
+/** The shape half of a {@link Pin}. */
 export type TriplePin = { kind: 'triple' } & PinChildren;
 
 /**
@@ -52,33 +52,27 @@ export type GroupConstraint =
   { kind: 'pin'; group: number; pin: Pin } | { kind: 'unify'; left: number; right: number };
 
 /**
- * What comes of meeting the two pins a group is asked to carry at once: the pin it is left with, plus what
- * meeting them *entailed* about other groups. A meet no value satisfies is reported as `false` instead.
+ * The meet of two pins on one group, which keeps the first: two terms are an equality, and two shapes are one value
+ * spelt twice, so their positions are pairwise one value too. A term never meets a shape, no pin holding a triple
+ * term.
+ * @param left - One of the two pins
+ * @param right - The other
+ * @returns what the meet entails about other groups, or `false` on a contradiction
  */
-export interface PinMeet {
-  /** The pin the group keeps - the more informative of the two. */
-  pin: Pin;
-  /** What meeting the two entailed, for the work list to establish in turn. */
-  entailed: GroupConstraint[];
+function meetPins(left: Pin, right: Pin): GroupConstraint[] | false {
+  if (left.kind === 'triple' && right.kind === 'triple') {
+    return triplePositions.map(position => ({ kind: 'unify', left: left[position], right: right[position] }));
+  }
+  return left.kind === 'term' && right.kind === 'term' && left.term.equals(right.term) && [];
 }
 
 /**
- * The meet of two pins on one group: two terms are an equality, and two shapes are one value spelt twice, so their
- * positions are pairwise one value too. A term never meets a shape, no pin holding a triple term.
- * @param left - One of the two pins, and the one the group keeps
- * @param right - The other
- * @returns what the group is left with plus what the meet entailed, or `false` on a contradiction
+ * The term type a pin fixes a group to.
+ * @param pin - The pin
+ * @returns the term type, a shape being a triple term
  */
-function meetPins(left: Pin, right: Pin): PinMeet | false {
-  if (left.kind === 'triple' && right.kind === 'triple') {
-    return {
-      pin: left,
-      entailed: triplePositions.map(position => ({ kind: 'unify', left: left[position], right: right[position] })),
-    };
-  }
-  return left.kind === 'term' && right.kind === 'term' && left.term.equals(right.term) ?
-      { pin: left, entailed: []} :
-    false;
+function termTypeOfPin(pin: Pin): RDF.Term['termType'] {
+  return pin.kind === 'term' ? pin.term.termType : 'Quad';
 }
 
 /**
@@ -196,16 +190,6 @@ export class TermClusterSet<T> extends ClusterSet<T> {
   }
 
   /**
-   * The term a group is pinned to.
-   * @param group - The group to look up
-   * @returns the term, or `undefined` when nothing pins it, or a shape does instead
-   */
-  public termOf(group: number): PinnedTerm | undefined {
-    const pin = this.pinOf(group);
-    return pin?.kind === 'term' ? pin.term : undefined;
-  }
-
-  /**
    * The positions of the shape a group is pinned to.
    * @param group - The group to look up
    * @returns the group per position, or `undefined` when it is not pinned to a shape
@@ -232,19 +216,8 @@ export class TermClusterSet<T> extends ClusterSet<T> {
   }
 
   /**
-   * Pins a term onto a group.
-   * @param group - The group to pin
-   * @param term - The term every value of it equals
-   * @returns `false` when the group already carries something incompatible, which leaves the set in a state
-   * no caller may read
-   */
-  public setTerm(group: number, term: PinnedTerm): boolean {
-    return this.setPin(group, { kind: 'term', term });
-  }
-
-  /**
    * Pins a group, meeting the pin with whatever the group already carries and draining everything that meet
-   * decides ({@link PinMeet}).
+   * decides.
    * @param group - The group to pin
    * @param pin - What every value of it equals
    * @returns `false` on a contradiction, after which the set holds no meaningful state
@@ -288,7 +261,7 @@ export class TermClusterSet<T> extends ClusterSet<T> {
       return this.unifyGroups(group, this.getGroup(this.ofVariable(term)));
     }
     if (term.termType !== 'Quad') {
-      return this.setTerm(group, term);
+      return this.setPin(group, { kind: 'term', term });
     }
     // A triple term states no graph, so a quad that names one is not a value any group can take.
     if (term.graph.termType !== 'DefaultGraph') {
@@ -464,23 +437,19 @@ export class TermClusterSet<T> extends ClusterSet<T> {
    */
   private place(group: number, pin: Pin, work: GroupConstraint[]): boolean {
     const currentPin = this.groupToPin[group];
-    let keptPin = pin;
     if (currentPin !== undefined) {
-      const pinMeet = meetPins(currentPin, pin);
-      if (pinMeet === false) {
+      // The group keeps its pin, whose term type its range already holds to.
+      const entailed = meetPins(currentPin, pin);
+      if (entailed === false) {
         return false;
       }
-      keptPin = pinMeet.pin;
-      work.push(...pinMeet.entailed);
+      work.push(...entailed);
+      return true;
     }
-    this.unregisterPinChildren(group, currentPin);
-    this.groupToPin[group] = keptPin;
-    this.registerPinChildren(group, keptPin);
+    this.groupToPin[group] = pin;
+    this.registerPinChildren(group, pin);
     // A pin is a range statement too, and the sharper one: a group pinned to a NamedNode holds nothing else.
-    return this.narrowRange(
-      group,
-      keptPin.kind === 'triple' ? tripleTermRange : rangeOfTermType(keptPin.term.termType),
-    );
+    return this.narrowRange(group, rangeOfTermType(termTypeOfPin(pin)));
   }
 
   /**
@@ -493,7 +462,7 @@ export class TermClusterSet<T> extends ClusterSet<T> {
     if (pin === undefined) {
       return true;
     }
-    return this.rangeOf(group).has(pin.kind === 'term' ? pin.term.termType : 'Quad');
+    return this.rangeOf(group).has(termTypeOfPin(pin));
   }
 
   /**

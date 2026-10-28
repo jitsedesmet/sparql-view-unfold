@@ -9,6 +9,32 @@ import { isSubsetOf } from './utils/setUtils.js';
  * subjectRange.meet(objectRange); // RangeSet(['BlankNode', 'NamedNode'])
  */
 export class RangeSet extends Set<RDF.Term['termType']> {
+  /** Whether the range is built, after which it is never changed. */
+  private readonly built: boolean;
+
+  /**
+   * @param termTypes - The term types the range holds
+   */
+  public constructor(termTypes?: Iterable<RDF.Term['termType']>) {
+    super(termTypes);
+    this.built = true;
+  }
+
+  public override add(termType: RDF.Term['termType']): this {
+    if (this.built) {
+      throw new Error('A range is not changed once built');
+    }
+    return super.add(termType);
+  }
+
+  public override delete(): boolean {
+    throw new Error('A range is not changed once built');
+  }
+
+  public override clear(): void {
+    throw new Error('A range is not changed once built');
+  }
+
   /**
    * The term types this range and another both admit.
    * @param other - The range to meet with

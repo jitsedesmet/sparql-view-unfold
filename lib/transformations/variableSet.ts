@@ -70,6 +70,7 @@ export class VariableSet {
    * @returns True if the term could match this VariableSet
    */
   public termIsCompatible(term: RDF.Term): boolean {
-    return this.isNoFixed || term.termType === 'Variable' || this.values.some(x => unifyTerms(x, term) !== undefined);
+    return this.isNoFixed || term.termType === 'Variable' ||
+      this.values.some(value => value.termType === term.termType && unifyTerms(value, term) !== undefined);
   }
 }

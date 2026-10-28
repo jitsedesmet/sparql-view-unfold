@@ -2,7 +2,6 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
-import { termIsStaticTerm } from '../utils/typeGuards.js';
 import { directExtensions } from '../utils.js';
 import { VariableSet } from './variableSet.js';
 
@@ -111,21 +110,16 @@ function variableExtensionsOverJoin(join: Algebra.Join): Map<string, VariableSet
 }
 
 function directExtensionOverUnionsAndMore(op: Algebra.Operation): Map<string, VariableSet> {
-  const varSets = new Map<string, VariableSet>();
-  const traverse = (op: Algebra.Operation): void => {
-    if (op.type === Algebra.Types.EXTEND) {
-      if (op.expression.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(op.expression.term)) {
-        varSets.set(op.variable.value, new VariableSet(op.expression.term));
-      }
-      traverse(op.input);
-    } else if (op.type === Algebra.Types.UNION) {
-      for (const [ var_, varSet ] of directExtensionOverUnions(op)) {
-        varSets.set(var_, varSet);
-      }
+  const varSets = new Map([ ...directExtensions(op) ].map(([ var_, term ]) => [ var_, new VariableSet(term) ]));
+  let below = op;
+  while (below.type === Algebra.Types.EXTEND) {
+    below = below.input;
+  }
+  if (below.type === Algebra.Types.UNION) {
+    for (const [ var_, varSet ] of directExtensionOverUnions(below)) {
+      varSets.set(var_, varSet);
     }
-  };
-
-  traverse(op);
+  }
   return varSets;
 }
 
