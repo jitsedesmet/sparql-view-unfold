@@ -8,7 +8,6 @@ import {
 import { rewriteNonRecursivePathsTransformation } from './transformations/pathTransformation.js';
 import { pullUpExtendsTransformation } from './transformations/pullUpExtends.js';
 import { pushDownAssertionsTransformation } from './transformations/pushDownAssertions.js';
-import { removeProjectionsTransformation } from './transformations/removeProjections.js';
 import type { UnfoldingOptions } from './transformations/unfolding.js';
 import { unfoldingTransformation } from './transformations/unfolding.js';
 import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
@@ -297,9 +296,14 @@ export function createQueryRewriter(transformations: readonly QueryTransformatio
  * unfolding, which only knows triple patterns. `FILTER(FALSE)` is collapsed after every step that can
  * produce one, so the next step has less to walk. The pushdown drives terms into the leaves and the
  * pull-up floats the binds it leaves behind back out, in that order, because the pushdown is what creates
- * them. `nullifyJoinOverIncompatibleBounds` comes last, after `removeProjections` and `pullUpExtends`: it
- * reads each join operand's top-level `EXTEND` chain and halts at a `PROJECT`, so anywhere earlier it sees
- * nothing at all.
+ * them. `nullifyJoinOverIncompatibleBounds` comes last, after `pullUpExtends`: it reads each join operand's
+ * top-level `EXTEND` chain and halts at a `PROJECT`, so it acts only on the binds no sub-SELECT hides.
+ *
+ * {@link transformations/removeProjections!removeProjectionsTransformation} is left out, so the sub-SELECT
+ * each mapping branch is wrapped in stays. On the benchmark (test/bench/README.md) flattening them after the
+ * pushdown changes no answer. Leaving them is up to 1.6 times faster on LUBM and OAEI, and never more than
+ * 1.1 times slower there, but up to 1.25 times slower on StarBench. Append it after the pull-up in a pipeline
+ * of your own to flatten them, and put `nullifyJoinOverIncompatibleBounds` after it to let that see past them.
  *
  * {@link transformations/nullifyUnbindableVars!nullifyUnbindableVars} is deliberately absent - nothing the
  * unfolding generates gives it anything to decide - and so are the blank node materialisations, which are
@@ -324,7 +328,6 @@ export function createDefaultTransformationPipeline(
     filterFalseTransformation(),
     pullUpExtendsTransformation(),
     filterFalseTransformation(),
-    removeProjectionsTransformation(),
     nullifyJoinOverIncompatibleBoundsTransformation(),
     filterFalseTransformation(),
   ];

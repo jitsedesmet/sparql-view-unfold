@@ -103,8 +103,9 @@ const rewriter = createQueryRewriter([
 ```
 
 Order matters and is not a preference: paths are expanded before the unfolding, which only knows triple
-patterns, and `nullifyJoinOverIncompatibleBoundsTransformation` sees nothing until `removeProjections` and
-`pullUpExtends` have run. [ARCHITECTURE.md](ARCHITECTURE.md) says why for each step.
+patterns, and `nullifyJoinOverIncompatibleBoundsTransformation` sees nothing a sub-SELECT hides, so it
+belongs after `removeProjections` and `pullUpExtends`. [ARCHITECTURE.md](ARCHITECTURE.md) says why for each
+step.
 
 ### Cardinality
 
@@ -207,7 +208,7 @@ The tables below are the short version; the generated
 | `filterFalseTransformation()` | Lets every `FILTER(FALSE)` absorb what stands over it, sub-SELECTs included. |
 | `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))`, `FILTER(sameTerm(?x, ?y))` and term type tests like `FILTER(isIRI(?x) \|\| isBLANK(?x))` as deep as they go: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
 | `pullUpExtendsTransformation()` | Floats every `BIND` as high as the plan allows and drops the ones nothing reads. |
-| `removeProjectionsTransformation()` | Removes inner projections, renaming what they hid to keep the scoping. |
+| `removeProjectionsTransformation()` | Removes inner projections, renaming what they hid to keep the scoping. Not in the default pipeline. |
 | `nullifyJoinOverIncompatibleBoundsTransformation()` | Replaces a join whose branches bind one variable to incompatible terms by `FILTER(FALSE)`. |
 | `nullifyUnbindableVarsTransformation()` | The same one level up, for incompatible term *types* rather than terms. Not in the default pipeline. |
 | `extendsToValuesTransformation()` | Rewrites a `BIND` of a ground term over the empty BGP, or over a VALUES, into a VALUES. |

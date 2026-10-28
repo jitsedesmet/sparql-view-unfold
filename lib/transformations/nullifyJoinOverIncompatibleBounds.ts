@@ -19,8 +19,9 @@ import { VariableSet } from './variableSet.js';
  * 3. Replaces EXTEND operations with incompatible values with FILTER(FALSE)
  *
  * It reads each join operand's top-level `EXTEND` chain and its recursion halts at a `PROJECT`, so a bind
- * still inside a sub-SELECT is invisible to it. That is why the default pipeline runs it *after*
- * `removeProjections` and `pullUpExtends`, and why it is inert anywhere earlier.
+ * still inside a sub-SELECT is invisible to it. It belongs *after* `removeProjections` and `pullUpExtends`,
+ * and is inert anywhere earlier; the default pipeline, which keeps the sub-SELECTs, runs it after
+ * `pullUpExtends` alone.
  *
  * @example
  * // Given query: SELECT * { ?s ?p ?o . <ex://a> ?p ?o }

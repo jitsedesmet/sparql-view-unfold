@@ -1,18 +1,38 @@
 import { describe, it } from 'vitest';
-import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import {
+  createDefaultTransformationPipeline,
+  createQueryRewriter,
+  filterFalseTransformation,
+  mappingFromConstructQueries,
+  nullifyJoinOverIncompatibleBoundsTransformation,
+  pullUpExtendsTransformation,
+  pushDownAssertionsTransformation,
+  removeProjectionsTransformation,
+  unfoldingTransformation,
+} from '../lib/index.js';
 
 /**
  * `nullifyJoinOverIncompatibleBounds` reads each join operand's top-level `EXTEND` chain and its recursion
- * halts at a `PROJECT`, so a bind still inside a sub-SELECT is invisible to it. That is why the default
- * pipeline runs it after `removeProjections` and `pullUpExtends`, and the query below is what shows it.
+ * halts at a `PROJECT`, so a bind still inside a sub-SELECT is invisible to it. The default pipeline keeps the
+ * sub-SELECTs, so the pass needs `removeProjections` before it, and the query below is what shows it.
  */
-describe('the default pipeline', () => {
+describe('nullifyJoinOverIncompatibleBounds after removeProjections', () => {
   // The two mappings pin the subject to two different terms, each under its own predicate.
-  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+  const mapping = mappingFromConstructQueries([
     'CONSTRUCT { <ex://a> <ex://p> ?o } WHERE { ?o <ex://src1> ?x }',
     'CONSTRUCT { <ex://b> <ex://q> ?o } WHERE { ?o <ex://src2> ?x }',
-  ])));
+  ]);
+  const rewriter = createQueryRewriter([
+    unfoldingTransformation(mapping),
+    filterFalseTransformation(),
+    pushDownAssertionsTransformation(),
+    filterFalseTransformation(),
+    pullUpExtendsTransformation(),
+    filterFalseTransformation(),
+    removeProjectionsTransformation(),
+    nullifyJoinOverIncompatibleBoundsTransformation(),
+    filterFalseTransformation(),
+  ]);
 
   it('collapses a join of two patterns that pin one variable to different terms', async({ expect }) => {
     // `?s` would have to be <ex://a> for the first pattern and <ex://b> for the second.
@@ -41,8 +61,13 @@ describe('the default pipeline over an OPTIONAL', () => {
     expect((await rewriter.rewriteQuery(
       'SELECT * { ?s <ex://p> ?o FILTER(SAMETERM(?o, "1")) OPTIONAL { ?s <ex://r> ?x FILTER(SAMETERM(?o, "2")) } }',
     )).trim()).toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) ( ?uq_x AS ?x ) WHERE {
-  ?v_1 <ex://q> ?v_2 .
-  BIND( ?v_1 AS ?uq_s )
+  {
+    SELECT ( ?mi_s AS ?uq_s ) WHERE {
+      SELECT ?mi_s WHERE {
+        ?mi_s <ex://q> ?mi_y .
+      }
+    }
+  }
   BIND( "1" AS ?uq_o )
 }`);
   });
@@ -62,15 +87,13 @@ describe('the default pipeline over a mapping that types its head', () => {
   const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([ construct ])));
 
   it('keeps the type test where nothing guarantees it', async({ expect }) => {
-    // `?v_1` is read from an object position, which holds literals and triple terms as well.
+    // `?mi_o` is read from an object position, which holds literals and triple terms as well.
     expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b }')).trim())
       .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
-  {
-    ?v_0 <ex://q> ?v_1 .
-    FILTER ( ( ISIRI( ?v_1 ) || ISBLANK( ?v_1 ) ) )
+  SELECT ( ?mi_o AS ?uq_a ) ( ?mi_s AS ?uq_b ) WHERE {
+    ?mi_s <ex://q> ?mi_o .
+    FILTER ( ( ISIRI( ?mi_o ) || ISBLANK( ?mi_o ) ) )
   }
-  BIND( ?v_1 AS ?uq_a )
-  BIND( ?v_0 AS ?uq_b )
 }`);
   });
 
@@ -79,9 +102,9 @@ describe('the default pipeline over a mapping that types its head', () => {
     // a blank node only: the pattern decides the test.
     expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(sameTerm(?a, ?b)) }')).trim())
       .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
-  ?v_0 <ex://q> ?v_0 .
-  BIND( ?v_0 AS ?uq_a )
-  BIND( ?v_0 AS ?uq_b )
+  SELECT ( ?mi_o AS ?uq_a ) ( ?mi_o AS ?uq_b ) WHERE {
+    ?mi_o <ex://q> ?mi_o .
+  }
 }`);
   });
 
@@ -94,15 +117,13 @@ describe('the default pipeline over a mapping that types its head', () => {
   });
 
   it('narrows the mapping\'s type test to a narrower one of the user', async({ expect }) => {
-    // The two tests are one assertion about `?v_1`, holding the term types both of them admit.
+    // The two tests are one assertion about `?mi_o`, holding the term types both of them admit.
     expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isIRI(?a)) }')).trim())
       .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
-  {
-    ?v_0 <ex://q> ?v_1 .
-    FILTER ( ISIRI( ?v_1 ) )
+  SELECT ( ?mi_o AS ?uq_a ) ( ?mi_s AS ?uq_b ) WHERE {
+    ?mi_s <ex://q> ?mi_o .
+    FILTER ( ISIRI( ?mi_o ) )
   }
-  BIND( ?v_1 AS ?uq_a )
-  BIND( ?v_0 AS ?uq_b )
 }`);
   });
 
@@ -114,18 +135,16 @@ describe('the default pipeline over a mapping that types its head', () => {
     ));
     expect((await generalized.rewriteQuery('SELECT * { ?a <ex://p> ?b }')).trim())
       .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
-  ?v_0 <ex://q> ?v_1 .
-  BIND( ?v_1 AS ?uq_a )
-  BIND( ?v_0 AS ?uq_b )
+  SELECT ( ?mi_o AS ?uq_a ) ( ?mi_s AS ?uq_b ) WHERE {
+    ?mi_s <ex://q> ?mi_o .
+  }
 }`);
     expect((await generalized.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isLITERAL(?a)) }')).trim())
       .toEqual(`SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
-  {
-    ?v_0 <ex://q> ?v_1 .
-    FILTER ( ISLITERAL( ?v_1 ) )
+  SELECT ( ?mi_o AS ?uq_a ) ( ?mi_s AS ?uq_b ) WHERE {
+    ?mi_s <ex://q> ?mi_o .
+    FILTER ( ISLITERAL( ?mi_o ) )
   }
-  BIND( ?v_1 AS ?uq_a )
-  BIND( ?v_0 AS ?uq_b )
 }`);
   });
 });

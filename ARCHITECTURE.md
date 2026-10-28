@@ -122,9 +122,9 @@ So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
 - **Named graphs.** `GRAPH` is rejected by the precheck: what unfolding a mapping *inside* a named graph
   means is not decided. The GRAPH rules in `pushDownAssertions` and `pullUpExtends` are there and tested,
   so the work left is semantic rather than mechanical.
-- **`removeProjections`.** Dropping inner projections helps many engines and hurts some; it is in the
-  default pipeline and deserves a proper study rather than the anecdote it rests on.
 - **`nullifyJoinOverIncompatibleBounds` seeing through a `PROJECT`**, which would free it from having to
-  run after `removeProjections`.
+  run after `removeProjections`. The default pipeline no longer flattens the sub-SELECTs (after the pushdown,
+  the benchmark found keeping them faster on LUBM and OAEI), so there it acts only on binds no sub-SELECT
+  hides.
 - **Merging SERVICE calls.** A service can absorb a variable amount of computation, so there is a
   composition to choose; `transformServiceCallPushUp` makes one choice.
