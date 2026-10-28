@@ -30,6 +30,7 @@ describe('clusterSolver', () => {
     it('reads a triple term back off the shape it became', ({ expect }) => {
       const solver = solverWithShape();
       // Nothing *pins* the group: a triple term is a shape, and the term is what reading it back gives.
+      expect(solver.pinOf(solver.getGroup(varY))?.kind).toBe('triple');
       expect(solver.resolvedTermOf(solver.getGroup(varY))).toBeUndefined();
       expect(solver.getCluster(varY).term).toEqual(DF.quad(varS, varP, varO));
     });

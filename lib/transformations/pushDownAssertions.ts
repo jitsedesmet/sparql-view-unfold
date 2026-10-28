@@ -425,9 +425,10 @@ function pruneValues(
     substitution.has(name) || assertions.get(name)?.subType === 'unbound';
   const newBindings: Algebra.Values['bindings'] = [];
   const pins = termPinsOn(assertions, values.variables);
+  const strongPins = new Map(pins.filter(pin => pin.strong).map(pin => [ pin.name, pin.term ]));
   for (const binding of values.bindings) {
     // TermPinsOn is wayyy cheaper then rowSatisfies
-    if (agreesWithPins(pins, binding) && rowSatisfies(assertions, values.variables, binding, pins)) {
+    if (agreesWithPins(pins, binding) && rowSatisfies(assertions, values.variables, binding, strongPins)) {
       newBindings.push(Object.fromEntries(
         Object.entries(binding).filter(([ name ]) => !isRebuilt(name)),
       ));
@@ -516,18 +517,20 @@ function agreesWithPins(
  * already fixes outright to the term the row holds, which asks nothing of Θ.
  * @param assertions - The conjunction to satisfy
  * @param variables - The columns of the VALUES
- * @param binding - The row to check, which {@link agreesWithPins} already let through
- * @param pins - The term pins of the columns
+ * @param binding - The row to check
+ * @param strongPins - The term each column Θ fixes outright is fixed to
  * @returns whether the row satisfies the conjunction
  */
 function rowSatisfies(
   assertions: AssertionConjunction,
   variables: readonly RDF.Variable[],
   binding: Algebra.Values['bindings'][number],
-  pins: readonly ColumnPin[],
+  strongPins: ReadonlyMap<string, RDF.Term>,
 ): boolean {
-  const asked = variables.filter(variable => binding[variable.value] === undefined ||
-    !pins.some(pin => pin.strong && pin.name === variable.value));
+  const asked = variables.filter((variable) => {
+    const value = binding[variable.value];
+    return value === undefined || strongPins.get(variable.value)?.equals(value) !== true;
+  });
   if (asked.length === 0) {
     return true;
   }

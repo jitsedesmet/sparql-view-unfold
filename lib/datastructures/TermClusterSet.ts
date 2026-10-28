@@ -609,11 +609,19 @@ export class TermClusterSet<T> extends ClusterSet<T> {
   }
 
   protected override dropGroup(group: number): void {
+    const pin = this.groupToPin[group];
     super.dropGroup(group);
-    this.unregisterPinChildren(group, this.groupToPin[group]);
+    this.unregisterPinChildren(group, pin);
     delete this.groupToPin[group];
     delete this.groupToRange[group];
     delete this.pinChildToOwners[group];
+    // A position nothing names says nothing once no shape holds it; a named one is its members' to keep.
+    for (const child of childGroupsOf(pin?.kind === 'triple' ? pin : undefined)) {
+      const resolved = this.resolveGroup(child);
+      if (this.hasGroup(resolved) && this.valuesOf(resolved).length === 0 && !this.isLive(resolved)) {
+        this.dropGroup(resolved);
+      }
+    }
   }
 }
 

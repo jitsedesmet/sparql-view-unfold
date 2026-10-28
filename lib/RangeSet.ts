@@ -1,6 +1,9 @@
 import type * as RDF from '@rdfjs/types';
 import { isSubsetOf } from './utils/setUtils.js';
 
+/** The ranges done being built, kept off the ranges themselves so that a range holds its term types and no more. */
+const builtRanges = new WeakSet<RangeSet>();
+
 /**
  * The term types a position or a variable may hold, ordered by set inclusion. A range is not changed once built,
  * so one can be shared.
@@ -9,19 +12,16 @@ import { isSubsetOf } from './utils/setUtils.js';
  * subjectRange.meet(objectRange); // RangeSet(['BlankNode', 'NamedNode'])
  */
 export class RangeSet extends Set<RDF.Term['termType']> {
-  /** Whether the range is built, after which it is never changed. */
-  private readonly built: boolean;
-
   /**
    * @param termTypes - The term types the range holds
    */
   public constructor(termTypes?: Iterable<RDF.Term['termType']>) {
     super(termTypes);
-    this.built = true;
+    builtRanges.add(this);
   }
 
   public override add(termType: RDF.Term['termType']): this {
-    if (this.built) {
+    if (builtRanges.has(this)) {
       throw new Error('A range is not changed once built');
     }
     return super.add(termType);

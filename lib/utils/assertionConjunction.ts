@@ -103,6 +103,33 @@ export interface EquatedGroup {
 }
 
 /**
+ * Values per group read off one state of a cluster set. It goes stale with that state and needs no invalidating:
+ * a {@link datastructures/ClusterSet!ClusterSet.revision | revision} stamp is unique to one state of one set.
+ */
+class GroupMemo<Value> {
+  private revision: number | undefined;
+  private readonly values = new Map<number, Value>();
+
+  /**
+   * The value of a group at a revision, computed the first time it is asked for there.
+   * @param revision - The revision of the set read
+   * @param group - The group to read
+   * @param compute - What the value is
+   * @returns the value
+   */
+  public get(revision: number, group: number, compute: () => Value): Value {
+    if (this.revision !== revision) {
+      this.revision = revision;
+      this.values.clear();
+    }
+    if (!this.values.has(group)) {
+      this.values.set(group, compute());
+    }
+    return this.values.get(group)!;
+  }
+}
+
+/**
  * A conjunction of assertions Θ, held as a union-find over the accesses it is about beside the variables it says are
  * bound or unbound. The `assert...` methods return `false` on a contradiction, after which the conjunction holds no
  * meaningful state.
@@ -143,13 +170,9 @@ export class AssertionConjunction {
    * stale the way {@link readings} does, and for the same reason: the members of a group are a function of
    * `clusters` alone, and no two states of any two sets share a stamp.
    */
-  private members: { revision: number; value: Map<number, readonly string[]> } | undefined;
-  /**
-   * The groups {@link fixedTermOf} was asked about, with the
-   * {@link datastructures/ClusterSet!ClusterSet.revision | revision} of {@link clusters} they were read at, stale
-   * the way {@link members} is. `null` is a group its pins leave open.
-   */
-  private fixedTerms: { revision: number; value: Map<number, RDF.Term | null> } | undefined;
+  private readonly members = new GroupMemo<readonly string[]>();
+  /** The groups {@link decidedTermOf} was asked about, stale the way {@link members} is. */
+  private readonly decidedTerms = new GroupMemo<RDF.Term | undefined>();
 
   public constructor() {
     this.clusters = new AssertionClusterSet();
@@ -212,9 +235,16 @@ export class AssertionConjunction {
    * @returns those variable names
    */
   private names(): string[] {
-    // What {@link get} answers something for, without building the answer.
-    return [ ...this.order ]
-      .filter(name => this.unbound.has(name) || this.bound.has(name) || this.clusters.groupOf(name) !== undefined);
+    return [ ...this.order ].filter(name => this.saysAbout(name));
+  }
+
+  /**
+   * Whether the conjunction says something about a variable, which is what {@link get} answers for.
+   * @param name - The variable to look up
+   * @returns whether it does
+   */
+  private saysAbout(name: string): boolean {
+    return this.unbound.has(name) || this.bound.has(name) || this.clusters.groupOf(name) !== undefined;
   }
 
   /** How many variables the conjunction says something about. */
@@ -229,6 +259,9 @@ export class AssertionConjunction {
    * @returns the assertion, or `undefined` when the conjunction says nothing about it
    */
   public get(name: string): Assertion | undefined {
+    if (!this.saysAbout(name)) {
+      return undefined;
+    }
     if (this.unbound.has(name)) {
       return assertUnbound();
     }
@@ -240,7 +273,7 @@ export class AssertionConjunction {
       return undefined;
     }
     const isStrong = this.strength.get(name) !== 'weak';
-    const term = this.fixedTermOf(group);
+    const term = this.decidedTermOf(group);
     if (term !== undefined) {
       return isStrong ? assertStrong(term) : assertWeak(term);
     }
@@ -341,7 +374,7 @@ export class AssertionConjunction {
   public equatedGroups(): EquatedGroup[] {
     const result: EquatedGroup[] = [];
     for (const [ group, readings ] of this.readingsPerGroup()) {
-      if (this.fixedTermOf(group) === undefined && readings.length > 1) {
+      if (this.decidedTermOf(group) === undefined && readings.length > 1) {
         result.push({ readings, range: this.assertedTermTypesOf(group) });
       }
     }
@@ -531,7 +564,7 @@ export class AssertionConjunction {
             if (!result.clusters.narrowRange(group, vRanges.rangeOf(name))) {
               return undefined;
             }
-          } else if (!admitsRange(result.clusters, group, vRanges.rangeOf(name))) {
+          } else if (result.clusters.rangeOf(group).meet(vRanges.rangeOf(name)).size === 0) {
             // W⟨?x ≡ v⟩ is `¬bnd(?x) ∨ ?x ≡ v`, and the right disjunct is false wherever `?x` is bound. So
             // the weak form *is* U⟨?x⟩ here - which is worth doing rather than leaving it: a weak member
             // says almost nothing, where `!bound(?x)` is a constraint the rest of the pass acts on.
@@ -961,7 +994,7 @@ export class AssertionConjunction {
    */
   private writeOutGroup(group: number, walk: Decomposition): AssertionConjunct[] {
     const accesses = walk.accessesPerGroup.get(group)!;
-    const term = this.fixedTermOf(group);
+    const term = this.decidedTermOf(group);
     const result: AssertionConjunct[] = [];
     if (term !== undefined) {
       // Every reading is that term, which already says they are equal to each other.
@@ -1126,17 +1159,8 @@ export class AssertionConjunction {
    * @param group - The group to read
    * @returns the term, a shape every position of which is fixed being the triple term it makes, or `undefined`
    */
-  private fixedTermOf(group: number): RDF.Term | undefined {
-    const revision = this.clusters.revision;
-    if (this.fixedTerms?.revision !== revision) {
-      this.fixedTerms = { revision, value: new Map() };
-    }
-    let known = this.fixedTerms.value.get(group);
-    if (known === undefined) {
-      known = this.clusters.resolvedTermOf(group) ?? null;
-      this.fixedTerms.value.set(group, known);
-    }
-    return known ?? undefined;
+  private decidedTermOf(group: number): RDF.Term | undefined {
+    return this.decidedTerms.get(this.clusters.revision, group, () => this.clusters.resolvedTermOf(group));
   }
 
   /**
@@ -1146,7 +1170,7 @@ export class AssertionConjunction {
    * @returns the group per position, or `undefined`
    */
   private readableChildrenOf(group: number): PinChildren | undefined {
-    return this.fixedTermOf(group) === undefined ? this.clusters.childrenOf(group) : undefined;
+    return this.decidedTermOf(group) === undefined ? this.clusters.childrenOf(group) : undefined;
   }
 
   /**
@@ -1162,17 +1186,8 @@ export class AssertionConjunction {
    * memo being shared
    */
   private namedMembers(group: number): readonly string[] {
-    const revision = this.clusters.revision;
-    if (this.members?.revision !== revision) {
-      this.members = { revision, value: new Map() };
-    }
-    const known = this.members.value.get(group);
-    if (known !== undefined) {
-      return known;
-    }
-    const sorted = [ ...this.clusters.valuesOf(group) ].sort((left, right) => left.localeCompare(right));
-    this.members.value.set(group, sorted);
-    return sorted;
+    return this.members.get(this.clusters.revision, group, () =>
+      [ ...this.clusters.valuesOf(group) ].sort((left, right) => left.localeCompare(right)));
   }
 
   /**
@@ -1233,7 +1248,7 @@ export class AssertionConjunction {
         // pinned to, or the representative every member of a clique substitutes to.
         result.set(group, this.shapeIsWorthWriting(group) ?
           materialisedTerm(group) :
-          this.fixedTermOf(group) ?? DF.variable(representative.name));
+          this.decidedTermOf(group) ?? DF.variable(representative.name));
       }
     }
     return result;
@@ -1251,7 +1266,7 @@ export class AssertionConjunction {
       return false;
     }
     return childGroupsOf(children).some(child =>
-      this.fixedTermOf(child) !== undefined ||
+      this.decidedTermOf(child) !== undefined ||
       this.namedMembers(child).length > 0 ||
       this.shapeIsWorthWriting(child));
   }
@@ -1372,18 +1387,6 @@ export function termTypesOfReadings(group: EquatedGroup): AssertionConjunct[] {
   return range === undefined ?
       [] :
     group.readings.map(reading => ({ access: reading, assertion: assertTermType(range) }));
-}
-
-/**
- * Whether a group can still hold a value of one of these types, its pin included.
- * @param clusters - The clusters holding the group
- * @param group - The group to check
- * @param range - The term types to admit
- * @returns whether something is left for the group to be
- */
-function admitsRange(clusters: AssertionClusterSet, group: number, range: RangeSet): boolean {
-  // A pin narrows the range of its group to its own term type, so the range alone says it.
-  return clusters.rangeOf(group).meet(range).size > 0;
 }
 
 /**

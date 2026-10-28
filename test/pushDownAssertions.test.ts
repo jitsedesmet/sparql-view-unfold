@@ -137,6 +137,21 @@ describe('pushDownAssertions', () => {
       );
     });
 
+    it('drops the VALUES rows that contradict a ground triple term, UNDEF included', ({ expect }) => {
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          VALUES (?x ?y) { (<<( :a :b :c )>> :a) (UNDEF :b) (<<( :a :b :d )>> :e) }
+          FILTER(sameTerm(?x, <<( :a :b :c )>>))
+        }`,
+        `SELECT ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?x ) ?y WHERE {
+  VALUES ?y {
+    <ex://a>
+  }
+}`,
+      );
+    });
+
     it('replaces a VALUES the assertions leave one empty row of by the empty BGP', ({ expect }) => {
       expectTransform(
         expect,

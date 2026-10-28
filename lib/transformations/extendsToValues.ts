@@ -14,19 +14,18 @@ import { termIsStaticTerm } from '../utils/typeGuards.js';
 export function transformExtendsToValues(c: TransformationContext, op: Algebra.Operation): Algebra.Operation {
   const { AF } = c;
   function transformExtend(op: Algebra.Extend): Algebra.Extend | Algebra.Values {
-    if (op.input.type === Algebra.Types.BGP && op.input.patterns.length === 0 &&
-     op.expression.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(op.expression.term)
-    ) {
-      return AF.createValues([ op.variable ], [{
-        [op.variable.value]: <RDF.Literal | RDF.NamedNode> op.expression.term,
-      }]);
+    if (op.expression.subType !== Algebra.ExpressionTypes.TERM || !termIsStaticTerm(op.expression.term)) {
+      return op;
     }
-    if (op.input.type === Algebra.Types.VALUES && op.expression.subType === Algebra.ExpressionTypes.TERM &&
-      termIsStaticTerm(op.expression.term)) {
-      const termExpr = <RDF.Literal | RDF.NamedNode> op.expression.term;
+    // A ground triple term is a VALUES term in SPARQL 1.2, which the type of a row does not know.
+    const term = <RDF.Literal | RDF.NamedNode> op.expression.term;
+    if (op.input.type === Algebra.Types.BGP && op.input.patterns.length === 0) {
+      return AF.createValues([ op.variable ], [{ [op.variable.value]: term }]);
+    }
+    if (op.input.type === Algebra.Types.VALUES) {
       return AF.createValues([ ...op.input.variables, op.variable ], op.input.bindings.map(x => ({
         ...x,
-        [op.variable.value]: termExpr,
+        [op.variable.value]: term,
       })));
     }
     return op;

@@ -346,6 +346,21 @@ describe('integration tests', () => {
       expect(resOnMappedData).toHaveLength(1);
     });
 
+    it('joins a ground triple term with one built from a variable left unbound', async({ expect }) => {
+      const store11 = await sourceToStore([ './test/statics/singleRdfReifiedTriple.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        mappers,
+        `PREFIX : <ex://>
+         SELECT * WHERE {
+           { BIND(<<( :me :name "jitse" )>> AS ?claim) }
+           { ?s :name ?n  OPTIONAL { ?s :age ?a }  BIND(<<( ?s :age ?a )>> AS ?claim) }
+         }`,
+      );
+      expect(resUsingRewriter).toEqual(resOnMappedData);
+      expect(resOnMappedData).toHaveLength(1);
+    });
+
     it('selecting all reified triple components returns the same results', async({ expect }) => {
       const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
       const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(

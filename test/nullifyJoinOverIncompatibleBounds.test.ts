@@ -48,5 +48,13 @@ describe('nullifyJoinOverIncompatibleBounds', () => {
     it('nullifies the bind of a triple term the ground one cannot match', async({ expect }) => {
       expect(await rewriter.rewriteQuery(joinWith('<<( ?s <ex://age> ?n )>>'))).toContain('FILTER ( FALSE )');
     });
+
+    it('keeps the bind of a triple term that can fail, leaving its variable unbound', async({ expect }) => {
+      // `?a` is unbound where the OPTIONAL does not match, and `?n` may be a literal in a subject position.
+      for (const pattern of [ '<<( ?s <ex://age> ?a )>>', '<<( ?n <ex://age> ?s )>>' ]) {
+        expect(await rewriter.rewriteQuery(joinWith(pattern).replace('?s <ex://name> ?n .', `?s <ex://name> ?n .
+    OPTIONAL { ?s <ex://age> ?a }`))).not.toContain('FALSE');
+      }
+    });
   });
 });
