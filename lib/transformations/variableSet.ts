@@ -1,4 +1,5 @@
 import type * as RDF from '@rdfjs/types';
+import { unifyTerms } from '../utils/assertions.js';
 
 /**
  * Represents a set of possible values for a variable.
@@ -63,12 +64,12 @@ export class VariableSet {
   }
 
   /**
-   * Checks if a term is compatible with this set of possible values.
-   * Variables are always compatible; concrete terms must be in the value set.
+   * Checks if a term is compatible with this set of possible values: a variable always is, any other term
+   * when it unifies with one of them, so that a triple term over variables matches the triple terms it can be.
    * @param term - The term to check
    * @returns True if the term could match this VariableSet
    */
   public termIsCompatible(term: RDF.Term): boolean {
-    return this.isNoFixed || term.termType === 'Variable' || this.values.some(x => x.equals(term));
+    return this.isNoFixed || term.termType === 'Variable' || this.values.some(x => unifyTerms(x, term) !== undefined);
   }
 }
