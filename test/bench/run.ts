@@ -2,24 +2,22 @@
  * @fileoverview Benchmark orchestration for StarBench (the BKR reification benchmark) and the LUBM and
  * OAEI Conference workloads.
  *
- * For every engine, scheme and dataset scale it measures six ways of answering each
- * benchmark query. On StarBench all six run on the SAME materialized RDF 1.1 data:
+ * For every engine, scheme and dataset scale it measures seven ways of answering each
+ * benchmark query. On StarBench all seven run on the SAME materialized RDF 1.1 data:
  *   - `rewriting`                  : the SPARQL 1.2 query rewritten to SPARQL 1.1
  *     with the standard pipeline (this library),
- *   - `rewriting+removeProjections`: the same, with the `removeProjections`
- *     transformation additionally applied (flattens the nested sub-`SELECT`s the
- *     standard pipeline wraps each mapper branch in),
  *   - `rewriting+pushDownAssertions`: the same, with `pushDownAssertions` additionally
  *     applied (assertion pushdown — pushes `FILTER(sameTerm(?x, c))` constraints down
  *     into the triple patterns that use ?x, instead of matching generically and
  *     filtering afterwards),
- *   - `rewriting+pullUpExtends`    : the pushdown pipeline plus `pullUpExtends`, applied
- *     once right after the pushdown and once more after `removeProjections` (see
- *     `runner.ts`'s pipeline comment for why twice) — floats the `BIND`s the pushdown
- *     leaves at every leaf back up to where they cost less, or drops them outright,
- *   - `rewriting+keepProjections`  : `rewriting+pullUpExtends` without `removeProjections` (and so with a
- *     single `pullUpExtends`): not a rung but a sibling of the last one, measuring what flattening the
- *     sub-`SELECT`s is worth once the pushdown has run,
+ *   - `rewriting+pullUpExtends`    : the pushdown pipeline plus `pullUpExtends`, which floats the
+ *     `BIND`s the pushdown leaves at every leaf back up to where they cost less, or drops them
+ *     outright: the order of the library's default pipeline,
+ *   - each of these three with `removeProjections` appended (`rewriting+removeProjections`,
+ *     `rewriting+pushDownAssertions+removeProjections`, `rewriting+pullUpExtends+removeProjections`), which
+ *     flattens the nested sub-`SELECT`s each mapper branch is wrapped in; the last also runs
+ *     `pullUpExtends` once more after it (see `runner.ts`). Each runs right after the pipeline it extends,
+ *     so the pair is measured back to back,
  *   - `materialized`               : the hand-written baseline query (BKR-R / BKR-S).
  * It also checks every approach against a ground-truth answer for the case: the
  * hand-written `materialized` baseline, which is plain SPARQL 1.1 over plain RDF 1.1
@@ -92,7 +90,7 @@ interface RunOptions {
   schemes: string[];
   /** Scales to run, of those each scheme has; `undefined` runs each scheme's defaults. */
   scales: string[] | undefined;
-  /** Approaches to run; `undefined` runs all six. */
+  /** Approaches to run; `undefined` runs all seven. */
   approaches: string[] | undefined;
   /** Cases to run, by id (`lubm/Q06`); `undefined` runs them all. */
   cases: string[] | undefined;
@@ -127,8 +125,9 @@ interface ResultRow {
   /** Size of the dataset subset, in quads. Measured per file and shared by every engine. */
   quads: number;
   caseId: string;
-  approach: 'rewriting' | 'rewriting+removeProjections' | 'rewriting+pushDownAssertions' | 'rewriting+pullUpExtends' |
-  'rewriting+keepProjections' | 'materialized';
+  approach: 'rewriting' | 'rewriting+removeProjections' | 'rewriting+pushDownAssertions' |
+  'rewriting+pushDownAssertions+removeProjections' | 'rewriting+pullUpExtends' |
+  'rewriting+pullUpExtends+removeProjections' | 'materialized';
   status: 'ok' | 'timeout' | 'error';
   medianMs: number;
   minMs: number;
@@ -366,7 +365,8 @@ function grade(caseRows: CaseRow[]): void {
 /**
  * What grading keeps of an answer until its case is graded: its size, and a hash of its rows as a bag and as
  * a set. Keeping the rows themselves ran out of memory: a block's answers are all held until its last case
- * has run, and StarBench's F-Q3 answers 8.5 million rows for each of the nine approaches.
+ * has run, and StarBench's F-Q3 answers 8.5 million rows for each of the thirteen runs of a case
+ * (six pipelines, `preserveCardinality` off and on, and the reference).
  * The rows come canonicalised and sorted (see `engines.ts`), so equal bag hashes mean the element-wise
  * equality `sameSolutions` tests, and skipping a row equal to the one before it hashes the distinct rows.
  */
@@ -522,8 +522,9 @@ async function runEngine(
           [ 'rewriting', 'standard' ],
           [ 'rewriting+removeProjections', 'removeProjections' ],
           [ 'rewriting+pushDownAssertions', 'pushDownAssertions' ],
+          [ 'rewriting+pushDownAssertions+removeProjections', 'pushDownAssertions+removeProjections' ],
           [ 'rewriting+pullUpExtends', 'pullUpExtends' ],
-          [ 'rewriting+keepProjections', 'keepProjections' ],
+          [ 'rewriting+pullUpExtends+removeProjections', 'pullUpExtends+removeProjections' ],
         ]) {
           const pair: Job[] = [];
           for (const view of opts.rdfViews) {

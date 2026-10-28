@@ -92,63 +92,70 @@ function withProjectionRemovalTransformations(mapping: Mapping, options: Unfoldi
  * answer, but it inflated Comunica's cardinality estimate enough to invert its join order
  * on `F-Q3`.
  *
- * `removeProjectionsTransformation` is appended last. It used to be a required workaround: the
- * pushdown leaves `BIND`s directly over the sub-`SELECT`s that mapper branches are wrapped in,
- * and Traqula's generator before 1.3.1 serialized that as a sub-`SELECT` followed by sibling
- * `BIND`s in one group — invalid SPARQL (`Parse error: Expecting --> } <-- but found -->
- * 'BIND' <--`) for every pushdown and pull-up rewrite of the 24 benchmark cases. Traqula
- * 1.3.1 fixes that serialization, and those rewrites parse without it. It stays in this
- * pipeline because the pipelines are cumulative — each approach is the one before it plus one
- * pass — and the recorded results were measured with it; it runs last to also pick up any new
- * sub-`SELECT`s the pushdown itself introduces.
+ * `removeProjectionsTransformation` is not part of it, as it is not part of the library's default
+ * pipeline: after the pushdown, keeping the sub-`SELECT`s is faster on most engines (see the benchmark
+ * README, "Flattening the subqueries"). {@link withPushDownAssertionsAndRemovalTransformations} is the same
+ * pipeline with it appended, which is how this rung ran until 2026-10.
  */
 function withPushDownAssertionsTransformations(mapping: Mapping, options: UnfoldingOptions): QueryTransformation[] {
   return [
     ...standardTransformations(mapping, options),
     pushDownAssertionsTransformation(),
     filterFalseTransformation(),
+  ];
+}
+
+/**
+ * {@link withPushDownAssertionsTransformations} with `removeProjectionsTransformation` appended. It runs after
+ * the pushdown rather than before it, so it also flattens any sub-`SELECT` the pushdown itself introduces.
+ *
+ * Before Traqula 1.3.1 it was a required workaround: the pushdown leaves `BIND`s directly over the
+ * sub-`SELECT`s mapper branches are wrapped in, and Traqula's generator serialized that as a sub-`SELECT`
+ * followed by sibling `BIND`s in one group, which is invalid SPARQL (`Parse error: Expecting --> } <-- but
+ * found --> 'BIND' <--`). Traqula 1.3.1 fixes that serialization, so the flattening is now a choice.
+ */
+function withPushDownAssertionsAndRemovalTransformations(
+  mapping: Mapping,
+  options: UnfoldingOptions,
+): QueryTransformation[] {
+  return [
+    ...withPushDownAssertionsTransformations(mapping, options),
     removeProjectionsTransformation(),
   ];
 }
 
 /**
- * The pushdown pipeline plus {@link pullUpExtendsTransformation}, applied twice:
- * `pushDownAssertionsTransformation` leaves an `EXTEND` at every leaf it substitutes into (see
- * its own `@fileoverview`), and `pullUpExtendsTransformation` is the pass built to be its other
- * half — floating those back up past joins/optionals/unions to where they cost less, or dropping
- * them outright when nothing above ends up reading them. It runs once right after the pushdown to
- * clean that up, and once more after `removeProjectionsTransformation`: flattening away the nested
- * sub-`SELECT`s changes the join topology its soundness checks read (fewer, flatter operands to
- * reason about), so a second pass can float — or drop — binds the first pass could not have,
- * without the sub-`SELECT` boundaries in the way. `removeProjectionsTransformation` itself still
- * runs where the plain pushdown pipeline has it (see that pipeline's own comment for why it is
- * kept now that Traqula 1.3.1 no longer needs it as a workaround).
+ * The pushdown pipeline plus {@link pullUpExtendsTransformation}: `pushDownAssertionsTransformation` leaves
+ * an `EXTEND` at every leaf it substitutes into (see its own `@fileoverview`), and
+ * `pullUpExtendsTransformation` is the pass built to be its other half, floating those back up past
+ * joins/optionals/unions to where they cost less, or dropping them outright when nothing above ends up
+ * reading them. This is the order of the library's default pipeline (`createDefaultTransformationPipeline`),
+ * less its path expansion and `nullifyJoinOverIncompatibleBounds`, which change none of the benchmark's
+ * rewrites.
  */
 function withPullUpExtendsTransformations(mapping: Mapping, options: UnfoldingOptions): QueryTransformation[] {
   return [
-    ...standardTransformations(mapping, options),
-    pushDownAssertionsTransformation(),
-    filterFalseTransformation(),
+    ...withPushDownAssertionsTransformations(mapping, options),
     pullUpExtendsTransformation(),
     filterFalseTransformation(),
-    removeProjectionsTransformation(),
-    pullUpExtendsTransformation(),
   ];
 }
 
 /**
- * {@link withPullUpExtendsTransformations} without `removeProjectionsTransformation`, and so with one
- * `pullUpExtendsTransformation` (the second pass only exists to see past what the flattening removed): the
- * sub-`SELECT` each mapper branch is wrapped in stays. It is not a rung of the ladder but a sibling of its
- * last one, measuring what the flattening is worth once the pushdown has run.
+ * {@link withPullUpExtendsTransformations} with `removeProjectionsTransformation` appended, and then
+ * `pullUpExtendsTransformation` once more: flattening away the nested sub-`SELECT`s changes the join
+ * topology its soundness checks read (fewer, flatter operands to reason about), so a second pass can float
+ * or drop binds the first could not, without the sub-`SELECT` boundaries in the way. This is how the last
+ * rung ran until 2026-10.
  */
-function withKeptProjectionsTransformations(mapping: Mapping, options: UnfoldingOptions): QueryTransformation[] {
+function withPullUpExtendsAndRemovalTransformations(
+  mapping: Mapping,
+  options: UnfoldingOptions,
+): QueryTransformation[] {
   return [
-    ...standardTransformations(mapping, options),
-    pushDownAssertionsTransformation(),
-    filterFalseTransformation(),
+    ...withPullUpExtendsTransformations(mapping, options),
+    removeProjectionsTransformation(),
     pullUpExtendsTransformation(),
-    filterFalseTransformation(),
   ];
 }
 
@@ -199,15 +206,17 @@ export interface BenchRecord {
 }
 
 /** Which optimization pipeline {@link rewriteToSparql11} should apply. */
-export type RewriteVariant = 'standard' | 'removeProjections' | 'pushDownAssertions' | 'pullUpExtends' |
-  'keepProjections';
+export type RewriteVariant = 'standard' | 'removeProjections' | 'pushDownAssertions' |
+  'pushDownAssertions+removeProjections' | 'pullUpExtends' | 'pullUpExtends+removeProjections';
 
 function pipelineFor(variant: RewriteVariant, mapping: Mapping, options: UnfoldingOptions): QueryTransformation[] {
   switch (variant) {
     case 'removeProjections': return withProjectionRemovalTransformations(mapping, options);
     case 'pushDownAssertions': return withPushDownAssertionsTransformations(mapping, options);
+    case 'pushDownAssertions+removeProjections':
+      return withPushDownAssertionsAndRemovalTransformations(mapping, options);
     case 'pullUpExtends': return withPullUpExtendsTransformations(mapping, options);
-    case 'keepProjections': return withKeptProjectionsTransformations(mapping, options);
+    case 'pullUpExtends+removeProjections': return withPullUpExtendsAndRemovalTransformations(mapping, options);
     default: return standardTransformations(mapping, options);
   }
 }
