@@ -640,14 +640,15 @@ export class AssertionConjunction {
   }
 
   /**
-   * Conjoins that reading the source yields a value of one of the term types of `range`: a construction
-   * yields one only where every position does, of a term type the position admits.
+   * Conjoins that reading the source yields a value of one of the term types of `range`: a construction, or a
+   * ground triple term like `<<( "x" :p :o )>>`, yields one only where every position does, of a term type the
+   * position admits.
    * @param source - What carries the target's value below
    * @param range - The term types the value may have
    * @returns `false` on a contradiction
    */
   private assertSourceYields(source: TransferSource, range: RangeSet): boolean {
-    if (isTripleConstruction(source)) {
+    if (('termType' in source && source.termType === 'Quad') || isTripleConstruction(source)) {
       return range.has('Quad') && triplePositions.every(position =>
         this.assertSourceYields(source[position], rangeOfPosition(position)));
     }
@@ -697,7 +698,7 @@ export class AssertionConjunction {
    * Conjoins A⟨?x ≡ c⟩ or W⟨?x ≡ c⟩, pinning the group of `?x` to `c` - which fixes every member of a clique
    * at once, and is how an assertion met above a unification travels onto all the variables it unified.
    * @param name - The variable to pin
-   * @param term - The term it equals
+   * @param term - The ground term it equals
    * @param strong - Whether it holds outright, rather than only where `?x` is bound
    * @returns `false` when the assertion contradicts what is already known
    */
@@ -709,7 +710,7 @@ export class AssertionConjunction {
    * Conjoins A⟨a ≡ c⟩ or W⟨a ≡ c⟩ for an arbitrary access, which pins the group that access names and shapes
    * the groups on the way to it.
    * @param access - The access to pin
-   * @param term - The term it equals
+   * @param term - The ground term it equals, a variable in it being unified rather than held
    * @param strong - Whether it holds outright, rather than only where its root is bound
    * @returns `false` on a contradiction
    */

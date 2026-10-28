@@ -532,6 +532,22 @@ GROUP BY ( <ex://c> AS ?x )`,
   });
 
   describe('the weak form', () => {
+    it('reads a ground triple term as one weak conjunct, as it does an IRI', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        `SELECT * WHERE {
+          VALUES ?y { <<( :a :p :o )>> <<( :b :p :o )>> UNDEF }
+          FILTER(!bound(?y) || sameTerm(?y, <<( :a :p :o )>>))
+        }`,
+        `SELECT ?y WHERE {
+  VALUES ?y {
+    <<( <ex://a> <ex://p> <ex://o> )>>
+    UNDEF
+  }
+}`,
+      );
+    });
+
     it('is discharged by the left hand side where the right can never bind the variable', ({ expect }) => {
       // `σ_W(A₁ ⟕ A₂) ≡ σ_W(σ_W(A₁) ⟕ A₂)` keeps W on top because `A₂` may bind `?y` to something else
       // and the merged solution is the one W discards. Where `A₂` has no `?y` to bind, every solution

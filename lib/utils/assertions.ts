@@ -319,13 +319,12 @@ function transferSourceOfTerm(term: RDF.Term): TransferSource | undefined {
   if (term.termType === 'Variable') {
     return access(term.value);
   }
-  if (term.termType !== 'Quad') {
+  if (termIsStaticTerm(term)) {
     return term;
   }
-  // A ground triple term too is built position by position, so that one its positions do not admit, like
-  // `<<( "x" :p :o )>>`, is not taken for a value. A quad carrying a graph is a generalised statement rather
-  // than a triple term, so no value Θ can hold is one and nothing is handed down.
-  return term.graph.termType === 'DefaultGraph' ?
+  // A quad carrying a graph is a generalised statement rather than a triple term, so no value Θ can hold is one
+  // and nothing is handed down.
+  return term.termType === 'Quad' && term.graph.termType === 'DefaultGraph' ?
     constructionOf(triplePositions.map(position => transferSourceOfTerm(term[position]))) :
     undefined;
 }
