@@ -421,8 +421,8 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
       </div>
       <div class="card finding wide">
         <div class="big">÷1.6 – ×1.25 <small>keeping the subqueries</small></div>
-        <h3>After the pushdown, flattening the subqueries no longer pays</h3>
-        <p>Leaving out <code>removeProjections</code> changes no answer. With <code>preserveCardinality</code> off it makes LUBM 1.3 to 1.6 times faster on GraphDB, QLever, Blazegraph and Jena, and lets GraphDB answer 33 more LUBM and OAEI queries. OAEI is otherwise unchanged. StarBench is up to 1.25 times slower, and one query up to 8 times. The library's default pipeline no longer runs it.</p>
+        <h3>After the pushdown, flattening the subqueries helps some engines and hurts others</h3>
+        <p>Leaving out <code>removeProjections</code> changes no answer. With <code>preserveCardinality</code> off it makes LUBM 1.3 to 1.6 times faster on GraphDB, QLever, Blazegraph and Jena, and lets GraphDB answer 33 more LUBM and OAEI queries. Flattening wins elsewhere: Comunica runs more queries faster flattened on every workload, StarBench is up to 1.25 times faster flattened on Jena, Comunica and Oxigraph, and single queries up to 8 times on Jena and Blazegraph. The library's default pipeline no longer runs it.</p>
         <a class="more" href="#flatten">Kept against flattened, per engine</a>
       </div>
     </div>
@@ -564,11 +564,17 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
       <p>Pipelines 3 and 4 flatten the sub-<code>SELECT</code> each view branch is wrapped in after the pushdown. A second run, on 27–28 October, measured pipeline 4 without that step: one <code>pullUpExtends</code> instead of two, since the second only exists to see past the flattening. It ran back to back with pipeline 4 on every engine, workload and scale, with the option off and on, and the reference graded both.</p>
       <p><strong>No answer changes.</strong> Every query both answered returns the same rows.</p>
       <p><strong>On LUBM keeping the subqueries is faster.</strong> GraphDB, QLever, Blazegraph and Jena run 1.3 to 1.6 times faster with the option off, and 1.2 to 1.3 with it on. With the option off, GraphDB answers 48 LUBM queries instead of 23, and all 130 OAEI queries. On OAEI the other engines are within 10%.</p>
-      <p><strong>On StarBench it costs up to 1.25 times</strong> with the option off, on Jena, Comunica and Oxigraph's singleton queries. The largest slowdowns are on <code>F-Q1</code>, which filters on <code>regex(str(?source), …)</code>. Without the flattening <code>?source</code> comes out of a subquery and the filter stays outside it, so Jena and Oxigraph evaluate the whole subquery, its <code>NOT EXISTS</code> included, before filtering: 8 and 3.4 times slower on the singleton encoding.</p>
-      <p>The library's default pipeline (<code>createDefaultTransformationPipeline</code>) therefore no longer runs <code>removeProjections</code>.</p>
+      <p><strong>Some engines gain from the flattening.</strong></p>
+      <ul class="plain">
+        <li><strong>Comunica</strong> runs more queries faster flattened than kept on every workload, with the option off and on: 15 against 2 on StarBench reification, 30 against 19 on OAEI. Pooled, StarBench is 1.13 to 1.19 times faster flattened with the option off.</li>
+        <li><strong>Jena and Oxigraph on StarBench</strong>, with the option off: 1.12 to 1.23 times faster flattened. The largest gains are on <code>F-Q1</code>, which filters on <code>regex(str(?source), …)</code>. Without the flattening <code>?source</code> comes out of a subquery and the filter stays outside it, so the engine evaluates the whole subquery, its <code>NOT EXISTS</code> included, before filtering: 8.3 and 3.5 times slower on the singleton encoding.</li>
+        <li><strong>Blazegraph on OAEI</strong> pools to about 1, but 40 queries are faster flattened against 33 kept, and the flattened side has the largest gains: up to 7.8 times.</li>
+        <li><strong>QLever on OAEI</strong> also has more queries faster flattened, by at most 1.2 times.</li>
+      </ul>
+      <p>Since the gains from keeping the subqueries are larger and wider, the library's default pipeline (<code>createDefaultTransformationPipeline</code>) no longer runs <code>removeProjections</code>. It is still exported, for engines and queries like these.</p>
     </div>
     <div class="scroll"><table class="grid" id="flatten-grid"></table></div>
-    <div class="legend" data-legend="div" data-faster="kept is faster" data-slower="kept is slower"></div>
+    <div class="legend" data-legend="div" data-faster="kept is faster" data-slower="flattened is faster"></div>
     <p class="note" id="flatten-note"></p>
   </div>
 </section>
@@ -1061,12 +1067,12 @@ function renderFlatten() {
       if (!k) { td.append(cellEl('cell empty', '')); continue; }
       const c = k.compare;
       const tipHtml = `<div class="t">${ENGINE[e]} · ${WORKLOAD[w]}</div><div class="m">+pullUpExtends without removeProjections against with it, preserveCardinality ${pc}</div>
-        ${cmpTip(c, 'kept', 'flattened')}<div style="margin-top:4px">answered: ${k.full.ok} flattened, ${k.keep.ok} kept, of ${k.full.total}</div>`;
+        ${cmpTip(c, 'kept', 'flattened')}<div style="margin-top:4px">answered: ${k.full.ok} flattened, ${k.keep.ok} kept, of ${k.full.total}</div>${k.bestFlat ? `<div>largest gain from flattening: ${esc(k.bestFlat.caseId)} ${esc(k.bestFlat.scale)}, ${k.bestFlat.flatMs} ms flattened, ${k.bestFlat.keepMs} ms kept</div>` : ''}`;
       const cls = c.n ? `cell ${bin(c.geomean)}` : 'cell none';
-      td.append(cellEl(cls, `<span class="v">${ratio(c.geomean)}</span><span class="s">${k.full.ok}→${k.keep.ok}</span>`, tipHtml));
+      td.append(cellEl(cls, `<span class="v">${ratio(c.geomean)}</span><span class="s">${k.full.ok}→${k.keep.ok}</span><span class="s">${c.bWins} · ${c.aWins}</span>`, tipHtml));
     }
   }
-  document.getElementById('flatten-note').textContent = `Pipeline 4 without the flattening against pipeline 4, preserveCardinality ${pc}, measured in the same run and paired query by query: the geometric mean over the queries both answered, all scales pooled. Below it, queries answered with the flattening → without.`;
+  document.getElementById('flatten-note').textContent = `Pipeline 4 without the flattening against pipeline 4, preserveCardinality ${pc}, measured in the same run and paired query by query: the geometric mean over the queries both answered, all scales pooled. Below it, queries answered with the flattening → without, then queries faster flattened · faster kept (beyond 10%; a query only one side answers counts for that side).`;
 }
 
 // ---------- detail explorer ----------

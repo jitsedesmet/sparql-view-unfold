@@ -336,6 +336,23 @@ const detail = allCells.map((c) => {
 // (not the campaign's rows, measured days apart), per engine × workload over all its scales.
 const KEEP = join(RESULTS, 'results-keep-projections.json');
 let keepProjections = null;
+
+// The query flattening speeds up most (kept time / flattened time), among those where either side takes 100 ms or
+// more, so that a 2 ms → 5 ms jitter does not head the list.
+function bestFlattening(cs, full, keep) {
+  let best = null;
+  for (const c of cs) {
+    const [ f, k ] = [ c.v[full], c.v[keep] ];
+    if (f?.status !== 'ok' || k?.status !== 'ok' || Math.max(f.medianMs, k.medianMs) < 100) {
+      continue;
+    }
+    const r = time(k) / time(f);
+    if (r > TIE && (!best || r > best.ratio)) {
+      best = { ratio: r, caseId: c.caseId, scale: c.scale, flatMs: f.medianMs, keepMs: k.medianMs };
+    }
+  }
+  return best;
+}
 if (existsSync(KEEP)) {
   const keepCells = new Map();
   for (const row of JSON.parse(readFileSync(KEEP, 'utf8'))) {
@@ -356,6 +373,7 @@ if (existsSync(KEEP)) {
         compare: compare(cs, `${keep}|${pc}`, `${full}|${pc}`),
         full: tally(cs, `${full}|${pc}`),
         keep: tally(cs, `${keep}|${pc}`),
+        bestFlat: bestFlattening(cs, `${full}|${pc}`, `${keep}|${pc}`),
       }])),
     }));
 }

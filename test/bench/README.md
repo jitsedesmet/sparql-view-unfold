@@ -650,9 +650,10 @@ All scales of a workload pooled. In parentheses: queries answered before → aft
   - Comunica goes from 12 to 22 StarBench reification queries and from 5 to 18 singleton ones.
 - **`pullUpExtends` adds ÷1.2 to ÷2.6** on the engines that gain from it. It is neutral on Virtuoso, and on
   Oxigraph except for StarBench singleton (÷1.3).
-- **`removeProjections` alone does not help, and on some engines it hurts.** It is a rung because the
-  pushdown needs it: a `FILTER` cannot be driven into a pattern hidden behind a sub-`SELECT`. On its own it
-  loses answers:
+- **`removeProjections` alone helps Jena, and hurts most other engines.** Jena gains ÷1.1 to ÷1.3 on
+  every workload, though it loses 2 StarBench answers to the budget. GraphDB's remaining answers run
+  ÷2.2 to ÷5.4 faster, but it answers far fewer. It is a rung because the pushdown needs it: a `FILTER`
+  cannot be driven into a pattern hidden behind a sub-`SELECT`. On its own it loses answers:
   - GraphDB: LUBM 22 → 8, OAEI 128 → 75.
   - Virtuoso on OAEI: 90 → 42. Its compiled-in state-slot limit (SQ156) rejects 24 of the flattened
     queries, and 64 time out.
@@ -948,46 +949,63 @@ only, not against the campaign's, which were measured days apart.
 npx tsx test/bench/run.ts ... --approaches materialized,rewriting+pullUpExtends,rewriting+keepProjections
 ```
 
-Keeping the sub-`SELECT`s against flattening them, all scales pooled, and the queries answered with
-the flattening → without it:
+Which way the flattening goes depends on the engine and the workload. Below, keeping the sub-`SELECT`s
+against flattening them, all scales pooled: the geometric mean (÷ kept is faster, × flattened is
+faster), then per query how many are faster flattened · faster kept (beyond 1.1×; a query only one side
+answers counts for that side), the queries answered flattened → kept, and the query flattening speeds up
+most, where it is 1.5× or more (either side 100 ms or more).
 
-| Engine | Workload | pc off | pc on | Answered, off | Answered, on |
-|---|---|---|---|---|---|
-| QLever | LUBM | ÷1.6 | ÷1.2 | 71 → 72 | 76 → 78 |
-| QLever | OAEI | ≈1 | ≈1 | 130 → 130 | 130 → 130 |
-| Virtuoso | LUBM | ≈1 | ≈1 | 47 → 47 | 51 → 51 |
-| Virtuoso | OAEI | ≈1 | ≈1 | 126 → 128 | 127 → 127 |
-| GraphDB | LUBM | ÷1.6 | ÷1.2 | 23 → 48 | 52 → 52 |
-| GraphDB | OAEI | ÷1.6 | ÷1.1 | 122 → 130 | 129 → 130 |
-| Oxigraph | LUBM | ≈1 | ≈1 | 46 → 46 | 50 → 50 |
-| Oxigraph | OAEI | ≈1 | ≈1 | 130 → 130 | 130 → 130 |
-| Oxigraph | StarBench reif. | ≈1 | ≈1 | 24 → 24 | 24 → 24 |
-| Oxigraph | StarBench single. | ×1.12 | ≈1 | 24 → 24 | 24 → 24 |
-| Jena | LUBM | ÷1.3 | ÷1.2 | 34 → 33 | 37 → 38 |
-| Jena | OAEI | ≈1 | ≈1 | 130 → 130 | 130 → 130 |
-| Jena | StarBench reif. | ×1.12 | ≈1 | 24 → 24 | 24 → 24 |
-| Jena | StarBench single. | ×1.23 | ≈1 | 24 → 24 | 24 → 24 |
-| Blazegraph | LUBM | ÷1.6 | ÷1.3 | 16 → 20 | 20 → 23 |
-| Blazegraph | OAEI | ≈1 | ≈1 | 115 → 120 | 118 → 122 |
-| Comunica | LUBM | ≈1 | ≈1 | 23 → 23 | 24 → 24 |
-| Comunica | OAEI | ≈1 | ≈1 | 129 → 129 | 130 → 130 |
-| Comunica | StarBench reif. | ×1.19 | ≈1 | 22 → 22 | 22 → 22 |
-| Comunica | StarBench single. | ×1.13 | ≈1 | 21 → 21 | 21 → 20 |
+| Engine | Workload | pc off | pc on | Faster flat. · kept, off | Faster flat. · kept, on | Answered, off | Answered, on | Largest gain from flattening |
+|---|---|---|---|---|---|---|---|---|
+| QLever | LUBM | ÷1.6 | ÷1.2 | 4 · 45 | 7 · 37 | 71 → 72 | 76 → 78 |  |
+| QLever | OAEI | ≈1 | ≈1 | 43 · 24 | 59 · 13 | 130 → 130 | 130 → 130 |  |
+| Virtuoso | LUBM | ≈1 | ≈1 | 7 · 19 | 3 · 3 | 47 → 47 | 51 → 51 |  |
+| Virtuoso | OAEI | ≈1 | ≈1 | 14 · 17 | 13 · 12 | 126 → 128 | 127 → 127 |  |
+| GraphDB | LUBM | ÷1.6 | ÷1.2 | 2 · 41 | 5 · 30 | 23 → 48 | 52 → 52 |  |
+| GraphDB | OAEI | ÷1.6 | ÷1.1 | 23 · 75 | 29 · 64 | 122 → 130 | 129 → 130 | ×2.2 `is_author_of_paper` eswc (on) |
+| Oxigraph | LUBM | ≈1 | ≈1 | 2 · 11 | 1 · 9 | 46 → 46 | 50 → 50 |  |
+| Oxigraph | OAEI | ≈1 | ≈1 | 12 · 30 | 21 · 22 | 130 → 130 | 130 → 130 |  |
+| Oxigraph | StarBench reif. | ≈1 | ≈1 | 1 · 2 | 2 · 2 | 24 → 24 | 24 → 24 |  |
+| Oxigraph | StarBench single. | ×1.12 | ≈1 | 2 · 0 | 0 · 1 | 24 → 24 | 24 → 24 | ×3.5 `F-Q1` s |
+| Jena | LUBM | ÷1.3 | ÷1.2 | 7 · 16 | 3 · 21 | 34 → 33 | 37 → 38 | ×2.2 `Q04` u50 |
+| Jena | OAEI | ≈1 | ≈1 | 30 · 39 | 24 · 31 | 130 → 130 | 130 → 130 | ×1.6 `author_of_inv_talk_abstract` d100 |
+| Jena | StarBench reif. | ×1.12 | ≈1 | 12 · 3 | 3 · 5 | 24 → 24 | 24 → 24 | ×2.3 `F-Q1` s (on) |
+| Jena | StarBench single. | ×1.23 | ≈1 | 8 · 5 | 4 · 6 | 24 → 24 | 24 → 24 | ×8.3 `F-Q1` s |
+| Blazegraph | LUBM | ÷1.6 | ÷1.3 | 6 · 13 | 9 · 14 | 16 → 20 | 20 → 23 | ×2.4 `Q06` u1 (on) |
+| Blazegraph | OAEI | ≈1 | ≈1 | 40 · 33 | 42 · 26 | 115 → 120 | 118 → 122 | ×7.8 `author_of_inv_talk_abstract` eswc |
+| Comunica | LUBM | ≈1 | ≈1 | 12 · 3 | 5 · 2 | 23 → 23 | 24 → 24 |  |
+| Comunica | OAEI | ≈1 | ≈1 | 30 · 19 | 40 · 15 | 129 → 129 | 130 → 130 | ×1.9 `early_registration` d100 |
+| Comunica | StarBench reif. | ×1.19 | ≈1 | 15 · 2 | 11 · 2 | 22 → 22 | 22 → 22 | ×1.5 `F-Q5` s |
+| Comunica | StarBench single. | ×1.13 | ≈1 | 12 · 1 | 4 · 1 | 21 → 21 | 21 → 20 |  |
 
 - **No answer changes.** Every query both pipelines answered returns the same number of rows, and grades
   the same against the reference.
-- **LUBM is faster with the subqueries kept**, on GraphDB, QLever, Blazegraph and Jena. With the option
-  off, GraphDB also answers 48 LUBM queries instead of 23, and all 130 OAEI queries.
-- **OAEI is unchanged** on every other engine.
-- **StarBench is up to 1.25 times slower with the option off**, and unchanged with it on, whose
-  `SELECT DISTINCT` subqueries the flattening keeps anyway. The largest slowdowns are on `F-Q1`
-  (`FILTER(regex(str(?source), '1511234'))`): Jena 0.6 s → 5.0 s and Oxigraph 2.0 s → 6.8 s on
-  `singleton`/`s`, Jena 2× on `reification`. Without the flattening `?source` comes out of a sub-`SELECT`,
-  and the filter stays outside it, so the engine evaluates the whole subquery, its `NOT EXISTS` included,
-  before filtering. That is the same boundary as the `DISTINCT` subquery above.
+- **Keeping the subqueries is faster on LUBM**, on GraphDB, QLever, Blazegraph and Jena. With the option
+  off, GraphDB also answers 48 LUBM queries instead of 23, and all 130 OAEI queries. GraphDB is the clearest
+  case for keeping them: on OAEI too, 75 queries are faster kept and 23 flattened.
+- **Some engines gain from the flattening.**
+  - **Comunica** runs more queries faster flattened than kept on every workload, with the option off and
+    on: 15 against 2 on StarBench reification, 30 against 19 on OAEI. Its pooled gain is ×1.13 to ×1.19
+    on StarBench with the option off, and at most 1.9× on a single query.
+  - **Jena and Oxigraph on StarBench** with the option off: ×1.12 to ×1.23 pooled. The largest gains are on
+    `F-Q1` (`FILTER(regex(str(?source), '1511234'))`): Jena 0.6 s → 5.0 s and Oxigraph 2.0 s → 6.8 s
+    without the flattening on `singleton`/`s`, Jena 2× on `reification`. Without the flattening `?source`
+    comes out of a sub-`SELECT`, and the filter stays outside it, so the engine evaluates the whole
+    subquery, its `NOT EXISTS` included, before filtering. That is the same boundary as the `DISTINCT`
+    subquery above.
+  - **Blazegraph on OAEI** pools to ≈1, but splits: 40 queries are faster flattened and 33 kept, and the
+    flattened side has the largest gains, up to 7.8× (`author_of_inv_talk_abstract` on `eswc`,
+    29 ms → 226 ms) and 4.3× (`external_reviewer` on `eswc`, 0.7 s → 3.1 s, option on).
+  - **QLever on OAEI** also has more queries faster flattened (43 against 24, and 59 against 13 with the
+    option on), but by at most 1.2×.
+- **With the option on, StarBench pools to ≈1** on every engine, since the flattening keeps the
+  `SELECT DISTINCT` subqueries the option adds. Comunica still has more queries faster flattened (11
+  against 2 on reification), and Jena's `F-Q1` on `reification`/`s` is still 2.3× faster flattened.
 
-Since the gains are larger and wider than the costs, `createDefaultTransformationPipeline` no longer runs
-`removeProjections`. The ladder keeps it, so that its results stay comparable with every earlier run.
+Since the gains from keeping the subqueries are larger and wider than those from flattening them,
+`createDefaultTransformationPipeline` no longer runs `removeProjections`. It is still exported, and for an
+engine like Comunica, or for queries that filter on a view variable as `F-Q1` does, a pipeline that
+appends it is faster. The ladder keeps it, so that its results stay comparable with every earlier run.
 
 ### Where the optimisations do not help, and why
 
