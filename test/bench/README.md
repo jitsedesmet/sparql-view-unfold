@@ -30,6 +30,12 @@ difference between two adjacent bars is the contribution of that transformation:
 | `rewriting+pushDownAssertions` | `rewriting`, then `pushDownAssertions` → `filterFalse` → `removeProjections` (pushes `FILTER(sameTerm(?x, c))` into the triple patterns that use `?x`, turning a free position into an indexed lookup) |
 | `rewriting+pullUpExtends` | `rewriting`, then `pushDownAssertions` → `filterFalse` → `pullUpExtends` → `filterFalse` → `removeProjections` → `pullUpExtends` (floats the `BIND`s the pushdown leaves at every leaf back up, or drops them) |
 
+A fifth, `rewriting+keepProjections`, is not a rung but a sibling of the last one: `rewriting`, then
+`pushDownAssertions` → `filterFalse` → `pullUpExtends` → `filterFalse`. It keeps the sub-`SELECT`s, and so
+runs `pullUpExtends` once, since the second pass only exists to see past the flattening. It measures what
+flattening is worth after the pushdown ("Flattening after the pushdown", under "Results"), and it is not
+part of the main campaign.
+
 Each name above is the `<stem>Transformation()` factory of that stem; see `runner.ts` for the exact
 composition, and for why `removeProjections` stays a step of the pushdown pipelines even though
 Traqula 1.3.1 no longer needs it to keep their output parseable.
@@ -41,10 +47,11 @@ rewrites (102 queries, `preserveCardinality` off and on). The sub-`SELECT`s that
 `SELECT DISTINCT` that `preserveCardinality` adds around each view pattern, and the aggregates of
 StarBench's A-Q3 and A-Q4, which `removeProjections` keeps by design.
 
-None of the four is the pipeline `createDefaultTransformationPipeline` builds, which is what a user of
-the library gets by default: that one expands property paths first, runs `pullUpExtends` once and
-`nullifyJoinOverIncompatibleBounds` last. The ladder here is built to isolate one pass at a time, not
-to be the recommended configuration.
+None of these is the pipeline `createDefaultTransformationPipeline` builds, which is what a user of
+the library gets by default: that one expands property paths first, runs `pullUpExtends` once, leaves out
+`removeProjections`, and runs `nullifyJoinOverIncompatibleBounds` last. `rewriting+keepProjections` is
+the closest to it. The ladder here is built to isolate one pass at a time, not to be the recommended
+configuration.
 
 ### How the mappers are read
 
@@ -125,14 +132,14 @@ older bytecode and works with Java 11/17.
 
 | File | Purpose |
 |---|---|
-| `run.ts` | The orchestrator: for every engine × scheme × scale it runs the four pipelines and the baseline over the *same* subset, grades them against the reference answer, and writes the results JSON. Flushes after every row, so an interrupted run still leaves usable JSON. |
-| `runner.ts` | `rewriteToSparql11(mappers, query, variant)` — the core rewrite call, async as `QueryRewriter.rewriteQuery` is, where `variant` selects one of the four pipelines — plus `sameSolutions()` and a simpler single-engine `runBenchmark()`/`formatRecords()` used by `cli.ts`. |
+| `run.ts` | The orchestrator: for every engine × scheme × scale it runs the pipelines and the baseline over the *same* subset, grades them against the reference answer, and writes the results JSON. Flushes after every row, so an interrupted run still leaves usable JSON. |
+| `runner.ts` | `rewriteToSparql11(mappers, query, variant)` — the core rewrite call, async as `QueryRewriter.rewriteQuery` is, where `variant` selects one of the pipelines — plus `sameSolutions()` and a simpler single-engine `runBenchmark()`/`formatRecords()` used by `cli.ts`. |
 | `config.ts` | Maps each reification pattern (`reification` → `BKR-Reification.ttl`/`BKR-R_*.rq`, `singleton` → `BKR-Singleton.ttl`/`BKR-S_*.rq`) to its CONSTRUCT mappers, materialized dataset and hand-written baseline query, and builds cases from `queries/BKR-star_*.rq`. Also lists the LUBM and OAEI workloads (`WORKLOADS`): their views, queries, and each scale's source and materialised-views files. |
 | `engines.ts` | `BenchEngine` interface + `ComunicaEngine` (a long-lived worker process per dataset, so the store is loaded and indexed once and the engine stays warm, while a query whose join state outgrows the heap costs one `error` row instead of the whole sweep; in-process for the in-memory stores the unit tests use), the native servers `OxigraphEngine`, `JenaEngine` and `QLeverEngine` (see "Setting up the engines") and `SparqlHttpEngine` (any *externally managed* SPARQL HTTP endpoint, used by `cli.ts`). |
 | `comunicaWorker.mjs` | A long-lived Comunica worker driven by `ComunicaEngine` over newline-delimited JSON: it loads and indexes the dataset once, then answers every query against it. The separate process is about memory, not cancellation — Comunica buffers join state that no cap on the output stream can bound, and a `FATAL ERROR: Reached heap limit` is not catchable, so an unbounded query has to be able to die without taking the run with it. Timeouts are handled inside the worker, so they cost the budget but not the loaded store. Given an `.hdt` file (the LUBM and OAEI data), it queries through Comunica's HDT engine instead of loading a store. |
 | `makeSubset.mjs` | Streams a full multi-GB dataset once and writes four self-contained subsets (`xs`/`s`/`m`/`l`), each containing the full closure of every benchmark query's target entities plus a uniform random noise sample, so results are comparable across scales. The full datasets (13–17GB) cannot be loaded into an in-memory store, so this is what the real run uses. |
 | `plot.mjs` | Turns a results JSON into hand-rolled SVG figures (time-by-query, scaling, overhead, correctness) per scheme × engine, for the rewrites with `preserveCardinality` off, or on with `--preserve-cardinality`. No dependencies. |
-| `overview/` | `analyse.mjs` turns `results/results.json` into the paired comparisons of "Results", and `build.mjs` inlines them into `template.html`, a self-contained results page. Both outputs are gitignored. |
+| `overview/` | `analyse.mjs` turns `results/results.json` and `results/results-keep-projections.json` into the paired comparisons of "Results", and `build.mjs` inlines them into `template.html`, a self-contained results page. Both outputs are gitignored. |
 | `cli.ts` | Ad-hoc single-pipeline runs against the **full** datasets or SPARQL endpoints you started yourself. No scale subsetting. |
 | `workloads/<name>/` | The LUBM and OAEI workloads: `prepare.sh` downloads or generates the data into a gitignored `data/`, and the committed `views.rq` and `queries/*.rq` are what the benchmark runs. `workloads/toNTriples.mjs` merges and skolemises the source files; `workloads/common.sh` holds the steps both scripts share. |
 | `materializeViews.ts` | Runs every view of a workload over its source data with Jena and writes the union, the graph the reference answers come from. Each view's result is cross-checked against Oxigraph's (or QLever's, with `--check qlever`), and nothing is written unless the two agree. |
@@ -928,6 +935,60 @@ is faster · where off is faster (by more than 10%). Then queries answered off �
     `derives_from` pattern becomes such a subquery, so the engine computes and deduplicates every
     `derives_from` triple before the selective `REGEX` filter and the join can cut it down.
 
+### Flattening after the pushdown
+
+A second run, measured 2026-10-27 → 10-28 with the runner of `f57caa0` (the rewriter unchanged since
+`20181c2`), ran `rewriting+keepProjections` back to back with `rewriting+pullUpExtends`, plus the reference
+to grade both. It used the campaign's engines, scales, budgets and settings, `preserveCardinality` off and
+on: 7,220 rows in `results/results-keep-projections.json`. Both pipelines are compared on that run's rows
+only, not against the campaign's, which were measured days apart.
+
+```bash
+# The campaign's commands, with only these approaches:
+npx tsx test/bench/run.ts ... --approaches materialized,rewriting+pullUpExtends,rewriting+keepProjections
+```
+
+Keeping the sub-`SELECT`s against flattening them, all scales pooled, and the queries answered with
+the flattening → without it:
+
+| Engine | Workload | pc off | pc on | Answered, off | Answered, on |
+|---|---|---|---|---|---|
+| QLever | LUBM | ÷1.6 | ÷1.2 | 71 → 72 | 76 → 78 |
+| QLever | OAEI | ≈1 | ≈1 | 130 → 130 | 130 → 130 |
+| Virtuoso | LUBM | ≈1 | ≈1 | 47 → 47 | 51 → 51 |
+| Virtuoso | OAEI | ≈1 | ≈1 | 126 → 128 | 127 → 127 |
+| GraphDB | LUBM | ÷1.6 | ÷1.2 | 23 → 48 | 52 → 52 |
+| GraphDB | OAEI | ÷1.6 | ÷1.1 | 122 → 130 | 129 → 130 |
+| Oxigraph | LUBM | ≈1 | ≈1 | 46 → 46 | 50 → 50 |
+| Oxigraph | OAEI | ≈1 | ≈1 | 130 → 130 | 130 → 130 |
+| Oxigraph | StarBench reif. | ≈1 | ≈1 | 24 → 24 | 24 → 24 |
+| Oxigraph | StarBench single. | ×1.12 | ≈1 | 24 → 24 | 24 → 24 |
+| Jena | LUBM | ÷1.3 | ÷1.2 | 34 → 33 | 37 → 38 |
+| Jena | OAEI | ≈1 | ≈1 | 130 → 130 | 130 → 130 |
+| Jena | StarBench reif. | ×1.12 | ≈1 | 24 → 24 | 24 → 24 |
+| Jena | StarBench single. | ×1.23 | ≈1 | 24 → 24 | 24 → 24 |
+| Blazegraph | LUBM | ÷1.6 | ÷1.3 | 16 → 20 | 20 → 23 |
+| Blazegraph | OAEI | ≈1 | ≈1 | 115 → 120 | 118 → 122 |
+| Comunica | LUBM | ≈1 | ≈1 | 23 → 23 | 24 → 24 |
+| Comunica | OAEI | ≈1 | ≈1 | 129 → 129 | 130 → 130 |
+| Comunica | StarBench reif. | ×1.19 | ≈1 | 22 → 22 | 22 → 22 |
+| Comunica | StarBench single. | ×1.13 | ≈1 | 21 → 21 | 21 → 20 |
+
+- **No answer changes.** Every query both pipelines answered returns the same number of rows, and grades
+  the same against the reference.
+- **LUBM is faster with the subqueries kept**, on GraphDB, QLever, Blazegraph and Jena. With the option
+  off, GraphDB also answers 48 LUBM queries instead of 23, and all 130 OAEI queries.
+- **OAEI is unchanged** on every other engine.
+- **StarBench is up to 1.25 times slower with the option off**, and unchanged with it on, whose
+  `SELECT DISTINCT` subqueries the flattening keeps anyway. The largest slowdowns are on `F-Q1`
+  (`FILTER(regex(str(?source), '1511234'))`): Jena 0.6 s → 5.0 s and Oxigraph 2.0 s → 6.8 s on
+  `singleton`/`s`, Jena 2× on `reification`. Without the flattening `?source` comes out of a sub-`SELECT`,
+  and the filter stays outside it, so the engine evaluates the whole subquery, its `NOT EXISTS` included,
+  before filtering. That is the same boundary as the `DISTINCT` subquery above.
+
+Since the gains are larger and wider than the costs, `createDefaultTransformationPipeline` no longer runs
+`removeProjections`. The ladder keeps it, so that its results stay comparable with every earlier run.
+
 ### Where the optimisations do not help, and why
 
 - **Joins on `BIND`-computed variables across `UNION` groups.** After every pass, each query pattern is
@@ -989,6 +1050,7 @@ figures from any results JSON. In summary:
 | 2026-10-13 → 10-14 | Virtuoso 7.2.17, GraphDB 11.5.1 Free and Blazegraph 2.1.6 RC added on LUBM and OAEI, with server-wide settings only (Virtuoso unvectorised, because its vectorised joins give wrong answers; GraphDB's heap at 36 GB). The only wrong answers in the benchmark are Virtuoso's: 105 from its `sameTerm` bug, all without the pushdown. With the pushdown, Virtuoso runs at 1.4–2.5× its materialised views on LUBM and at parity on OAEI; GraphDB and Blazegraph run at up to 41× and 73× on LUBM and pay off within 14 queries. |
 | 2026-10-21 | Virtuoso, GraphDB and Blazegraph run once with `preserveCardinality` too. GraphDB's pushdown then answers all 13 LUBM queries at every scale (23 → 52 cells): its query plans show it splitting the flattened rewrite's joins into cross products, which the `DISTINCT` subqueries prevent. Virtuoso halves its LUBM time but loses rows on 38 cells, to a bug in joining three `SELECT DISTINCT` subqueries unvectorised. Blazegraph barely moves. |
 | 2026-10-22 → 10-26 | One campaign replaces every earlier result. All seven engines and three workloads ran on the same commit and settings: the standard RDF view (`generalizedRdfView: false`, now `run.ts`'s default too), `preserveCardinality` off and on back to back for each query (`--paired-cardinality`), and the median of three runs for queries under 10 s (`--reps 3 --reps-below 10000`). Grading keeps a hash of each answer instead of its rows, so StarBench's 8.5-million-row answers no longer exhaust memory. `results.json` holds both settings, 12,996 rows, and `results-preserve-cardinality.json` is gone. `timeMaterialization.ts --break-even` counts each setting apart. `overview/` builds the results page from it. The pushdown carries the ladder on every engine and workload. The only wrong answers are Virtuoso's 283. StarBench's broken references are graded as such. Building the views pays off after a median of about 14 queries. |
+| 2026-10-27 → 10-28 | `rewriting+keepProjections`, the full pipeline without `removeProjections`, measured against it on every engine and workload (7,220 rows, `results-keep-projections.json`). No answer changes. LUBM is ÷1.2 to ÷1.6 faster on four engines, and GraphDB answers 33 more queries. StarBench is up to 1.25 times slower with `preserveCardinality` off. `removeProjections` left the library's default pipeline. The README now lists the version of each engine measured. |
 
 ## Extending
 

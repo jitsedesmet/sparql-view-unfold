@@ -1,7 +1,8 @@
 // Turns the benchmark's results into the data the overview page embeds (see build.mjs).
 // Usage: node test/bench/overview/analyse.mjs [results.json] [--out overview-data.json]
-// Reads results/results.json (every engine, preserveCardinality off and on) and results/materialization.json.
-import { readFileSync, writeFileSync } from 'node:fs';
+// Reads results/results.json (every engine, preserveCardinality off and on), results/materialization.json and
+// results/results-keep-projections.json (the full pipeline against the same without removeProjections).
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 const RESULTS = join(import.meta.dirname, '..', 'results');
@@ -331,6 +332,34 @@ const detail = allCells.map((c) => {
   return [ ENGINES.indexOf(c.engine), WORKLOADS.indexOf(c.workload), SCALES.indexOf(c.scale), caseIds.indexOf(c.caseId), vs, otherReferenceCount(c), referenceDefect(c) ? (referenceDiffers(c) ? 2 : 1) : 0 ];
 });
 
+// The full pipeline without removeProjections, against the full pipeline measured alongside it in the same run
+// (not the campaign's rows, measured days apart), per engine × workload over all its scales.
+const KEEP = join(RESULTS, 'results-keep-projections.json');
+let keepProjections = null;
+if (existsSync(KEEP)) {
+  const keepCells = new Map();
+  for (const row of JSON.parse(readFileSync(KEEP, 'utf8'))) {
+    const key = `${row.engine}\t${row.scheme}\t${row.scale}\t${row.caseId}`;
+    if (!keepCells.has(key)) {
+      keepCells.set(key, { engine: row.engine, workload: row.scheme, scale: row.scale, caseId: row.caseId, v: {}});
+    }
+    keepCells.get(key).v[variantOf(row)] = row;
+  }
+  const [ full, keep ] = [ 'rewriting+pullUpExtends', 'rewriting+keepProjections' ];
+  keepProjections = [ ...groupBy([ ...keepCells.values() ], c => `${c.engine}\t${c.workload}`).values() ]
+    .sort((x, y) => order(ENGINES, x[0].engine) - order(ENGINES, y[0].engine) ||
+      order(WORKLOADS, x[0].workload) - order(WORKLOADS, y[0].workload))
+    .map(cs => ({
+      engine: cs[0].engine,
+      workload: cs[0].workload,
+      ...Object.fromEntries([ 'off', 'on' ].map(pc => [ pc, {
+        compare: compare(cs, `${keep}|${pc}`, `${full}|${pc}`),
+        full: tally(cs, `${full}|${pc}`),
+        keep: tally(cs, `${keep}|${pc}`),
+      }])),
+    }));
+}
+
 const data = {
   generated: new Date().toISOString(),
   source: basename(IN),
@@ -339,6 +368,7 @@ const data = {
   dict: { engines: ENGINES, workloads: WORKLOADS, scales: SCALES, variants: VARIANTS, caseIds, errors },
   summary,
   pooled,
+  keepProjections,
   detail,
 };
 writeFileSync(OUT, JSON.stringify(data));

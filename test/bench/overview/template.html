@@ -344,11 +344,12 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
       <li><a href="#payoff">Pay-off</a></li>
       <li><a href="#correct">Correctness</a></li>
       <li><a href="#cardinality">preserveCardinality</a></li>
+      <li><a href="#flatten">Flattening</a></li>
       <li><a href="#queries">Per query</a></li>
       <li><a href="#engines">Engines</a></li>
       <li><a href="#method">Method</a></li>
     </ul></nav>
-    <div class="switch" title="Which rewrites the Passes, Answered, Cost, Pay-off and Per query views show">
+    <div class="switch" title="Which rewrites the Passes, Answered, Cost, Pay-off, Flattening and Per query views show">
       <span class="seg-label">preserveCardinality</span>
       <div class="seg" role="group" aria-label="preserveCardinality">
         <button type="button" data-pc="off" aria-pressed="true">off</button>
@@ -418,6 +419,12 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
         <p>Pushing assertions down makes Oxigraph, Jena and Comunica 4 to 8 times faster on SPARQL 1.2 queries over reification and singleton properties. Comunica then answers 22 of 24 reification queries instead of 12. The full pipeline still runs 4 to 10 times behind a hand-written query on Oxigraph and Jena (reification), and 25 to 33 times on Comunica.</p>
         <a class="more" href="#passes">Each pass, per engine</a>
       </div>
+      <div class="card finding wide">
+        <div class="big">÷1.6 – ×1.25 <small>keeping the subqueries</small></div>
+        <h3>After the pushdown, flattening the subqueries no longer pays</h3>
+        <p>Leaving out <code>removeProjections</code> changes no answer. With <code>preserveCardinality</code> off it makes LUBM 1.3 to 1.6 times faster on GraphDB, QLever, Blazegraph and Jena, and lets GraphDB answer 33 more LUBM and OAEI queries. OAEI is otherwise unchanged. StarBench is up to 1.25 times slower, and one query up to 8 times. The library's default pipeline no longer runs it.</p>
+        <a class="more" href="#flatten">Kept against flattened, per engine</a>
+      </div>
     </div>
   </div>
 </section>
@@ -438,6 +445,7 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
           <div class="arrow" aria-hidden="true">→</div>
           <div class="step"><i>4</i><b>+pullUpExtends</b><span>Float the <code>BIND</code>s the pushdown leaves at every leaf back up, or drop them: once before the flattening, once after.</span></div>
         </div>
+        <p class="note">A separate run measured pipeline 4 without the flattening (<a href="#flatten">question 7</a>).</p>
         <div class="versus">
           <div class="step"><b>materialised</b> <span>The reference. LUBM and OAEI: the original query over the views, materialised ahead of time (the build time is measured separately). StarBench: a hand-written SPARQL 1.1 query over the source.</span></div>
           <div class="step"><b>preserveCardinality</b> <span>A rewriter option that wraps each view pattern in <code>SELECT DISTINCT</code>, so duplicates the views would not produce do not appear. Every rewrite runs with it off and on, back to back.</span></div>
@@ -545,6 +553,23 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
     <div class="scroll"><table class="grid" id="pc-grid"></table></div>
     <div class="legend" data-legend="div" data-faster="on is faster" data-slower="on is slower"></div>
     <p class="note">The full pipeline with the option on against off, paired query by query: the geometric mean over the queries both settings answered, all scales pooled. Below it, queries answered off → on.</p>
+  </div>
+</section>
+
+<section class="block gutter" id="flatten">
+  <div class="wrap">
+    <div class="kicker">Question 7</div>
+    <h2>Is flattening the subqueries still worth it after the pushdown?</h2>
+    <div class="prose">
+      <p>Pipelines 3 and 4 flatten the sub-<code>SELECT</code> each view branch is wrapped in after the pushdown. A second run, on 27–28 October, measured pipeline 4 without that step: one <code>pullUpExtends</code> instead of two, since the second only exists to see past the flattening. It ran back to back with pipeline 4 on every engine, workload and scale, with the option off and on, and the reference graded both.</p>
+      <p><strong>No answer changes.</strong> Every query both answered returns the same rows.</p>
+      <p><strong>On LUBM keeping the subqueries is faster.</strong> GraphDB, QLever, Blazegraph and Jena run 1.3 to 1.6 times faster with the option off, and 1.2 to 1.3 with it on. With the option off, GraphDB answers 48 LUBM queries instead of 23, and all 130 OAEI queries. On OAEI the other engines are within 10%.</p>
+      <p><strong>On StarBench it costs up to 1.25 times</strong> with the option off, on Jena, Comunica and Oxigraph's singleton queries. The largest slowdowns are on <code>F-Q1</code>, which filters on <code>regex(str(?source), …)</code>. Without the flattening <code>?source</code> comes out of a subquery and the filter stays outside it, so Jena and Oxigraph evaluate the whole subquery, its <code>NOT EXISTS</code> included, before filtering: 8 and 3.4 times slower on the singleton encoding.</p>
+      <p>The library's default pipeline (<code>createDefaultTransformationPipeline</code>) therefore no longer runs <code>removeProjections</code>.</p>
+    </div>
+    <div class="scroll"><table class="grid" id="flatten-grid"></table></div>
+    <div class="legend" data-legend="div" data-faster="kept is faster" data-slower="kept is slower"></div>
+    <p class="note" id="flatten-note"></p>
   </div>
 </section>
 
@@ -1021,6 +1046,29 @@ function renderPc() {
   }
 }
 
+function renderFlatten() {
+  const t = document.getElementById('flatten-grid');
+  const K = {};
+  for (const k of D.keepProjections ?? []) (K[k.engine] ??= {})[k.workload] = k[pc];
+  t.innerHTML = `<thead><tr><th></th>${workloads.map(w => `<th>${WORKLOAD_SHORT[w]}</th>`).join('')}</tr></thead><tbody></tbody>`;
+  const tb = t.tBodies[0];
+  for (const e of ENGINE_ORDER) {
+    const tr = tb.insertRow();
+    tr.innerHTML = `<th>${ENGINE[e]}</th>`;
+    for (const w of workloads) {
+      const td = tr.insertCell();
+      const k = K[e]?.[w];
+      if (!k) { td.append(cellEl('cell empty', '')); continue; }
+      const c = k.compare;
+      const tipHtml = `<div class="t">${ENGINE[e]} · ${WORKLOAD[w]}</div><div class="m">+pullUpExtends without removeProjections against with it, preserveCardinality ${pc}</div>
+        ${cmpTip(c, 'kept', 'flattened')}<div style="margin-top:4px">answered: ${k.full.ok} flattened, ${k.keep.ok} kept, of ${k.full.total}</div>`;
+      const cls = c.n ? `cell ${bin(c.geomean)}` : 'cell none';
+      td.append(cellEl(cls, `<span class="v">${ratio(c.geomean)}</span><span class="s">${k.full.ok}→${k.keep.ok}</span>`, tipHtml));
+    }
+  }
+  document.getElementById('flatten-note').textContent = `Pipeline 4 without the flattening against pipeline 4, preserveCardinality ${pc}, measured in the same run and paired query by query: the geometric mean over the queries both answered, all scales pooled. Below it, queries answered with the flattening → without.`;
+}
+
 // ---------- detail explorer ----------
 const qx = { engine: 'oxigraph', workload: 'lubm', scale: 'u1' };
 const detailIndex = new Map();
@@ -1096,7 +1144,7 @@ for (const id of [ 'qx-engine', 'qx-workload', 'qx-scale' ]) {
 // ---------- wiring ----------
 function renderPcDependent() {
   for (const b of document.querySelectorAll('.seg button')) b.setAttribute('aria-pressed', String(b.dataset.pc === pc));
-  renderPasses(); renderAnswered(); renderCost(); renderPayoff(); renderExplorer();
+  renderPasses(); renderAnswered(); renderCost(); renderPayoff(); renderFlatten(); renderExplorer();
 }
 for (const b of document.querySelectorAll('.seg button')) {
   b.addEventListener('click', () => {
