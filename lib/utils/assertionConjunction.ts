@@ -231,9 +231,9 @@ export class AssertionConjunction {
       return undefined;
     }
     const isStrong = this.strength.get(name) !== 'weak';
-    const pin = this.clusters.pinOf(group);
-    if (pin?.kind === 'term') {
-      return isStrong ? assertStrong(pin.term) : assertWeak(pin.term);
+    const term = this.clusters.resolvedTermOf(group);
+    if (term !== undefined) {
+      return isStrong ? assertStrong(term) : assertWeak(term);
     }
     const representative = this.representativeMemberOf(group);
     if (representative === undefined || representative === name) {
@@ -332,7 +332,7 @@ export class AssertionConjunction {
   public equatedGroups(): EquatedGroup[] {
     const result: EquatedGroup[] = [];
     for (const [ group, readings ] of this.readingsPerGroup()) {
-      if (this.clusters.pinOf(group)?.kind !== 'term' && readings.length > 1) {
+      if (this.clusters.resolvedTermOf(group) === undefined && readings.length > 1) {
         result.push({ readings, range: this.assertedTermTypesOf(group) });
       }
     }
@@ -674,7 +674,7 @@ export class AssertionConjunction {
    * @returns `false` on a contradiction
    */
   public assertPin(access: Access, term: RDF.Term, strong: boolean): boolean {
-    return this.narrowing(access, strong, (clusters, group) => clusters.setTerm(group, term));
+    return this.narrowing(access, strong, (clusters, group) => clusters.assertTerm(group, term));
   }
 
   /**
@@ -952,13 +952,14 @@ export class AssertionConjunction {
    */
   private writeOutGroup(group: number, walk: Decomposition): AssertionConjunct[] {
     const accesses = walk.accessesPerGroup.get(group)!;
-    const pin = this.clusters.pinOf(group);
+    const term = this.clusters.resolvedTermOf(group);
     const result: AssertionConjunct[] = [];
-    if (pin?.kind === 'term') {
-      // Every reading is that term, which already says they are equal to each other.
-      return accesses.map(access => ({
+    if (term !== undefined) {
+      // Every reading is that term, which already says they are equal to each other, and a reading through a
+      // shape written out as the triple term it is was said by that term.
+      return accesses.filter(access => !this.readsThroughFixedShape(access)).map(access => ({
         access,
-        assertion: this.isStrong(access) ? assertStrong(pin.term) : assertWeak(pin.term),
+        assertion: this.isStrong(access) ? assertStrong(term) : assertWeak(term),
       }));
     }
     const [ representative, ...rest ] = accesses;
@@ -988,7 +989,7 @@ export class AssertionConjunction {
    * @returns the term types, or `undefined` when nothing has to be told
    */
   private termTypesToState(group: number, walk: Decomposition): RangeSet | undefined {
-    if (this.clusters.pinOf(group)?.kind === 'term') {
+    if (this.clusters.resolvedTermOf(group) !== undefined) {
       return undefined;
     }
     if (this.clusters.childrenOf(group) !== undefined) {
@@ -1007,6 +1008,19 @@ export class AssertionConjunction {
       }
     }
     return isSubsetOf(confined, asserted) ? undefined : asserted.meet(confined);
+  }
+
+  /**
+   * Whether an access reads a position of a shape every position of which is fixed.
+   * @param read - The access to check
+   * @returns whether it does, so that the triple term the shape is written out as says what it reads
+   */
+  private readsThroughFixedShape(read: Access): boolean {
+    if (isBareAccess(read)) {
+      return false;
+    }
+    const shape = this.resolveAccess({ name: read.name, positions: read.positions.slice(0, -1) });
+    return shape !== undefined && this.clusters.resolvedTermOf(shape) !== undefined;
   }
 
   /**

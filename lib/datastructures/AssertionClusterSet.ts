@@ -3,9 +3,8 @@ import type { RangeSet } from '../RangeSet.js';
 import { TermClusterSet } from './TermClusterSet.js';
 
 /**
- * The {@link TermClusterSet} an {@link utils/assertionConjunction!AssertionConjunction} is built on:
- * groups of RDF terms, meeting pins the way a conjunction of `sameTerm` conditions needs them met, and
- * remembering which part of a group's range it was *told* rather than worked out.
+ * The {@link TermClusterSet} an {@link utils/assertionConjunction!AssertionConjunction} is built on: groups of
+ * variable names, remembering which part of a group's range it was *told* rather than worked out.
  *
  * That last part is here rather than in {@link TermClusterSet} because it is not a fact about groups at all
  * - it is about writing them back out as a condition, which only a conjunction ever does. The set narrows a

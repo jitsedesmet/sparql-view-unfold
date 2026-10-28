@@ -73,7 +73,7 @@ describe('termClusterSet', () => {
     it('decomposes a ground triple term against a shape', ({ expect }) => {
       const set = newSet();
       const { subject } = <PinChildren> set.assertTriplePin(set.getGroup('o'));
-      expect(set.setTerm(set.getGroup('o'), ground)).toBe(true);
+      expect(set.assertTerm(set.getGroup('o'), ground)).toBe(true);
       expect(set.termOf(subject)).toEqual(termA);
     });
 
@@ -151,10 +151,11 @@ describe('termClusterSet', () => {
       expect(set.assertTerm(set.getGroup('a'), DF.literal('x'))).toBe(false);
     });
 
-    it('meets a triple term pinned whole with the shape of the same triple term', ({ expect }) => {
+    it('holds a ground triple term as a shape, every position of it fixed', ({ expect }) => {
       const set = newSet();
-      expect(set.setTerm(set.getGroup('x'), ground)).toBe(true);
       expect(set.assertTerm(set.getGroup('x'), ground)).toBe(true);
+      expect(set.pinOf(set.getGroup('x'))?.kind).toBe('triple');
+      expect(set.resolvedTermOf(set.getGroup('x'))).toEqual(ground);
     });
 
     it('refuses a quad naming a graph, no triple term naming one', ({ expect }) => {

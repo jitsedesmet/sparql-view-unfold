@@ -486,11 +486,11 @@ function termPinsOn(
  * {@link rowSatisfies}.
  *
  * **Sound because a pin is the same equality either way round.** Asserting the term a row holds onto a group
- * already pinned to a term meets the two pins, and that meet is `term.equals` and nothing else, so a row
- * disagreeing with a pin is a row the full check has to reject - whichever column it reaches first. Nothing
- * a row asserts can move a group off a term pin either: a merge keeps the pin it met, or fails. A row this
- * lets through is still checked in full, so being generous costs only the check it was going to pay for
- * anyway - an unbound column, a column Θ says nothing about, and a shape all go that way.
+ * already fixed to a term is `term.equals` and nothing else - a triple term position by position - so a row
+ * disagreeing with a pin is a row the full check has to reject, whichever column it reaches first. Nothing a
+ * row asserts can move a group off a fixed term either: a merge keeps what it met, or fails. A row this lets
+ * through is still checked in full, so being generous costs only the check it was going to pay for anyway -
+ * an unbound column, a column Θ says nothing about, and a shape with a position left open all go that way.
  * @param pins - The term pins of the columns
  * @param binding - The row to check
  * @returns whether the row agrees with every pin it holds a term for

@@ -227,10 +227,10 @@ export function entailedByReading(read: Access): AssertionConjunct {
 }
 
 /**
- * Whether an assertion may fix a variable to this *ground* term, i.e. whether it pins a group to it.
+ * Whether an assertion may fix a variable to this *ground* term.
  *
- * A triple term is admitted exactly when it is ground: until its components are known it is a *shape*, and
- * that is the business of the pin lattice ({@link datastructures/TermClusterSet!TermClusterSet}) instead.
+ * A triple term is admitted exactly when it is ground: one over variables is a construction, which says what it
+ * says a position at a time instead.
  * @param term - The term to check
  * @returns whether the term is variable-free
  */

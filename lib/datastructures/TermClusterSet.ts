@@ -32,7 +32,10 @@ export type PinChildren = Readonly<Record<TriplePosition, number>>;
  * named an *anonymous* group: it unifies and carries a pin and a range like any other, while contributing
  * nothing to the members of the set.
  */
-export type Pin = TriplePin | { kind: 'term'; term: RDF.Term };
+export type Pin = TriplePin | { kind: 'term'; term: PinnedTerm };
+
+/** What a `term` pin holds: a triple term is a shape instead, and a variable a group of its own. */
+export type PinnedTerm = Exclude<RDF.Term, RDF.BaseQuad | RDF.Variable>;
 
 /** The shape half of a {@link Pin}, named so that a meet can take one and hand one back. */
 export type TriplePin = { kind: 'triple' } & PinChildren;
@@ -60,50 +63,22 @@ export interface PinMeet {
 }
 
 /**
- * The meet of two shapes on one group: one value spelt twice, so its positions are pairwise one value too.
- * @param left - One of the two shapes, and the one the group keeps
- * @param right - The other
- * @returns the pin the group keeps and the unifications the meet entailed
- */
-export function meetShapes(left: TriplePin, right: TriplePin): PinMeet {
-  return {
-    pin: left,
-    entailed: triplePositions.map(position => ({ kind: 'unify', left: left[position], right: right[position] })),
-  };
-}
-
-/**
- * The meet of two pins on one group: two terms are an equality, two shapes unify position by position
- * ({@link meetShapes}), and a ground triple term meeting a shape decomposes the same way.
- * @param left - One of the two pins
+ * The meet of two pins on one group: two terms are an equality, and two shapes are one value spelt twice, so their
+ * positions are pairwise one value too. A term never meets a shape, no pin holding a triple term.
+ * @param left - One of the two pins, and the one the group keeps
  * @param right - The other
  * @returns what the group is left with plus what the meet entailed, or `false` on a contradiction
  */
-export function meetPins(left: Pin, right: Pin): PinMeet | false {
-  if (left.kind === 'triple') {
-    return right.kind === 'triple' ? meetShapes(left, right) : decomposedAgainst(left, right.term);
-  }
-  if (right.kind === 'triple') {
-    return decomposedAgainst(right, left.term);
-  }
-  return left.term.equals(right.term) ? { pin: left, entailed: []} : false;
-}
-
-/**
- * A ground triple term meeting a shape: the same decomposition two shapes are, with the components already known.
- * @param shape - The shape the group carries, and the pin it keeps
- * @param ground - The term it has to agree with
- * @returns the pin and the pins its positions take, or `false` when the term is no triple term at all
- */
-function decomposedAgainst(shape: TriplePin, ground: RDF.Term): PinMeet | false {
-  if (ground.termType === 'Quad' && ground.graph.termType === 'DefaultGraph') {
+function meetPins(left: Pin, right: Pin): PinMeet | false {
+  if (left.kind === 'triple' && right.kind === 'triple') {
     return {
-      pin: shape,
-      entailed: triplePositions.map(position =>
-        ({ kind: 'pin', group: shape[position], pin: { kind: 'term', term: ground[position] }})),
+      pin: left,
+      entailed: triplePositions.map(position => ({ kind: 'unify', left: left[position], right: right[position] })),
     };
   }
-  return false;
+  return left.kind === 'term' && right.kind === 'term' && left.term.equals(right.term) ?
+      { pin: left, entailed: []} :
+    false;
 }
 
 /**
@@ -225,7 +200,7 @@ export class TermClusterSet<T> extends ClusterSet<T> {
    * @param group - The group to look up
    * @returns the term, or `undefined` when nothing pins it, or a shape does instead
    */
-  public termOf(group: number): RDF.Term | undefined {
+  public termOf(group: number): PinnedTerm | undefined {
     const pin = this.pinOf(group);
     return pin?.kind === 'term' ? pin.term : undefined;
   }
@@ -263,7 +238,7 @@ export class TermClusterSet<T> extends ClusterSet<T> {
    * @returns `false` when the group already carries something incompatible, which leaves the set in a state
    * no caller may read
    */
-  public setTerm(group: number, term: RDF.Term): boolean {
+  public setTerm(group: number, term: PinnedTerm): boolean {
     return this.setPin(group, { kind: 'term', term });
   }
 
