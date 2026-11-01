@@ -1,8 +1,7 @@
 // Turns the benchmark's results into the data the overview page embeds (see build.mjs).
 // Usage: node test/bench/overview/analyse.mjs [results.json] [--out overview-data.json]
-// Reads results/results.json (every engine, preserveCardinality off and on), results/materialization.json and
-// results/results-keep-projections.json (the full pipeline against the same without removeProjections).
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+// Reads results/results.json (every engine, preserveCardinality off and on) and results/materialization.json.
+import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 const RESULTS = join(import.meta.dirname, '..', 'results');
@@ -14,9 +13,14 @@ const IN = process.argv.slice(2).find((arg, i, args) => !arg.startsWith('--') &&
 const ENGINES = [ 'qlever', 'virtuoso', 'graphdb', 'oxigraph', 'jena', 'blazegraph', 'comunica' ];
 const WORKLOADS = [ 'lubm', 'oaei', 'reification', 'singleton' ];
 const SCALES = [ 'u1', 'u10', 'u50', 'u100', 'u250', 'u500', 'eswc', 'd100', 'xs', 's' ];
-const RUNGS = [ 'rewriting', 'rewriting+removeProjections', 'rewriting+pushDownAssertions', 'rewriting+pullUpExtends' ];
-// A variant is one column of the benchmark: the reference, or a rung with pc off or on.
-const VARIANTS = [ 'materialized', ...RUNGS.map(r => `${r}|off`), ...RUNGS.map(r => `${r}|on`) ];
+// The ladder: each rung is the one before it plus one pass. The last runs the default pipeline's passes.
+const RUNGS = [ 'rewriting', 'rewriting+pushDownAssertions', 'rewriting+pullUpExtends' ];
+// Each rung with removeProjections appended, measured right after it.
+const FLATTENED = Object.fromEntries(RUNGS.map(r => [ r, `${r}+removeProjections` ]));
+const APPROACHES = [ ...RUNGS, ...RUNGS.map(r => FLATTENED[r]) ];
+const FINAL = RUNGS.at(-1);
+// A variant is one column of the benchmark: the reference, or an approach with pc off or on.
+const VARIANTS = [ 'materialized', ...APPROACHES.map(r => `${r}|off`), ...APPROACHES.map(r => `${r}|on`) ];
 function variantOf(row) {
   return row.approach === 'materialized' ?
     'materialized' :
@@ -214,7 +218,7 @@ function breakEven(cs, engine, workload, scale, pc) {
     return null;
   }
   const fastest = ways.reduce((a, b) => a.totalMs <= b.totalMs ? a : b);
-  const final = `rewriting+pullUpExtends|${pc}`;
+  const final = `${FINAL}|${pc}`;
   let saving = 0;
   let queries = 0;
   let rewritingCensored = false;
@@ -243,13 +247,29 @@ function breakEven(cs, engine, workload, scale, pc) {
   };
 }
 
+// The query flattening speeds up most (kept time / flattened time), among those where either side takes 100 ms or
+// more, so that a 2 ms → 5 ms jitter does not head the list.
+function bestFlattening(cs, full, keep) {
+  let best = null;
+  for (const c of cs) {
+    const [ f, k ] = [ c.v[full], c.v[keep] ];
+    if (f?.status !== 'ok' || k?.status !== 'ok' || Math.max(f.medianMs, k.medianMs) < 100) {
+      continue;
+    }
+    const r = time(k) / time(f);
+    if (r > TIE && (!best || r > best.ratio)) {
+      best = { ratio: round(r), caseId: c.caseId, scale: c.scale, flatMs: f.medianMs, keepMs: k.medianMs };
+    }
+  }
+  return best;
+}
 /** The comparisons the page shows, over any set of cells. */
 function measures(cs) {
   const steps = {};
   for (const pc of [ 'off', 'on' ]) {
     steps[pc] = RUNGS.slice(1).map((rung, i) => compare(cs, `${rung}|${pc}`, `${RUNGS[i]}|${pc}`));
   }
-  const final = 'rewriting+pullUpExtends';
+  const final = FINAL;
   const common = cs.filter(c => !referenceDiffers(c) && [ 'materialized', `${final}|off`, `${final}|on` ]
     .every(v => c.v[v]?.status === 'ok'));
   return {
@@ -262,8 +282,13 @@ function measures(cs) {
     // The final rung against the reference, pc off and on, over only the cases all three answered, so the
     // two pc settings are compared on the same queries.
     finalCommon: { off: compare(common, `${final}|off`, 'materialized'), on: compare(common, `${final}|on`, 'materialized') },
-    // Pc on against pc off, per rung.
-    pcEffect: Object.fromEntries(RUNGS.map(r => [ r, compare(cs, `${r}|on`, `${r}|off`) ])),
+    // Pc on against pc off, per approach.
+    pcEffect: Object.fromEntries(APPROACHES.map(r => [ r, compare(cs, `${r}|on`, `${r}|off`) ])),
+    // Each rung against its flattened twin: a < 1 means keeping the sub-SELECTs is faster.
+    flatten: Object.fromEntries([ 'off', 'on' ].map(pc => [ pc, Object.fromEntries(RUNGS.map(r => [ r, {
+      ...compare(cs, `${r}|${pc}`, `${FLATTENED[r]}|${pc}`),
+      best: bestFlattening(cs, `${FLATTENED[r]}|${pc}`, `${r}|${pc}`),
+    }])) ])),
   };
 }
 
@@ -332,61 +357,14 @@ const detail = allCells.map((c) => {
   return [ ENGINES.indexOf(c.engine), WORKLOADS.indexOf(c.workload), SCALES.indexOf(c.scale), caseIds.indexOf(c.caseId), vs, otherReferenceCount(c), referenceDefect(c) ? (referenceDiffers(c) ? 2 : 1) : 0 ];
 });
 
-// The full pipeline without removeProjections, against the full pipeline measured alongside it in the same run
-// (not the campaign's rows, measured days apart), per engine × workload over all its scales.
-const KEEP = join(RESULTS, 'results-keep-projections.json');
-let keepProjections = null;
-
-// The query flattening speeds up most (kept time / flattened time), among those where either side takes 100 ms or
-// more, so that a 2 ms → 5 ms jitter does not head the list.
-function bestFlattening(cs, full, keep) {
-  let best = null;
-  for (const c of cs) {
-    const [ f, k ] = [ c.v[full], c.v[keep] ];
-    if (f?.status !== 'ok' || k?.status !== 'ok' || Math.max(f.medianMs, k.medianMs) < 100) {
-      continue;
-    }
-    const r = time(k) / time(f);
-    if (r > TIE && (!best || r > best.ratio)) {
-      best = { ratio: r, caseId: c.caseId, scale: c.scale, flatMs: f.medianMs, keepMs: k.medianMs };
-    }
-  }
-  return best;
-}
-if (existsSync(KEEP)) {
-  const keepCells = new Map();
-  for (const row of JSON.parse(readFileSync(KEEP, 'utf8'))) {
-    const key = `${row.engine}\t${row.scheme}\t${row.scale}\t${row.caseId}`;
-    if (!keepCells.has(key)) {
-      keepCells.set(key, { engine: row.engine, workload: row.scheme, scale: row.scale, caseId: row.caseId, v: {}});
-    }
-    keepCells.get(key).v[variantOf(row)] = row;
-  }
-  const [ full, keep ] = [ 'rewriting+pullUpExtends', 'rewriting+keepProjections' ];
-  keepProjections = [ ...groupBy([ ...keepCells.values() ], c => `${c.engine}\t${c.workload}`).values() ]
-    .sort((x, y) => order(ENGINES, x[0].engine) - order(ENGINES, y[0].engine) ||
-      order(WORKLOADS, x[0].workload) - order(WORKLOADS, y[0].workload))
-    .map(cs => ({
-      engine: cs[0].engine,
-      workload: cs[0].workload,
-      ...Object.fromEntries([ 'off', 'on' ].map(pc => [ pc, {
-        compare: compare(cs, `${keep}|${pc}`, `${full}|${pc}`),
-        full: tally(cs, `${full}|${pc}`),
-        keep: tally(cs, `${keep}|${pc}`),
-        bestFlat: bestFlattening(cs, `${full}|${pc}`, `${keep}|${pc}`),
-      }])),
-    }));
-}
-
 const data = {
   generated: new Date().toISOString(),
   source: basename(IN),
   rows: rows.length,
   tie: TIE,
-  dict: { engines: ENGINES, workloads: WORKLOADS, scales: SCALES, variants: VARIANTS, caseIds, errors },
+  dict: { engines: ENGINES, workloads: WORKLOADS, scales: SCALES, rungs: RUNGS, flattened: FLATTENED, variants: VARIANTS, caseIds, errors },
   summary,
   pooled,
-  keepProjections,
   detail,
 };
 writeFileSync(OUT, JSON.stringify(data));

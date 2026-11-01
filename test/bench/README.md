@@ -41,8 +41,8 @@ first and runs `nullifyJoinOverIncompatibleBounds` last, which change none of th
 Until 2026-10 the ladder had four rungs, `rewriting` → `+removeProjections` → `+pushDownAssertions` →
 `+pullUpExtends`, and the two pushdown rungs flattened: they were what is now named
 `rewriting+pushDownAssertions+removeProjections` and `rewriting+pullUpExtends+removeProjections`. Results
-files from before then use the old names with the old meaning (see "History"). The October results below
-are from that ladder, and are being re-measured on this one.
+files from before then use the old names with the old meaning (see "History");
+`results/results-keep-projections.json`, the run that led to the change, has been renamed to the new names.
 
 `removeProjections` runs after the pushdown, not before it, so it also flattens whatever the pushdown
 leaves. A further `removeProjections` at the end of either flattened pushdown pipeline (or one more
@@ -137,7 +137,7 @@ older bytecode and works with Java 11/17.
 | `comunicaWorker.mjs` | A long-lived Comunica worker driven by `ComunicaEngine` over newline-delimited JSON: it loads and indexes the dataset once, then answers every query against it. The separate process is about memory, not cancellation — Comunica buffers join state that no cap on the output stream can bound, and a `FATAL ERROR: Reached heap limit` is not catchable, so an unbounded query has to be able to die without taking the run with it. Timeouts are handled inside the worker, so they cost the budget but not the loaded store. Given an `.hdt` file (the LUBM and OAEI data), it queries through Comunica's HDT engine instead of loading a store. |
 | `makeSubset.mjs` | Streams a full multi-GB dataset once and writes four self-contained subsets (`xs`/`s`/`m`/`l`), each containing the full closure of every benchmark query's target entities plus a uniform random noise sample, so results are comparable across scales. The full datasets (13–17GB) cannot be loaded into an in-memory store, so this is what the real run uses. |
 | `plot.mjs` | Turns a results JSON into hand-rolled SVG figures (time-by-query, scaling, overhead, correctness) per scheme × engine, for the rewrites with `preserveCardinality` off, or on with `--preserve-cardinality`. No dependencies. |
-| `overview/` | `analyse.mjs` turns `results/results.json` and `results/results-keep-projections.json` into the paired comparisons of "Results", and `build.mjs` inlines them into `template.html`, a self-contained results page. Both outputs are gitignored. |
+| `overview/` | `analyse.mjs` turns `results/results.json` into the paired comparisons of "Results", and `build.mjs` inlines them into `template.html`, a self-contained results page. Both outputs are gitignored. |
 | `cli.ts` | Ad-hoc single-pipeline runs against the **full** datasets or SPARQL endpoints you started yourself. No scale subsetting. |
 | `workloads/<name>/` | The LUBM and OAEI workloads: `prepare.sh` downloads or generates the data into a gitignored `data/`, and the committed `views.rq` and `queries/*.rq` are what the benchmark runs. `workloads/toNTriples.mjs` merges and skolemises the source files; `workloads/common.sh` holds the steps both scripts share. |
 | `materializeViews.ts` | Runs every view of a workload over its source data with Jena and writes the union, the graph the reference answers come from. Each view's result is cross-checked against Oxigraph's (or QLever's, with `--check qlever`), and nothing is written unless the two agree. |
@@ -578,24 +578,27 @@ npx tsx test/bench/timeMaterialization.ts --break-even test/bench/results/result
 
 ## Results
 
-One campaign, measured 2026-10-22 → 10-26 on commit `9249d80` (the rewriter at `20181c2`), with the same
-harness and settings for every engine and workload: 12,996 rows in `results/results.json`.
+One campaign, measured 2026-10-28 → 11-01 on commit `84744a8` (the rewriter's passes unchanged since
+`20181c2`), with the same harness and settings for every engine and workload: 18,772 rows in
+`results/results.json`.
 
+- **Pipelines:** the three rungs and their three `+removeProjections` twins (see "What it measures"), each
+  twin measured right after its rung.
 - **Views:** the standard RDF view (`generalizedRdfView: false`), the library's default.
 - **`preserveCardinality`:** every rewrite ran with it off and on, back to back (`--paired-cardinality`). Which
   of the two runs first alternates from query to query. The `materialized` row is shared by both.
 - **Repeats:** a query whose first run takes under 10 s runs three times and reports the median
   (`--reps 3 --reps-below 10000`). A slower query, and a timeout, run once.
 - **Budget:** 60 s per query for LUBM and OAEI, 300 s for StarBench. A LUBM query that timed out at one
-  scale is not run at the larger ones, separately for each `preserveCardinality` setting.
+  scale is not run at the larger ones, separately for each pipeline and `preserveCardinality` setting.
 - **Engines and scales:** all seven on LUBM `u1`–`u100` and OAEI `eswc`/`d100`, QLever also on LUBM
   `u250`/`u500`. StarBench `xs`/`s` runs on Oxigraph, Jena and Comunica, the engines with RDF 1.2. Versions
   and settings are as in "Setting up the engines".
-- A testbed restart on 2026-10-25 cut off Comunica's StarBench `singleton`/`s` block. That block was re-run
-  whole on 10-26, since a block's rows are graded only when it ends.
 
-Absolute times are lower than in earlier runs, the `materialized` ones included, because fast queries now
-report the median of three warm runs. Compare ratios within this run, not times across runs.
+Against the October campaign, which ran the same four pipelines that are still here under their new names
+(see "History"), 12,893 of the 12,996 matching rows have the same status, row count and grade. The rest are
+queries near the budget that timed out in one run and not the other, and answers left ungraded because a
+reference timed out. Absolute times still drift between runs, so compare ratios within this run.
 
 **How the numbers below are made.** Every comparison is paired: two variants of the same query at the same
 scale.
@@ -617,69 +620,160 @@ node test/bench/overview/build.mjs             # -> test/bench/overview/overview
 
 All scales of a workload pooled. In parentheses: queries answered before → after the pass.
 
-| Engine | Workload | `+removeProjections` | `+pushDownAssertions` | `+pullUpExtends` |
-|---|---|---|---|---|
-| Oxigraph | LUBM | ×1.8 (20→12) | ÷78 (12→46) | ≈1 (46→46) |
-| Oxigraph | OAEI | ≈1 (128→128) | ÷187 (128→130) | ≈1 (130→130) |
-| Oxigraph | StarBench reification | ×1.1 (24→24) | ÷4.0 (24→24) | ≈1 (24→24) |
-| Oxigraph | StarBench singleton | ×1.1 (23→23) | ÷4.3 (23→24) | ÷1.3 (24→23) |
-| Jena | LUBM | ÷1.3 (19→19) | ÷9.0 (19→34) | ÷1.4 (34→34) |
-| Jena | OAEI | ÷1.2 (126→125) | ÷49 (125→129) | ÷1.2 (129→130) |
-| Jena | StarBench reification | ÷1.2 (24→22) | ÷5.3 (22→23) | ÷1.4 (23→24) |
-| Jena | StarBench singleton | ÷1.1 (24→22) | ÷4.7 (22→23) | ÷1.5 (23→24) |
-| QLever | LUBM | — (0→0) | — (0→71) | ÷1.4 (71→71) |
-| QLever | OAEI | — (0→0) | — (0→130) | ÷1.4 (130→130) |
-| Virtuoso | LUBM | — (2→0) | — (0→47) | ≈1 (47→47) |
-| Virtuoso | OAEI | ×9.6 (90→42) | ÷1,151 (42→128) | ≈1 (128→126) |
-| GraphDB | LUBM | ÷5.4 (22→8) | ÷1.9 (8→20) | ÷2.6 (20→23) |
-| GraphDB | OAEI | ÷2.2 (128→75) | ÷24 (75→121) | ÷1.4 (121→122) |
-| Blazegraph | LUBM | — (0→0) | — (0→14) | ÷2.0 (14→16) |
-| Blazegraph | OAEI | — (0→34) | ÷629 (34→113) | ÷1.6 (113→115) |
-| Comunica | LUBM | ≈1 (6→7) | ÷29 (7→22) | ÷1.5 (22→23) |
-| Comunica | OAEI | ≈1 (67→84) | ÷952 (84→128) | ÷1.3 (128→128) |
-| Comunica | StarBench reification | ≈1 (11→12) | ÷5.2 (12→22) | ÷1.6 (22→22) |
-| Comunica | StarBench singleton | ≈1 (4→5) | ÷7.5 (5→18) | ÷1.3 (18→19) |
+| Engine | Workload | `+pushDownAssertions` | `+pullUpExtends` |
+|---|---|---|---|
+| Oxigraph | LUBM | ÷34 (17→46) | ÷1.1 (46→46) |
+| Oxigraph | OAEI | ÷193 (128→130) | ≈1 (130→130) |
+| Oxigraph | StarBench reification | ÷3.8 (23→24) | ≈1 (24→23) |
+| Oxigraph | StarBench singleton | ÷4.2 (24→24) | ÷1.1 (24→24) |
+| Jena | LUBM | ÷13 (19→33) | ÷1.4 (33→33) |
+| Jena | OAEI | ÷65 (126→130) | ÷1.2 (130→130) |
+| Jena | StarBench reification | ÷5.1 (24→24) | ÷1.3 (24→24) |
+| Jena | StarBench singleton | ÷4.5 (24→24) | ÷1.2 (24→24) |
+| QLever | LUBM | — (0→72) | ÷1.4 (72→72) |
+| QLever | OAEI | — (0→130) | ÷1.4 (130→130) |
+| Virtuoso | LUBM | ÷68 (2→47) | ≈1 (47→47) |
+| Virtuoso | OAEI | ÷186 (89→128) | ≈1 (128→128) |
+| GraphDB | LUBM | ÷16 (21→47) | ÷1.3 (47→47) |
+| GraphDB | OAEI | ÷66 (128→130) | ÷1.3 (130→130) |
+| Blazegraph | LUBM | — (0→17) | ÷2.3 (17→20) |
+| Blazegraph | OAEI | — (0→114) | ÷1.5 (114→120) |
+| Comunica | LUBM | ÷26 (7→22) | ÷1.5 (22→23) |
+| Comunica | OAEI | ÷541 (65→128) | ÷1.4 (128→129) |
+| Comunica | StarBench reification | ÷4.8 (12→21) | ÷1.5 (21→22) |
+| Comunica | StarBench singleton | ÷8.3 (4→19) | ÷1.3 (19→19) |
 
-- **`pushDownAssertions` is the pass that makes the rewrite work**, on every engine and workload: ÷24 to
-  ÷1,151 on OAEI, ÷1.9 to ÷78 on LUBM, ÷4.0 to ÷7.5 on StarBench. Where the rewrite failed, it makes
+- **`pushDownAssertions` is the pass that makes the rewrite work**, on every engine and workload: ÷65 to
+  ÷541 on OAEI, ÷13 to ÷68 on LUBM, ÷3.8 to ÷8.3 on StarBench. Where the rewrite failed, it makes
   queries answerable:
   - QLever answers nothing without it, because it has no `sameTerm` and the pushdown removes those filters.
-  - On LUBM, Virtuoso and Blazegraph also answer nothing without it.
-  - Comunica goes from 12 to 22 StarBench reification queries and from 5 to 18 singleton ones.
-- **`pullUpExtends` adds ÷1.2 to ÷2.6** on the engines that gain from it. It is neutral on Virtuoso, and on
-  Oxigraph except for StarBench singleton (÷1.3).
-- **`removeProjections` alone helps Jena, and hurts most other engines.** Jena gains ÷1.1 to ÷1.3 on
-  every workload, though it loses 2 StarBench answers to the budget. GraphDB's remaining answers run
-  ÷2.2 to ÷5.4 faster, but it answers far fewer. It is a rung because the pushdown needs it: a `FILTER`
-  cannot be driven into a pattern hidden behind a sub-`SELECT`. On its own it loses answers:
-  - GraphDB: LUBM 22 → 8, OAEI 128 → 75.
-  - Virtuoso on OAEI: 90 → 42. Its compiled-in state-slot limit (SQ156) rejects 24 of the flattened
-    queries, and 64 time out.
-  - Oxigraph on LUBM: 20 → 12.
+  - On LUBM, Virtuoso and Blazegraph also answer next to nothing without it: 2 and 0 of 52.
+  - Comunica goes from 12 to 21 StarBench reification queries and from 4 to 19 singleton ones.
+- **`pullUpExtends` adds ÷1.2 to ÷2.3** on the engines that gain from it. It is neutral on Virtuoso, and
+  close to it on Oxigraph (÷1.1 or less).
+
+### What flattening the subqueries is worth
+
+The unfolding wraps each view branch in a sub-`SELECT`. `removeProjections` flattens them into one tree of
+`UNION`/`JOIN`/`FILTER`/`BIND`. The library's default pipeline leaves it out, but whether it pays depends on
+the engine, so every rung was also measured with it appended. Each cell is the flattened rewrite against
+the same rung without it (÷ flattening is faster, × slower), then in parentheses how many queries are faster
+flattened · faster kept (by more than 10%; a query only one side answers counts for that side), then the
+queries answered kept → flattened where that changes.
+
+`preserveCardinality` off:
+
+| Engine | Workload | `rewriting` | `+pushDownAssertions` | `+pullUpExtends` |
+|---|---|---|---|---|
+| Oxigraph | LUBM | ×1.8 (0 · 17), 17 → 12 | ≈1 (9 · 1) | ≈1 (3 · 9) |
+| Oxigraph | OAEI | ≈1 (2 · 14) | ≈1 (22 · 27) | ≈1 (21 · 23) |
+| Oxigraph | StarBench reification | ×1.1 (0 · 4), 23 → 22 | ≈1 (0 · 1) | ≈1 (1 · 0), 23 → 24 |
+| Oxigraph | StarBench singleton | ≈1 (1 · 6), 24 → 22 | ≈1 (0 · 3) | ÷1.1 (3 · 1) |
+| Jena | LUBM | ÷1.3 (17 · 1) | ≈1 (14 · 4) | ≈1 (9 · 7) |
+| Jena | OAEI | ÷1.2 (119 · 6), 126 → 125 | ≈1 (36 · 32), 130 → 129 | ≈1 (30 · 26) |
+| Jena | StarBench reification | ÷1.1 (12 · 3), 24 → 22 | ≈1 (12 · 4) | ÷1.2 (15 · 2) |
+| Jena | StarBench singleton | ≈1 (6 · 4), 24 → 22 | ≈1 (3 · 3), 24 → 22 | ÷1.3 (11 · 4) |
+| QLever | LUBM | — | ×1.6 (3 · 41), 72 → 71 | ×1.6 (4 · 41), 72 → 71 |
+| QLever | OAEI | — | ≈1 (35 · 19) | ≈1 (34 · 14) |
+| Virtuoso | LUBM | — (0 · 0), 2 → 0 | ×1.1 (5 · 20) | ×1.1 (1 · 20) |
+| Virtuoso | OAEI | ×9.2 (2 · 83), 89 → 42 | ≈1 (9 · 35) | ≈1 (9 · 21), 128 → 126 |
+| GraphDB | LUBM | ÷4.4 (8 · 17), 21 → 8 | ×2.9 (7 · 39), 47 → 21 | ×1.9 (2 · 40), 47 → 24 |
+| GraphDB | OAEI | ÷2.1 (66 · 62), 128 → 77 | ×1.5 (52 · 53), 130 → 122 | ×1.5 (33 · 57), 130 → 122 |
+| Blazegraph | LUBM | — | ×1.3 (6 · 11), 17 → 14 | ×1.5 (7 · 12), 20 → 16 |
+| Blazegraph | OAEI | — (33 · 0), 0 → 34 | ≈1 (64 · 16), 114 → 113 | ≈1 (56 · 28), 120 → 115 |
+| Comunica | LUBM | ≈1 (0 · 1), 7 → 6 | ≈1 (11 · 3) | ≈1 (11 · 2) |
+| Comunica | OAEI | ≈1 (16 · 2), 65 → 80 | ≈1 (46 · 13) | ≈1 (44 · 13) |
+| Comunica | StarBench reification | ≈1 (4 · 1), 12 → 11 | ÷1.1 (6 · 1), 21 → 22 | ÷1.2 (14 · 0) |
+| Comunica | StarBench singleton | ≈1 (0 · 1) | ≈1 (9 · 1) | ÷1.1 (6 · 1) |
+
+`preserveCardinality` on:
+
+| Engine | Workload | `rewriting` | `+pushDownAssertions` | `+pullUpExtends` |
+|---|---|---|---|---|
+| Oxigraph | LUBM | ×1.6 (0 · 19), 19 → 15 | ×1.1 (2 · 20) | ≈1 (0 · 9) |
+| Oxigraph | OAEI | ≈1 (0 · 1) | ≈1 (21 · 19) | ≈1 (11 · 17) |
+| Oxigraph | StarBench reification | ≈1 (0 · 2) | ≈1 (0 · 2) | ≈1 (2 · 0) |
+| Oxigraph | StarBench singleton | ×1.1 (0 · 5) | ≈1 (0 · 0) | ≈1 (0 · 1) |
+| Jena | LUBM | ÷1.3 (19 · 2), 21 → 20 | ≈1 (11 · 12), 36 → 34 | ≈1 (6 · 11), 36 → 35 |
+| Jena | OAEI | ÷1.3 (126 · 0) | ≈1 (40 · 17) | ≈1 (28 · 11) |
+| Jena | StarBench reification | ≈1 (13 · 3) | ≈1 (8 · 3) | ≈1 (6 · 3) |
+| Jena | StarBench singleton | ≈1 (9 · 5) | ≈1 (5 · 2) | ≈1 (6 · 3) |
+| QLever | LUBM | — | ×1.2 (8 · 33), 78 → 75 | ×1.2 (7 · 37), 78 → 76 |
+| QLever | OAEI | — | ≈1 (45 · 10) | ≈1 (47 · 12) |
+| Virtuoso | LUBM | ≈1 (0 · 0) | ≈1 (6 · 1) | ≈1 (2 · 1) |
+| Virtuoso | OAEI | ×3.0 (11 · 28), 87 → 77 | ≈1 (14 · 14) | ≈1 (15 · 12) |
+| GraphDB | LUBM | ÷1.3 (16 · 1), 20 → 21 | ÷1.1 (28 · 5), 50 → 49 | ×1.1 (8 · 29) |
+| GraphDB | OAEI | ÷1.2 (88 · 14), 128 → 127 | ≈1 (60 · 34), 130 → 129 | ≈1 (52 · 35), 130 → 129 |
+| Blazegraph | LUBM | — | ≈1 (7 · 11), 21 → 15 | ×1.4 (9 · 12), 22 → 20 |
+| Blazegraph | OAEI | — (34 · 0), 0 → 34 | ≈1 (64 · 18), 122 → 118 | ≈1 (60 · 22), 122 → 118 |
+| Comunica | LUBM | ×1.4 (0 · 6), 6 → 2 | ≈1 (7 · 4) | ≈1 (6 · 2) |
+| Comunica | OAEI | ≈1 (1 · 4) | ÷1.1 (45 · 6) | ≈1 (31 · 6) |
+| Comunica | StarBench reification | ≈1 (5 · 2), 9 → 12 | ≈1 (8 · 2), 21 → 22 | ÷1.1 (14 · 1) |
+| Comunica | StarBench singleton | ≈1 (0 · 0) | ÷1.1 (9 · 1) | ≈1 (7 · 1) |
+
+- **No answer changes.** Every query both twins answered returns the same number of rows, and grades the
+  same against the reference.
+- **Before the pushdown, flattening helps some engines a lot and breaks others.**
+  - **Jena** gains ÷1.2 to ÷1.3 on LUBM and OAEI: 119 OAEI queries are faster flattened and 6 kept.
+  - **GraphDB** runs the queries it still answers ÷2.1 to ÷4.4 faster flattened (OAEI `sc_member` at `d100`:
+    5.0 s → 0.3 s), but answers far fewer of them: 21 → 8 LUBM, 128 → 77 OAEI.
+  - **Blazegraph** answers 34 OAEI queries flattened and none kept, where it times out or overflows its
+    stack (17 queries).
+  - **Oxigraph** loses on LUBM (×1.8, 17 → 12 answered), and **Virtuoso** on OAEI (×9.2, 89 → 42): its
+    compiled-in state-slot limit (SQ156) rejects 24 of the flattened queries, and 64 time out.
+- **After the pushdown it splits by engine.** Pooled, most cells are within 10%, but per query the engines
+  lean clearly one way.
+  - **Keeping is faster on QLever's and GraphDB's LUBM**, ÷1.6 to ÷2.9 with the option off, and on
+    Blazegraph's LUBM (÷1.3 to ÷1.5). GraphDB is the clearest case: flattened, it answers 21 to 24 LUBM
+    queries instead of 47, and 122 OAEI queries instead of 130 (see "What `preserveCardinality` changes" for
+    why).
+  - **Flattening is faster per query on Jena, Comunica, and on QLever's and Blazegraph's OAEI.** With the
+    option off at `+pullUpExtends`: Jena 15 against 2 on StarBench reification and 11 against 4 on
+    singleton, ÷1.2 to ÷1.3 pooled; Comunica 44 against 13 on OAEI and 14 against 0 on StarBench
+    reification; Blazegraph 56 against 28 on OAEI, and 64 against 16 at `+pushDownAssertions`; QLever 34
+    against 14 on OAEI. Most of these gains are small, but some single queries gain a lot: Blazegraph's
+    `author_of_inv_talk_abstract` at `eswc` 13× at `+pushDownAssertions` (0.67 s → 0.05 s), Comunica's
+    `early_registration` at `d100` 4.8× with the option on (53 s → 11 s), Comunica's reification `A-Q4` at
+    `s` 3.2× (215 s → 67 s), Jena's LUBM `Q03` at `u100` 3.1×.
+  - **The largest single gain is `F-Q1`**, `FILTER(regex(str(?source), '1511234'))`, at `+pullUpExtends`:
+    Jena 5.2 s → 0.5 s on `singleton`/`s`, Oxigraph 4.1 s → 1.2 s at `xs`. It comes from the second
+    `pullUpExtends` that runs after the flattening, not from the flattening alone, which changes nothing on
+    `F-Q1` at `+pushDownAssertions`. That pass moves `BIND(?v_3 AS ?uq_source)` above the filter, so the
+    `REGEX` tests the triple pattern's own variable rather than a computed one, or one projected out of a
+    sub-`SELECT`.
+- **With the option on the differences shrink after the pushdown**, since the flattening keeps the
+  `SELECT DISTINCT` subqueries the option adds. Every cell there is within about 1.1×, except QLever's and
+  Blazegraph's LUBM, which stay faster kept (1.2× and 1.4×). The per-query counts still lean the same way:
+  Comunica 45 against 6 on OAEI, QLever 45 against 10.
+
+The gains from keeping the subqueries are larger and wider than those from flattening them, so
+`createDefaultTransformationPipeline` leaves `removeProjections` out. It is still exported: for Jena,
+Comunica, or Blazegraph on vocabulary translation, a pipeline that appends it (with a second
+`pullUpExtends`) is faster.
 
 ### What each engine answers within the budget
 
 Queries answered, all scales pooled (a query at two scales counts twice): reference · `rewriting` ·
-`+removeProjections` · `+pushDownAssertions` · `+pullUpExtends`, then `+pullUpExtends` with
-`preserveCardinality` on in parentheses, of the total.
+`+pushDownAssertions` · `+pullUpExtends`, then `+pullUpExtends` with `preserveCardinality` on in
+parentheses, of the total. The flattened twins are in the tables above.
 
 | Engine | LUBM | OAEI | StarBench reification | StarBench singleton |
 |---|---|---|---|---|
-| Oxigraph | 43 · 20 · 12 · 46 · 46 (50) / 52 | 130 · 128 · 128 · 130 · 130 (130) / 130 | 23 · 24 · 24 · 24 · 24 (24) / 24 | 24 · 23 · 23 · 24 · 23 (24) / 24 |
-| Jena | 52 · 19 · 19 · 34 · 34 (36) / 52 | 130 · 126 · 125 · 129 · 130 (130) / 130 | 20 · 24 · 22 · 23 · 24 (24) / 24 | 24 · 24 · 22 · 23 · 24 (24) / 24 |
-| QLever | 78 · 0 · 0 · 71 · 71 (76) / 78 | 130 · 0 · 0 · 130 · 130 (130) / 130 | — | — |
-| Virtuoso | 52 · 2 · 0 · 47 · 47 (51) / 52 | 130 · 90 · 42 · 128 · 126 (127) / 130 | — | — |
-| GraphDB | 52 · 22 · 8 · 20 · 23 (52) / 52 | 130 · 128 · 75 · 121 · 122 (129) / 130 | — | — |
-| Blazegraph | 52 · 0 · 0 · 14 · 16 (20) / 52 | 130 · 0 · 34 · 113 · 115 (118) / 130 | — | — |
-| Comunica | 49 · 6 · 7 · 22 · 23 (24) / 52 | 130 · 67 · 84 · 128 · 128 (129) / 130 | 22 · 11 · 12 · 22 · 22 (22) / 24 | 24 · 4 · 5 · 18 · 19 (19) / 24 |
+| Oxigraph | 43 · 17 · 46 · 46 (50) / 52 | 130 · 128 · 130 · 130 (130) / 130 | 22 · 23 · 24 · 23 (24) / 24 | 24 · 24 · 24 · 24 (24) / 24 |
+| Jena | 52 · 19 · 33 · 33 (36) / 52 | 130 · 126 · 130 · 130 (130) / 130 | 20 · 24 · 24 · 24 (24) / 24 | 24 · 24 · 24 · 24 (24) / 24 |
+| QLever | 78 · 0 · 72 · 72 (78) / 78 | 130 · 0 · 130 · 130 (130) / 130 | — | — |
+| Virtuoso | 52 · 2 · 47 · 47 (51) / 52 | 130 · 89 · 128 · 128 (127) / 130 | — | — |
+| GraphDB | 52 · 21 · 47 · 47 (52) / 52 | 130 · 128 · 130 · 130 (130) / 130 | — | — |
+| Blazegraph | 52 · 0 · 17 · 20 (22) / 52 | 130 · 0 · 114 · 120 (122) / 130 | — | — |
+| Comunica | 49 · 7 · 22 · 23 (24) / 52 | 130 · 65 · 128 · 129 (130) / 130 | 22 · 12 · 21 · 22 (22) / 24 | 24 · 4 · 19 · 19 (19) / 24 |
 
-- **OAEI is answered almost completely** after the pushdown: 113 to 130 of 130 on every engine.
-- **On LUBM the engine decides.** The full pipeline answers 71 of 78 on QLever and 47 of 52 on Virtuoso,
-  but only 16 to 34 of 52 on Blazegraph, Comunica, GraphDB and Jena. With `preserveCardinality` on, GraphDB
-  answers all 52 (see below).
+- **OAEI is answered almost completely** after the pushdown: 114 to 130 of 130 on every engine.
+- **On LUBM the engine decides.** The full pipeline answers 72 of 78 on QLever and 46 to 47 of 52 on
+  Oxigraph, Virtuoso and GraphDB, but only 20 to 33 of 52 on Blazegraph, Comunica and Jena. With
+  `preserveCardinality` on, QLever and GraphDB answer them all.
 - **Some references time out where the rewrite answers.** Oxigraph's own materialised query times out on
-  Q02, Q03, Q05, Q08, Q09 and Q10 at `u50`/`u100`, and Comunica's on three LUBM cells. On Jena, the
-  hand-written StarBench queries for reification `F-Q3` and `F-Q4` take over 300 s.
+  Q08 and Q09 at `u50` and on seven queries at `u100`, and Comunica's on three LUBM cells. The hand-written
+  StarBench query for reification `F-Q3` takes over 300 s on all three engines, and `F-Q4` on Jena.
 
 ### Against the reference
 
@@ -688,40 +782,41 @@ hand-written query over the same data for StarBench. In parentheses: queries bot
 
 | Engine | LUBM `u1` | `u10` | `u50` | `u100` | `u250` | `u500` | OAEI `eswc` | `d100` | reif. `xs` | reif. `s` | sing. `xs` | sing. `s` |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Oxigraph | ×1.4 (13) | ≈1 (12) | ×1.4 (9) | ÷1.2 (5) | — | — | ≈1 (65) | ÷1.4 (65) | ×6.6 (12) | ×10 (11) | ×778 (3) | ×1,540 (3) |
-| Jena | ×5.7 (10) | ×59 (9) | ×194 (9) | ×362 (6) | — | — | ≈1 (65) | ×1.3 (65) | ×3.7 (10) | ×10 (10) | ×108 (3) | ×273 (3) |
-| QLever | ×13 (13) | ×13 (12) | ×16 (12) | ×24 (12) | ×46 (11) | ×76 (11) | ×2.1 (65) | ×1.9 (65) | — | — | — | — |
-| Virtuoso | ×4.5 (13) | ×4.9 (12) | ×5.3 (11) | ×4.3 (11) | — | — | ×1.4 (64) | ×1.4 (62) | — | — | — | — |
-| GraphDB | ×12 (8) | ×19 (5) | ×55 (5) | ×80 (5) | — | — | ×1.8 (64) | ×2.0 (58) | — | — | — | — |
-| Blazegraph | ×20 (6) | ×66 (5) | ×13 (3) | ×19 (2) | — | — | ×2.7 (62) | ×2.2 (53) | — | — | — | — |
-| Comunica | ×39 (12) | ×51 (5) | ×36 (3) | ×57 (3) | — | — | ×3.1 (65) | ×3.2 (63) | ×33 (11) | ×25 (11) | ×17 (3) | ×37 (3) |
+| Oxigraph | ×1.1 (13) | ≈1 (12) | ×1.2 (10) | ÷1.1 (5) | — | — | ÷1.1 (65) | ÷1.3 (65) | ×8.5 (11) | ×9.5 (11) | ×809 (3) | ×1,400 (3) |
+| Jena | ×5.9 (10) | ×50 (9) | ×175 (9) | ×207 (5) | — | — | ÷1.1 (65) | ×1.2 (65) | ×4.5 (10) | ×13 (10) | ×119 (3) | ×265 (3) |
+| QLever | ×13 (13) | ×12 (13) | ×10 (12) | ×13 (12) | ×22 (11) | ×35 (11) | ×2.1 (65) | ×1.9 (65) | — | — | — | — |
+| Virtuoso | ×3.7 (13) | ×4.5 (12) | ×4.8 (11) | ×4.3 (11) | — | — | ×1.4 (65) | ×1.1 (63) | — | — | — | — |
+| GraphDB | ×9.0 (13) | ×47 (13) | ×95 (11) | ×141 (10) | — | — | ×1.2 (65) | ×1.6 (65) | — | — | — | — |
+| Blazegraph | ×23 (8) | ×70 (6) | ×41 (4) | ×10 (2) | — | — | ×3.3 (64) | ×2.7 (56) | — | — | — | — |
+| Comunica | ×38 (12) | ×58 (5) | ×39 (3) | ×66 (3) | — | — | ×3.2 (65) | ×3.1 (64) | ×35 (11) | ×26 (11) | ×17 (3) | ×30 (3) |
 
 - **OAEI is vocabulary translation, and there the full pipeline runs close to the materialised views:**
-  - at par on Oxigraph and Jena;
-  - within 1.4× on Virtuoso;
-  - 2 to 3 times slower on QLever, GraphDB, Blazegraph and Comunica, which pay more per `UNION` branch.
+  - faster on Oxigraph (÷1.1 to ÷1.3), at par on Jena;
+  - within 1.6× on Virtuoso and GraphDB;
+  - 2 to 3.3 times slower on QLever, Blazegraph and Comunica, which pay more per `UNION` branch.
 
   Each query touches a few of the 148 views, and the pushdown turns them into indexed lookups.
 - **LUBM is reasoning by rewriting, and its cost depends on the engine.** It runs:
   - at par on Oxigraph;
-  - about 5 times slower on Virtuoso;
-  - on QLever, 13 times slower at `u1`, growing to 76 times at `u500`;
-  - on Jena, 6 times slower at one university, growing to 362 times at a hundred.
+  - about 4 to 5 times slower on Virtuoso;
+  - on QLever, 10 to 13 times slower up to `u100`, growing to 35 times at `u500`;
+  - on Jena and GraphDB, 6 to 9 times slower at one university, growing to 141 (GraphDB) and 207 (Jena)
+    times at a hundred.
 
   The difference from OAEI is fan-out. An OAEI term has at most one view per source, while a LUBM class
   like `Person` or `Student` has dozens of derivations, and the entailed facts are what the queries ask for.
 - **Oxigraph answers its own materialised views more slowly than the rewrite at the larger LUBM scales.**
-  At `u100` its materialised query answers 7 of 13 queries, and its rewrite 10; at `u50`, 10 and 11. Earlier runs traced this to
+  At `u100` its materialised query answers 6 of 13 queries, and its rewrite 10. Earlier runs traced this to
   plan choice:
   - Over the views, Oxigraph starts Q01 from every graduate student.
   - In the pushed-down rewrite, the course is a constant in each branch, and Oxigraph starts there.
-- **On StarBench the hand-written query stays ahead.** For reification the rewrite runs 3.7 to 10 times
-  behind it on Jena and Oxigraph, and 25 to 33 times on Comunica. For singleton only `B-Q1`, `B-Q3` and
+- **On StarBench the hand-written query stays ahead.** For reification the rewrite runs 4.5 to 13 times
+  behind it on Jena and Oxigraph, and 26 to 35 times on Comunica. For singleton only `B-Q1`, `B-Q3` and
   `F-Q2` can be compared, since the other nine reference queries ask a different question (see "Known
   issues"). Those three read the singleton encoding through a constant in milliseconds, hence ratios in
   the hundreds and thousands.
-- With `preserveCardinality` on, the picture is the same, except for GraphDB and Virtuoso (see "What
-  `preserveCardinality` changes").
+- With `preserveCardinality` on, the picture is the same, except for Virtuoso and GraphDB on LUBM (see
+  "What `preserveCardinality` changes").
 
 ### What materialising costs, per engine
 
@@ -802,13 +897,13 @@ on:
 
 | Engine | LUBM `u1` | `u10` | `u50` | `u100` | `u250` | `u500` | OAEI `eswc` | `d100` |
 |---|---|---|---|---|---|---|---|---|
-| Oxigraph | 9 → never | ≤ 620 → never | never | never | — | — | 490 → 877 | 552 → never |
-| Jena | ≤ 1 | ≤ 2 | ≤ 8 | ≤ 11 | — | — | 117 → 1,149 | 11 → 82 |
-| QLever | 6 → 9 | 16 → 17 | 29 → 22 | 28 → 30 | ≤ 39 → 37 | ≤ 105 → ≤ 91 | 103 → 75 | 37 → 124 |
-| Virtuoso | 13 → 203 | ≤ 20 → 413 | ≤ 222 → 922 | ≤ 700 → ≤ 3,512 | — | — | 5 → 9 | ≤ 16 → ≤ 30 |
-| GraphDB | ≤ 1 → 64 | ≤ 2 → 30 | ≤ 6 → 23 | ≤ 11 → 22 | — | — | ≤ 5 → 666 | ≤ 4 → ≤ 22 |
-| Blazegraph | ≤ 1 | ≤ 2 | ≤ 7 | ≤ 14 | — | — | ≤ 2 | ≤ 2 |
-| Comunica | ≤ 2 → 7 | ≤ 17 | ~364 → ~357 | ~1,299 → ~1,243 | — | — | 14 → 33 | ≤ 9 → ≤ 13 |
+| Oxigraph | 10 → never | never | never | never | — | — | 2,022 → 4,538 | 281 → 488 |
+| Jena | ≤ 1 | ≤ 2 | ≤ 7 → ≤ 8 | ≤ 11 | — | — | 360 → 1,660 | 28 → 87 |
+| QLever | 7 → 8 | 4 → 26 | ≤ 11 → 51 | ≤ 17 → 60 | ≤ 38 → 87 | ≤ 120 → 181 | 101 → 67 | 124 → 118 |
+| Virtuoso | 14 → 209 | 57 → 329 | ≤ 404 → 2,022 | ≤ 1,094 → ≤ 1,595 | — | — | 5 → 9 | ≤ 17 → ≤ 31 |
+| GraphDB | 19 → 84 | 9 → 32 | ≤ 14 → 29 | ≤ 17 → 25 | — | — | 590 → 1,265 | 73 → 258 |
+| Blazegraph | ≤ 1 | ≤ 2 | ≤ 7 | ≤ 14 | — | — | ≤ 3 → ≤ 4 | ≤ 2 → ≤ 3 |
+| Comunica | ≤ 3 → 8 | ≤ 17 | ~363 → ~356 | ~1,283 → ~1,237 | — | — | 16 → 31 | ≤ 12 → 13 |
 
 How to read the bounds:
 - **≤:** the rewrite timed out on some queries, so the saving is understated and the count is an upper
@@ -818,31 +913,31 @@ How to read the bounds:
 - **never:** the rewrite is faster on average.
 
 What the table shows:
-- **Building pays off within a few dozen queries in most cells.** The median over the 44 cells is about 14
-  queries, with `preserveCardinality` off.
-- **The pay-off point rises with the data on every engine.** Building gets more expensive faster than the
+- **Building pays off within a few dozen queries in most cells.** The median over the 44 cells is 17
+  queries with `preserveCardinality` off, and about 55 with it on.
+- **The pay-off point rises with the data on most engines.** Building gets more expensive faster than the
   saving per query grows.
-- **Jena, GraphDB and Blazegraph pay off within 14 queries on LUBM.** Their rewrites run far behind their
-  materialised views.
+- **Jena and Blazegraph pay off within 14 queries on LUBM, GraphDB within 19.** Their rewrites run far
+  behind their materialised views.
 - **Comunica needs over a thousand queries at `u100`,** because its build takes 14 hours.
-- **On Oxigraph, building never pays off from LUBM `u50` up.** There its rewrite is faster than its own
+- **On Oxigraph, building never pays off from LUBM `u10` up.** There its rewrite is faster than its own
   materialised views.
-- **`preserveCardinality` moves the pay-off point later where it speeds the rewrite up.** That is GraphDB
-  on LUBM, Virtuoso, and Jena on OAEI.
+- **`preserveCardinality` mostly moves the pay-off point later**, most on GraphDB, QLever and Virtuoso on
+  LUBM and Jena on OAEI, where it speeds up the slowest rewrites, which dominate the average saving.
 
 ### Are the answers right?
 
-All four pipelines and all workloads together, `preserveCardinality` off / on:
+All six pipelines and all workloads together, `preserveCardinality` off / on:
 
 | Engine | answered | exact | repeats | wrong | ungraded | broken ref. |
 |---|---|---|---|---|---|---|
-| Oxigraph | 829 / 841 | 659 / 750 | 83 / 0 | 0 / 0 | 14 / 16 | 73 / 75 |
-| Jena | 802 / 816 | 645 / 738 | 82 / 0 | 0 / 0 | 2 / 2 | 73 / 76 |
-| QLever | 402 / 411 | 286 / 411 | 116 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
-| Virtuoso | 482 / 523 | 300 / 346 | 76 / 0 | **106 / 177** | 0 / 0 | 0 / 0 |
-| GraphDB | 519 / 655 | 471 / 655 | 48 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
-| Blazegraph | 292 / 306 | 278 / 306 | 14 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
-| Comunica | 578 / 553 | 503 / 515 | 37 / 0 | 0 / 0 | 0 / 0 | 38 / 38 |
+| Oxigraph | 1,271 / 1,292 | 988 / 1,145 | 144 / 0 | 0 / 0 | 27 / 35 | 112 / 112 |
+| Jena | 1,222 / 1,242 | 980 / 1,126 | 130 / 0 | 0 / 0 | 2 / 2 | 110 / 114 |
+| QLever | 806 / 827 | 572 / 827 | 234 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| Virtuoso | 831 / 880 | 574 / 664 | 152 / 0 | **105 / 216** | 0 / 0 | 0 / 0 |
+| GraphDB | 877 / 1,017 | 752 / 1,017 | 125 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| Blazegraph | 563 / 592 | 528 / 592 | 35 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| Comunica | 956 / 940 | 825 / 875 | 65 / 0 | 0 / 0 | 0 / 0 | 66 / 65 |
 
 Column meanings:
 - **exact:** the same rows, the same number of times.
@@ -851,10 +946,10 @@ Column meanings:
 - **broken ref.:** the answer differs from a StarBench reference that is itself broken.
 
 - **Every wrong answer is a Virtuoso bug, and there are two** (see "Known issues"):
-  - Pipelines 1–2: it drops `FILTER(sameTerm(?o, C))` over a `UNION` whose branches bind `?o` to different
-    constants. Many OAEI queries come back with the whole union.
-  - With `preserveCardinality` on, at pipelines 3–4: joining three or more `SELECT DISTINCT` subqueries
-    loses rows at `VectorSize = 1`. That accounts for 38 answers.
+  - `rewriting` and `rewriting+removeProjections`: it drops `FILTER(sameTerm(?o, C))` over a `UNION` whose
+    branches bind `?o` to different constants. Many OAEI queries come back with the whole union.
+  - With `preserveCardinality` on, at the four pushdown pipelines: joining three or more `SELECT DISTINCT`
+    subqueries loses rows at `VectorSize = 1`. That accounts for 19 answers per pipeline, 76 in all.
 
   No other engine gives a wrong answer, on any workload or pipeline.
 - **Repeats are expected with `preserveCardinality` off, and all of them are LUBM's.** A fact the ontology
@@ -862,15 +957,15 @@ Column meanings:
   LUBM and OAEI answer is exact, on every engine but Virtuoso.
 - **Ungraded answers still match in size.**
   - Oxigraph's ungraded LUBM answers are queries whose own materialised reference timed out (see above).
-    With `preserveCardinality` on, their row counts match the references of the engines that answered.
+    With `preserveCardinality` on, all 30 have the row count the other engines' references agree on.
   - Where a hand-written StarBench reference timed out, the plain rewrite stands in as the reference, and
-    that row itself counts as ungraded. These are Jena's reification `F-Q3` and `F-Q4`, and Oxigraph's
-    `F-Q3` at `s`. Their sizes match every other engine's.
+    that row itself counts as ungraded. No engine's hand-written reification `F-Q3` finishes within the
+    budget; every rewrite that does returns the same 8,490,234 rows.
 - **The broken references are StarBench's own** (see "Known issues"):
   - Nine singleton queries ask a different question.
   - The `F-Q1` and `F-Q2` references of both encodings return one variable too many (`SELECT *`).
 
-  All 373 answers graded against them return the same number of rows on every engine and every pipeline.
+  All 579 answers graded against them return the same number of rows on every engine and every pipeline.
   The nine singleton queries are also left out of every time comparison with the reference.
 - **The OAEI check proves less than its count suggests.** The reference is empty for 23 of the 65
   queries on `d100` and 31 on `eswc`, because the sources lack those facts or no view produces them.
@@ -893,117 +988,52 @@ is faster · where off is faster (by more than 10%). Then queries answered off �
 
 | Engine | LUBM | OAEI | StarBench reification | StarBench singleton |
 |---|---|---|---|---|
-| Oxigraph | ÷1.1 (15 · 19), 46 → 50 | ≈1 (14 · 19), 130 → 130 | ×1.2 (0 · 20), 24 → 24 | ×1.4 (1 · 20), 23 → 24 |
-| Jena | ÷1.1 (17 · 13), 34 → 36 | ≈1 (30 · 32), 130 → 130 | ×1.4 (1 · 19), 24 → 24 | ×1.4 (1 · 21), 24 → 24 |
-| QLever | ×1.1 (23 · 38), 71 → 76 | ×1.2 (16 · 86), 130 → 130 | — | — |
-| Virtuoso | ÷2.7 (38 · 1), 47 → 51 | ≈1 (29 · 14), 126 → 127 | — | — |
-| GraphDB | ÷1.9 (45 · 7), 23 → 52 | ÷1.5 (63 · 33), 122 → 129 | — | — |
-| Blazegraph | ÷1.2 (10 · 8), 16 → 20 | ≈1 (23 · 48), 115 → 118 | — | — |
-| Comunica | ≈1 (10 · 11), 23 → 24 | ≈1 (30 · 46), 128 → 129 | ×1.3 (1 · 21), 22 → 22 | ×1.2 (1 · 15), 19 → 19 |
+| Oxigraph | ÷1.1 (14 · 18), 46 → 50 | ≈1 (16 · 19), 130 → 130 | ×1.1 (1 · 22), 23 → 24 | ×1.2 (0 · 12), 24 → 24 |
+| Jena | ≈1 (14 · 13), 33 → 36 | ≈1 (27 · 37), 130 → 130 | ×1.2 (0 · 16), 24 → 24 | ×1.2 (0 · 20), 24 → 24 |
+| QLever | ×1.4 (18 · 52), 72 → 78 | ×1.2 (8 · 89), 130 → 130 | — | — |
+| Virtuoso | ÷2.4 (34 · 2), 47 → 51 | ≈1 (24 · 13), 128 → 127 | — | — |
+| GraphDB | ÷1.6 (33 · 11), 47 → 52 | ≈1 (34 · 53), 130 → 130 | — | — |
+| Blazegraph | ≈1 (10 · 10), 20 → 22 | ≈1 (27 · 36), 120 → 122 | — | — |
+| Comunica | ≈1 (9 · 11), 23 → 24 | ≈1 (25 · 45), 129 → 130 | ×1.3 (0 · 19), 22 → 22 | ×1.2 (1 · 13), 19 → 19 |
 
-- **GraphDB is where it matters: it answers all 52 LUBM queries instead of 23.**
-  - Its query plan (`FROM onto:explain`) shows why. Without the option, GraphDB distributes a join over the
-    rewrite's top-level `UNION`s (24 × 7 = 168 joins for Q05).
-  - Each of those joins shares no variable, only two `BIND(?v AS ?uq_x)`s, so it becomes a cross product
+- **On GraphDB it completes LUBM: 52 of 52 instead of 47**, ÷1.6 overall.
+  - Its query plan (`FROM onto:explain`) shows why GraphDB struggles without a subquery boundary. On a
+    flattened rewrite it distributes a join over the top-level `UNION`s (24 × 7 = 168 joins for Q05). Each
+    of those joins shares no variable, only two `BIND(?v AS ?uq_x)`s, so it becomes a cross product
     compared afterwards.
-  - A `SELECT DISTINCT` subquery is a boundary that stops the distribution. Q05's pushdown times out at every
-    scale without the option, and takes 0.4 s at `u1` and 29 s at `u100` with it.
-- **Virtuoso runs LUBM 2.7 times faster with it, but in the form that loses rows** (the 38 answers above).
+  - A sub-`SELECT` stops the distribution. The default pipeline's rewrite keeps one around each view
+    branch, and the option adds a `SELECT DISTINCT` around each pattern. Q05 times out at every scale
+    flattened with the option off, while kept it takes 0.5 s at `u1` and 31 s at `u100`, and with the
+    option 0.2 s and 14 s.
+  - Before the default pipeline kept the subqueries, the option was what made GraphDB usable on LUBM: the
+    October campaign's flattened full pipeline answered 23 of 52 without it.
+- **Virtuoso runs LUBM 2.4 times faster with it, but in the form that loses rows** (the 76 answers above).
 - **On LUBM's other engines it wins where duplicates multiply and loses where a large pattern meets a
   selective one.** On QLever, for example:
-  - **Wins:** Q09, which runs out of QLever's 12 GB of query memory from `u10` on without the option,
-    takes 2.8 s at `u10` and 41 s at `u500` with it. Q02 at `u500` goes from 47.9 s (3.0 M rows) to 5.6 s
-    (1,284).
+  - **Wins:** Q09 takes 49.5 s at `u10` without the option (3.6 million rows, 2,540 distinct) and does not
+    finish from `u50` on; with it, 2.3 s at `u10` and 25 s at `u500`. Q02 at `u500` goes from 45.5 s (3.0 M rows)
+    to 5.5 s (1,284).
   - **Losses:** Q05 asks for the `Person`s who are members of one department. With the option, QLever must
     first deduplicate every `Person` in the data, so the time follows the data while the answer stays
-    719 rows: 1.0, 3.4, 12, 18 and 44 s from `u1` to `u250`, and a timeout at `u500`. Q13 (one university's
-    alumni) behaves the same way.
-  - The two roughly cancel out: ÷1.1 to ×1.1 per engine.
+    719 rows: 0.9, 1.3, 2.5, 5.2, 10 and 24 s from `u1` to `u500`, against 0.6 to 4.7 s without it. Q13 (one
+    university's alumni) behaves the same way.
+  - On QLever the losses outnumber the wins (52 queries against 18, ×1.4 overall). On Oxigraph, Jena,
+    Blazegraph and Comunica they roughly cancel out.
 - **On OAEI it wins where overlapping views meet in a join.** `is_author_of_paper` joins `Paper_Author`,
   `authorOf` and `Paper`, all three duplicated. At `d100`:
-  - Jena: 59 s → 2.4 s.
-  - QLever: 9.6 s → 1.2 s.
-  - Oxigraph: 5.9 s → 1.7 s.
-  - Comunica answers it in 17 s, where it timed out without the option.
+  - Jena: 19 s → 2.1 s.
+  - GraphDB: 14 s → 1.3 s.
+  - Oxigraph: 4.2 s → 1.8 s.
+  - QLever: 1.7 s → 0.9 s.
+  - Comunica answers it in 19 s, where it timed out without the option.
 
   Elsewhere OAEI is close to neutral. QLever pays ×1.2 overall.
-- **On StarBench it only costs:** 1.2 to 1.4 times slower on all three engines, with no answer changed.
-  - The cost shows at the last rung: `+pullUpExtends` gains ÷1.1 to ÷1.6 with the option off, and only
-    ÷1.05 to ÷1.3 with it on.
+- **On StarBench it only costs:** 1.1 to 1.3 times slower on all three engines, with no answer changed.
+  - The cost shows at the last rung: `+pullUpExtends` gains ÷1.1 to ÷1.5 with the option off, and only up
+    to ÷1.2 with it on.
   - A `DISTINCT` subquery is a boundary that filters and joins cannot cross. In `singleton/F-Q1`, the
     `derives_from` pattern becomes such a subquery, so the engine computes and deduplicates every
     `derives_from` triple before the selective `REGEX` filter and the join can cut it down.
-
-### Flattening after the pushdown
-
-A second run, measured 2026-10-27 → 10-28 with the runner of `f57caa0` (the rewriter unchanged since
-`20181c2`), ran `rewriting+keepProjections` back to back with `rewriting+pullUpExtends`, plus the reference
-to grade both. It used the campaign's engines, scales, budgets and settings, `preserveCardinality` off and
-on: 7,220 rows in `results/results-keep-projections.json`. Both pipelines are compared on that run's rows
-only, not against the campaign's, which were measured days apart.
-
-```bash
-# The campaign's commands, with only these approaches:
-npx tsx test/bench/run.ts ... --approaches materialized,rewriting+pullUpExtends,rewriting+keepProjections
-```
-
-Which way the flattening goes depends on the engine and the workload. Below, keeping the sub-`SELECT`s
-against flattening them, all scales pooled: the geometric mean (÷ kept is faster, × flattened is
-faster), then per query how many are faster flattened · faster kept (beyond 1.1×; a query only one side
-answers counts for that side), the queries answered flattened → kept, and the query flattening speeds up
-most, where it is 1.5× or more (either side 100 ms or more).
-
-| Engine | Workload | pc off | pc on | Faster flat. · kept, off | Faster flat. · kept, on | Answered, off | Answered, on | Largest gain from flattening |
-|---|---|---|---|---|---|---|---|---|
-| QLever | LUBM | ÷1.6 | ÷1.2 | 4 · 45 | 7 · 37 | 71 → 72 | 76 → 78 |  |
-| QLever | OAEI | ≈1 | ≈1 | 43 · 24 | 59 · 13 | 130 → 130 | 130 → 130 |  |
-| Virtuoso | LUBM | ≈1 | ≈1 | 7 · 19 | 3 · 3 | 47 → 47 | 51 → 51 |  |
-| Virtuoso | OAEI | ≈1 | ≈1 | 14 · 17 | 13 · 12 | 126 → 128 | 127 → 127 |  |
-| GraphDB | LUBM | ÷1.6 | ÷1.2 | 2 · 41 | 5 · 30 | 23 → 48 | 52 → 52 |  |
-| GraphDB | OAEI | ÷1.6 | ÷1.1 | 23 · 75 | 29 · 64 | 122 → 130 | 129 → 130 | ×2.2 `is_author_of_paper` eswc (on) |
-| Oxigraph | LUBM | ≈1 | ≈1 | 2 · 11 | 1 · 9 | 46 → 46 | 50 → 50 |  |
-| Oxigraph | OAEI | ≈1 | ≈1 | 12 · 30 | 21 · 22 | 130 → 130 | 130 → 130 |  |
-| Oxigraph | StarBench reif. | ≈1 | ≈1 | 1 · 2 | 2 · 2 | 24 → 24 | 24 → 24 |  |
-| Oxigraph | StarBench single. | ×1.12 | ≈1 | 2 · 0 | 0 · 1 | 24 → 24 | 24 → 24 | ×3.5 `F-Q1` s |
-| Jena | LUBM | ÷1.3 | ÷1.2 | 7 · 16 | 3 · 21 | 34 → 33 | 37 → 38 | ×2.2 `Q04` u50 |
-| Jena | OAEI | ≈1 | ≈1 | 30 · 39 | 24 · 31 | 130 → 130 | 130 → 130 | ×1.6 `author_of_inv_talk_abstract` d100 |
-| Jena | StarBench reif. | ×1.12 | ≈1 | 12 · 3 | 3 · 5 | 24 → 24 | 24 → 24 | ×2.3 `F-Q1` s (on) |
-| Jena | StarBench single. | ×1.23 | ≈1 | 8 · 5 | 4 · 6 | 24 → 24 | 24 → 24 | ×8.3 `F-Q1` s |
-| Blazegraph | LUBM | ÷1.6 | ÷1.3 | 6 · 13 | 9 · 14 | 16 → 20 | 20 → 23 | ×2.4 `Q06` u1 (on) |
-| Blazegraph | OAEI | ≈1 | ≈1 | 40 · 33 | 42 · 26 | 115 → 120 | 118 → 122 | ×7.8 `author_of_inv_talk_abstract` eswc |
-| Comunica | LUBM | ≈1 | ≈1 | 12 · 3 | 5 · 2 | 23 → 23 | 24 → 24 |  |
-| Comunica | OAEI | ≈1 | ≈1 | 30 · 19 | 40 · 15 | 129 → 129 | 130 → 130 | ×1.9 `early_registration` d100 |
-| Comunica | StarBench reif. | ×1.19 | ≈1 | 15 · 2 | 11 · 2 | 22 → 22 | 22 → 22 | ×1.5 `F-Q5` s |
-| Comunica | StarBench single. | ×1.13 | ≈1 | 12 · 1 | 4 · 1 | 21 → 21 | 21 → 20 |  |
-
-- **No answer changes.** Every query both pipelines answered returns the same number of rows, and grades
-  the same against the reference.
-- **Keeping the subqueries is faster on LUBM**, on GraphDB, QLever, Blazegraph and Jena. With the option
-  off, GraphDB also answers 48 LUBM queries instead of 23, and all 130 OAEI queries. GraphDB is the clearest
-  case for keeping them: on OAEI too, 75 queries are faster kept and 23 flattened.
-- **Some engines gain from the flattening.**
-  - **Comunica** runs more queries faster flattened than kept on every workload, with the option off and
-    on: 15 against 2 on StarBench reification, 30 against 19 on OAEI. Its pooled gain is ×1.13 to ×1.19
-    on StarBench with the option off, and at most 1.9× on a single query.
-  - **Jena and Oxigraph on StarBench** with the option off: ×1.12 to ×1.23 pooled. The largest gains are on
-    `F-Q1` (`FILTER(regex(str(?source), '1511234'))`): Jena 0.6 s → 5.0 s and Oxigraph 2.0 s → 6.8 s
-    without the flattening on `singleton`/`s`, Jena 2× on `reification`. Without the flattening `?source`
-    comes out of a sub-`SELECT`, and the filter stays outside it, so the engine evaluates the whole
-    subquery, its `NOT EXISTS` included, before filtering. That is the same boundary as the `DISTINCT`
-    subquery above.
-  - **Blazegraph on OAEI** pools to ≈1, but splits: 40 queries are faster flattened and 33 kept, and the
-    flattened side has the largest gains, up to 7.8× (`author_of_inv_talk_abstract` on `eswc`,
-    29 ms → 226 ms) and 4.3× (`external_reviewer` on `eswc`, 0.7 s → 3.1 s, option on).
-  - **QLever on OAEI** also has more queries faster flattened (43 against 24, and 59 against 13 with the
-    option on), but by at most 1.2×.
-- **With the option on, StarBench pools to ≈1** on every engine, since the flattening keeps the
-  `SELECT DISTINCT` subqueries the option adds. Comunica still has more queries faster flattened (11
-  against 2 on reification), and Jena's `F-Q1` on `reification`/`s` is still 2.3× faster flattened.
-
-Since the gains from keeping the subqueries are larger and wider than those from flattening them,
-`createDefaultTransformationPipeline` no longer runs `removeProjections`. It is still exported, and for an
-engine like Comunica, or for queries that filter on a view variable as `F-Q1` does, a pipeline that
-appends it is faster. The ladder keeps it, so that its results stay comparable with every earlier run.
 
 ### Where the optimisations do not help, and why
 
@@ -1013,28 +1043,30 @@ appends it is faster. The ladder keeps it, so that its results stay comparable w
   the other side up in, and no engine distributes the join over the branches usefully (GraphDB's attempt
   makes cross products, above). Examples:
   - **LUBM Q09** (student, advisor, course: three typed variables joined in a triangle). Without
-    `preserveCardinality`, every pipeline fails on every engine from `u10` on: timeouts, and QLever's
-    memory limit. The materialised query takes 0.16 s (QLever) to 42 s (Comunica) at `u10`. With the
-    option, QLever answers it at every scale and Oxigraph up to `u50`.
+    `preserveCardinality`, only QLever and GraphDB answer it beyond `u1`, at `u10` and in 32 to 56 s, with
+    3.6 million rows for 2,540. The materialised query takes 0.16 s (QLever) to 45 s (Comunica) at `u10`.
+    With the option, QLever answers it at every scale, GraphDB and Virtuoso (wrongly, see above) up to
+    `u100`, and Oxigraph up to `u50`.
   - **Jena answers none of LUBM Q02, Q07 and Q09** with any pipeline at any scale without
-    `preserveCardinality`, and only Q07 (and Q02's plain rewriting) at `u1` with it.
-  - **OAEI `is_author_of_paper`** on Jena `d100`: `+pullUpExtends` takes 59 s, slower than the plain
-    rewriting's 27 s, against 0.8 s on the materialised views.
+    `preserveCardinality`, and only Q07 (and Q02 without the flattening) at `u1` with it.
+  - **OAEI `is_author_of_paper`** on Jena `d100`: the three pipelines take 19 to 20 s without the option,
+    against 0.8 s on the materialised views. Flattened, two of them time out and the full pipeline takes
+    59 s.
 - **Identical `UNION` branches are not merged.** Where one view reaches a source predicate through a
   `UNION` and another reaches it directly, both branches survive. `is_author_of_paper`'s rewrite
   reads `cmt:writePaper`, `confOf:writes` and `edas:hasRelatedPaper` twice each.
 - **The unoptimised rewrites are too big for the engines.** Without the pushdown, a LUBM rewrite runs to
   hundreds of thousands of characters. From `u50` on, the two pipelines before the pushdown answer 4 LUBM
-  cells in total across all seven engines, all of them GraphDB's `+removeProjections`.
+  cells in total across all seven engines, all of them GraphDB's `rewriting+removeProjections`.
 - **`EXISTS` inside a `BIND` is rewritten into a correlated `BIND`** (OAEI `early_registration`).
   - The pattern inside the `EXISTS` ends in `BIND(?v_0 AS ?uq_s)`, while `?uq_s` is already bound outside
     it, which SPARQL's substitution semantics leave undefined.
-  - Most engines accept it. Virtuoso rejects it at `+pullUpExtends` ("Alias ?uq_s is defined twice"). With
-    the option on, it fails at the other pipelines with an internal optimiser error.
+  - Most engines accept it. Virtuoso rejects the flattened full pipeline ("Alias ?uq_s is defined twice").
+    With the option on, it fails at every other pipeline with an internal optimiser error.
   - The reference is empty at both scales, so this benchmark cannot say whether the answer would be right.
     Treat it as unverified.
 - **Blazegraph orders joins of `BIND`-computed variables badly** (see "Known issues"). Even after the
-  pushdown it answers 16 of 52 LUBM cells, and its stack overflows on the deeply nested plans before it.
+  pushdown it answers 20 of 52 LUBM cells, and its stack overflows on the deeply nested plans before it.
 
 ## History
 
@@ -1067,6 +1099,7 @@ figures from any results JSON. In summary:
 | 2026-10-21 | Virtuoso, GraphDB and Blazegraph run once with `preserveCardinality` too. GraphDB's pushdown then answers all 13 LUBM queries at every scale (23 → 52 cells): its query plans show it splitting the flattened rewrite's joins into cross products, which the `DISTINCT` subqueries prevent. Virtuoso halves its LUBM time but loses rows on 38 cells, to a bug in joining three `SELECT DISTINCT` subqueries unvectorised. Blazegraph barely moves. |
 | 2026-10-22 → 10-26 | One campaign replaces every earlier result. All seven engines and three workloads ran on the same commit and settings: the standard RDF view (`generalizedRdfView: false`, now `run.ts`'s default too), `preserveCardinality` off and on back to back for each query (`--paired-cardinality`), and the median of three runs for queries under 10 s (`--reps 3 --reps-below 10000`). Grading keeps a hash of each answer instead of its rows, so StarBench's 8.5-million-row answers no longer exhaust memory. `results.json` holds both settings, 12,996 rows, and `results-preserve-cardinality.json` is gone. `timeMaterialization.ts --break-even` counts each setting apart. `overview/` builds the results page from it. The pushdown carries the ladder on every engine and workload. The only wrong answers are Virtuoso's 283. StarBench's broken references are graded as such. Building the views pays off after a median of about 14 queries. |
 | 2026-10-27 → 10-28 | `rewriting+keepProjections`, the full pipeline without `removeProjections`, measured against it on every engine and workload (7,220 rows, `results-keep-projections.json`). No answer changes. LUBM is ÷1.2 to ÷1.6 faster on four engines, and GraphDB answers 33 more queries. StarBench is up to 1.25 times slower with `preserveCardinality` off. `removeProjections` left the library's default pipeline. The README now lists the version of each engine measured. |
+| 2026-10-28 → 11-01 | The ladder rebuilt on the default pipeline's order: `rewriting` → `+pushDownAssertions` → `+pullUpExtends`, none of them flattening, each with a `+removeProjections` twin measured right after it (the October rungs 3 and 4 are now `rewriting+pushDownAssertions+removeProjections` and `rewriting+pullUpExtends+removeProjections`, and `rewriting+keepProjections` is the new `rewriting+pullUpExtends`). One campaign of 18,772 rows replaces `results.json`; 12,893 of the 12,996 rows it shares with October agree in status, row count and grade. Flattening goes both ways: before the pushdown it helps Jena and GraphDB's remaining answers and breaks Oxigraph's LUBM and Virtuoso's OAEI; after it, QLever, GraphDB and Blazegraph are faster kept on LUBM, while Jena, Comunica and Blazegraph's and QLever's OAEI have more queries faster flattened. Without the flattening GraphDB answers 47 of 52 LUBM cells with `preserveCardinality` off, against 23 in October. Building the views pays off after a median of 17 queries. |
 
 ## Extending
 

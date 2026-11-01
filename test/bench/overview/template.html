@@ -204,7 +204,7 @@ section.block > .wrap > h2 { font-size: 24px; font-weight: 600; letter-spacing: 
 .setup .protocol { grid-column: span 5; padding: 20px; }
 @media (max-width: 900px) { .setup .workloads, .setup .protocol { grid-column: span 12; } }
 .setup h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
-.ladder { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr; gap: 8px; align-items: stretch; }
+.ladder { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 8px; align-items: stretch; }
 .ladder .step { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--surface-2); min-width: 0; }
 .ladder .step b { display: block; font-family: "IBM Plex Mono", monospace; font-size: 12.5px; font-weight: 600; word-break: break-word; }
 .ladder .step span { display: block; font-size: 13px; color: var(--ink-2); margin-top: 4px; }
@@ -291,6 +291,7 @@ td.zero { color: var(--muted); }
 }
 table.qx th, table.qx td { padding: 0; }
 table.qx thead th { font-size: 12px; font-weight: 500; color: var(--muted); text-align: center; padding: 4px 4px 6px; white-space: nowrap; }
+table.qx thead th.flat { font-style: italic; font-weight: 400; }
 table.qx tbody th { text-align: left; font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: 12.5px; padding-right: 12px; white-space: nowrap; }
 table.qx td.ref { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-2); text-align: right; padding-right: 10px; white-space: nowrap; }
 .qc { margin: 1px; height: 34px; min-width: 96px; border-radius: 5px; display: flex; align-items: center; justify-content: center; gap: 5px; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
@@ -367,7 +368,7 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
       A query over virtual RDF views can be answered by <b>rewriting</b> it into a query over the source data,
       or by <b>materialising</b> the views first and querying those. This page compares the two on three
       workloads and seven SPARQL engines: one consistent run of every engine, rewriter version and setting,
-      measured 22–26 October 2026.
+      measured 28 October – 1 November 2026.
     </p>
   </div>
 </header>
@@ -378,52 +379,52 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
     <h2>What the run shows</h2>
     <div class="findings" id="findings-grid">
       <div class="card finding">
-        <div class="big">÷24 – ÷1,150 <small>on OAEI</small></div>
+        <div class="big">÷65 – ÷541 <small>on OAEI</small></div>
         <h3>Pushing assertions down is the pass that makes the rewrite work</h3>
-        <p>On OAEI it makes every engine 24 to 1,150 times faster than the pipeline before it; on LUBM 2 to 80 times. On QLever, and on Virtuoso and Blazegraph for LUBM, the pipelines before it answer nothing at all.</p>
+        <p>On OAEI it makes every engine 65 to 541 times faster than the pipeline before it; on LUBM 13 to 68 times. On QLever, and on Blazegraph, the pipeline before it answers nothing at all, and on Virtuoso 2 of 52 LUBM queries.</p>
         <a class="more" href="#passes">Each pass, per engine</a>
       </div>
       <div class="card finding">
-        <div class="big">×0.7 – ×3.2 <small>on OAEI</small></div>
+        <div class="big">÷1.3 – ×3.3 <small>on OAEI</small></div>
         <h3>Translating vocabularies costs little over materialised views</h3>
-        <p>On OAEI the full pipeline runs within about three times the materialised views on every engine, and on Oxigraph and Jena at par. Each query touches a few of 148 views, and the pushdown turns them into indexed lookups.</p>
+        <p>On OAEI the full pipeline runs within about three times the materialised views on every engine, at par on Jena, and faster than them on Oxigraph. Each query touches a few of 148 views, and the pushdown turns them into indexed lookups.</p>
         <a class="more" href="#cost">Cost per engine and scale</a>
       </div>
       <div class="card finding">
-        <div class="big">×0.8 – ×362 <small>on LUBM</small></div>
+        <div class="big">×0.9 – ×207 <small>on LUBM</small></div>
         <h3>Reasoning by rewriting depends on the engine</h3>
-        <p>On LUBM the same rewrites run at par with the materialised views on Oxigraph, about five times slower on Virtuoso, and 13 to 76 times slower on QLever as data grows to 500 universities. Jena goes from 6 times slower at one university to 362 times at a hundred.</p>
+        <p>On LUBM the same rewrites run at par with the materialised views on Oxigraph, four to five times slower on Virtuoso, and 10 to 35 times slower on QLever as data grows to 500 universities. Jena goes from 6 times slower at one university to 207 times at a hundred, GraphDB from 9 to 141 times.</p>
         <a class="more" href="#cost">Cost per engine and scale</a>
       </div>
       <div class="card finding">
-        <div class="big">≈14 <small>queries, median</small></div>
+        <div class="big">≈17 <small>queries, median</small></div>
         <h3>Materialising usually pays off within tens of queries</h3>
-        <p>Building the views once beats rewriting after a median of about 14 queries across the 44 engine-and-scale cells. Oxigraph is the exception: on LUBM from 50 universities up, the rewrite is faster on average, so the build never pays off.</p>
+        <p>Building the views once beats rewriting after a median of 17 queries across the 44 engine-and-scale cells. Oxigraph is the exception: on LUBM from 10 universities up, the rewrite is faster on average, so the build never pays off.</p>
         <a class="more" href="#payoff">Pay-off per engine and scale</a>
       </div>
       <div class="card finding">
         <div class="big">0 <small>wrong answers from the rewriter</small></div>
         <h3>Every wrong answer is a Virtuoso bug</h3>
-        <p>All 283 wrong answers come from two Virtuoso bugs, both reproduced in isolation. With <code>preserveCardinality</code> on, every other answer is exact, except on StarBench queries whose hand-written reference is itself broken; there all engines return the same row count. With it off, LUBM answers repeat rows the views derive more than once.</p>
+        <p>All 321 wrong answers come from two Virtuoso bugs, both reproduced in isolation. With <code>preserveCardinality</code> on, every other answer is exact, except on StarBench queries whose hand-written reference is itself broken; there all engines return the same row count. With it off, LUBM answers repeat rows the views derive more than once.</p>
         <a class="more" href="#correct">Correctness per engine</a>
       </div>
       <div class="card finding">
-        <div class="big">23 → 52 <small>GraphDB, LUBM</small></div>
-        <h3><code>preserveCardinality</code> rescues GraphDB, is neutral on LUBM and OAEI, and costs on StarBench</h3>
-        <p>Its <code>DISTINCT</code> subqueries stop GraphDB from turning the joins into cross products, so it answers every LUBM query. On LUBM and OAEI it changes other engines' times by ÷1.2 to ×1.2, and it speeds Virtuoso up only on the plans that hit its row-losing bug. On StarBench it makes every engine 1.2 to 1.4 times slower and changes no answer.</p>
+        <div class="big">47 → 52 <small>GraphDB, LUBM</small></div>
+        <h3><code>preserveCardinality</code> completes GraphDB, is mostly neutral on LUBM and OAEI, and costs on StarBench</h3>
+        <p>With it, GraphDB answers every LUBM query, 1.6 times faster. On LUBM and OAEI it changes most other engines' times by ÷1.1 to ×1.2, costs QLever 1.4 times on LUBM, and speeds Virtuoso up only on the plans that hit its row-losing bug. On StarBench it makes every engine 1.1 to 1.3 times slower and changes no answer.</p>
         <a class="more" href="#cardinality">The option per engine</a>
       </div>
       <div class="card finding wide">
-        <div class="big">÷4 – ÷8 <small>on StarBench</small></div>
+        <div class="big">÷3.8 – ÷8.3 <small>on StarBench</small></div>
         <h3>On StarBench the pushdown matters as much, and hand-written SPARQL stays ahead</h3>
-        <p>Pushing assertions down makes Oxigraph, Jena and Comunica 4 to 8 times faster on SPARQL 1.2 queries over reification and singleton properties. Comunica then answers 22 of 24 reification queries instead of 12. The full pipeline still runs 4 to 10 times behind a hand-written query on Oxigraph and Jena (reification), and 25 to 33 times on Comunica.</p>
+        <p>Pushing assertions down makes Oxigraph, Jena and Comunica 4 to 8 times faster on SPARQL 1.2 queries over reification and singleton properties. Comunica then answers 21 of 24 reification queries instead of 12, and 19 singleton ones instead of 4. The full pipeline still runs 4.5 to 13 times behind a hand-written query on Oxigraph and Jena (reification), and 26 to 35 times on Comunica.</p>
         <a class="more" href="#passes">Each pass, per engine</a>
       </div>
       <div class="card finding wide">
-        <div class="big">÷1.6 – ×1.25 <small>keeping the subqueries</small></div>
-        <h3>After the pushdown, flattening the subqueries helps some engines and hurts others</h3>
-        <p>Leaving out <code>removeProjections</code> changes no answer. With <code>preserveCardinality</code> off it makes LUBM 1.3 to 1.6 times faster on GraphDB, QLever, Blazegraph and Jena, and lets GraphDB answer 33 more LUBM and OAEI queries. Flattening wins elsewhere: Comunica runs more queries faster flattened on every workload, StarBench is up to 1.25 times faster flattened on Jena, Comunica and Oxigraph, and single queries up to 8 times on Jena and Blazegraph. The library's default pipeline no longer runs it.</p>
-        <a class="more" href="#flatten">Kept against flattened, per engine</a>
+        <div class="big">both ways <small>flattening the subqueries</small></div>
+        <h3>Whether flattening the subqueries pays depends on the engine</h3>
+        <p>Every pipeline also ran with <code>removeProjections</code> appended; it changes no answer. Before the pushdown it makes Jena 1.2 to 1.3 times faster and GraphDB's remaining answers 2 to 4 times, but loses many answers on GraphDB, Oxigraph and Virtuoso. After it, keeping the subqueries is 1.3 to 2.9 times faster on QLever's, GraphDB's and Blazegraph's LUBM, and GraphDB answers 47 LUBM queries instead of 21 to 24. Flattening wins more queries than it loses on Jena, Comunica, and Blazegraph's and QLever's OAEI, single queries by up to 13 times. The library's default pipeline keeps the subqueries.</p>
+        <a class="more" href="#flatten">Flattened against kept, per rung and engine</a>
       </div>
     </div>
   </div>
@@ -435,17 +436,15 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
     <h2>What is compared, on what, and how</h2>
     <div class="setup">
       <div class="card approaches">
-        <h3>Four rewrite pipelines, each the one before plus one pass</h3>
+        <h3>Three rewrite pipelines, each the one before plus one pass, and each also flattened</h3>
         <div class="ladder">
-          <div class="step"><i>1</i><b>rewriting</b><span>Unfold every view the query touches into a UNION of its CONSTRUCT bodies, with <code>FILTER(sameTerm(…))</code> for every constant.</span></div>
+          <div class="step"><i>1</i><b>rewriting</b><span>Unfold every view the query touches into a UNION of its CONSTRUCT bodies, each in a sub-<code>SELECT</code>, with <code>FILTER(sameTerm(…))</code> for every constant.</span></div>
           <div class="arrow" aria-hidden="true">→</div>
-          <div class="step"><i>2</i><b>+removeProjections</b><span>Flatten the sub-<code>SELECT</code> each view branch is wrapped in.</span></div>
+          <div class="step key"><i>2</i><b>+pushDownAssertions</b><span>Push each <code>sameTerm</code> filter into the triple patterns, turning a scan into an indexed lookup.</span></div>
           <div class="arrow" aria-hidden="true">→</div>
-          <div class="step key"><i>3</i><b>+pushDownAssertions</b><span>Push each <code>sameTerm</code> filter into the triple patterns, turning a scan into an indexed lookup. Step 2's flattening moves after it.</span></div>
-          <div class="arrow" aria-hidden="true">→</div>
-          <div class="step"><i>4</i><b>+pullUpExtends</b><span>Float the <code>BIND</code>s the pushdown leaves at every leaf back up, or drop them: once before the flattening, once after.</span></div>
+          <div class="step"><i>3</i><b>+pullUpExtends</b><span>Float the <code>BIND</code>s the pushdown leaves at every leaf back up, or drop them. This is the order of the library's default pipeline.</span></div>
         </div>
-        <p class="note">A separate run measured pipeline 4 without the flattening (<a href="#flatten">question 7</a>).</p>
+        <p class="note">Each pipeline also ran with <code>removeProjections</code> appended, right after it: it flattens the sub-<code>SELECT</code>s, and on pipeline 3 is followed by a second <code>pullUpExtends</code>. <a href="#flatten">Question 7</a> compares the two.</p>
         <div class="versus">
           <div class="step"><b>materialised</b> <span>The reference. LUBM and OAEI: the original query over the views, materialised ahead of time (the build time is measured separately). StarBench: a hand-written SPARQL 1.1 query over the source.</span></div>
           <div class="step"><b>preserveCardinality</b> <span>A rewriter option that wraps each view pattern in <code>SELECT DISTINCT</code>, so duplicates the views would not produce do not appear. Every rewrite runs with it off and on, back to back.</span></div>
@@ -530,13 +529,13 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
     <h2>Are the answers right?</h2>
     <div class="prose" id="correct-prose">
       <p><strong>The rewriter gave no wrong answer on any engine but Virtuoso, and Virtuoso's come from two bugs, each reproduced on a minimal query.</strong></p>
-      <p><strong>A filter dropped (pipelines 1–2).</strong> Virtuoso drops <code>FILTER(sameTerm(?o, C))</code> over a <code>UNION</code> whose branches bind <code>?o</code> to different constants, and returns the whole union: many OAEI queries come back with 8,699 or 80,393 rows whatever they ask. <code>?o = C</code> is answered correctly, and the pushdown removes these filters.</p>
-      <p><strong>Rows lost (pipelines 3–4, <code>preserveCardinality</code> on).</strong> Joining three or more <code>SELECT DISTINCT</code> subqueries loses rows at <code>VectorSize = 1</code>. The default vector size answers those correctly but has a bug of its own on the rewrites without the option, so no setting is right for every rewrite. The benchmark keeps 1.</p>
+      <p><strong>A filter dropped (<code>rewriting</code>, kept or flattened).</strong> Virtuoso drops <code>FILTER(sameTerm(?o, C))</code> over a <code>UNION</code> whose branches bind <code>?o</code> to different constants, and returns the whole union: many OAEI queries come back with 8,699 or 80,393 rows whatever they ask. <code>?o = C</code> is answered correctly, and the pushdown removes these filters.</p>
+      <p><strong>Rows lost (the four pushdown pipelines, <code>preserveCardinality</code> on).</strong> Joining three or more <code>SELECT DISTINCT</code> subqueries loses rows at <code>VectorSize = 1</code>. The default vector size answers those correctly but has a bug of its own on the rewrites without the option, so no setting is right for every rewrite. The benchmark keeps 1.</p>
       <p><strong>Repeats are expected.</strong> With <code>preserveCardinality</code> off, a LUBM fact the ontology derives in several ways appears several times. The rows are right; their multiplicity is not.</p>
-      <p><strong>Some of StarBench's references are broken.</strong> Nine of its twelve hand-written singleton queries ask a different question than the SPARQL 1.2 query: other IRIs or concepts, or a missing pattern. The <code>F-Q1</code> and <code>F-Q2</code> references of both encodings return one variable too many (<code>SELECT *</code>). Answers that differ from these references are counted as <i>broken ref.</i>, not wrong. All 373 such answers return the same number of rows on every engine and every pipeline. The nine singleton queries are also left out of every time comparison with the reference.</p>
+      <p><strong>Some of StarBench's references are broken.</strong> Nine of its twelve hand-written singleton queries ask a different question than the SPARQL 1.2 query: other IRIs or concepts, or a missing pattern. The <code>F-Q1</code> and <code>F-Q2</code> references of both encodings return one variable too many (<code>SELECT *</code>). Answers that differ from these references are counted as <i>broken ref.</i>, not wrong. All 579 such answers return the same number of rows on every engine and every pipeline. The nine singleton queries are also left out of every time comparison with the reference.</p>
     </div>
     <div class="scroll"><table class="plain" id="correct-table"></table></div>
-    <p class="note">All four pipelines counted together. <i>Exact</i>: the same rows the same number of times. <i>Repeats</i>: the same rows, some repeated (expected with <code>preserveCardinality</code> off, as the views overlap). <i>Ungraded</i>: the reference itself timed out; the row count is then checked against the other engines' references. <i>Broken ref.</i>: differs from a StarBench reference known to be broken.</p>
+    <p class="note">All six pipelines counted together. <i>Exact</i>: the same rows the same number of times. <i>Repeats</i>: the same rows, some repeated (expected with <code>preserveCardinality</code> off, as the views overlap). <i>Ungraded</i>: the reference itself timed out; the row count is then checked against the other engines' references. <i>Broken ref.</i>: differs from a StarBench reference known to be broken.</p>
   </div>
 </section>
 
@@ -546,9 +545,9 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
     <h2>What does <code>preserveCardinality</code> change?</h2>
     <div class="prose" id="pc-prose">
       <p>The option wraps each view's pattern in <code>SELECT DISTINCT</code>, so an answer holds a row as often as the virtual graph would. Every rewrite ran both ways, back to back.</p>
-      <p><strong>GraphDB is where it matters.</strong> Without it, GraphDB distributes a join over the top-level <code>UNION</code>s of the rewrite. Each distributed join then shares no variable, only two <code>BIND</code>s, and becomes a cross product. The subqueries block that, and GraphDB answers all 52 LUBM queries instead of 23.</p>
-      <p><strong>On LUBM and OAEI it is otherwise close to neutral.</strong> It helps where the views overlap and duplicates multiply, and costs a little where a large pattern meets a selective one. Virtuoso runs LUBM 2.7 times faster with it, but in the form that loses rows.</p>
-      <p><strong>On StarBench it only costs.</strong> With it on, the full pipeline is 1.2 to 1.4 times slower on all three engines, and it changes no answer: StarBench's views never produce a row twice, so there are no repeats to remove. Most of the difference shows at the last pass: <code>+pullUpExtends</code> gains ÷1.1 to ÷1.6 with the option off, but only ÷1.05 to ÷1.3 with it on.</p>
+      <p><strong>On GraphDB it completes LUBM: 52 queries instead of 47, 1.6 times faster.</strong> On a flattened rewrite GraphDB distributes a join over the top-level <code>UNION</code>s. Each distributed join then shares no variable, only two <code>BIND</code>s, and becomes a cross product. Any subquery blocks that: the sub-<code>SELECT</code>s the default pipeline keeps, and the option's <code>DISTINCT</code>s. Flattened and without the option, GraphDB answers only 21 to 24 LUBM queries.</p>
+      <p><strong>On LUBM and OAEI it is otherwise close to neutral.</strong> It helps where the views overlap and duplicates multiply, and costs where a large pattern meets a selective one. On QLever's LUBM the costs win, 1.4 times. Virtuoso runs LUBM 2.4 times faster with it, but in the form that loses rows.</p>
+      <p><strong>On StarBench it only costs.</strong> With it on, the full pipeline is 1.1 to 1.3 times slower on all three engines, and it changes no answer: StarBench's views never produce a row twice, so there are no repeats to remove. Most of the difference shows at the last pass: <code>+pullUpExtends</code> gains ÷1.1 to ÷1.5 with the option off, but at most ÷1.2 with it on.</p>
     </div>
     <div class="scroll"><table class="grid" id="pc-grid"></table></div>
     <div class="legend" data-legend="div" data-faster="on is faster" data-slower="on is slower"></div>
@@ -559,22 +558,23 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
 <section class="block gutter" id="flatten">
   <div class="wrap">
     <div class="kicker">Question 7</div>
-    <h2>Is flattening the subqueries still worth it after the pushdown?</h2>
+    <h2>What is flattening the subqueries worth?</h2>
     <div class="prose">
-      <p>Pipelines 3 and 4 flatten the sub-<code>SELECT</code> each view branch is wrapped in after the pushdown. A second run, on 27–28 October, measured pipeline 4 without that step: one <code>pullUpExtends</code> instead of two, since the second only exists to see past the flattening. It ran back to back with pipeline 4 on every engine, workload and scale, with the option off and on, and the reference graded both.</p>
-      <p><strong>No answer changes.</strong> Every query both answered returns the same rows.</p>
-      <p><strong>On LUBM keeping the subqueries is faster.</strong> GraphDB, QLever, Blazegraph and Jena run 1.3 to 1.6 times faster with the option off, and 1.2 to 1.3 with it on. With the option off, GraphDB answers 48 LUBM queries instead of 23, and all 130 OAEI queries. On OAEI the other engines are within 10%.</p>
-      <p><strong>Some engines gain from the flattening.</strong></p>
+      <p>The unfolding wraps each view branch in a sub-<code>SELECT</code>. <code>removeProjections</code> flattens them into one tree; the library's default pipeline leaves it out. Every pipeline also ran with it appended, right after it, with the option off and on, and the reference graded both. <strong>No answer changes.</strong></p>
+      <p><strong>Before the pushdown it helps some engines a lot and breaks others.</strong> Jena runs LUBM and OAEI 1.2 to 1.3 times faster flattened, and GraphDB the queries it still answers 2 to 4 times. But GraphDB then answers 8 LUBM queries instead of 21 and 77 OAEI queries instead of 128, Oxigraph's LUBM is 1.8 times slower, and Virtuoso's state-slot limit rejects many flattened OAEI queries. Blazegraph answers 34 OAEI queries only flattened.</p>
+      <p><strong>After it, the engines lean one way or the other.</strong></p>
       <ul class="plain">
-        <li><strong>Comunica</strong> runs more queries faster flattened than kept on every workload, with the option off and on: 15 against 2 on StarBench reification, 30 against 19 on OAEI. Pooled, StarBench is 1.13 to 1.19 times faster flattened with the option off.</li>
-        <li><strong>Jena and Oxigraph on StarBench</strong>, with the option off: 1.12 to 1.23 times faster flattened. The largest gains are on <code>F-Q1</code>, which filters on <code>regex(str(?source), …)</code>. Without the flattening <code>?source</code> comes out of a subquery and the filter stays outside it, so the engine evaluates the whole subquery, its <code>NOT EXISTS</code> included, before filtering: 8.3 and 3.5 times slower on the singleton encoding.</li>
-        <li><strong>Blazegraph on OAEI</strong> pools to about 1, but 40 queries are faster flattened against 33 kept, and the flattened side has the largest gains: up to 7.8 times.</li>
-        <li><strong>QLever on OAEI</strong> also has more queries faster flattened, by at most 1.2 times.</li>
+        <li><strong>Keeping is faster on LUBM for QLever, GraphDB and Blazegraph:</strong> 1.3 to 2.9 times with the option off. Flattened, GraphDB answers 21 to 24 LUBM queries instead of 47.</li>
+        <li><strong>Flattening wins more queries than it loses on Jena, Comunica, and Blazegraph's and QLever's OAEI.</strong> At pipeline 3 with the option off: Jena 15 against 2 on StarBench reification, Comunica 44 against 13 on OAEI, Blazegraph 56 against 28. Most gains are small; single queries gain up to 13 times (Blazegraph's <code>author_of_inv_talk_abstract</code>).</li>
+        <li><strong>The largest is <code>F-Q1</code></strong>, which filters on <code>regex(str(?source), …)</code>: Jena 5.2 s → 0.5 s on the singleton encoding. The gain comes from the second <code>pullUpExtends</code> the flattening allows, which moves the <code>BIND</code> of <code>?source</code> above the filter, so the filter tests the triple pattern's own variable. Flattening alone, at pipeline 2, changes nothing there.</li>
       </ul>
-      <p>Since the gains from keeping the subqueries are larger and wider, the library's default pipeline (<code>createDefaultTransformationPipeline</code>) no longer runs <code>removeProjections</code>. It is still exported, for engines and queries like these.</p>
+      <p>With the option on, the differences after the pushdown shrink to about 1.1 times, except QLever's and Blazegraph's LUBM. Since the gains from keeping the subqueries are larger and wider, the library's default pipeline (<code>createDefaultTransformationPipeline</code>) leaves <code>removeProjections</code> out. It is still exported, for engines and queries like these.</p>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Pipeline" id="flatten-rung"></div>
     </div>
     <div class="scroll"><table class="grid" id="flatten-grid"></table></div>
-    <div class="legend" data-legend="div" data-faster="kept is faster" data-slower="flattened is faster"></div>
+    <div class="legend" data-legend="div" data-faster="flattened is faster" data-slower="flattened is slower"></div>
     <p class="note" id="flatten-note"></p>
   </div>
 </section>
@@ -583,7 +583,7 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
   <div class="wrap">
     <div class="kicker">Detail</div>
     <h2>Every query</h2>
-    <p class="intro">One engine, workload and scale at a time. Each cell is the median time, coloured by its ratio to the reference. Hover or tap a cell for the row counts and the engine's message.</p>
+    <p class="intro">One engine, workload and scale at a time. Each cell is the median time, coloured by its ratio to the reference. Each pipeline is followed by its flattened twin (<i>flat.</i>). Hover or tap a cell for the row counts and the engine's message.</p>
     <div class="controls">
       <label>Engine <select id="qx-engine"></select></label>
       <label>Workload <select id="qx-workload"></select></label>
@@ -611,22 +611,22 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
         <h3>Oxigraph <small>0.5.11</small></h3>
         <div class="cfg">RocksDB store built with <code>oxigraph load</code>, served read-only.</div>
         <ul>
-          <li><span class="tag limit">limit</span>Its own materialised reference times out on six LUBM queries at <code>u50</code>/<code>u100</code> (the views graph is 1.4 times the source), where the rewrite answers. Those answers are ungraded; with <code>preserveCardinality</code> on their row counts match QLever's and Jena's references.</li>
+          <li><span class="tag limit">limit</span>Its own materialised reference times out on two LUBM queries at <code>u50</code> and seven at <code>u100</code> (the views graph is 1.4 times the source), where the rewrite answers. Those answers are ungraded; with <code>preserveCardinality</code> on their row counts match QLever's and Jena's references.</li>
         </ul>
       </div>
       <div class="card engine">
         <h3>Jena Fuseki <small>6.3.0-SNAPSHOT</small></h3>
         <div class="cfg">TDB2 store built with <code>tdb2.tdbloader --loader=parallel</code>. A nightly: no release has the ARQ triple-term fix StarBench needs.</div>
         <ul>
-          <li><span class="tag limit">limit</span>The two pipelines before the pushdown time out on 9 of 13 LUBM queries from <code>u50</code> up.</li>
+          <li><span class="tag limit">limit</span>Before the pushdown, kept or flattened, it answers no LUBM query from <code>u50</code> up.</li>
         </ul>
       </div>
       <div class="card engine">
         <h3>QLever <small>build 8303d22 · 30 Sep 2026</small></h3>
         <div class="cfg">Index built with <code>qlever-index</code>; query memory capped at 12 GB.</div>
         <ul>
-          <li><span class="tag limit">limit</span>No <code>sameTerm</code>, so pipelines 1–2 fail on every query; the pushdown removes the function.</li>
-          <li><span class="tag limit">limit</span>LUBM Q09 without <code>preserveCardinality</code> runs out of the 12 GB query memory from <code>u10</code> up.</li>
+          <li><span class="tag limit">limit</span>No <code>sameTerm</code>, so <code>rewriting</code> fails on every query, kept or flattened; the pushdown removes the function.</li>
+          <li><span class="tag limit">limit</span>LUBM Q09 without <code>preserveCardinality</code>: flattened, it runs out of the 12 GB query memory from <code>u10</code> up; kept, it answers <code>u10</code> in 50 s and times out beyond.</li>
           <li>No RDF 1.2, so no StarBench. The only engine run at <code>u250</code> and <code>u500</code>.</li>
         </ul>
       </div>
@@ -634,8 +634,8 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
         <h3>Virtuoso <small>7.2.17 open source</small></h3>
         <div class="cfg"><code>VectorSize = 1</code>, <code>MaxMemPoolSize = 16G</code>, 50 M result rows allowed. Data in a named graph, which every query sets as its default graph.</div>
         <ul>
-          <li><span class="tag bug">bug</span><code>FILTER(sameTerm(?o, C))</code> over a <code>UNION</code> that binds <code>?o</code> to different constants is dropped: wrong answers at pipelines 1–2.</li>
-          <li><span class="tag bug">bug</span>At <code>VectorSize = 1</code>, a join of three or more <code>SELECT DISTINCT</code> subqueries loses rows: 38 wrong answers with <code>preserveCardinality</code> on.</li>
+          <li><span class="tag bug">bug</span><code>FILTER(sameTerm(?o, C))</code> over a <code>UNION</code> that binds <code>?o</code> to different constants is dropped: wrong answers before the pushdown.</li>
+          <li><span class="tag bug">bug</span>At <code>VectorSize = 1</code>, a join of three or more <code>SELECT DISTINCT</code> subqueries loses rows: 19 wrong answers per pushdown pipeline with <code>preserveCardinality</code> on, 76 in all.</li>
           <li><span class="tag bug">bug</span>At the default vector size, a join over <code>UNION</code>s that bind the join variable takes another branch's values; this is why it runs at 1, costing 5 to 20 times the speed.</li>
           <li><span class="tag limit">limit</span>Compiled-in limits: generated SQL over 10,000 lines (SP031), too many state slots (SQ156). These reject the larger rewrites before the pushdown.</li>
         </ul>
@@ -644,8 +644,8 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
         <h3>GraphDB <small>11.5.1 Free</small></h3>
         <div class="cfg">RDF4J 5.3.1 underneath; empty ruleset (no inference); 36 GB heap.</div>
         <ul>
-          <li><span class="tag limit">limit</span>Distributes a join over top-level <code>UNION</code>s (24 × 7 = 168 groups for LUBM Q05). Where the join key is only set by <code>BIND</code>, each group becomes a cross product. <code>preserveCardinality</code>'s subqueries stop it.</li>
-          <li>Without the option, <code>+removeProjections</code> exposes that shape: on OAEI it answers fewer queries than plain rewriting.</li>
+          <li><span class="tag limit">limit</span>On a flattened rewrite it distributes a join over top-level <code>UNION</code>s (24 × 7 = 168 groups for LUBM Q05). Where the join key is only set by <code>BIND</code>, each group becomes a cross product. Any subquery stops it: the sub-<code>SELECT</code>s the default pipeline keeps, or <code>preserveCardinality</code>'s <code>DISTINCT</code>s.</li>
+          <li>So flattening costs it answers at every pipeline: LUBM 47 → 21 to 24 after the pushdown, OAEI 128 → 77 before it.</li>
         </ul>
       </div>
       <div class="card engine">
@@ -661,7 +661,7 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
         <div class="cfg">A long-lived worker per dataset: HDT (5.0.1) for LUBM and OAEI, an in-memory N3 store for StarBench.</div>
         <ul>
           <li><span class="tag limit">limit</span>Materialising is very slow: 4 hours at <code>u50</code> and 13 at <code>u100</code>, against minutes elsewhere. That is why its pay-off counts run into the hundreds.</li>
-          <li><span class="tag limit">limit</span>On StarBench it answers 4 to 12 of 24 queries before the pushdown and 18 to 22 after it. Many answers sit near the 300 s budget: re-running the singleton <code>s</code> block turned 5 of its first run's timeouts into answers taking 108 to 288 s.</li>
+          <li><span class="tag limit">limit</span>On StarBench it answers 4 to 12 of 24 queries before the pushdown and 19 to 22 after it. Many answers sit near the 300 s budget, so a run can turn one into a timeout or back: in October, re-running the singleton <code>s</code> block turned 5 timeouts into answers taking 108 to 288 s.</li>
         </ul>
       </div>
     </div>
@@ -685,13 +685,11 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
     <details class="method">
       <summary>What is new in this version of the page</summary>
       <div>
-        <p>Every number now comes from one run: the same rewriter (commit <code>20181c2</code>), the same harness and the same settings for every engine, measured 22–26 October 2026. The earlier page combined runs from late September to mid-October across rewriter versions, with drift of up to 1.25 times between runs.</p>
+        <p>The ladder now follows the library's default pipeline, and every number comes from one new run: commit <code>84744a8</code> (the rewriter's passes unchanged since <code>20181c2</code>), the same harness and settings for every engine, measured 28 October – 1 November 2026.</p>
         <ul class="plain">
-          <li><b>Standard RDF view</b> (<code>generalizedRdfView: false</code>), the library's default, where earlier numbers used the generalised view.</li>
-          <li><b><code>preserveCardinality</code> on and off back to back</b> per query, alternating which goes first, rather than in separate runs.</li>
-          <li><b>Median of three</b> for queries under 10 s. Absolute times are lower than in earlier runs, the materialised reference's included. Compare ratios within this page, not times across pages.</li>
-          <li>A machine restart cut off Comunica's singleton <code>s</code> block; that block was re-run whole.</li>
-          <li>Grading keeps a hash of each answer instead of its rows. Same verdicts, but StarBench's 8.5-million-row answers no longer exhaust memory (commit <code>9249d80</code>).</li>
+          <li><b>The pushdown pipelines no longer flatten.</b> Until October, pipelines 3 and 4 ran <code>removeProjections</code>; the default pipeline dropped it after a run found keeping the subqueries faster on most engines. The old pipelines are still measured, as the flattened twins of pipelines 2 and 3, and <code>+removeProjections</code> before the pushdown as the twin of pipeline 1.</li>
+          <li><b>Against the October run</b>, 12,893 of the 12,996 rows the two share agree in status, row count and grade. The rest are queries near the budget, and answers left ungraded because a reference timed out.</li>
+          <li><b>Standard RDF view</b> (<code>generalizedRdfView: false</code>), <b><code>preserveCardinality</code> on and off back to back</b> per query, and the <b>median of three</b> for queries under 10 s, as in October. Compare ratios within this page, not times across pages.</li>
         </ul>
       </div>
     </details>
@@ -701,7 +699,7 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
         <ul class="plain">
           <li>StarBench on QLever, Virtuoso, GraphDB and Blazegraph: none supports SPARQL 1.2.</li>
           <li>StarBench's larger scales (<code>m</code>, <code>l</code>), and LUBM above <code>u100</code> on any engine but QLever.</li>
-          <li>The library's default pipeline (<code>createDefaultTransformationPipeline</code>): the ladder isolates one pass at a time instead.</li>
+          <li>The two steps of the library's default pipeline the ladder leaves out: expanding property paths first and <code>nullifyJoinOverIncompatibleBounds</code> last. Neither changes any of the benchmark's rewrites.</li>
           <li>Cold-cache timings: every engine is warm after loading, and fast queries report the median of three runs.</li>
         </ul>
       </div>
@@ -713,12 +711,12 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
         <pre class="cmd">npx tsx test/bench/run.ts --engines oxigraph --schemes lubm,oaei \
   --scales u1,u10,u50,u100,eswc,d100 --timeout 60000 \
   --rdf-views standard --paired-cardinality --reps 3 --reps-below 10000 \
-  --out test/bench/results/bench-campaign-oxigraph-workloads.json
+  --out test/bench/results/bench-ladder-oxigraph-workloads.json
 
 npx tsx test/bench/run.ts --engines oxigraph --schemes reification,singleton \
   --scales xs,s --timeout 300000 \
   --rdf-views standard --paired-cardinality --reps 3 --reps-below 10000 \
-  --out test/bench/results/bench-campaign-oxigraph-starbench.json</pre>
+  --out test/bench/results/bench-ladder-oxigraph-starbench.json</pre>
       </div>
     </details>
   </div>
@@ -737,10 +735,14 @@ const WORKLOAD = { lubm: 'LUBM', oaei: 'OAEI Conference', reification: 'StarBenc
 const WORKLOAD_SHORT = { lubm: 'LUBM', oaei: 'OAEI', reification: 'Star · reif.', singleton: 'Star · single.' };
 const WORKLOAD_ORDER = [ 'lubm', 'oaei', 'reification', 'singleton' ];
 const SCALE_ORDER = D.dict.scales;
-const RUNGS = [ 'rewriting', 'rewriting+removeProjections', 'rewriting+pushDownAssertions', 'rewriting+pullUpExtends' ];
-const RUNG = { 'rewriting': 'rewriting', 'rewriting+removeProjections': '+removeProjections', 'rewriting+pushDownAssertions': '+pushDownAssertions', 'rewriting+pullUpExtends': '+pullUpExtends' };
-const RUNG_SHORT = { 'rewriting': 'rewriting', 'rewriting+removeProjections': '+removeProj.', 'rewriting+pushDownAssertions': '+pushDown', 'rewriting+pullUpExtends': '+pullUp' };
-const FINAL = 'rewriting+pullUpExtends';
+// The ladder, each rung the one before plus one pass, and each rung's twin with removeProjections appended.
+const RUNGS = D.dict.rungs;
+const FLAT = D.dict.flattened;
+const APPROACHES = RUNGS.flatMap(r => [ r, FLAT[r] ]);
+const RUNG = { 'rewriting': 'rewriting', 'rewriting+pushDownAssertions': '+pushDownAssertions', 'rewriting+pullUpExtends': '+pullUpExtends' };
+const RUNG_SHORT = { 'rewriting': 'rewriting', 'rewriting+pushDownAssertions': '+pushDown', 'rewriting+pullUpExtends': '+pullUp' };
+for (const r of RUNGS) { RUNG[FLAT[r]] = `${RUNG[r]}, flattened`; RUNG_SHORT[FLAT[r]] = 'flat.'; }
+const FINAL = RUNGS.at(-1);
 
 const S = {};
 for (const s of D.summary) ((S[s.engine] ??= {})[s.workload] ??= {})[s.scale] = s;
@@ -879,7 +881,7 @@ function renderPasses() {
   let head1 = '<tr><th></th>', head2 = '<tr><th></th>';
   workloads.forEach((w, i) => {
     if (i) { head1 += '<th class="gap"></th>'; head2 += '<th class="gap"></th>'; }
-    head1 += `<th class="group" colspan="3">${WORKLOAD_SHORT[w]}</th>`;
+    head1 += `<th class="group" colspan="${steps.length}">${WORKLOAD_SHORT[w]}</th>`;
     head2 += steps.map(r => `<th>${RUNG_SHORT[r]}</th>`).join('');
   });
   t.innerHTML = `<thead>${head1}</tr>${head2}</tr></thead><tbody></tbody>`;
@@ -1014,7 +1016,7 @@ function renderPayoff() {
 
 // ---------- Q5: correctness ----------
 function renderCorrect() {
-  const sum = (p, set, f) => RUNGS.reduce((a, r) => a + p.tally[`${r}|${set}`][f], 0);
+  const sum = (p, set, f) => APPROACHES.reduce((a, r) => a + p.tally[`${r}|${set}`][f], 0);
   let html = `<thead><tr><th></th><th class="group" colspan="5">preserveCardinality off</th><th class="group" colspan="4">preserveCardinality on</th></tr>
     <tr><th></th><th>exact</th><th>repeats</th><th>wrong</th><th>ungraded</th><th>broken ref.</th><th>exact</th><th>wrong</th><th>ungraded</th><th>broken ref.</th></tr></thead><tbody>`;
   for (const w of workloads) {
@@ -1052,10 +1054,11 @@ function renderPc() {
   }
 }
 
+let flattenRung = FINAL;
 function renderFlatten() {
+  document.getElementById('flatten-rung').innerHTML = RUNGS.map((r, i) =>
+    `<button type="button" data-rung="${r}" aria-pressed="${r === flattenRung}">${i + 1} · ${RUNG_SHORT[r]}</button>`).join('');
   const t = document.getElementById('flatten-grid');
-  const K = {};
-  for (const k of D.keepProjections ?? []) (K[k.engine] ??= {})[k.workload] = k[pc];
   t.innerHTML = `<thead><tr><th></th>${workloads.map(w => `<th>${WORKLOAD_SHORT[w]}</th>`).join('')}</tr></thead><tbody></tbody>`;
   const tb = t.tBodies[0];
   for (const e of ENGINE_ORDER) {
@@ -1063,17 +1066,28 @@ function renderFlatten() {
     tr.innerHTML = `<th>${ENGINE[e]}</th>`;
     for (const w of workloads) {
       const td = tr.insertCell();
-      const k = K[e]?.[w];
-      if (!k) { td.append(cellEl('cell empty', '')); continue; }
-      const c = k.compare;
-      const tipHtml = `<div class="t">${ENGINE[e]} · ${WORKLOAD[w]}</div><div class="m">+pullUpExtends without removeProjections against with it, preserveCardinality ${pc}</div>
-        ${cmpTip(c, 'kept', 'flattened')}<div style="margin-top:4px">answered: ${k.full.ok} flattened, ${k.keep.ok} kept, of ${k.full.total}</div>${k.bestFlat ? `<div>largest gain from flattening: ${esc(k.bestFlat.caseId)} ${esc(k.bestFlat.scale)}, ${k.bestFlat.flatMs} ms flattened, ${k.bestFlat.keepMs} ms kept</div>` : ''}`;
-      const cls = c.n ? `cell ${bin(c.geomean)}` : 'cell none';
-      td.append(cellEl(cls, `<span class="v">${ratio(c.geomean)}</span><span class="s">${k.full.ok}→${k.keep.ok}</span><span class="s">${c.bWins} · ${c.aWins}</span>`, tipHtml));
+      const p = P[e]?.[w];
+      if (!p) { td.append(cellEl('cell empty', '')); continue; }
+      // compare(kept, flattened): its ratio is kept / flattened, shown the other way round, as what flattening does.
+      const c = p.flatten[pc][flattenRung];
+      const kept = p.tally[`${flattenRung}|${pc}`], flat = p.tally[`${FLAT[flattenRung]}|${pc}`];
+      const best = c.best;
+      const tipHtml = `<div class="t">${ENGINE[e]} · ${WORKLOAD[w]}</div><div class="m">${RUNG[flattenRung]} with removeProjections against without, preserveCardinality ${pc}</div>
+        ${cmpTip(c, 'kept', 'flattened')}<div style="margin-top:4px">answered: ${kept.ok} kept, ${flat.ok} flattened, of ${kept.total}</div>${best ? `<div>largest gain from flattening: ${esc(best.caseId)} ${esc(best.scale)}, ${ms(best.keepMs)} kept, ${ms(best.flatMs)} flattened</div>` : ''}`;
+      const r = c.n ? 1 / c.geomean : null;
+      const cls = c.n ? `cell ${bin(r)}` : 'cell none';
+      td.append(cellEl(cls, `<span class="v">${c.n ? ratio(r) : '–'}</span><span class="s">${kept.ok}→${flat.ok}</span><span class="s">${c.bWins} · ${c.aWins}</span>`, tipHtml));
     }
   }
-  document.getElementById('flatten-note').textContent = `Pipeline 4 without the flattening against pipeline 4, preserveCardinality ${pc}, measured in the same run and paired query by query: the geometric mean over the queries both answered, all scales pooled. Below it, queries answered with the flattening → without, then queries faster flattened · faster kept (beyond 10%; a query only one side answers counts for that side).`;
+  document.getElementById('flatten-note').textContent = `Pipeline ${RUNGS.indexOf(flattenRung) + 1} with removeProjections appended against without it, preserveCardinality ${pc}, measured back to back and paired query by query: the geometric mean over the queries both answered, all scales pooled. Below it, queries answered kept → flattened, then queries faster flattened · faster kept (beyond 10%; a query only one side answers counts for that side).`;
 }
+document.getElementById('flatten-rung').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-rung]');
+  if (!b) return;
+  flattenRung = b.dataset.rung;
+  hideTip();
+  renderFlatten();
+});
 
 // ---------- detail explorer ----------
 const qx = { engine: 'oxigraph', workload: 'lubm', scale: 'u1' };
@@ -1103,7 +1117,7 @@ function renderExplorer() {
   const vIdx = r => D.dict.variants.indexOf(r === 'materialized' ? r : `${r}|${pc}`);
   const t = document.getElementById('qx-table');
   const timeout = S[qx.engine][qx.workload][qx.scale].timeoutMs;
-  t.innerHTML = `<thead><tr><th>query</th><th>ref. rows</th><th>reference</th>${RUNGS.map(r => `<th>${RUNG_SHORT[r]}</th>`).join('')}</tr></thead><tbody></tbody>`;
+  t.innerHTML = `<thead><tr><th>query</th><th>ref. rows</th><th>reference</th>${APPROACHES.map(r => `<th${FLAT[r] ? '' : ' class="flat"'}>${RUNG_SHORT[r]}</th>`).join('')}</tr></thead><tbody></tbody>`;
   const tb = t.tBodies[0];
   for (const d of rows) {
     const id = D.dict.caseIds[d[3]].split('/')[1];
@@ -1137,7 +1151,7 @@ function renderExplorer() {
       td.append(cellEl(`qc${isBase ? ' base' : r != null ? ' ' + bin(r) : ''}`, `${ms(t)}${badge}`, tipHtml));
     };
     cellFor(base, 'reference', true);
-    for (const r of RUNGS) cellFor(vs[vIdx(r)], `${RUNG[r]}, preserveCardinality ${pc}`, false);
+    for (const r of APPROACHES) cellFor(vs[vIdx(r)], `${RUNG[r]}, preserveCardinality ${pc}`, false);
   }
   const s = S[qx.engine][qx.workload][qx.scale];
   const c = s.vsReference[`${FINAL}|${pc}`];
@@ -1149,10 +1163,10 @@ for (const id of [ 'qx-engine', 'qx-workload', 'qx-scale' ]) {
 
 // ---------- wiring ----------
 function renderPcDependent() {
-  for (const b of document.querySelectorAll('.seg button')) b.setAttribute('aria-pressed', String(b.dataset.pc === pc));
+  for (const b of document.querySelectorAll('.seg button[data-pc]')) b.setAttribute('aria-pressed', String(b.dataset.pc === pc));
   renderPasses(); renderAnswered(); renderCost(); renderPayoff(); renderFlatten(); renderExplorer();
 }
-for (const b of document.querySelectorAll('.seg button')) {
+for (const b of document.querySelectorAll('.seg button[data-pc]')) {
   b.addEventListener('click', () => {
     pc = b.dataset.pc;
     try { localStorage.setItem('pc', pc); } catch (e) {}
@@ -1160,7 +1174,7 @@ for (const b of document.querySelectorAll('.seg button')) {
     renderPcDependent();
   });
 }
-document.getElementById('provenance').textContent = `Benchmark overview · ${nf.format(D.rows)} measurements · run 22–26 Oct 2026`;
+document.getElementById('provenance').textContent = `Benchmark overview · ${nf.format(D.rows)} measurements · run 28 Oct – 1 Nov 2026`;
 document.getElementById('foot').innerHTML = `Generated ${esc(D.generated.slice(0, 16).replace('T', ' '))} UTC from <code>${esc(D.source)}</code>, ${nf.format(D.rows)} rows. Source: <code>test/bench/overview</code> on branch <code>bench/add-starbench-bis</code>.`;
 renderLegends(); renderSetup(); renderCorrect(); renderPc(); renderPcDependent();
 </script>

@@ -2,15 +2,14 @@
  * @fileoverview Turns the benchmark results JSON into a collection of SVG figures.
  *
  * Produces, per scheme (a StarBench reification scheme, or the LUBM / OAEI workload) × engine,
- * comparing five approaches — the
- * standard rewriting, the same rewriting with {@link removeProjections} applied
- * (anonymizing hidden sub-`SELECT` variables and flattening the nested projections
- * away), the same rewriting with {@link pushDownAssertions} applied ("assertion
+ * comparing seven approaches — the
+ * standard rewriting, the same rewriting with {@link pushDownAssertions} applied ("assertion
  * pushdown" — pushes `FILTER(sameTerm(?x, c))` constraints down into the triple
  * patterns that use them instead of matching generically and filtering afterwards),
- * the pushdown pipeline plus {@link pullUpExtends} applied twice (floats the `BIND`s
- * the pushdown leaves at every leaf back up to where they cost less, or drops them),
- * and the `materialized` approach (StarBench: the hand-written baseline query over the same data;
+ * the pushdown pipeline plus {@link pullUpExtends} (floats the `BIND`s the pushdown leaves
+ * at every leaf back up to where they cost less, or drops them), each of these three with
+ * {@link removeProjections} appended (anonymizing hidden sub-`SELECT` variables and
+ * flattening the nested projections away), and the `materialized` approach (StarBench: the hand-written baseline query over the same data;
  * LUBM / OAEI: the original query over the materialised views):
  *   - time-by-query bar chart at the largest scale with data,
  *   - a scaling line chart (median time vs dataset size) per approach,
@@ -50,19 +49,26 @@ const rows = JSON.parse(readFileSync(resultsJson, 'utf8'))
 
 const COLORS = {
   rewriting: '#2b7bba',
-  'rewriting+removeProjections': '#7a52c7',
+  'rewriting+removeProjections': '#8fbfe3',
   'rewriting+pushDownAssertions': '#17a398',
+  'rewriting+pushDownAssertions+removeProjections': '#8fd6cf',
   'rewriting+pullUpExtends': '#c0399f',
+  'rewriting+pullUpExtends+removeProjections': '#e3a3d4',
   materialized: '#e08214',
   grid: '#cccccc',
   text: '#222222',
 };
-/** The four rewriting pipeline variants, compared against each other and against `materialized`. */
+/**
+ * The six rewriting pipeline variants, compared against each other and against `materialized`: each rung,
+ * followed by its flattened twin in a lighter shade of the rung's colour.
+ */
 const REWRITING_APPROACHES = [
   'rewriting',
   'rewriting+removeProjections',
   'rewriting+pushDownAssertions',
+  'rewriting+pushDownAssertions+removeProjections',
   'rewriting+pullUpExtends',
+  'rewriting+pullUpExtends+removeProjections',
 ];
 const esc = s => String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
@@ -105,6 +111,8 @@ ${body}
 </svg>`;
 }
 
+/** Width of the column right of every plot that holds its legend, wide enough for the longest approach name. */
+const LEGEND_W = 420;
 function legend(x, y, items) {
   return items.map((it, i) => `
 <rect x="${x}" y="${y + i * 18}" width="12" height="12" fill="${it.color}"/>
@@ -138,12 +146,12 @@ function timeByQuery(scheme, engine) {
     return null;
   }
   const maxMs = Math.max(1, ...data.map(r => timing(r).ms));
-  const W = 900;
+  const W = 900 + LEGEND_W;
   const H = 460;
   const padL = 60;
   const padB = 90;
   const padT = 50;
-  const padR = 20;
+  const padR = 20 + LEGEND_W;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
   const groupW = plotW / cases.length;
@@ -181,8 +189,8 @@ function timeByQuery(scheme, engine) {
     body += `<text x="${gx + groupW / 2}" y="${padT + plotH + 14}" text-anchor="end" ` +
       `transform="rotate(-40 ${gx + groupW / 2} ${padT + plotH + 14})" fill="${COLORS.text}">${esc(label)}</text>`;
   }
-  body += legend(W - 160, padT, approaches.map(a => ({ color: COLORS[a], label: a })));
-  body += `<text x="${W - 160}" y="${padT + approaches.length * 18 + 12}" font-size="10" ` +
+  body += legend(W - LEGEND_W + 10, padT, approaches.map(a => ({ color: COLORS[a], label: a })));
+  body += `<text x="${W - LEGEND_W + 10}" y="${padT + approaches.length * 18 + 12}" font-size="10" ` +
     `fill="${COLORS.text}">hatched ≥ : timed out, lower bound</text>`;
   return svgDoc(W, H, body);
 }
@@ -219,12 +227,12 @@ function scaling(scheme, engine) {
   const maxX = Math.max(...allX);
   const minX = Math.min(...allX);
   const maxY = Math.max(1, ...approaches.flatMap(a => points[a].map(p => p.y)));
-  const W = 760;
+  const W = 760 + LEGEND_W;
   const H = 440;
   const padL = 70;
   const padB = 60;
   const padT = 50;
-  const padR = 20;
+  const padR = 20 + LEGEND_W;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
   const sx = x => padL + (maxX === minX ? plotW / 2 : ((x - minX) / (maxX - minX)) * plotW);
@@ -265,8 +273,8 @@ function scaling(scheme, engine) {
         `<title>${title}</title></circle>`;
     }
   }
-  body += legend(padL + 10, padT, approaches.map(a => ({ color: COLORS[a], label: a })));
-  body += `<text x="${padL + 10}" y="${padT + approaches.length * 18 + 12}" font-size="10" ` +
+  body += legend(W - LEGEND_W + 10, padT, approaches.map(a => ({ color: COLORS[a], label: a })));
+  body += `<text x="${W - LEGEND_W + 10}" y="${padT + approaches.length * 18 + 12}" font-size="10" ` +
     `fill="${COLORS.text}">dashed / hollow: sum includes a timed-out query (lower bound)</text>`;
   return svgDoc(W, H, body);
 }
@@ -297,12 +305,12 @@ function overhead(scheme, engine) {
     return null;
   }
   const maxR = Math.max(1.2, ...ratios.map(r => r.ratio));
-  const W = 900;
+  const W = 900 + LEGEND_W;
   const H = 440;
   const padL = 60;
   const padB = 90;
   const padT = 50;
-  const padR = 20;
+  const padR = 20 + LEGEND_W;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
   const bw = plotW / cases.length;
@@ -341,8 +349,8 @@ function overhead(scheme, engine) {
     body += `<text x="${gx + bw / 2}" y="${padT + plotH + 14}" text-anchor="end" ` +
       `transform="rotate(-40 ${gx + bw / 2} ${padT + plotH + 14})" fill="${COLORS.text}">${esc(label)}</text>`;
   }
-  body += legend(W - 190, padT, REWRITING_APPROACHES.map(a => ({ color: COLORS[a], label: a })));
-  body += `<text x="${W - 190}" y="${padT + REWRITING_APPROACHES.length * 18 + 12}" font-size="10" ` +
+  body += legend(W - LEGEND_W + 10, padT, REWRITING_APPROACHES.map(a => ({ color: COLORS[a], label: a })));
+  body += `<text x="${W - LEGEND_W + 10}" y="${padT + REWRITING_APPROACHES.length * 18 + 12}" font-size="10" ` +
     `fill="${COLORS.text}">hatched ≥ : timed out, lower bound</text>`;
   return svgDoc(W, H, body);
 }
@@ -420,18 +428,15 @@ function correctness(scheme, engine, approach) {
  * benchmark most needs a verdict on, and it is exactly the one the old
  * `rewriting`-as-its-own-oracle reference could never fail.
  */
-const CHECKABLE_APPROACHES = [
-  'rewriting',
-  'rewriting+removeProjections',
-  'rewriting+pushDownAssertions',
-  'rewriting+pullUpExtends',
-];
+const CHECKABLE_APPROACHES = REWRITING_APPROACHES;
 /** Filename suffix for each checkable approach's correctness heat-strip. */
 const CORRECTNESS_SUFFIX = {
   rewriting: 'rewriting',
-  'rewriting+removeProjections': 'proj-removed',
+  'rewriting+removeProjections': 'rewriting-flat',
   'rewriting+pushDownAssertions': 'pushdown',
+  'rewriting+pushDownAssertions+removeProjections': 'pushdown-flat',
   'rewriting+pullUpExtends': 'pullup',
+  'rewriting+pullUpExtends+removeProjections': 'pullup-flat',
 };
 
 const generators = { time_by_query: timeByQuery, scaling, overhead };
