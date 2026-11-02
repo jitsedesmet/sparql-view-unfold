@@ -327,6 +327,37 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
   background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 8px;
   box-shadow: var(--shadow); padding: 9px 11px; font-size: 12.5px; line-height: 1.45;
 }
+/* Ladder figure: one panel per engine, one line per query. */
+.lad-legend { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 12.5px; color: var(--ink-2); margin-top: 14px; }
+.lad-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.lad-legend svg { display: block; }
+.lad-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 290px), 1fr)); gap: 14px; margin-top: 12px; }
+.lad-card { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 12px 8px; min-width: 0; }
+.lad-card h3 { font-size: 14px; font-weight: 600; }
+.lad-card .sub { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.lad-card svg { display: block; width: 100%; height: auto; overflow: visible; touch-action: pan-y; }
+.lad-card .gl { stroke: var(--line); stroke-width: 1; }
+.lad-card .tick { fill: var(--muted); font: 10.5px "IBM Plex Mono", ui-monospace, monospace; }
+.lad-card .xl { fill: var(--ink); font: 600 10.5px "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif; }
+.lad-card .xn { fill: var(--muted); font: 10px "IBM Plex Mono", ui-monospace, monospace; }
+.lad-card .lane { fill: var(--surface-2); }
+.lad-card .lane-t { fill: var(--muted); font: italic 10px "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif; }
+.lad-card .q { fill: none; stroke: var(--muted); stroke-width: 1; stroke-opacity: 0.45; }
+.lad-card .qd { fill: var(--muted); fill-opacity: 0.6; }
+.lad-card .qd.ub { fill: none; stroke: var(--muted); stroke-opacity: 0.85; }
+.lad-card .hit { fill: none; stroke: transparent; stroke-width: 10; pointer-events: stroke; }
+.lad-card .hl { pointer-events: none; }
+.lad-card .hl .q { stroke: var(--ink); stroke-opacity: 1; stroke-width: 2; }
+.lad-card .hl .qd { fill: var(--ink); fill-opacity: 1; }
+.lad-card .hl .qd.ub { fill: var(--surface); stroke: var(--ink); }
+.lad-card .med { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; }
+.lad-card .medd { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.lad-card .refl { stroke: var(--p3); stroke-width: 2; stroke-dasharray: 5 4; }
+.lad-card .ref-t { fill: var(--ink-2); font: 10px "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif; }
+details.lad-table { margin-top: 14px; }
+details.lad-table summary { cursor: pointer; font-size: 13px; color: var(--ink-2); }
+details.lad-table td .sub { display: block; font-size: 11px; color: var(--muted); }
+
 #tip b { font-weight: 600; }
 #tip .t { font-weight: 600; margin-bottom: 4px; }
 #tip .m { color: var(--muted); }
@@ -340,6 +371,7 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
       <li><a href="#findings">Findings</a></li>
       <li><a href="#setup">Setup</a></li>
       <li><a href="#passes">Passes</a></li>
+      <li><a href="#ladder">Per query lines</a></li>
       <li><a href="#answered">Answered</a></li>
       <li><a href="#cost">Cost</a></li>
       <li><a href="#payoff">Pay-off</a></li>
@@ -350,7 +382,7 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
       <li><a href="#engines">Engines</a></li>
       <li><a href="#method">Method</a></li>
     </ul></nav>
-    <div class="switch" title="Which rewrites the Passes, Answered, Cost, Pay-off, Flattening and Per query views show">
+    <div class="switch" title="Which rewrites the Passes, Per query lines, Answered, Cost, Pay-off, Flattening and Per query views show">
       <span class="seg-label">preserveCardinality</span>
       <div class="seg" role="group" aria-label="preserveCardinality">
         <button type="button" data-pc="off" aria-pressed="true">off</button>
@@ -478,6 +510,24 @@ footer { padding-block: 32px 56px; color: var(--muted); font-size: 13px; border-
     <div class="scroll"><table class="grid" id="passes-grid"></table></div>
     <div class="legend" data-legend="div"></div>
     <p class="note" id="passes-note"></p>
+  </div>
+</section>
+
+<section class="block gutter" id="ladder">
+  <div class="wrap">
+    <div class="kicker">Question 1, query by query</div>
+    <h2>How does each query's time change as the passes are added?</h2>
+    <p class="intro">One panel per engine and one thin line per query, from the plain rewrite through <code>pushDownAssertions</code> to <code>pullUpExtends</code>; the thick line is the median. Pick a workload and scale, whether to show the time itself or the time relative to the materialised reference, and whether the subqueries are kept or flattened.</p>
+    <div class="controls" id="lad-controls">
+      <div class="switch"><span class="seg-label">Workload</span><div class="seg" role="group" aria-label="Workload" data-lk="w"></div></div>
+      <div class="switch"><span class="seg-label">Scale</span><div class="seg" role="group" aria-label="Scale" data-lk="s"></div></div>
+      <div class="switch"><span class="seg-label">Show</span><div class="seg" role="group" aria-label="Show" data-lk="m"></div></div>
+      <div class="switch"><span class="seg-label">Subqueries</span><div class="seg" role="group" aria-label="Subqueries" data-lk="f"></div></div>
+    </div>
+    <div class="lad-legend" id="lad-legend" aria-hidden="true"></div>
+    <div class="lad-grid" id="lad-grid"></div>
+    <p class="note" id="lad-note"></p>
+    <details class="lad-table"><summary>These medians as a table</summary><div class="scroll"><table class="plain" id="lad-table"></table></div></details>
   </div>
 </section>
 
@@ -804,6 +854,7 @@ let tipOwner = null;
 function showTip(el, x, y) {
   if (!el._tip) return;
   tipOwner = el;
+  ladHighlight(el);
   tip.innerHTML = el._tip;
   tip.hidden = false;
   const r = tip.getBoundingClientRect();
@@ -813,7 +864,7 @@ function showTip(el, x, y) {
   tip.style.left = left + 'px';
   tip.style.top = top + 'px';
 }
-function hideTip() { tip.hidden = true; tipOwner = null; }
+function hideTip() { tip.hidden = true; tipOwner = null; ladHighlight(null); }
 document.addEventListener('pointermove', (e) => {
   const el = e.target.closest?.('[data-t]');
   if (e.pointerType !== 'mouse') return;
@@ -821,7 +872,11 @@ document.addEventListener('pointermove', (e) => {
 });
 document.addEventListener('click', (e) => {
   const el = e.target.closest?.('[data-t]');
-  if (el && el !== tipOwner) { const r = el.getBoundingClientRect(); showTip(el, r.left + r.width / 2, r.bottom); }
+  if (el && el !== tipOwner) {
+    const r = el.getBoundingClientRect();
+    // A line in a chart is as wide as the chart, so its tip goes where it was tapped.
+    if (el instanceof SVGElement) showTip(el, e.clientX, e.clientY); else showTip(el, r.left + r.width / 2, r.bottom);
+  }
   else if (!el || e.pointerType !== 'mouse') hideTip();
 });
 document.addEventListener('focusin', (e) => {
@@ -1161,10 +1216,225 @@ for (const id of [ 'qx-engine', 'qx-workload', 'qx-scale' ]) {
   document.getElementById(id).addEventListener('change', (e) => { qx[id.slice(3)] = e.target.value; renderExplorer(); });
 }
 
+// ---------- ladder figure ----------
+const lad = { w: 'lubm', s: 'u10', m: 'time', f: 'kept' };
+try { Object.assign(lad, JSON.parse(localStorage.getItem('ladder') ?? '{}')); } catch (e) {}
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svgEl(name, attrs, parent) {
+  const n = document.createElementNS(SVG_NS, name);
+  for (const [ k, v ] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+// The highlighted query is a copy drawn on top; the line under the pointer never moves, so leaving it always clears it.
+let ladHighlighted = null;
+function ladHighlight(el) {
+  if (el === ladHighlighted) return;
+  for (const h of document.querySelectorAll('#lad-grid .hl')) h.replaceChildren();
+  ladHighlighted = el;
+  if (!el?._line) return;
+  const copy = el._line.cloneNode(true);
+  copy.querySelector('.hit').remove();
+  el._hl.appendChild(copy);
+}
+
+// One point per rung: { v } when answered, { fail: 'timeout' | 'error' } when not, { fail: 'none' } when there is nothing to plot.
+// Against the reference, v is step time ÷ reference time, so lower is faster in both modes; ub marks a reference that timed out.
+function ladPoint(v, base, broken, budget) {
+  if (!v) return { fail: 'none' };
+  if (v[0] === 1 || v[0] === 3) return { fail: 'timeout' };
+  if (v[0] === 2 || v[3] === 3) return { fail: 'error' };
+  const t = Math.max(v[1], 1);
+  if (lad.m === 'time') return { v: t };
+  if (broken === 2 || !base || base[0] === 2) return { fail: 'none' };
+  if (base[0] === 1 || base[0] === 3) return { v: t / budget, ub: true };
+  return { v: t / Math.max(base[1], 1) };
+}
+// Median with every unanswered query ranked slowest; when the middle is unanswered, so is the median.
+function ladMedian(points) {
+  const a = points.filter(p => p.fail !== 'none').map(p => p.fail ? Infinity : p.v).sort((x, y) => x - y);
+  if (!a.length) return null;
+  const m = a.length >> 1;
+  if (a.length % 2) return a[m];
+  if (!Number.isFinite(a[m - 1]) || !Number.isFinite(a[m])) return Infinity;
+  return Math.sqrt(a[m - 1] * a[m]);
+}
+function ladCell(v, budget) {
+  if (!v) return '–';
+  if (v[0] === 1) return 'timed out';
+  if (v[0] === 3) return 'not run';
+  if (v[0] === 2) return 'error';
+  return ms(v[1]) + (v[3] === 3 ? ' wrong' : '');
+}
+const ladMed = m => m == null ? '–' : !Number.isFinite(m) ? 'unanswered' : lad.m === 'time' ? ms(Math.round(m)) : ratio(m);
+
+function ladSegs(key, items) {
+  document.querySelector(`#lad-controls [data-lk="${key}"]`).innerHTML = items.map(([ v, label ]) =>
+    `<button type="button" data-v="${esc(v)}" aria-pressed="${lad[key] === v}">${esc(label)}</button>`).join('');
+}
+document.getElementById('lad-controls').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-v]');
+  if (!b) return;
+  lad[b.closest('[data-lk]').dataset.lk] = b.dataset.v;
+  hideTip();
+  renderLadder();
+});
+
+function renderLadder() {
+  const ws = workloads.filter(w => w in WORKLOAD);
+  if (!ws.includes(lad.w)) lad.w = 'lubm';
+  const w = lad.w;
+  const scs = scalesOf(w);
+  if (!scs.includes(lad.s)) lad.s = scs.includes('u10') ? 'u10' : scs[0];
+  if (lad.m !== 'time' && lad.m !== 'ratio') lad.m = 'time';
+  if (lad.f !== 'kept' && lad.f !== 'flat') lad.f = 'kept';
+  const sc = lad.s, mode = lad.m;
+  try { localStorage.setItem('ladder', JSON.stringify(lad)); } catch (e) {}
+  ladSegs('w', ws.map(x => [ x, WORKLOAD_SHORT[x] ]));
+  ladSegs('s', scs.map(x => [ x, x ]));
+  ladSegs('m', [ [ 'time', 'Time' ], [ 'ratio', 'Against the reference' ] ]);
+  ladSegs('f', [ [ 'kept', 'kept' ], [ 'flat', 'flattened' ] ]);
+
+  const steps = RUNGS.map(r => lad.f === 'kept' ? r : FLAT[r]);
+  const vIdx = [ 'materialized', ...steps.map(r => `${r}|${pc}`) ].map(v => D.dict.variants.indexOf(v));
+  const panels = enginesOf(w).map((e) => {
+    const rows = (detailIndex.get(`${e}\t${w}\t${sc}`) ?? []).slice().sort((a, b) => D.dict.caseIds[a[3]].localeCompare(D.dict.caseIds[b[3]]));
+    if (!rows.length) return null;
+    const budget = S[e][w][sc].timeoutMs;
+    const queries = rows.map((d) => {
+      const base = d[4][vIdx[0]];
+      const vs = vIdx.slice(1).map(i => d[4][i]);
+      return { id: D.dict.caseIds[d[3]].split('/')[1], base, vs, pts: vs.map(v => ladPoint(v, base, d[6], budget)) };
+    });
+    return { e, budget, queries };
+  }).filter(Boolean);
+
+  // One y scale for all panels, in powers of ten.
+  const budget = Math.max(...panels.map(p => p.budget));
+  let lo = Infinity, hi = -Infinity;
+  for (const p of panels) for (const q of p.queries) for (const pt of q.pts) if (pt.v != null) { lo = Math.min(lo, pt.v); hi = Math.max(hi, pt.v); }
+  if (!Number.isFinite(lo)) { lo = 1; hi = 10; }
+  if (mode === 'time') { hi = budget; lo = Math.min(lo, budget / 10); } else { lo = Math.min(lo, 1); hi = Math.max(hi, 1); }
+  const l0 = Math.floor(Math.log10(lo));
+  const l1 = Math.max(l0 + 1, mode === 'time' ? Math.log10(hi) : Math.ceil(Math.log10(hi)));
+
+  const refName = 'the reference';
+  const sw = (stroke, width, extra = '') => `<svg width="22" height="10"><line x1="1" y1="5" x2="21" y2="5" stroke="${stroke}" stroke-width="${width}" ${extra}/></svg>`;
+  document.getElementById('lad-legend').innerHTML =
+    `<span>${sw('var(--muted)', 1, 'stroke-opacity="0.7"')}one query</span>` +
+    `<span>${sw('var(--accent)', 2.5)}median, unanswered queries counted as slowest</span>` +
+    (mode === 'time'
+      ? `<span>${sw('var(--p3)', 2, 'stroke-dasharray="5 4"')}median on the materialised reference</span>`
+      : `<span>${sw('var(--p3)', 2, 'stroke-dasharray="5 4"')}as fast as the reference</span><span><svg width="12" height="12"><circle cx="6" cy="6" r="3.5" fill="none" stroke="var(--muted)"/></svg>the reference timed out: at least this much faster</span>`);
+
+  const W = 320, H = 250, L = 52, R = 12, T = 8, B = 40, LANE = 30;
+  const xs = steps.map((_, i) => L + 18 + i * (W - L - R - 36) / (steps.length - 1));
+  const top = T + LANE + 8, bot = H - B;
+  const y = v => bot - (Math.log10(Math.min(Math.max(v, 10 ** l0), 10 ** l1)) - l0) / (l1 - l0) * (bot - top);
+  const laneY = fail => T + 7 + (fail === 'timeout' ? 0 : 12);
+  const pos = p => p.v != null ? y(p.v) : laneY(p.fail);
+  const path = cs => cs.filter(c => c[1] != null).map((c, i) => `${i ? 'L' : 'M'}${c[0].toFixed(1)} ${c[1].toFixed(1)}`).join('');
+  const stepName = i => RUNG[steps[i]];
+
+  const grid = document.getElementById('lad-grid');
+  grid.replaceChildren();
+  ladHighlighted = null;
+  for (const { e, budget: bud, queries } of panels) {
+    const n = queries.length;
+    const answered = steps.map((_, i) => queries.filter(q => q.pts[i].v != null).length);
+    const refOk = queries.filter(q => q.base?.[0] === 0).length;
+    const card = document.createElement('figure');
+    card.className = 'lad-card';
+    card.innerHTML = `<h3>${ENGINE[e]}</h3><div class="sub">${n} queries · reference answers ${refOk}</div>`;
+    const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${ENGINE[e]}, ${WORKLOAD[w]} ${sc}: queries answered per step ${answered.join(', ')} of ${n}` }, card);
+    for (let k = l0; k <= Math.floor(l1 + 1e-9); k++) {
+      const v = 10 ** k;
+      svgEl('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: 'gl' }, svg);
+      svgEl('text', { x: L - 6, y: y(v) + 3.5, 'text-anchor': 'end', class: 'tick' }, svg).textContent =
+        mode === 'time' ? (v < 1000 ? `${v} ms` : `${v / 1000} s`) : k === 0 ? '1' : ratio(v);
+    }
+    if (mode === 'time' && Math.abs(Math.log10(bud) - Math.round(Math.log10(bud))) > 1e-9) {
+      svgEl('line', { x1: L, x2: W - R, y1: y(bud), y2: y(bud), class: 'gl' }, svg);
+      svgEl('text', { x: L - 6, y: y(bud) + 3.5, 'text-anchor': 'end', class: 'tick' }, svg).textContent = `${bud / 1000} s`;
+    }
+    svgEl('rect', { x: L, y: T, width: W - L - R, height: LANE - 4, rx: 4, class: 'lane' }, svg);
+    svgEl('text', { x: L - 6, y: laneY('timeout') + 3.5, 'text-anchor': 'end', class: 'lane-t' }, svg).textContent = 'timeout';
+    svgEl('text', { x: L - 6, y: laneY('error') + 3.5, 'text-anchor': 'end', class: 'lane-t' }, svg).textContent = 'error';
+    xs.forEach((x, i) => {
+      svgEl('text', { x, y: H - B + 16, 'text-anchor': 'middle', class: 'xl' }, svg).textContent = RUNG_SHORT[RUNGS[i]];
+      svgEl('text', { x, y: H - B + 30, 'text-anchor': 'middle', class: 'xn' }, svg).textContent = `${answered[i]}/${n}`;
+    });
+    if (mode === 'ratio') {
+      svgEl('line', { x1: L, x2: W - R, y1: y(1), y2: y(1), class: 'refl' }, svg);
+    } else {
+      const rm = ladMedian(queries.map(q => q.base?.[0] === 0 ? { v: Math.max(q.base[1], 1) } : q.base ? { fail: 'timeout' } : { fail: 'none' }));
+      if (rm != null && Number.isFinite(rm)) {
+        svgEl('line', { x1: L, x2: W - R, y1: y(rm), y2: y(rm), class: 'refl' }, svg);
+        svgEl('text', { x: W - R, y: y(rm) - 4, 'text-anchor': 'end', class: 'ref-t' }, svg).textContent = `reference ${ms(Math.round(rm))}`;
+      } else {
+        svgEl('text', { x: W - R, y: top + 12, 'text-anchor': 'end', class: 'ref-t' }, svg).textContent = 'reference: median unanswered';
+      }
+    }
+    const hl = svgEl('g', { class: 'hl' });
+    queries.forEach((q, qi) => {
+      if (q.pts.every(p => p.fail === 'none')) return;
+      const jitter = ((qi * 37) % 11 - 5) * 0.56;
+      const cs = q.pts.map((p, i) => [ xs[i], p.fail === 'none' ? null : pos(p) + (p.v == null ? jitter : 0) ]);
+      const g = svgEl('g', {}, svg);
+      const d = path(cs);
+      svgEl('path', { d, class: 'q' }, g);
+      cs.forEach((c, i) => { if (c[1] != null) svgEl('circle', { cx: c[0], cy: c[1], r: 2.2, class: 'qd' + (q.pts[i].ub ? ' ub' : '') }, g); });
+      const hit = svgEl('path', { d: cs.filter(c => c[1] != null).length > 1 ? d : d + 'h0.01', class: 'hit', 'data-t': '' }, g);
+      hit._line = g;
+      hit._hl = hl;
+      hit._tip = `<div class="t">${esc(q.id)}</div><div class="m">${ENGINE[e]} · ${WORKLOAD[w]} ${sc} · subqueries ${lad.f === 'kept' ? 'kept' : 'flattened'}, preserveCardinality ${pc}</div>
+        <table><tr><td>reference</td><td>${ladCell(q.base, bud)}</td><td></td></tr>
+        ${steps.map((st, i) => { const p = q.pts[i]; return `<tr><td>${esc(stepName(i))}</td><td>${ladCell(q.vs[i], bud)}</td><td>${mode === 'ratio' && p.v != null ? (p.ub ? 'at least ' + ratio(p.v) : ratio(p.v)) : ''}</td></tr>`; }).join('')}</table>`;
+    });
+    const meds = steps.map((_, i) => ladMedian(queries.map(q => q.pts[i])));
+    const mc = meds.map((m, i) => [ xs[i], m == null ? null : Number.isFinite(m) ? y(m) : laneY('timeout') ]);
+    const mg = svgEl('g', {}, svg);
+    const md = path(mc);
+    svgEl('path', { d: md, class: 'med' }, mg);
+    mc.forEach((c) => { if (c[1] != null) svgEl('circle', { cx: c[0], cy: c[1], r: 4.5, class: 'medd' }, mg); });
+    const mhit = svgEl('path', { d: md, class: 'hit', 'data-t': '' }, mg);
+    mhit._tip = `<div class="t">${ENGINE[e]} · median over ${n} queries</div><div class="m">${WORKLOAD[w]} ${sc} · subqueries ${lad.f === 'kept' ? 'kept' : 'flattened'}, preserveCardinality ${pc}</div>
+      <table>${steps.map((st, i) => `<tr><td>${esc(stepName(i))}</td><td>${ladMed(meds[i])}</td><td>${answered[i]}/${n} answered</td></tr>`).join('')}</table>`;
+    svg.appendChild(hl);
+    grid.appendChild(card);
+  }
+
+  const missing = ENGINE_ORDER.filter(e => !panels.some(p => p.e === e)).map(e => ENGINE[e]);
+  const notes = [ mode === 'time'
+    ? `Median time per query on a log scale, budget ${budget / 1000} s. Queries that time out or fail sit in the shaded band at the top, so a line that rises into it is a query that step lost; the step after a pass can also win one back.`
+    : `Each step's time divided by the time on the materialised views, on a log scale: below 1 the rewrite is faster than the views, above it slower (÷10 = ten times faster). Unanswered queries sit in the shaded band at the top. Where the reference timed out, the ratio uses the budget and is a bound (hollow points).` ];
+  notes.push(lad.f === 'kept'
+    ? 'Subqueries kept: the pipelines as the library runs them.'
+    : 'Flattened: each pipeline with removeProjections appended, the twin compared in Question 7.');
+  notes.push('A wrong answer counts as an error; only Virtuoso gives them. A query that timed out at a smaller LUBM scale is not run again and counts as a timeout.');
+  if (w === 'singleton' && mode === 'ratio') notes.push('Singleton cases whose hand-written reference asks a different question are left out.');
+  if (missing.length) notes.push(`Not run here: ${missing.join(', ')}.`);
+  notes.push('Hover or tap a line for that query\'s times; the thick line for the medians.');
+  document.getElementById('lad-note').textContent = notes.join(' ');
+
+  const t = document.getElementById('lad-table');
+  let h = `<thead><tr><th>Engine</th><th>reference</th>${steps.map((_, i) => `<th>${esc(RUNG_SHORT[RUNGS[i]])}</th>`).join('')}</tr></thead><tbody>`;
+  for (const { e, queries } of panels) {
+    const n = queries.length;
+    const rm = ladMedian(queries.map(q => q.base?.[0] === 0 ? { v: Math.max(q.base[1], 1) } : q.base ? { fail: 'timeout' } : { fail: 'none' }));
+    h += `<tr><td>${ENGINE[e]}</td><td class="num">${rm == null ? '–' : Number.isFinite(rm) ? ms(Math.round(rm)) : 'unanswered'}<span class="sub">${queries.filter(q => q.base?.[0] === 0).length}/${n}</span></td>`;
+    steps.forEach((_, i) => {
+      h += `<td class="num">${ladMed(ladMedian(queries.map(q => q.pts[i])))}<span class="sub">${queries.filter(q => q.pts[i].v != null).length}/${n}</span></td>`;
+    });
+    h += '</tr>';
+  }
+  t.innerHTML = h + '</tbody>';
+}
+
 // ---------- wiring ----------
 function renderPcDependent() {
   for (const b of document.querySelectorAll('.seg button[data-pc]')) b.setAttribute('aria-pressed', String(b.dataset.pc === pc));
-  renderPasses(); renderAnswered(); renderCost(); renderPayoff(); renderFlatten(); renderExplorer();
+  renderPasses(); renderLadder(); renderAnswered(); renderCost(); renderPayoff(); renderFlatten(); renderExplorer();
 }
 for (const b of document.querySelectorAll('.seg button[data-pc]')) {
   b.addEventListener('click', () => {
