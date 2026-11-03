@@ -3,7 +3,7 @@ import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transform
 import type { PreOrderMappingReturn } from '@traqula/core';
 import { forEveryNodeType } from '@traqula/core';
 import type { RangeContext } from './certainlyBoundVars.js';
-import { cpMetaOf, joinedMeta, withoutCpVars } from './certainlyBoundVars.js';
+import { cpMetaOf, joinedMeta, operationTransformer, withoutCpVars } from './certainlyBoundVars.js';
 import { containsExistenceExpression, holdsExpression } from './expressionHelpers.js';
 
 /**
@@ -31,9 +31,6 @@ export const leaveExistencePatterns = { preVisitor: () => ({ continue: false }) 
 export function leaveExistencePatternsPreOrder(expression: Algebra.Expression): PreOrderMappingReturn {
   return { newValue: expression, continue: false };
 }
-
-/** Skips the metadata of an operation, a cache rather than a tree. */
-const skipMetadata = { ignoreKeys: new Set([ 'metadata' ]) };
 
 /**
  * Rewrites an operation with a pass, then the pattern of each EXISTS in it with the solution it is evaluated for as
@@ -69,10 +66,10 @@ function rewriteTreeInExistenceScopes<C extends RangeContext>(
   op: Algebra.Operation,
   pass: ExistenceScopedPass<C>,
 ): Algebra.Operation {
-  return algebraUtils.mapOperation<'unsafe', Algebra.Operation>(pass(c, op), forEveryNodeType({
-    preVisitor: () => skipMetadata,
-    transform: (copy: Algebra.Operation) => withExistencePatternsRewritten(c, copy, pass),
-  }, { [Types.EXPRESSION]: leaveExistencePatterns }));
+  return operationTransformer.transformNode<'unsafe', Algebra.Operation>(pass(c, op), forEveryNodeType(
+    { transform: (copy: Algebra.Operation) => withExistencePatternsRewritten(c, copy, pass) },
+    { [Types.EXPRESSION]: leaveExistencePatterns },
+  ));
 }
 
 /**

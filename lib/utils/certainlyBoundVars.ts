@@ -290,6 +290,9 @@ const dropMetadata = { transform: (copy: { metadata?: unknown }): unknown => {
 /** Drops the metadata of every operation, no matter its type. */
 const dropAllMetadata = forEveryNodeType(dropMetadata);
 
+/** A transformer over the algebra that only visits the keys holding operations, so no RDF term and no metadata. */
+export const operationTransformer = algebraUtils.algebraTransformer({}).clone({}, algebraUtils.knownKeysAllowlist);
+
 /**
  * Returns a copy of `op` without any cached metadata, the state {@link withCpVars} recomputes from. Since
  * every operation is copied, the tree it is given is left untouched.
@@ -297,7 +300,7 @@ const dropAllMetadata = forEveryNodeType(dropMetadata);
  * @returns the stripped copy
  */
 export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
-  return algebraUtils.mapOperation<'unsafe', T>(op, dropAllMetadata);
+  return operationTransformer.transformNode<'unsafe', T>(op, dropAllMetadata);
 }
 
 /**
@@ -743,11 +746,7 @@ function variablesImpliedUnboundBy(expression: A.Expression, agg = new Set<strin
  * @returns its variables
  */
 export function termVars(term: RDF.Term): Set<string> {
-  if (term.termType === 'Variable') {
-    return new Set([ term.value ]);
-  }
-  if (term.termType === 'Quad') {
-    return unionSets([ termVars(term.subject), termVars(term.predicate), termVars(term.object) ]);
-  }
-  return new Set<string>();
+  const names = new Set<string>();
+  algebraUtils.forEachTermVariable(term, variable => names.add(variable.value));
+  return names;
 }

@@ -1,4 +1,5 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import type { VisitChildrenHelpers } from '@traqula/core';
 import type { DataFactory } from 'rdf-data-factory';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
 import { triplePositions } from '../datastructures/TermClusterSet.js';
@@ -238,6 +239,11 @@ function encodeInternalBnode(
   return concat(expression.args.map(encodeArgument));
 }
 
+/** Visits only the input of an operation, leaving its expressions to the transform. */
+const visitInputOnly = {
+  visitChildren: (op: Algebra.Single, { visitKey }: VisitChildrenHelpers) => visitKey(op, 'input'),
+};
+
 /**
  * Materialises every internal blank node in an operation and rewrites `ISBLANK` to recognise what they became.
  * One in an expression over the input of an EXTEND, FILTER, ORDER BY or GROUP is encoded with the ranges of that input,
@@ -310,12 +316,11 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
      * @returns The callbacks doing so.
      */
     function overInput(key: 'expression' | 'expressions' | 'aggregates'): {
-      preVisitor: () => { ignoreKeys: Set<string> };
+      preVisitor: () => typeof visitInputOnly;
       transform: (copy: Algebra.Single) => Algebra.Single;
     } {
-      const ignoreKeys = new Set([ key ]);
       return {
-        preVisitor: () => ({ ignoreKeys }),
+        preVisitor: () => visitInputOnly,
         transform: (copy) => {
           const holder = <Record<typeof key, Algebra.Expression | Algebra.Expression[]>> <unknown> copy;
           const materialise = materialiserOverInputOf(context, copy);
