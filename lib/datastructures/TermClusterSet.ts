@@ -277,9 +277,18 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   public narrowRange(group: number, range: RangeSet): boolean {
     this.touch();
     const resolved = this.resolveGroup(group);
-    const narrowed = this.rangeOf(resolved).meet(range);
-    this.groupToRange[resolved] = narrowed;
-    return narrowed.size > 0 && this.rangeAdmits(resolved, this.groupToPin[resolved]);
+    // The stored range rather than {@link rangeOf}, which a subclass may meet with ranges it keeps apart.
+    this.groupToRange[resolved] = (this.groupToRange[resolved] ?? objectRange).meet(range);
+    return this.admitsAValue(resolved);
+  }
+
+  /**
+   * Whether a group can still hold a value: its range is not empty, and holds the term type of its pin.
+   * @param group - The resolved group to check
+   * @returns whether something is left for it to be
+   */
+  protected admitsAValue(group: number): boolean {
+    return this.rangeOf(group).size > 0 && this.rangeAdmits(group, this.groupToPin[group]);
   }
 
   /**

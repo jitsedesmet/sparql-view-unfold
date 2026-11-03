@@ -2648,6 +2648,19 @@ GROUP BY ?x ( ?x AS ?y )`,
         );
       });
 
+      it('keeps a test the operation made redundant above it', ({ expect }) => {
+        // The outer `isIRI(?o)` is forgotten at the filter that guarantees it, which has to forget it as known too.
+        expectStableTransform(
+          expect,
+          'SELECT * { { ?t :x ?o . ?t :y ?o2 FILTER(isIRI(?o)) } FILTER(isIRI(?o) && sameTerm(?o, ?o2)) }',
+          `SELECT ?o ( ?o AS ?o2 ) ?t WHERE {
+  ?t <ex://x> ?o .
+  ?t <ex://y> ?o .
+  FILTER ( ISIRI( ?o ) )
+}`,
+        );
+      });
+
       it('keeps a test below a subquery', ({ expect }) => {
         expectStableTransform(
           expect,

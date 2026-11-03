@@ -520,9 +520,10 @@ export class AssertionConjunction {
    */
   private normaliseRangesFor(meta: CPMeta): boolean {
     const { cVars, vRanges } = meta;
+    const names = this.names();
     // A⟨?x ≡ v⟩ implies `bnd(?x)`, so every strong member holds the group's value at once.
     const strongRangePerGroup = new Map<number, RangeSet>();
-    for (const name of this.names()) {
+    for (const name of names) {
       const group = this.clusters.groupOf(name);
       if (group !== undefined && this.strength.get(name) === 'strong') {
         const resolved = this.clusters.resolveGroup(group);
@@ -535,14 +536,18 @@ export class AssertionConjunction {
         return false;
       }
     }
-    for (const name of this.names()) {
+    // Looked up again per member: forgetting a term type may release the members read before.
+    for (const name of names) {
       const group = this.clusters.groupOf(name);
       if (group === undefined) {
         continue;
       }
       const range = vRanges.rangeOf(name);
-      const strongRange = strongRangePerGroup.get(this.clusters.resolveGroup(group)) ?? objectRange;
-      if (this.strength.get(name) === 'weak' && !admitsRange(this.clusters, group, range.meet(strongRange))) {
+      if (this.strength.get(name) === 'weak' && !admitsRange(
+        this.clusters,
+        group,
+        range.meet(strongRangePerGroup.get(this.clusters.resolveGroup(group)) ?? objectRange),
+      )) {
         // W⟨?x ≡ v⟩ is `¬bnd(?x) ∨ ?x ≡ v`, whose right disjunct is false wherever `?x` is bound here, so it *is*
         // U⟨?x⟩ - a constraint the rest of the pass acts on. Cannot fail: `?x` is neither `bound` nor strong.
         this.assertUnbound(name);
@@ -1412,12 +1417,11 @@ export function termTypesOfReadings(group: EquatedGroup): AssertionConjunct[] {
  * @returns whether something is left for the group to be
  */
 function admitsRange(clusters: AssertionClusterSet, group: number, range: RangeSet): boolean {
-  const pin = clusters.pinOf(group);
-  if (pin === undefined) {
-    return clusters.rangeOf(group).meet(range).size > 0;
+  if (clusters.rangeOf(group).meet(range).size === 0) {
+    return false;
   }
-  const type = pin.kind === 'term' ? pin.term.termType : 'Quad';
-  return clusters.rangeOf(group).meet(range).size > 0 && range.has(type);
+  const pin = clusters.pinOf(group);
+  return pin === undefined || range.has(pin.kind === 'term' ? pin.term.termType : 'Quad');
 }
 
 /**

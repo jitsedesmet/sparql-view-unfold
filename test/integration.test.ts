@@ -158,6 +158,31 @@ describe('integration tests', () => {
     };
   }
 
+  /**
+   * Checks that a SELECT over the mapped data and its rewriting over the RDF 1.1 data give the same rows, and that
+   * those are the rows expected.
+   * @param expect - The `expect` of the test
+   * @param dataFile - The RDF 1.1 data to load
+   * @param mappers - The CONSTRUCT queries of the mappings
+   * @param userQuery - The SELECT query
+   * @param rows - The rows it has to give
+   * @param options - What the mapping is configured with
+   */
+  async function expectSelectRowsOver(
+    expect: typeof Expect,
+    dataFile: string,
+    mappers: string[],
+    userQuery: string,
+    rows: string[],
+    options: MappingOptions = {},
+  ): Promise<void> {
+    const store11 = await sourceToStore([ dataFile ]);
+    const { resOnMappedData, resUsingRewriter } =
+      await compareSelectRewrittenToMapped(store11, mappers, userQuery, options);
+    expect(resOnMappedData).toEqual(resUsingRewriter);
+    expect(resOnMappedData).toEqual(rows);
+  }
+
   describe('rdf interop reification - single reified triple', () => {
     const mappers = [ tripleTermConstruct, nonTripleTermConstruct ];
 
@@ -539,11 +564,12 @@ describe('integration tests', () => {
     // has to survive the equality being pushed past it. repeatedVariable.ttl holds a literal pair beside an IRI one.
     const prefix = 'PREFIX : <ex://>\nPREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n';
     const pairConstruct = `${prefix}CONSTRUCT { ?o :p ?o2 } WHERE { ?t :x ?o ; :y ?o2 }`;
+    // Not `reificationConstruct`: its `rdf:type` pattern changes the plan to one that never lost the test.
     const reificationConstruct =
       `${prefix}CONSTRUCT { ?r rdf:reifies <<( ?s ?p ?o )>> } WHERE { ?r rdf:subject ?s ; rdf:predicate ?p ; rdf:object ?o }`;
 
     /**
-     * Checks that a SELECT over the mapped data and its rewriting over repeatedVariable.ttl give the rows expected.
+     * {@link expectSelectRowsOver} repeatedVariable.ttl.
      * @param expect - The `expect` of the test
      * @param mappers - The CONSTRUCT queries of the mappings
      * @param userQuery - The SELECT query, without its prefix
@@ -555,11 +581,7 @@ describe('integration tests', () => {
       userQuery: string,
       rows: string[],
     ): Promise<void> {
-      const store11 = await sourceToStore([ './test/statics/repeatedVariable.ttl' ]);
-      const { resOnMappedData, resUsingRewriter } =
-        await compareSelectRewrittenToMapped(store11, mappers, `${prefix}${userQuery}`);
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual(rows);
+      await expectSelectRowsOver(expect, './test/statics/repeatedVariable.ttl', mappers, `${prefix}${userQuery}`, rows);
     }
 
     it('keeps the type test of a subject equated with its object', async({ expect }) => {
@@ -608,8 +630,7 @@ describe('integration tests', () => {
     ];
 
     /**
-     * Checks that a SELECT over the mapped data and its rewriting over permutedPositions.ttl give the same rows, and
-     * that those are the rows expected.
+     * {@link expectSelectRowsOver} permutedPositions.ttl, over the mappings above.
      * @param expect - The `expect` of the test
      * @param userQuery - The SELECT query, without its prefix
      * @param rows - The rows it has to give
@@ -621,11 +642,14 @@ describe('integration tests', () => {
       rows: string[],
       options: MappingOptions = {},
     ): Promise<void> {
-      const store11 = await sourceToStore([ './test/statics/permutedPositions.ttl' ]);
-      const { resOnMappedData, resUsingRewriter } =
-        await compareSelectRewrittenToMapped(store11, mappers, `${prefix}${userQuery}`, options);
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-      expect(resOnMappedData).toEqual(rows);
+      await expectSelectRowsOver(
+        expect,
+        './test/statics/permutedPositions.ttl',
+        mappers,
+        `${prefix}${userQuery}`,
+        rows,
+        options,
+      );
     }
 
     it('returns an object as subject only where it can be one', async({ expect }) => {
