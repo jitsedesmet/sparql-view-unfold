@@ -30,7 +30,7 @@ import {
 } from '../utils/assertions.js';
 import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
-import { createFilterFalse } from '../utils/operationhelpers.js';
+import { canMatchZeroLength, createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import { unionSets } from '../utils/setUtils.js';
 import type { DerivedVarNamer } from '../utils.js';
@@ -204,15 +204,28 @@ function swapWith(
   const { AF } = c;
   switch (op.type) {
     // A BGP and a path bind all of their variables, so normalisation has made every assertion reaching
-    // them strong, and a clique is substituted to its representative. Every leaf is handed the *same*
-    // conjunction; what differs is what each can pay off with the rewrite it makes, and so what has to
-    // be restated over it. A pattern settles what a pattern can state - a term, an equality, a shape -
+    // them strong, and a clique is substituted to its representative. A path that can match zero steps
+    // between two variables takes no term at its ends: from a fixed term, that match yields the term even
+    // where the graph lacks it, where from a variable it ranges over the nodes of the graph. Every leaf is
+    // handed the *same* conjunction; what differs is what each can pay off with the rewrite it makes, and
+    // so what has to be restated over it. A pattern settles what a pattern can state - a term, an equality, a shape -
     // and no more, `isIRI(?x)` staying; a VALUES row settles everything at once ({@link pruneValues}).
     case Algebra.Types.BGP: {
       return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPatterns(c, op, substitution)));
     }
     case Algebra.Types.PATH: {
-      return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPath(c, op, substitution)));
+      const { subject, object } = op;
+      const variableOnlyNames =
+        subject.termType === 'Variable' && object.termType === 'Variable' && canMatchZeroLength(op.predicate) ?
+          new Set([ subject.value, object.value ]) :
+          undefined;
+      return keep(rewritePattern(
+        c,
+        assertions,
+        namer,
+        substitution => substituteIntoPath(c, op, substitution),
+        variableOnlyNames,
+      ));
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
@@ -343,7 +356,8 @@ function substituteIntoPatterns(
  *
  * Unlike a BGP a path may legitimately have a literal in its subject slot (`?lit ^:p ?s`), so only the
  * graph position is checked. Paths are not duplicate-free, but substituting only restricts the set of
- * start nodes and leaves the witness count of every surviving pair untouched.
+ * start nodes and leaves the witness count of every surviving pair untouched - provided no term is written
+ * into the variable ends of a path that can match zero steps ({@link swapWith}).
  * @param c - The transformation context
  * @param path - The path to substitute into
  * @param assertions - The substitution to write in
@@ -364,15 +378,16 @@ function substituteIntoPath(c: TransformationContext, path: Algebra.Path, assert
  * took out of it, and a condition for what a pattern cannot state.
  *
  * The three come from one call ({@link AssertionConjunction.intoPattern}) because they are one decision;
- * `substituteInto` is the only thing a BGP and a property path differ in. The condition goes on the
- * pattern, below the re-binding, and is written against the values the pattern holds rather than against
- * the accesses Θ reads them by: `isIRI(OBJECT(?o))` becomes `isIRI(?o_o)`, a condition over a variable
- * the pattern binds and one an engine can push into the scan.
+ * `substituteInto` and `variableOnlyNames` are the only things a BGP and a property path differ in. The
+ * condition goes on the pattern, below the re-binding, and is written against the values the pattern holds
+ * rather than against the accesses Θ reads them by: `isIRI(OBJECT(?o))` becomes `isIRI(?o_o)`, a condition
+ * over a variable the pattern binds and one an engine can push into the scan.
  * @param c - The transformation context
  * @param assertions - The conjunction to write into the pattern
  * @param namer - Coins the variables a materialised shape needs
  * @param substituteInto - Writes the substitution into the pattern, checking the positions its own kind of
  * pattern can hold
+ * @param variableOnlyNames - The variables the pattern may only have a variable written in for
  * @returns the rewritten pattern, its condition and its re-bindings
  */
 function rewritePattern(
@@ -380,8 +395,9 @@ function rewritePattern(
   assertions: AssertionConjunction,
   namer: DerivedVarNamer,
   substituteInto: (substitution: Assertions) => Algebra.Operation,
+  variableOnlyNames?: ReadonlySet<string>,
 ): Algebra.Operation {
-  const { substitution, residual, asWritten } = assertions.intoPattern(namer);
+  const { substitution, residual, asWritten } = assertions.intoPattern(namer, variableOnlyNames);
   const pattern = substituteInto(substitution);
   // Read against what the pattern now binds, which is what decides `sameTerm(?x, ?x)` for it. Placing the
   // condition below the re-binding rather than above needs no check: a name the substitution re-binds

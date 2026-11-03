@@ -118,9 +118,80 @@ describe('pushDownAssertions', () => {
     it('substitutes into a property path', ({ expect }) => {
       expectTransform(
         expect,
-        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(?x, :a)) }',
+        'SELECT * WHERE { ?x :step+ ?y FILTER(sameTerm(?x, :a)) }',
         `SELECT ( <ex://a> AS ?x ) ?y WHERE {
-  <ex://a> (<ex://step>*) ?y .
+  <ex://a> (<ex://step>+) ?y .
+}`,
+      );
+    });
+
+    // From a fixed term, a zero-length match yields that term even where the graph lacks it, while from a
+    // variable it ranges over the nodes of the graph only.
+    it.for([
+      ':step?',
+      ':step*',
+      '^(:step?)',
+      '(:step?)+',
+      '(:step?/:onwards*)+',
+      ':step|(:onwards?)',
+    ])('keeps a term asserted on an end of %s, which can match zero steps, a filter', (path, { expect }) => {
+      const query = `SELECT * WHERE { ?x ${path} ?y FILTER(sameTerm(?x, :a)) }`;
+      const transformed = transform(query);
+      expect(transformed).toContain('FILTER ( SAMETERM( ?x , <ex://a> ) )');
+      expect(transformed).not.toContain('<ex://a> (');
+      expectIdempotent(expect, query);
+    });
+
+    it.for([ '!:step', '^(:step+)', '(:step?/:onwards)+', ':step|:onwards' ])(
+      'substitutes a term into an end of %s, which cannot match zero steps',
+      (path, { expect }) => {
+        expect(transform(`SELECT * WHERE { ?x ${path} ?y FILTER(sameTerm(?x, :a)) }`)).not.toContain('FILTER');
+      },
+    );
+
+    it('unifies the ends of a zero-length-capable path, keeping their asserted term a filter', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(?x, ?y) && sameTerm(?x, :a)) }',
+        `SELECT ?x ( ?x AS ?y ) WHERE {
+  ?x (<ex://step>*) ?x .
+  FILTER ( SAMETERM( ?x , <ex://a> ) )
+}`,
+      );
+    });
+
+    it('substitutes a term into the end of a path that can match zero steps from a term', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        'SELECT * WHERE { :a :step* ?y FILTER(sameTerm(?y, :b)) }',
+        `SELECT ( <ex://b> AS ?y ) WHERE {
+  <ex://a> (<ex://step>*) <ex://b> .
+}`,
+      );
+    });
+
+    it('keeps a shape asserted on an end of a path that can match zero steps a filter', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(subject(?x), :a)) }',
+        `SELECT ?x ?y WHERE {
+  ?x (<ex://step>*) ?y .
+  FILTER ( SAMETERM( SUBJECT( ?x ) , <ex://a> ) )
+}`,
+      );
+    });
+
+    it('substitutes the graph of a path that can match zero steps', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?x :step* ?y } FILTER(sameTerm(?g, :g) && sameTerm(?x, :a)) }',
+        `SELECT ( <ex://g> AS ?g ) ?x ?y WHERE {
+  GRAPH <ex://g> {
+    {
+      ?x (<ex://step>*) ?y .
+      FILTER ( SAMETERM( ?x , <ex://a> ) )
+    }
+  }
 }`,
       );
     });
@@ -2087,9 +2158,9 @@ GROUP BY ?x ( ?x AS ?y )`,
     it('materialises a shape into a property path', ({ expect }) => {
       expectTransform(
         expect,
-        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(subject(?x), :a)) }',
+        'SELECT * WHERE { ?x :step+ ?y FILTER(sameTerm(subject(?x), :a)) }',
         `SELECT ( <<( <ex://a> ?x_p ?x_o )>> AS ?x ) ?y WHERE {
-  <<( <ex://a> ?x_p ?x_o )>> (<ex://step>*) ?y .
+  <<( <ex://a> ?x_p ?x_o )>> (<ex://step>+) ?y .
 }`,
       );
     });
@@ -3587,6 +3658,13 @@ HAVING SAMETERM( ?y , SAMPLE( ?x ) )`,
         { { ?x :p ?y } UNION { ?x :p ?y } }
         FILTER(sameTerm(?x, :a))
       }`, 2);
+    });
+
+    it('does not match a zero-length path from a term the graph lacks', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :step? ?y
+        FILTER(sameTerm(?x, :absent))
+      }`, 0);
     });
 
     it('keeps the per-pair witness count of a property path', async({ expect }) => {
