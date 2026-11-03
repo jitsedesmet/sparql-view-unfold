@@ -87,8 +87,9 @@ function rewriteTreeInExistenceScopes<C extends ExistenceScopeContext, T extends
 
 /**
  * Rewrites the pattern of every EXISTS an operation evaluates, with the solutions of its input as `existenceScope`.
+ * Each EXISTS gets a pattern of its own, as a pass may share one EXISTS between operations.
  * @param c - The context the operation was rewritten in
- * @param op - The operation, whose expressions are changed in place
+ * @param op - The operation, whose expressions are replaced
  * @param pass - The pass
  */
 function rewriteExistencePatternsOf<C extends ExistenceScopeContext>(
@@ -96,24 +97,51 @@ function rewriteExistencePatternsOf<C extends ExistenceScopeContext>(
   op: Algebra.Operation,
   pass: ExistenceScopedPass<C>,
 ): void {
-  const expressions = expressionsEvaluatedBy(op).filter(containsExistenceExpression);
-  if (expressions.length === 0) {
+  if (!expressionsEvaluatedBy(op).some(containsExistenceExpression)) {
     return;
   }
   const solutions = joinedMeta([ (<A.Single | A.Multi> op).input ].flat().map(input => cpMetaOf(c, input)));
-  // A pass may copy one EXISTS into an expression twice; its pattern is rewritten once.
-  const rewritten = new Set<Algebra.ExistenceExpression>();
-  const rewritePattern = (existence: Algebra.ExistenceExpression): { continue: false } => {
-    if (!rewritten.has(existence)) {
-      rewritten.add(existence);
-      const existenceScope = metaRestrictedTo(solutions, collectVariableNames(c.astTransformer, existence.input));
-      existence.input = rewriteTreeInExistenceScopes({ ...c, existenceScope }, existence.input, pass);
+  const rewritePatterns = (expression: Algebra.Expression): Algebra.Expression =>
+    algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: { existence: {
+      // A nested EXISTS is rewritten with the pattern holding it.
+      ...leaveExistencePatterns,
+      transform: (existence: Algebra.ExistenceExpression) => {
+        const existenceScope = metaRestrictedTo(solutions, collectVariableNames(c.astTransformer, existence.input));
+        const pattern = withoutCpVars(existence.input);
+        return { ...existence, input: rewriteTreeInExistenceScopes({ ...c, existenceScope }, pattern, pass) };
+      },
+    }}});
+  replaceExpressionsEvaluatedBy(op, rewritePatterns);
+}
+
+/**
+ * Replaces each expression an operation evaluates per solution of its input.
+ * @param op - The operation, changed in place
+ * @param replace - Gives the replacement of one expression
+ */
+function replaceExpressionsEvaluatedBy(
+  op: Algebra.Operation,
+  replace: (expression: Algebra.Expression) => Algebra.Expression,
+): void {
+  switch (op.type) {
+    case Types.FILTER:
+    case Types.EXTEND: {
+      op.expression = replace(op.expression);
+      break;
     }
-    // A nested EXISTS is rewritten with the pattern holding it.
-    return { continue: false };
-  };
-  for (const expression of expressions) {
-    algebraUtils.visitOperationSub(expression, {}, { expression: { existence: { preVisitor: rewritePattern }}});
+    case Types.LEFT_JOIN: {
+      op.expression = op.expression === undefined ? undefined : replace(op.expression);
+      break;
+    }
+    case Types.ORDER_BY: {
+      op.expressions = op.expressions.map(replace);
+      break;
+    }
+    case Types.GROUP: {
+      op.aggregates = op.aggregates.map(aggregate => <Algebra.BoundAggregate> replace(aggregate));
+      break;
+    }
+    default:
   }
 }
 

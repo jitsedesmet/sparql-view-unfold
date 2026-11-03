@@ -1,3 +1,4 @@
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
 import { iriRange } from '../lib/RangeSet.js';
 import type { TransformationContext } from '../lib/transformContext.js';
@@ -438,6 +439,25 @@ describe('the pattern of an EXISTS', () => {
   it('reads a BIND over a variable of that solution with its range', ({ expect }) => {
     const { vRanges } = patternMeta('?s ?p ?o FILTER EXISTS { ?w ?q ?v BIND(COALESCE(?s, "x") AS ?t) }');
     expect([ ...vRanges.rangeOf('t') ].sort()).toEqual([ 'BlankNode', 'Literal', 'NamedNode' ]);
+  });
+
+  it('rewrites an EXISTS a pass shares between operations once per operation, in its scope', ({ expect }) => {
+    const query = parseQuery(c, 'SELECT * WHERE { VALUES ?o { "l" } FILTER EXISTS { ?s ?p ?o } }');
+    const rewritten = rewriteInExistenceScopes(c, query, (context, operation) => {
+      if (context.existenceScope !== undefined) {
+        // Marks the pattern with the range of ?o it was rewritten for.
+        const range = [ ...context.existenceScope.vRanges.rangeOf('o') ].join(',');
+        return context.AF.createFilter(operation, context.AF.createTermExpression(context.DF.literal(range)));
+      }
+      const filter = <Algebra.Filter> (<Algebra.Project> operation).input;
+      const iris = (<Algebra.Project> parseQuery(c, 'SELECT * WHERE { VALUES ?o { <ex://a> } }')).input;
+      return context.AF.createUnion([ filter, context.AF.createFilter(iris, filter.expression) ]);
+    });
+    const marks = (<Algebra.Union> rewritten).input.map((branch) => {
+      const pattern = <Algebra.Filter> (<Algebra.ExistenceExpression> (<Algebra.Filter> branch).expression).input;
+      return [ pattern.input.type, (<Algebra.TermExpression> pattern.expression).term.value ];
+    });
+    expect(marks).toEqual([[ 'bgp', 'Literal' ], [ 'bgp', 'NamedNode' ]]);
   });
 
   it('sees both sides of the OPTIONAL whose condition it is in', ({ expect }) => {

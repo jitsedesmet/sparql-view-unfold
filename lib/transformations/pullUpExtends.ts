@@ -175,12 +175,12 @@ interface PeeledInputs {
  */
 export function pullUpExtends<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   // SPARQL has nowhere to write a `BIND` in the chain. It excludes `ORDER_BY`, so a bind can still rise
-  // past an ordering to the projection that discards it. The pass first gets the query, whose chain this is.
-  let sealed: Set<Algebra.Operation> | undefined;
-  return rewriteInExistenceScopes(c, op, (context, input) => {
-    sealed ??= solutionModifierChainOf(input);
-    return floatBinds(context, sealed, input);
-  });
+  // past an ordering to the projection that discards it. An EXISTS pattern has no such chain.
+  return rewriteInExistenceScopes(c, op, (context, input) => floatBinds(
+    context,
+    context.existenceScope === undefined ? solutionModifierChainOf(input) : new Set(),
+    input,
+  ));
 }
 
 /**
