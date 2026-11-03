@@ -5,10 +5,10 @@ import { createTransformationContext, parseQuery } from '../lib/transformContext
 import type { CPMeta } from '../lib/utils/certainlyBoundVars.js';
 import {
   cpMetaOf,
-  rewriteInExistenceScopes,
   standardExpressionRange,
   withCpVars,
 } from '../lib/utils/certainlyBoundVars.js';
+import { rewriteInExistenceScopes } from '../lib/utils/existenceScopes.js';
 import { constructedTermOf } from '../lib/utils/expressionHelpers.js';
 
 const c = createTransformationContext();

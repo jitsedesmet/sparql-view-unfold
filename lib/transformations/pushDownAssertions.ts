@@ -28,12 +28,8 @@ import {
   variablesOfTransferSource,
   asWeakenedConjunct,
 } from '../utils/assertions.js';
-import {
-  cpMetaOf,
-  leaveExistencePatternsPreOrder,
-  rewriteInExistenceScopes,
-  withoutCpVars,
-} from '../utils/certainlyBoundVars.js';
+import { cpMetaOf } from '../utils/certainlyBoundVars.js';
+import { preOrderCallbacksOutsideExistencePatterns, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
@@ -126,18 +122,15 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: Transformatio
   // wherever it is written, and a name coined against a part of the tree would collide with a variable
   // in the part that has not been met yet - which is also why this takes the root, see above.
   const namer = derivedVarNamer(markVariableNamesUsed(c, rootOp));
-  const pushDown = (context: TransformationContext, op: Algebra.Operation): Algebra.Operation => {
-    const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>>[1] =
-      Object.fromEntries(Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]));
-    callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(context, namer, filter);
-    callbacks[Algebra.Types.EXPRESSION] = leaveExistencePatternsPreOrder;
+  // Metadata is cleared around the pass, not inside it: `keepMetadata` is how a filter hands its conjunction to the
+  // next `pushFilter`.
+  return rewriteInExistenceScopes(c, rootOp, (context, op) => {
+    const callbacks = {
+      ...preOrderCallbacksOutsideExistencePatterns(keep),
+      [Algebra.Types.FILTER]: (filter: Algebra.Filter) => pushFilter(context, namer, filter),
+    };
     return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(op, callbacks);
-  };
-  // Starting from a copy without metadata gives both a tree of our own to rewrite and the guarantee that
-  // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out
-  // for the same reason, the rewrites having since changed what the traversal cached. Not *inside*
-  // `mapOperationPreOrder`: `keepMetadata` is how a filter hands its conjunction to the next `pushFilter`.
-  return withoutCpVars(rewriteInExistenceScopes(c, withoutCpVars(rootOp), pushDown));
+  });
 }
 
 /**

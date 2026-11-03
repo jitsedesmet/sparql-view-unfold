@@ -5,13 +5,8 @@ import type { QueryTransformation } from '../types.js';
 import type { Access } from '../utils/assertions.js';
 import { componentOf } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
-import {
-  cpMetaOf,
-  leaveExistencePatterns,
-  rewriteInExistenceScopes,
-  termVars,
-  withoutCpVars,
-} from '../utils/certainlyBoundVars.js';
+import { cpMetaOf, termVars } from '../utils/certainlyBoundVars.js';
+import { leaveExistencePatterns, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
 import {
   asksBoundOfVariable,
   constructedTermOf,
@@ -86,10 +81,8 @@ import { collectVariableNames } from '../utils.js';
  *
  * One post-order {@link algebraUtils.mapOperation}: it works back up from the descendants, so by the time
  * a callback sees a node, each of its inputs already carries at the top of itself everything it could
- * float. That is the whole recursion - no custom traversal and no fixpoint loop over the tree. Enter and
- * leave through `withoutCpVars`, as the pushdown does: entering gives a tree of our own to rewrite and the
- * guarantee that what `withCpVars` reports describes the plan as it stands, and leaving clears what the
- * rewrites invalidated.
+ * float. That is the whole recursion - no custom traversal and no fixpoint loop over the tree. It runs
+ * through `rewriteInExistenceScopes`, which hands it a tree without metadata and clears the metadata after.
  *
  * ## The query's own solution modifiers
  *
@@ -133,7 +126,7 @@ interface FloatingBind {
   chainPosition: number;
   /**
    * The gate every rule is behind: whether the bind does the same wherever it is evaluated. That needs a stable `e`
-   * and an `?x` that the outer solution of an EXISTS does not bind.
+   * and an `?x` its input does not bind, as the outer solution of an EXISTS can.
    */
   bindIsStable: boolean;
   /**
@@ -181,14 +174,13 @@ interface PeeledInputs {
  * // SELECT ?y WHERE { ?y <ex://p> ?o }
  */
 export function pullUpExtends<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  // Starting from a copy without metadata gives both a tree of our own to rewrite and the guarantee that
-  // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out
-  // for the same reason, the rewrites having since invalidated what the licences cached.
-  const entered = withoutCpVars(op);
   // SPARQL has nowhere to write a `BIND` in the chain. It excludes `ORDER_BY`, so a bind can still rise
-  // past an ordering to the projection that discards it.
-  const sealed = solutionModifierChainOf(entered);
-  return withoutCpVars(rewriteInExistenceScopes(c, entered, (context, input) => floatBinds(context, sealed, input)));
+  // past an ordering to the projection that discards it. The pass first gets the query, whose chain this is.
+  let sealed: Set<Algebra.Operation> | undefined;
+  return rewriteInExistenceScopes(c, op, (context, input) => {
+    sealed ??= solutionModifierChainOf(input);
+    return floatBinds(context, sealed, input);
+  });
 }
 
 /**
@@ -262,14 +254,15 @@ function floatBinds(
 function peelInputs(c: TransformationContext, inputs: readonly Algebra.Operation[]): PeeledInputs {
   const chains = inputs.map(input => peelExtends(c, input));
   const bindsPerInput = chains.map((chain, inputIndex) => chain.binds.map((bind, chainPosition) => {
+    const scopeBelowBind = cpMetaOf(c, bind.extendNode.input);
     const floatingBind: FloatingBind = {
       bind,
       inputIndex,
       chainPosition,
-      bindIsStable: isStableExpression(c, bind.expression) && !c.existenceScope?.vRanges.has(bind.variable.value),
+      bindIsStable: isStableExpression(c, bind.expression) && !scopeBelowBind.vRanges.has(bind.variable.value),
       constructedTerm: constructedTermOf(bind.expression),
       bindsCertainly: cpMetaOf(c, bind.extendNode).cVars.has(bind.variable.value),
-      scopeBelowBind: cpMetaOf(c, bind.extendNode.input),
+      scopeBelowBind,
       disposition: 'stay',
       mustLeaveWith: [],
     };
@@ -600,8 +593,8 @@ function floatThroughFilter(c: TransformationContext, filter: Algebra.Filter): A
       // re-planted, the risers gone - so that is where its `cVars` has to be read. Not stale: the pass
       // never mutates a node, it builds a fresh one through the factory, so a cached `CPMeta` can only
       // sit on a subtree that is structurally what it was when the metadata was computed. The one thing
-      // that *would* be stale is metadata left by an earlier pass, which entering through
-      // `withoutCpVars` has already cleared.
+      // that *would* be stale is metadata left by an earlier pass, which `rewriteInExistenceScopes` has
+      // already cleared.
       substituteDepartedBinds(c, filter.expression, risers, cpMetaOf(c, rewrittenInputs[0]).cVars),
     ));
 }

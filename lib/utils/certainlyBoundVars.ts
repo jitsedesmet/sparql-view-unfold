@@ -1,7 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
-import type { PreOrderMappingReturn } from '@traqula/core';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
 import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import {
@@ -20,13 +19,7 @@ import {
   tripleTermRange,
 } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
-import { collectVariableNames } from '../utils.js';
-import {
-  constructedTermOf,
-  containsExistenceExpression,
-  splitConjunction,
-  splitDisjunction,
-} from './expressionHelpers.js';
+import { constructedTermOf, splitConjunction, splitDisjunction } from './expressionHelpers.js';
 import { xsd } from './rdfDatatypes.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
@@ -142,7 +135,7 @@ function intersectRanges(inputs: readonly CPMeta[]): VRanges {
  * @param inputs - The metadata of the operands
  * @returns the metadata of their join
  */
-function joinedMeta(inputs: readonly CPMeta[]): CPMeta {
+export function joinedMeta(inputs: readonly CPMeta[]): CPMeta {
   return { cVars: unionSets(inputs.map(input => input.cVars)), vRanges: intersectRanges(inputs) };
 }
 
@@ -152,7 +145,7 @@ function joinedMeta(inputs: readonly CPMeta[]): CPMeta {
  * @param names - The variables to keep
  * @returns the restricted metadata
  */
-function metaRestrictedTo(meta: CPMeta, names: SSet): CPMeta {
+export function metaRestrictedTo(meta: CPMeta, names: SSet): CPMeta {
   return {
     cVars: intersectSets([ meta.cVars, names ]),
     vRanges: new VRanges([ ...meta.vRanges ].filter(([ name ]) => names.has(name))),
@@ -160,37 +153,15 @@ function metaRestrictedTo(meta: CPMeta, names: SSet): CPMeta {
 }
 
 /**
- * The range of a variable after a BIND or an aggregate writes it. In an EXISTS, a variable of the outer solution
- * may keep its value, as SPARQL 1.2 leaves such a write undefined.
- * @param c - The context whose `existenceScope` holds the outer solution
+ * The range of a variable after a BIND or an aggregate writes it. A variable its input may bind already, as the outer
+ * solution of an EXISTS does, may keep its value: SPARQL 1.2 leaves such a write undefined.
  * @param name - The variable written
  * @param written - The range of the value written
  * @param input - The metadata of the solutions written in
  * @returns the range of the variable afterwards
  */
-function rangeAfterWrite(c: RangeContext, name: string, written: RangeSet, input: CPMeta): RangeSet {
-  return c.existenceScope?.vRanges.has(name) ? new RangeSet([ ...input.vRanges.rangeOf(name), ...written ]) : written;
-}
-
-/**
- * Joins the outer solution of an EXISTS into the metadata of an operation in its pattern, in place.
- * @param meta - The metadata of the operation, changed in place
- * @param scope - What the outer solution binds
- */
-function joinExistenceScope(meta: CPMeta, scope: CPMeta): void {
-  for (const [ name, range ] of scope.vRanges) {
-    const own = meta.vRanges.rangeOf(name);
-    if (!scope.cVars.has(name)) {
-      if (!meta.cVars.has(name) && !isSubsetOf(range, own)) {
-        meta.vRanges.set(name, new RangeSet([ ...own, ...range ]));
-      }
-    } else if (!meta.cVars.has(name)) {
-      meta.vRanges.set(name, range);
-      meta.cVars.add(name);
-    } else if (!isSubsetOf(own, range)) {
-      meta.vRanges.set(name, own.meet(range));
-    }
-  }
+function rangeAfterWrite(name: string, written: RangeSet, input: CPMeta): RangeSet {
+  return input.vRanges.has(name) ? RangeSet.join([ input.vRanges.rangeOf(name), written ]) : written;
 }
 
 /**
@@ -412,7 +383,7 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
   }
   const annotated = computeCpVarsOutsideExistenceScope(c, op);
   if (c.existenceScope !== undefined) {
-    joinExistenceScope(annotated.metadata, c.existenceScope);
+    Object.assign(annotated.metadata, joinedMeta([ annotated.metadata, c.existenceScope ]));
   }
   (<ScopedCPMeta> annotated.metadata).existenceScope = c.existenceScope;
   return annotated;
@@ -528,7 +499,7 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
       const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
       for (const aggregate of resOp.aggregates) {
         const target = aggregate.variable.value;
-        ranges.set(target, rangeAfterWrite(c, target, c.expressionRange(c, aggregate, input.metadata), input.metadata));
+        ranges.set(target, rangeAfterWrite(target, c.expressionRange(c, aggregate, input.metadata), input.metadata));
       }
       resOp.metadata.vRanges = ranges;
       return resOp;
@@ -559,7 +530,7 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
       // The EXTEND brings its target into scope, and what the expression yields overrides whatever the
       // input had to say about it - binding an already bound variable is an error, not a narrowing.
       const written = c.expressionRange(c, resOp.expression, input.metadata);
-      ranges.set(resOp.variable.value, rangeAfterWrite(c, resOp.variable.value, written, input.metadata));
+      ranges.set(resOp.variable.value, rangeAfterWrite(resOp.variable.value, written, input.metadata));
       resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.FILTER: {
@@ -668,112 +639,6 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
  */
 export function cpMetaOf(c: RangeContext, op: Algebra.Operation): CPMeta {
   return withCpVars(c, op).metadata;
-}
-
-/**
- * The expressions an operation evaluates per solution of its input, or of its joined inputs for an OPTIONAL.
- * @param op - The operation to read
- * @returns its expressions
- */
-function expressionsEvaluatedBy(op: Algebra.Operation): Algebra.Expression[] {
-  switch (op.type) {
-    case Types.FILTER:
-    case Types.EXTEND: {
-      return [ op.expression ];
-    }
-    case Types.LEFT_JOIN: {
-      return op.expression === undefined ? [] : [ op.expression ];
-    }
-    case Types.ORDER_BY: {
-      return op.expressions;
-    }
-    case Types.GROUP: {
-      return op.aggregates;
-    }
-    default: {
-      return [];
-    }
-  }
-}
-
-/**
- * Rewrites the pattern of every EXISTS an operation evaluates, each with the solutions of the operation's input as its
- * `existenceScope`.
- * @param c - The context the operation was rewritten in
- * @param op - The operation, whose expressions are changed in place
- * @param rewrite - The pass, as given to {@link rewriteInExistenceScopes}
- */
-function rewriteExistencePatternsOf<C extends ExistenceScopeContext>(
-  c: C,
-  op: Algebra.Operation,
-  rewrite: (context: C, op: Algebra.Operation) => Algebra.Operation,
-): void {
-  const expressions = expressionsEvaluatedBy(op).filter(containsExistenceExpression);
-  if (expressions.length === 0) {
-    return;
-  }
-  const inputs = [ (<A.Single | A.Multi> op).input ].flat().map(input => cpMetaOf(c, input));
-  const solutions = inputs.length === 1 ? inputs[0] : joinedMeta(inputs);
-  // A pass may copy one EXISTS into an expression twice; its pattern is rewritten once.
-  const rewritten = new Set<Algebra.ExistenceExpression>();
-  const rewritePattern = (existence: Algebra.ExistenceExpression): { continue: false } => {
-    if (!rewritten.has(existence)) {
-      rewritten.add(existence);
-      const existenceScope = metaRestrictedTo(solutions, collectVariableNames(c.astTransformer, existence.input));
-      existence.input = rewriteInExistenceScopes({ ...c, existenceScope }, existence.input, rewrite);
-    }
-    // A nested EXISTS is rewritten with the pattern holding it.
-    return { continue: false };
-  };
-  for (const expression of expressions) {
-    algebraUtils.visitOperationSub(expression, {}, { expression: { existence: { preVisitor: rewritePattern }}});
-  }
-}
-
-/** What {@link rewriteInExistenceScopes} reads of a {@link TransformationContext}. */
-export type ExistenceScopeContext = RangeContext & Pick<TransformationContext, 'astTransformer'>;
-
-/** The traversal callback with which a pass leaves EXISTS patterns to {@link rewriteInExistenceScopes}. */
-export const leaveExistencePatterns = { preVisitor: () => ({ continue: false }) };
-
-/**
- * The `algebraUtils.mapOperationPreOrder` callback with which a pass leaves EXISTS patterns to
- * {@link rewriteInExistenceScopes}.
- * @param expression - The expression to leave as it is
- * @returns the instruction not to descend into it
- */
-export function leaveExistencePatternsPreOrder(expression: Algebra.Expression): PreOrderMappingReturn {
-  return { newValue: expression, continue: false };
-}
-
-/**
- * Rewrites an operation with a pass, then the pattern of each EXISTS in it with the solutions it is evaluated for as
- * `existenceScope`. The pattern's scope is only known once the pass has placed the EXISTS, so the pass leaves patterns
- * alone, using {@link leaveExistencePatterns} or {@link leaveExistencePatternsPreOrder}.
- * @param c - The context to rewrite in
- * @param op - The operation to rewrite, a tree the pass may change
- * @param rewrite - The pass
- * @returns the rewritten operation
- */
-export function rewriteInExistenceScopes<C extends ExistenceScopeContext, T extends Algebra.Operation>(
-  c: C,
-  op: T,
-  rewrite: (context: C, op: Algebra.Operation) => Algebra.Operation,
-): T {
-  const rewritten = rewrite(c, op);
-  const callbacks = {
-    // The pass's cached metadata describes the plan before it, so it is computed again.
-    preVisitor: (operation: { metadata?: unknown }) => {
-      delete operation.metadata;
-      return {};
-    },
-    visitor: (operation: Algebra.Operation) => rewriteExistencePatternsOf(c, operation, rewrite),
-  };
-  algebraUtils.visitOperation(rewritten, {
-    ...Object.fromEntries(Object.values(Types).map(type => [ type, callbacks ])),
-    [Types.EXPRESSION]: leaveExistencePatterns,
-  });
-  return <T> rewritten;
 }
 
 /**

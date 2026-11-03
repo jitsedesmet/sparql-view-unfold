@@ -10,10 +10,8 @@ import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import {
   cpMetaOf,
   expressionCertainlyEvaluates,
-  leaveExistencePatterns,
-  rewriteInExistenceScopes,
-  withoutCpVars,
 } from '../utils/certainlyBoundVars.js';
+import { leaveExistencePatterns, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
 import {
   constructedTermOf,
   createBooleanExpression,
@@ -342,8 +340,7 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
     });
   }
 
-  // The ranges cache metadata on the copy, so it starts and ends without any.
-  return withoutCpVars(rewriteInExistenceScopes(c, withoutCpVars(op), materialiseAll));
+  return rewriteInExistenceScopes(c, op, materialiseAll);
 }
 
 /** How a pipeline step materialises internal blank nodes. */
