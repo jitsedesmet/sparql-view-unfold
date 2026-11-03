@@ -534,6 +534,57 @@ describe('integration tests', () => {
     });
   });
 
+  describe('a repeated variable over mappings that type their head', () => {
+    // A query repeating a variable equates two objects a mapping writes into a subject position, whose type test
+    // has to survive the equality being pushed past it. repeatedVariable.ttl holds a literal pair beside an IRI one.
+    const prefix = 'PREFIX : <ex://>\nPREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n';
+    const pairConstruct = `${prefix}CONSTRUCT { ?o :p ?o2 } WHERE { ?t :x ?o ; :y ?o2 }`;
+    const reificationConstruct =
+      `${prefix}CONSTRUCT { ?r rdf:reifies <<( ?s ?p ?o )>> } WHERE { ?r rdf:subject ?s ; rdf:predicate ?p ; rdf:object ?o }`;
+
+    /**
+     * Checks that a SELECT over the mapped data and its rewriting over repeatedVariable.ttl give the rows expected.
+     * @param expect - The `expect` of the test
+     * @param mappers - The CONSTRUCT queries of the mappings
+     * @param userQuery - The SELECT query, without its prefix
+     * @param rows - The rows it has to give
+     */
+    async function expectRowsOverRepeatedVariable(
+      expect: typeof Expect,
+      mappers: string[],
+      userQuery: string,
+      rows: string[],
+    ): Promise<void> {
+      const store11 = await sourceToStore([ './test/statics/repeatedVariable.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } =
+        await compareSelectRewrittenToMapped(store11, mappers, `${prefix}${userQuery}`);
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+      expect(resOnMappedData).toEqual(rows);
+    }
+
+    it('keeps the type test of a subject equated with its object', async({ expect }) => {
+      await expectRowsOverRepeatedVariable(expect, [ pairConstruct ], 'SELECT * { ?a :p ?a }', [ '{a=ex://c}' ]);
+    });
+
+    it('keeps the type test of a triple term subject equated with its object', async({ expect }) => {
+      await expectRowsOverRepeatedVariable(
+        expect,
+        [ reificationConstruct ],
+        'SELECT * { ?x rdf:reifies <<( ?a :q ?a )>> }',
+        [ '{a=ex://c,x=ex://r2}' ],
+      );
+    });
+
+    it('keeps the triple term test of a merged mapping', async({ expect }) => {
+      await expectRowsOverRepeatedVariable(
+        expect,
+        [ reificationConstruct, pairConstruct ],
+        'SELECT * { ?x rdf:reifies <<( ?a :q ?a )>> }',
+        [ '{a=ex://c,x=ex://r2}' ],
+      );
+    });
+  });
+
   describe('mappings writing a variable into a position it was not read from', () => {
     // Every mapping but the first writes a variable its body reads from an object position into a subject or a
     // predicate position. A literal or a triple term cannot stand there, and a CONSTRUCT instantiates no triple

@@ -250,10 +250,9 @@ export class AssertionConjunction {
    * @returns the term types, or `undefined` where Θ says nothing about them
    */
   private assertedTermTypesOf(group: number): RangeSet | undefined {
-    // Deliberately not {@link TermClusterSet.rangeOf}: that is narrowed by the position the group sits in
-    // and by what the operation leaves its variables, which are facts of the plan Θ is written into
-    // rather than facts of Θ. Reporting them would put {@link get} at odds with {@link conjuncts},
-    // which states only what was asserted.
+    // Deliberately not {@link TermClusterSet.rangeOf}: that is narrowed by the position the group sits in,
+    // which is a fact of the plan Θ is written into rather than of Θ. Reporting it would put {@link get} at
+    // odds with {@link conjuncts}, which states only what was asserted.
     if (this.clusters.childrenOf(group) !== undefined) {
       return tripleTermRange;
     }
@@ -504,35 +503,54 @@ export class AssertionConjunction {
         }
         // Never bound and weak -> the `!bound(?x)` disjunct carries it, so nothing to assert.
         result.removeMember(name);
-      } else {
-        if (cVars.has(name)) {
-          // B⟨?x⟩ holds of every solution here, and completes a weak member into a strong one.
-          result.strength.set(name, 'strong');
-        }
-        const group = result.clusters.groupOf(name);
-        if (group !== undefined) {
-          // A member of a group the variable can never be, which both forms have something to say about -
-          // the same rule as (FBndII) one level down the lattice, the variable being in scope here and no
-          // solution binding it to *this* value. Read off `result`, so a promotion just above counts.
-          if (result.strength.get(name) === 'strong') {
-            // A⟨?x ≡ v⟩ implies `bnd(?x)`, so what the plan leaves for `?x` is what it leaves for the group.
-            // We need to do this e.g. in case the var just became strong,
-            //   and we do it here since we need a 'isValid' check regardless.
-            if (!result.clusters.narrowRange(group, vRanges.rangeOf(name))) {
-              return undefined;
-            }
-          } else if (!admitsRange(result.clusters, group, vRanges.rangeOf(name))) {
-            // W⟨?x ≡ v⟩ is `¬bnd(?x) ∨ ?x ≡ v`, and the right disjunct is false wherever `?x` is bound. So
-            // the weak form *is* U⟨?x⟩ here - which is worth doing rather than leaving it: a weak member
-            // says almost nothing, where `!bound(?x)` is a constraint the rest of the pass acts on.
-            // Cannot fail: `?x` is neither `bound` nor a strong member, the two states it rejects.
-            result.assertUnbound(name);
-          }
-          result.forgetTermTypesEntailedBy(name, vRanges.rangeOf(name), cVars);
-        }
+      } else if (cVars.has(name)) {
+        // B⟨?x⟩ holds of every solution here, and completes a weak member into a strong one.
+        result.strength.set(name, 'strong');
       }
     }
-    return result;
+    return result.normaliseRangesFor(meta) ? result : undefined;
+  }
+
+  /**
+   * Reads the groups against the term types the operation leaves their members - the same rule as (FBndII)
+   * one level down the lattice. Only checked, never narrowed into a group: a range holds of the operation's
+   * solutions rather than of what lies below it, so carrying it down would drop the very test that made it true.
+   * @param meta - The variables the operation certainly binds, and the term types each variable it binds can take
+   * @returns `false` when a group of strong members is left no value, which makes the operation empty
+   */
+  private normaliseRangesFor(meta: CPMeta): boolean {
+    const { cVars, vRanges } = meta;
+    // A⟨?x ≡ v⟩ implies `bnd(?x)`, so every strong member holds the group's value at once.
+    const strongRangePerGroup = new Map<number, RangeSet>();
+    for (const name of this.names()) {
+      const group = this.clusters.groupOf(name);
+      if (group !== undefined && this.strength.get(name) === 'strong') {
+        const resolved = this.clusters.resolveGroup(group);
+        const known = strongRangePerGroup.get(resolved) ?? objectRange;
+        strongRangePerGroup.set(resolved, known.meet(vRanges.rangeOf(name)));
+      }
+    }
+    for (const [ group, range ] of strongRangePerGroup) {
+      if (!admitsRange(this.clusters, group, range)) {
+        return false;
+      }
+    }
+    for (const name of this.names()) {
+      const group = this.clusters.groupOf(name);
+      if (group === undefined) {
+        continue;
+      }
+      const range = vRanges.rangeOf(name);
+      const strongRange = strongRangePerGroup.get(this.clusters.resolveGroup(group)) ?? objectRange;
+      if (this.strength.get(name) === 'weak' && !admitsRange(this.clusters, group, range.meet(strongRange))) {
+        // W⟨?x ≡ v⟩ is `¬bnd(?x) ∨ ?x ≡ v`, whose right disjunct is false wherever `?x` is bound here, so it *is*
+        // U⟨?x⟩ - a constraint the rest of the pass acts on. Cannot fail: `?x` is neither `bound` nor strong.
+        this.assertUnbound(name);
+      } else {
+        this.forgetTermTypesEntailedBy(name, range, cVars);
+      }
+    }
+    return true;
   }
 
   /**
