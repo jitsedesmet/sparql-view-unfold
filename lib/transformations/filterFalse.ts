@@ -1,7 +1,13 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import { createFilterFalse, isExpressionFalse, isFilterFalse } from '../utils/operationhelpers.js';
+import {
+  createFilterFalse,
+  isExpressionFalse,
+  isFilterFalse,
+  termFalse,
+  termTrue,
+} from '../utils/operationhelpers.js';
 import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
 
 /**
@@ -31,6 +37,7 @@ import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
  * - PROJECT/EXTEND/DISTINCT/etc. over FILTER(FALSE) becomes FILTER(FALSE), sub-SELECTs included
  * - MINUS/LEFT JOIN whose right operand is FILTER(FALSE) becomes its left operand
  * - LEFT JOIN whose condition is `FALSE` becomes its left operand: no right solution can satisfy it
+ * - `EXISTS { FILTER(FALSE) }` becomes `FALSE`, and `NOT EXISTS { FILTER(FALSE) }` becomes `TRUE`
  * - GROUP and the query's own solution modifiers are left in place
  * @param c - The transformation context
  * @param op - The operation to transform
@@ -82,7 +89,10 @@ export function transformFilterFalse(c: TransformationContext, op: Algebra.Opera
         }
         return values;
       } },
-      // TODO: exists and not exists
+      [Algebra.Types.EXPRESSION]: { transform: expression =>
+        expression.subType === Algebra.ExpressionTypes.EXISTENCE && isFilterFalse(c, expression.input) ?
+          c.AF.createTermExpression(expression.not ? termTrue : termFalse) :
+          expression },
     },
   );
 }
