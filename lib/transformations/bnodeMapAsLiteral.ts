@@ -10,6 +10,7 @@ import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import {
   cpMetaOf,
   expressionCertainlyEvaluates,
+  leaveExistencePatterns,
   rewriteInExistenceScopes,
   withoutCpVars,
 } from '../utils/certainlyBoundVars.js';
@@ -267,8 +268,7 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
     encodeArguments: (named: Algebra.NamedExpression) => Algebra.Expression,
   ): Algebra.Expression {
     return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: {
-      // The pattern of an EXISTS is materialised in its own scope, by `rewriteInExistenceScopes`.
-      existence: { preVisitor: () => ({ continue: false }) },
+      existence: leaveExistencePatterns,
       ...internalBnodeExpressionCallbacks(c, materialisation, encodeArguments),
     }});
   }
@@ -300,7 +300,7 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   }
 
   /**
-   * Materialises the internal blank nodes in an operation, leaving an EXISTS pattern to `rewriteInExistenceScopes`.
+   * Materialises the internal blank nodes in an operation, outside EXISTS patterns.
    * @param context - The context to read ranges in.
    * @param operation - The operation to transform.
    * @returns The transformed operation.

@@ -28,7 +28,12 @@ import {
   variablesOfTransferSource,
   asWeakenedConjunct,
 } from '../utils/assertions.js';
-import { cpMetaOf, rewriteInExistenceScopes, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import {
+  cpMetaOf,
+  leaveExistencePatternsPreOrder,
+  rewriteInExistenceScopes,
+  withoutCpVars,
+} from '../utils/certainlyBoundVars.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
@@ -125,9 +130,7 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: Transformatio
     const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>>[1] =
       Object.fromEntries(Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]));
     callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(context, namer, filter);
-    // The pattern of an EXISTS is pushed down in its own scope, by `rewriteInExistenceScopes`.
-    callbacks[Algebra.Types.EXPRESSION] = (expression: Algebra.Expression) =>
-      ({ ...keep(expression), continue: false });
+    callbacks[Algebra.Types.EXPRESSION] = leaveExistencePatternsPreOrder;
     return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(op, callbacks);
   };
   // Starting from a copy without metadata gives both a tree of our own to rewrite and the guarantee that
@@ -180,8 +183,8 @@ function pushAssertions(
   if (normalised === undefined) {
     return empty(c, op);
   }
-  // A conjunct about the solution an EXISTS is evaluated for holds of all the pattern alike, so it stays here: below, a
-  // rule could write a term for its variable, which binds it again, or carry it past a sub-SELECT not projecting it.
+  // A conjunct on a variable of the outer solution of an EXISTS stays here: below, a rule could write a term for it, or
+  // carry it past a sub-SELECT that does not project it.
   const scope = c.existenceScope?.vRanges;
   if (scope !== undefined) {
     const { inside, outside } = normalised.split(name => !scope.has(name));

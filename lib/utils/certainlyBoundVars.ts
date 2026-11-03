@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
+import type { PreOrderMappingReturn } from '@traqula/core';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
 import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import {
@@ -137,17 +138,16 @@ function intersectRanges(inputs: readonly CPMeta[]): VRanges {
 }
 
 /**
- * What the operands an operation *merges* bind: every variable one of them binds certainly, with the ranges of
- * {@link intersectRanges}.
+ * What the join of some operands binds.
  * @param inputs - The metadata of the operands
- * @returns the merged metadata
+ * @returns the metadata of their join
  */
 function joinedMeta(inputs: readonly CPMeta[]): CPMeta {
   return { cVars: unionSets(inputs.map(input => input.cVars)), vRanges: intersectRanges(inputs) };
 }
 
 /**
- * What an operation binds of some variables only, which is all that stays in scope above a projection of them.
+ * What an operation binds of some variables only, as a projection on them keeps.
  * @param meta - The metadata of the operation
  * @param names - The variables to keep
  * @returns the restricted metadata
@@ -160,24 +160,22 @@ function metaRestrictedTo(meta: CPMeta, names: SSet): CPMeta {
 }
 
 /**
- * The range of a variable a BIND or an aggregate writes. One the solution an EXISTS is evaluated for binds already is
- * written undefined, which the engine leaves out, so it can also keep the value it had.
- * @param c - The context whose `existenceScope` holds that solution
+ * The range of a variable after a BIND or an aggregate writes it. In an EXISTS, a variable of the outer solution
+ * may keep its value, as SPARQL 1.2 leaves such a write undefined.
+ * @param c - The context whose `existenceScope` holds the outer solution
  * @param name - The variable written
- * @param written - The range of what is written
- * @param input - The metadata of the solutions it is written in
+ * @param written - The range of the value written
+ * @param input - The metadata of the solutions written in
  * @returns the range of the variable afterwards
  */
-function writtenRange(c: RangeContext, name: string, written: RangeSet, input: CPMeta): RangeSet {
+function rangeAfterWrite(c: RangeContext, name: string, written: RangeSet, input: CPMeta): RangeSet {
   return c.existenceScope?.vRanges.has(name) ? new RangeSet([ ...input.vRanges.rangeOf(name), ...written ]) : written;
 }
 
 /**
- * Joins the solution an EXISTS is evaluated for into what an operation in its pattern binds, by the rule of
- * {@link joinedMeta} for the variables of that solution alone, in place so that an operation already holding the join
- * allocates nothing.
- * @param meta - The metadata of the operation, which is changed in place
- * @param scope - What the solution may bind
+ * Joins the outer solution of an EXISTS into the metadata of an operation in its pattern, in place.
+ * @param meta - The metadata of the operation, changed in place
+ * @param scope - What the outer solution binds
  */
 function joinExistenceScope(meta: CPMeta, scope: CPMeta): void {
   for (const [ name, range ] of scope.vRanges) {
@@ -401,18 +399,18 @@ export function expressionCertainlyEvaluates(c: RangeContext, expression: Algebr
 /**
  * The operation with its certainly and possibly bound variables assigned, computed by dynamic programming:
  * callers are responsible for keeping the metadata up to date when they manipulate the operation.
- * @param c - The context whose `expressionRange` gives what a BIND or an aggregate binds, and whose `existenceScope` is
- * joined into an operation in the pattern of an EXISTS
+ * @param c - The context whose `expressionRange` gives what a BIND or an aggregate binds, and whose `existenceScope`
+ * is joined in
  * @param op - The operation to annotate
  * @returns the same operation, with its metadata attached
  */
 export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPOp<T> {
   const cached = (<T & { metadata?: Partial<ScopedCPMeta> }> op).metadata;
-  // Metadata read in another scope describes another operation, so it is computed again.
+  // Metadata computed in another scope does not hold here.
   if (cached?.cVars !== undefined && cached.vRanges !== undefined && cached.existenceScope === c.existenceScope) {
     return <CPOp<T>> op;
   }
-  const annotated = computeCpVars(c, op);
+  const annotated = computeCpVarsOutsideExistenceScope(c, op);
   if (c.existenceScope !== undefined) {
     joinExistenceScope(annotated.metadata, c.existenceScope);
   }
@@ -420,16 +418,16 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
   return annotated;
 }
 
-/** Cached metadata, with the `existenceScope` it was read in. */
+/** Cached metadata, with the `existenceScope` it was computed in. */
 type ScopedCPMeta = CPMeta & Pick<RangeContext, 'existenceScope'>;
 
 /**
- * Computes what {@link withCpVars} caches, before it joins in the scope of an EXISTS.
+ * Computes the metadata {@link withCpVars} caches, without joining in the `existenceScope`.
  * @param c - The context whose `expressionRange` gives what a BIND or an aggregate binds
  * @param op - The operation to annotate
  * @returns the same operation, with its metadata attached
  */
-function computeCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPOp<T> {
+function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: RangeContext, op: T): CPOp<T> {
   function asCPVars<T extends Algebra.Operation>(op: T): CPOp<T> {
     const casted = <CPOp<T>> op;
     if (!Object.hasOwn(op, 'metadata')) {
@@ -530,7 +528,7 @@ function computeCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPO
       const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
       for (const aggregate of resOp.aggregates) {
         const target = aggregate.variable.value;
-        ranges.set(target, writtenRange(c, target, c.expressionRange(c, aggregate, input.metadata), input.metadata));
+        ranges.set(target, rangeAfterWrite(c, target, c.expressionRange(c, aggregate, input.metadata), input.metadata));
       }
       resOp.metadata.vRanges = ranges;
       return resOp;
@@ -561,7 +559,7 @@ function computeCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPO
       // The EXTEND brings its target into scope, and what the expression yields overrides whatever the
       // input had to say about it - binding an already bound variable is an error, not a narrowing.
       const written = c.expressionRange(c, resOp.expression, input.metadata);
-      ranges.set(resOp.variable.value, writtenRange(c, resOp.variable.value, written, input.metadata));
+      ranges.set(resOp.variable.value, rangeAfterWrite(c, resOp.variable.value, written, input.metadata));
       resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.FILTER: {
@@ -673,7 +671,7 @@ export function cpMetaOf(c: RangeContext, op: Algebra.Operation): CPMeta {
 }
 
 /**
- * The expressions an operation evaluates for each solution of its input, or of its two inputs joined for an OPTIONAL.
+ * The expressions an operation evaluates per solution of its input, or of its joined inputs for an OPTIONAL.
  * @param op - The operation to read
  * @returns its expressions
  */
@@ -699,16 +697,16 @@ function expressionsEvaluatedBy(op: Algebra.Operation): Algebra.Expression[] {
 }
 
 /**
- * Rewrites the pattern of every EXISTS an operation evaluates, in a context whose `existenceScope` is what the
- * solutions it evaluates them for bind of the variables the pattern mentions.
- * @param c - The context the operation is rewritten in
- * @param op - The operation, whose expressions are rewritten in place
- * @param rewritePattern - Rewrites one pattern in the context it is given
+ * Rewrites the pattern of every EXISTS an operation evaluates, each with the solutions of the operation's input as its
+ * `existenceScope`.
+ * @param c - The context the operation was rewritten in
+ * @param op - The operation, whose expressions are changed in place
+ * @param rewrite - The pass, as given to {@link rewriteInExistenceScopes}
  */
-function rewriteExistencePatterns<C extends ExistenceScopeContext>(
+function rewriteExistencePatternsOf<C extends ExistenceScopeContext>(
   c: C,
   op: Algebra.Operation,
-  rewritePattern: (patternContext: C, pattern: Algebra.Operation) => Algebra.Operation,
+  rewrite: (context: C, op: Algebra.Operation) => Algebra.Operation,
 ): void {
   const expressions = expressionsEvaluatedBy(op).filter(containsExistenceExpression);
   if (expressions.length === 0) {
@@ -716,31 +714,45 @@ function rewriteExistencePatterns<C extends ExistenceScopeContext>(
   }
   const inputs = [ (<A.Single | A.Multi> op).input ].flat().map(input => cpMetaOf(c, input));
   const solutions = inputs.length === 1 ? inputs[0] : joinedMeta(inputs);
-  // A pass may write one EXISTS into an expression more than once, and its pattern is rewritten once.
+  // A pass may copy one EXISTS into an expression twice; its pattern is rewritten once.
   const rewritten = new Set<Algebra.ExistenceExpression>();
-  const rewrite = (existence: Algebra.ExistenceExpression): { continue: false } => {
+  const rewritePattern = (existence: Algebra.ExistenceExpression): { continue: false } => {
     if (!rewritten.has(existence)) {
       rewritten.add(existence);
       const existenceScope = metaRestrictedTo(solutions, collectVariableNames(c.astTransformer, existence.input));
-      existence.input = rewritePattern({ ...c, existenceScope }, existence.input);
+      existence.input = rewriteInExistenceScopes({ ...c, existenceScope }, existence.input, rewrite);
     }
-    // A nested EXISTS is the business of the rewrite of the pattern holding it.
+    // A nested EXISTS is rewritten with the pattern holding it.
     return { continue: false };
   };
   for (const expression of expressions) {
-    algebraUtils.visitOperationSub(expression, {}, { expression: { existence: { preVisitor: rewrite }}});
+    algebraUtils.visitOperationSub(expression, {}, { expression: { existence: { preVisitor: rewritePattern }}});
   }
 }
 
 /** What {@link rewriteInExistenceScopes} reads of a {@link TransformationContext}. */
 export type ExistenceScopeContext = RangeContext & Pick<TransformationContext, 'astTransformer'>;
 
+/** The traversal callback with which a pass leaves EXISTS patterns to {@link rewriteInExistenceScopes}. */
+export const leaveExistencePatterns = { preVisitor: () => ({ continue: false }) };
+
 /**
- * Rewrites an operation with a pass that leaves the pattern of an EXISTS alone, and then each such pattern in a context
- * whose `existenceScope` joins in the solution it is evaluated for, as SPARQL 1.2 does.
+ * The `algebraUtils.mapOperationPreOrder` callback with which a pass leaves EXISTS patterns to
+ * {@link rewriteInExistenceScopes}.
+ * @param expression - The expression to leave as it is
+ * @returns the instruction not to descend into it
+ */
+export function leaveExistencePatternsPreOrder(expression: Algebra.Expression): PreOrderMappingReturn {
+  return { newValue: expression, continue: false };
+}
+
+/**
+ * Rewrites an operation with a pass, then the pattern of each EXISTS in it with the solutions it is evaluated for as
+ * `existenceScope`. The pattern's scope is only known once the pass has placed the EXISTS, so the pass leaves patterns
+ * alone, using {@link leaveExistencePatterns} or {@link leaveExistencePatternsPreOrder}.
  * @param c - The context to rewrite in
- * @param op - The operation to rewrite, a tree of the pass's own
- * @param rewrite - The pass, which does not descend into an EXISTS
+ * @param op - The operation to rewrite, a tree the pass may change
+ * @param rewrite - The pass
  * @returns the rewritten operation
  */
 export function rewriteInExistenceScopes<C extends ExistenceScopeContext, T extends Algebra.Operation>(
@@ -749,19 +761,17 @@ export function rewriteInExistenceScopes<C extends ExistenceScopeContext, T exte
   rewrite: (context: C, op: Algebra.Operation) => Algebra.Operation,
 ): T {
   const rewritten = rewrite(c, op);
-  const rewritePattern = (patternContext: C, pattern: Algebra.Operation): Algebra.Operation =>
-    rewriteInExistenceScopes(patternContext, pattern, rewrite);
   const callbacks = {
-    // What the pass cached describes the plan it was handed, and the visitor below reads the plan it hands back.
+    // The pass's cached metadata describes the plan before it, so it is computed again.
     preVisitor: (operation: { metadata?: unknown }) => {
       delete operation.metadata;
       return {};
     },
-    visitor: (operation: Algebra.Operation) => rewriteExistencePatterns(c, operation, rewritePattern),
+    visitor: (operation: Algebra.Operation) => rewriteExistencePatternsOf(c, operation, rewrite),
   };
   algebraUtils.visitOperation(rewritten, {
     ...Object.fromEntries(Object.values(Types).map(type => [ type, callbacks ])),
-    [Types.EXPRESSION]: { preVisitor: () => ({ continue: false }) },
+    [Types.EXPRESSION]: leaveExistencePatterns,
   });
   return <T> rewritten;
 }

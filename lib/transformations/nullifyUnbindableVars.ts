@@ -2,7 +2,12 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import { rewriteInExistenceScopes, withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import {
+  leaveExistencePatternsPreOrder,
+  rewriteInExistenceScopes,
+  withCpVars,
+  withoutCpVars,
+} from '../utils/certainlyBoundVars.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 
 /**
@@ -45,9 +50,7 @@ export function nullifyUnbindableVars<T extends Algebra.Operation>(c: Transforma
     const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>>[1] =
       Object.fromEntries(Object.values(Algebra.Types).map(type =>
         [ type, (copy: Algebra.Operation) => nullifyIfProvenEmpty(context, copy) ]));
-    // The pattern of an EXISTS is nullified in its own scope, by `rewriteInExistenceScopes`.
-    callbacks[Algebra.Types.EXPRESSION] = (expression: Algebra.Expression) =>
-      ({ ...keepMetadata, newValue: expression, continue: false });
+    callbacks[Algebra.Types.EXPRESSION] = leaveExistencePatternsPreOrder;
     return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(operation, callbacks);
   };
   // Starting from a copy without metadata gives us both a tree of our own to rewrite and the guarantee

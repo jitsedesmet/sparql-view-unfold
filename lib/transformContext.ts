@@ -58,9 +58,8 @@ export interface TransformationContext {
     input?: CPMeta,
   ) => RangeSet;
   /**
-   * What the solution an EXISTS is evaluated for binds of the variables its pattern mentions, while a pass rewrites
-   * that pattern. SPARQL 1.2 joins the solution into every group of the pattern, its ContextSolution, and leaves a BIND
-   * of one of those variables undefined.
+   * While a pass rewrites an EXISTS pattern: what the outer solution binds of the pattern's variables. SPARQL 1.2
+   * joins that solution into every group of the pattern.
    */
   existenceScope?: CPMeta;
 }

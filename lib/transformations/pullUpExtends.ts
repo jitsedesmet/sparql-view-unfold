@@ -5,7 +5,13 @@ import type { QueryTransformation } from '../types.js';
 import type { Access } from '../utils/assertions.js';
 import { componentOf } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
-import { cpMetaOf, rewriteInExistenceScopes, termVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import {
+  cpMetaOf,
+  leaveExistencePatterns,
+  rewriteInExistenceScopes,
+  termVars,
+  withoutCpVars,
+} from '../utils/certainlyBoundVars.js';
 import {
   asksBoundOfVariable,
   constructedTermOf,
@@ -126,9 +132,8 @@ interface FloatingBind {
   /** Its position in that chain, in evaluation order. */
   chainPosition: number;
   /**
-   * The gate every rule is behind: whether the bind does the same wherever in the plan it is evaluated. That needs `e`
-   * to give the same answer everywhere, and `?x` not to be bound by the solution an EXISTS is evaluated for, which the
-   * bind then may keep.
+   * The gate every rule is behind: whether the bind does the same wherever it is evaluated. That needs a stable `e`
+   * and an `?x` that the outer solution of an EXISTS does not bind.
    */
   bindIsStable: boolean;
   /**
@@ -187,7 +192,7 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformationCont
 }
 
 /**
- * Floats every `BIND` in an operation, leaving the pattern of an EXISTS to {@link rewriteInExistenceScopes}.
+ * Floats every `BIND` in an operation, outside EXISTS patterns.
  * @param c - The transformation context
  * @param sealed - The solution modifier chain of the query, which no bind is written into
  * @param op - The operation to rewrite
@@ -242,8 +247,7 @@ function floatBinds(
       transform: (from, original) => floatThroughCongruentOperation(c, from, sealed.has(original), input =>
         c.AF.createFrom(input, from.default, from.named)),
     },
-    // The pattern of an EXISTS is floated through in its own scope, by `rewriteInExistenceScopes`.
-    [Algebra.Types.EXPRESSION]: { preVisitor: () => ({ continue: false }) },
+    [Algebra.Types.EXPRESSION]: leaveExistencePatterns,
     // An EXTEND needs no callback of its own: a chain is one unit, decided by whatever it stands under.
     // Everything else is a leaf or a barrier, and a type without a callback is exactly a barrier.
   });
