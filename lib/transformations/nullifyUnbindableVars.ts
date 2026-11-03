@@ -1,10 +1,10 @@
-import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
+import { forEveryNodeType } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import { withCpVars } from '../utils/certainlyBoundVars.js';
-import { preOrderCallbacksOutsideExistencePatterns, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
+import { leaveExistencePatternsPreOrder, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 
 /**
@@ -44,7 +44,10 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  */
 export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   return rewriteInExistenceScopes(c, op, (context, operation) => {
-    const callbacks = preOrderCallbacksOutsideExistencePatterns(copy => nullifyIfProvenEmpty(context, copy));
+    const callbacks = forEveryNodeType(
+      (copy: Algebra.Operation) => nullifyIfProvenEmpty(context, copy),
+      { [Algebra.Types.EXPRESSION]: leaveExistencePatternsPreOrder },
+    );
     return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(operation, callbacks);
   });
 }

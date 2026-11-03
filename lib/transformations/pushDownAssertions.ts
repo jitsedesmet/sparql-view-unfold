@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
+import { forEveryNodeType } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import type { AssertionFilter, EquatedGroup } from '../utils/assertionConjunction.js';
@@ -29,7 +30,7 @@ import {
   asWeakenedConjunct,
 } from '../utils/assertions.js';
 import { cpMetaOf } from '../utils/certainlyBoundVars.js';
-import { preOrderCallbacksOutsideExistencePatterns, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
+import { leaveExistencePatternsPreOrder, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
@@ -125,10 +126,10 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: Transformatio
   // Metadata is cleared around the pass, not inside it: `keepMetadata` is how a filter hands its conjunction to the
   // next `pushFilter`.
   return rewriteInExistenceScopes(c, rootOp, (context, op) => {
-    const callbacks = {
-      ...preOrderCallbacksOutsideExistencePatterns(keep),
+    const callbacks = forEveryNodeType(keep, {
       [Algebra.Types.FILTER]: (filter: Algebra.Filter) => pushFilter(context, namer, filter),
-    };
+      [Algebra.Types.EXPRESSION]: leaveExistencePatternsPreOrder,
+    });
     return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(op, callbacks);
   });
 }

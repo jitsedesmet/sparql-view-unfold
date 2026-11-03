@@ -407,7 +407,7 @@ describe('the pattern of an EXISTS', () => {
    * @param query - The WHERE clause
    * @returns the metadata of the pattern
    */
-  function patternMeta(query: string): CPMeta {
+  function existsMeta(query: string): CPMeta {
     let meta: CPMeta | undefined;
     rewriteInExistenceScopes(c, parseQuery(c, `SELECT * WHERE { ${query} }`), (context, operation) => {
       if (context.existenceScope !== undefined) {
@@ -418,26 +418,26 @@ describe('the pattern of an EXISTS', () => {
     return meta!;
   }
 
-  it('binds what the solution it is evaluated for binds of the variables it mentions', ({ expect }) => {
-    const { cVars, vRanges } = patternMeta('?s ?p ?o FILTER EXISTS { ?w ?q ?v BIND(?s AS ?t) }');
+  it('binds what the solution it is evaluated for binds', ({ expect }) => {
+    const { cVars, vRanges } = existsMeta('?s ?p ?o FILTER EXISTS { ?w ?q ?v BIND(?s AS ?t) }');
     expect(cVars.has('s')).toBe(true);
     expect([ ...vRanges.rangeOf('s') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
-    expect(vRanges.has('o')).toBe(false);
+    expect([ ...vRanges.rangeOf('o') ].sort()).toEqual([ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]);
   });
 
   it('binds a variable that solution may leave unbound possibly', ({ expect }) => {
-    const { cVars, vRanges } = patternMeta('?s ?p ?o OPTIONAL { ?s ?q ?v } FILTER EXISTS { ?w ?r ?u BIND(?v AS ?t) }');
+    const { cVars, vRanges } = existsMeta('?s ?p ?o OPTIONAL { ?s ?q ?v } FILTER EXISTS { ?w ?r ?u BIND(?v AS ?t) }');
     expect(cVars.has('v')).toBe(false);
     expect(vRanges.canBind('v')).toBe(true);
   });
 
   it('meets that range with the one it binds itself', ({ expect }) => {
-    const { vRanges } = patternMeta('?s <ex://p> ?o FILTER EXISTS { ?o ?q ?v }');
+    const { vRanges } = existsMeta('?s <ex://p> ?o FILTER EXISTS { ?o ?q ?v }');
     expect([ ...vRanges.rangeOf('o') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
   });
 
   it('reads a BIND over a variable of that solution with its range', ({ expect }) => {
-    const { vRanges } = patternMeta('?s ?p ?o FILTER EXISTS { ?w ?q ?v BIND(COALESCE(?s, "x") AS ?t) }');
+    const { vRanges } = existsMeta('?s ?p ?o FILTER EXISTS { ?w ?q ?v BIND(COALESCE(?s, "x") AS ?t) }');
     expect([ ...vRanges.rangeOf('t') ].sort()).toEqual([ 'BlankNode', 'Literal', 'NamedNode' ]);
   });
 
@@ -461,7 +461,7 @@ describe('the pattern of an EXISTS', () => {
   });
 
   it('sees both sides of the OPTIONAL whose condition it is in', ({ expect }) => {
-    const { cVars } = patternMeta('?s ?p ?o OPTIONAL { ?s ?q ?v FILTER EXISTS { ?w ?r ?v } }');
+    const { cVars } = existsMeta('?s ?p ?o OPTIONAL { ?s ?q ?v FILTER EXISTS { ?w ?r ?v } }');
     expect(cVars.has('v')).toBe(true);
   });
 });

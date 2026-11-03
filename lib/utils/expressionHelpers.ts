@@ -1,5 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { forEveryNodeType } from '@traqula/core';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
@@ -171,9 +172,7 @@ export function holdsExpression(
     found = accepts(expression);
     return { shortcut: found };
   } };
-  algebraUtils.visitOperationSub(node, {}, {
-    expression: Object.fromEntries(Object.values(Algebra.ExpressionTypes).map(subType => [ subType, test ])),
-  });
+  algebraUtils.visitOperationSub(node, {}, { expression: forEveryNodeType(test) });
   return found;
 }
 

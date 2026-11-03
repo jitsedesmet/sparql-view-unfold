@@ -1,11 +1,10 @@
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
-import { algebraUtils, Types } from '@traqula/algebra-transformations-1-2';
+import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
-import type { TransformationContext } from '../transformContext.js';
-import { collectVariableNames } from '../utils.js';
+import { forEveryNodeType } from '@traqula/core';
 import type { RangeContext } from './certainlyBoundVars.js';
-import { cpMetaOf, joinedMeta, metaRestrictedTo, withoutCpVars } from './certainlyBoundVars.js';
-import { containsExistenceExpression } from './expressionHelpers.js';
+import { cpMetaOf, joinedMeta, withoutCpVars } from './certainlyBoundVars.js';
+import { containsExistenceExpression, holdsExpression } from './expressionHelpers.js';
 
 /**
  * @fileoverview Rewriting EXISTS patterns in the scope of the solution they are evaluated for.
@@ -14,9 +13,6 @@ import { containsExistenceExpression } from './expressionHelpers.js';
  * the EXISTS patterns, and then each pattern with that solution as `existenceScope`: the scope is only known once the
  * pass has placed the EXISTS.
  */
-
-/** What {@link rewriteInExistenceScopes} reads of a {@link TransformationContext}. */
-export type ExistenceScopeContext = RangeContext & Pick<TransformationContext, 'astTransformer'>;
 
 /** A pass that leaves EXISTS patterns alone, rewriting an operation in a context. */
 export type ExistenceScopedPass<C> = (context: C, op: Algebra.Operation) => Algebra.Operation;
@@ -28,90 +24,112 @@ export type ExistenceScopedPass<C> = (context: C, op: Algebra.Operation) => Alge
 export const leaveExistencePatterns = { preVisitor: () => ({ continue: false }) };
 
 /**
- * The `algebraUtils.mapOperationPreOrder` callbacks that apply one callback to every operation outside EXISTS patterns.
- * @param callback - The callback for every operation
- * @returns the callbacks per type
+ * The `algebraUtils.mapOperationPreOrder` callback with which a pass leaves EXISTS patterns alone.
+ * @param expression - The expression to leave as it is
+ * @returns the instruction not to descend into it
  */
-export function preOrderCallbacksOutsideExistencePatterns(
-  callback: (op: Algebra.Operation) => PreOrderMappingReturn,
-): Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>>[1] {
-  return {
-    ...Object.fromEntries(Object.values(Types).map(type => [ type, callback ])),
-    [Types.EXPRESSION]: (expression: Algebra.Expression) => ({ newValue: expression, continue: false }),
-  };
+export function leaveExistencePatternsPreOrder(expression: Algebra.Expression): PreOrderMappingReturn {
+  return { newValue: expression, continue: false };
 }
 
+/** Skips the metadata of an operation, a cache rather than a tree. */
+const skipMetadata = { ignoreKeys: new Set([ 'metadata' ]) };
+
 /**
- * Rewrites an operation with a pass, then the pattern of each EXISTS in it with the solutions it is evaluated for as
- * `existenceScope`. The result, like the tree the pass gets, holds no cached metadata.
+ * Rewrites an operation with a pass, then the pattern of each EXISTS in it with the solution it is evaluated for as
+ * `existenceScope`. The pass gets a copy without cached metadata, and the result holds none either.
  * @param c - The context to rewrite in
  * @param op - The operation to rewrite, which is left untouched
  * @param pass - The pass, which leaves EXISTS patterns alone
  * @returns the rewritten operation
  */
-export function rewriteInExistenceScopes<C extends ExistenceScopeContext, T extends Algebra.Operation>(
+export function rewriteInExistenceScopes<C extends RangeContext, T extends Algebra.Operation>(
   c: C,
   op: T,
   pass: ExistenceScopedPass<C>,
 ): T {
-  return withoutCpVars(rewriteTreeInExistenceScopes(c, withoutCpVars(op), pass));
+  const entered = withoutCpVars(op);
+  const isExistence = (expression: Algebra.Expression): boolean => expression.subType === ExpressionTypes.EXISTENCE;
+  // A plan without EXISTS, the common case, skips the walk over the rewritten plan.
+  const rewritten = holdsExpression(entered, isExistence) ?
+    rewriteTreeInExistenceScopes(c, entered, pass) :
+    pass(c, entered);
+  return <T> withoutCpVars(rewritten);
 }
 
 /**
- * {@link rewriteInExistenceScopes} on a tree of its own, keeping the metadata it computes.
+ * Rewrites an operation without cached metadata with a pass, then the pattern of each EXISTS in its result.
  * @param c - The context to rewrite in
- * @param op - The operation to rewrite, which the pass may change
+ * @param op - The operation to rewrite
  * @param pass - The pass
- * @returns the rewritten operation
+ * @returns the rewritten operation, a new tree
  */
-function rewriteTreeInExistenceScopes<C extends ExistenceScopeContext, T extends Algebra.Operation>(
-  c: C,
-  op: T,
-  pass: ExistenceScopedPass<C>,
-): T {
-  const rewritten = pass(c, op);
-  const callbacks = {
-    // The metadata the pass cached describes the plan before it.
-    preVisitor: (operation: { metadata?: unknown }) => {
-      delete operation.metadata;
-      return {};
-    },
-    visitor: (operation: Algebra.Operation) => rewriteExistencePatternsOf(c, operation, pass),
-  };
-  algebraUtils.visitOperation(rewritten, {
-    ...Object.fromEntries(Object.values(Types).map(type => [ type, callbacks ])),
-    [Types.EXPRESSION]: leaveExistencePatterns,
-  });
-  return <T> rewritten;
-}
-
-/**
- * Rewrites the pattern of every EXISTS an operation evaluates, with the solutions of its input as `existenceScope`.
- * Each EXISTS gets a pattern of its own, as a pass may share one EXISTS between operations.
- * @param c - The context the operation was rewritten in
- * @param op - The operation, whose expressions are replaced
- * @param pass - The pass
- */
-function rewriteExistencePatternsOf<C extends ExistenceScopeContext>(
+function rewriteTreeInExistenceScopes<C extends RangeContext>(
   c: C,
   op: Algebra.Operation,
   pass: ExistenceScopedPass<C>,
-): void {
-  if (!expressionsEvaluatedBy(op).some(containsExistenceExpression)) {
-    return;
+): Algebra.Operation {
+  return algebraUtils.mapOperation<'unsafe', Algebra.Operation>(pass(c, op), forEveryNodeType({
+    preVisitor: () => skipMetadata,
+    transform: (copy: Algebra.Operation) => withExistencePatternsRewritten(c, copy, pass),
+  }, { [Types.EXPRESSION]: leaveExistencePatterns }));
+}
+
+/**
+ * Rewrites the pattern of every EXISTS an operation evaluates, with the solution it is evaluated for as
+ * `existenceScope`. Each EXISTS gets a pattern of its own, as a pass may share one EXISTS between operations.
+ * @param c - The context the operation was rewritten in
+ * @param copy - A copy of the operation, whose cached metadata describes the plan before the pass
+ * @param pass - The pass
+ * @returns the copy, without metadata and with its expressions replaced
+ */
+function withExistencePatternsRewritten<C extends RangeContext>(
+  c: C,
+  copy: Algebra.Operation,
+  pass: ExistenceScopedPass<C>,
+): Algebra.Operation {
+  delete (<{ metadata?: unknown }> copy).metadata;
+  if (!expressionsEvaluatedBy(copy).some(containsExistenceExpression)) {
+    return copy;
   }
-  const solutions = joinedMeta([ (<A.Single | A.Multi> op).input ].flat().map(input => cpMetaOf(c, input)));
-  const rewritePatterns = (expression: Algebra.Expression): Algebra.Expression =>
+  const inputs = [ (<A.Single | A.Multi> copy).input ].flat();
+  const patternContext = { ...c, existenceScope: joinedMeta(inputs.map(input => cpMetaOf(c, input))) };
+  replaceExpressionsEvaluatedBy(copy, expression =>
     algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: { existence: {
       // A nested EXISTS is rewritten with the pattern holding it.
       ...leaveExistencePatterns,
-      transform: (existence: Algebra.ExistenceExpression) => {
-        const existenceScope = metaRestrictedTo(solutions, collectVariableNames(c.astTransformer, existence.input));
-        const pattern = withoutCpVars(existence.input);
-        return { ...existence, input: rewriteTreeInExistenceScopes({ ...c, existenceScope }, pattern, pass) };
-      },
-    }}});
-  replaceExpressionsEvaluatedBy(op, rewritePatterns);
+      transform: (existence: Algebra.ExistenceExpression) => ({
+        ...existence,
+        input: rewriteTreeInExistenceScopes(patternContext, withoutCpVars(existence.input), pass),
+      }),
+    }}}));
+  return copy;
+}
+
+/**
+ * The expressions an operation evaluates per solution of its input, or of its joined inputs for an OPTIONAL.
+ * @param op - The operation to read
+ * @returns its expressions
+ */
+function expressionsEvaluatedBy(op: Algebra.Operation): Algebra.Expression[] {
+  switch (op.type) {
+    case Types.FILTER:
+    case Types.EXTEND: {
+      return [ op.expression ];
+    }
+    case Types.LEFT_JOIN: {
+      return op.expression === undefined ? [] : [ op.expression ];
+    }
+    case Types.ORDER_BY: {
+      return op.expressions;
+    }
+    case Types.GROUP: {
+      return op.aggregates;
+    }
+    default: {
+      return [];
+    }
+  }
 }
 
 /**
@@ -142,31 +160,5 @@ function replaceExpressionsEvaluatedBy(
       break;
     }
     default:
-  }
-}
-
-/**
- * The expressions an operation evaluates per solution of its input, or of its joined inputs for an OPTIONAL.
- * @param op - The operation to read
- * @returns its expressions
- */
-function expressionsEvaluatedBy(op: Algebra.Operation): Algebra.Expression[] {
-  switch (op.type) {
-    case Types.FILTER:
-    case Types.EXTEND: {
-      return [ op.expression ];
-    }
-    case Types.LEFT_JOIN: {
-      return op.expression === undefined ? [] : [ op.expression ];
-    }
-    case Types.ORDER_BY: {
-      return op.expressions;
-    }
-    case Types.GROUP: {
-      return op.aggregates;
-    }
-    default: {
-      return [];
-    }
   }
 }

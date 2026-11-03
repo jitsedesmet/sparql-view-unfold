@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
+import { forEveryNodeType } from '@traqula/core';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
 import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import {
@@ -145,7 +146,7 @@ export function joinedMeta(inputs: readonly CPMeta[]): CPMeta {
  * @param names - The variables to keep
  * @returns the restricted metadata
  */
-export function metaRestrictedTo(meta: CPMeta, names: SSet): CPMeta {
+function metaRestrictedTo(meta: CPMeta, names: SSet): CPMeta {
   return {
     cVars: intersectSets([ meta.cVars, names ]),
     vRanges: new VRanges([ ...meta.vRanges ].filter(([ name ]) => names.has(name))),
@@ -287,7 +288,7 @@ const dropMetadata = { transform: (copy: { metadata?: unknown }): unknown => {
 } };
 
 /** Drops the metadata of every operation, no matter its type. */
-const dropAllMetadata = Object.fromEntries(Object.values(Types).map(type => [ type, dropMetadata ]));
+const dropAllMetadata = forEveryNodeType(dropMetadata);
 
 /**
  * Returns a copy of `op` without any cached metadata, the state {@link withCpVars} recomputes from. Since
