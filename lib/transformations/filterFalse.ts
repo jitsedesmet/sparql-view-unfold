@@ -47,7 +47,7 @@ export function transformFilterFalse(c: TransformationContext, op: Algebra.Opera
   const sealed = solutionModifierChainOf(op);
   const absorbSingle = { transform: (x: Algebra.Single, original: Algebra.Operation): Algebra.Single =>
     absorbingSingle(c, x, sealed.has(original)) };
-  return algebraUtils.mapOperation<'unsafe', typeof op>(
+  return algebraUtils.mapOperationSub<'unsafe', typeof op>(
     op,
     {
       [Algebra.Types.JOIN]: { transform: join => absorbJoinOnEmptyBindings(c, join) },
@@ -89,11 +89,11 @@ export function transformFilterFalse(c: TransformationContext, op: Algebra.Opera
         }
         return values;
       } },
-      [Algebra.Types.EXPRESSION]: { transform: expression =>
-        expression.subType === Algebra.ExpressionTypes.EXISTENCE && isFilterFalse(c, expression.input) ?
-          c.AF.createTermExpression(expression.not ? termTrue : termFalse) :
-          expression },
     },
+    { [Algebra.Types.EXPRESSION]: { [Algebra.ExpressionTypes.EXISTENCE]: { transform: existence =>
+      isFilterFalse(c, existence.input) ?
+        c.AF.createTermExpression(existence.not ? termTrue : termFalse) :
+        existence }}},
   );
 }
 
