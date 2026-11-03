@@ -532,7 +532,7 @@ export class AssertionConjunction {
       }
     }
     for (const [ group, range ] of strongRangePerGroup) {
-      if (!admitsRange(this.clusters, group, range)) {
+      if (!this.clusters.admitsRange(group, range)) {
         return false;
       }
     }
@@ -542,12 +542,10 @@ export class AssertionConjunction {
       if (group === undefined) {
         continue;
       }
-      const range = vRanges.rangeOf(name);
-      if (this.strength.get(name) === 'weak' && !admitsRange(
-        this.clusters,
-        group,
-        range.meet(strongRangePerGroup.get(this.clusters.resolveGroup(group)) ?? objectRange),
-      )) {
+      // Every strong member holds the group's value, so what they leave it is what `name` holds where it is bound.
+      const strongRange = strongRangePerGroup.get(this.clusters.resolveGroup(group)) ?? objectRange;
+      const range = vRanges.rangeOf(name).meet(strongRange);
+      if (this.strength.get(name) === 'weak' && !this.clusters.admitsRange(group, range)) {
         // W⟨?x ≡ v⟩ is `¬bnd(?x) ∨ ?x ≡ v`, whose right disjunct is false wherever `?x` is bound here, so it *is*
         // U⟨?x⟩ - a constraint the rest of the pass acts on. Cannot fail: `?x` is neither `bound` nor strong.
         this.assertUnbound(name);
@@ -1407,21 +1405,6 @@ export function termTypesOfReadings(group: EquatedGroup): AssertionConjunct[] {
   return range === undefined ?
       [] :
     group.readings.map(reading => ({ access: reading, assertion: assertTermType(range) }));
-}
-
-/**
- * Whether a group can still hold a value of one of these types, its pin included.
- * @param clusters - The clusters holding the group
- * @param group - The group to check
- * @param range - The term types to admit
- * @returns whether something is left for the group to be
- */
-function admitsRange(clusters: AssertionClusterSet, group: number, range: RangeSet): boolean {
-  if (clusters.rangeOf(group).meet(range).size === 0) {
-    return false;
-  }
-  const pin = clusters.pinOf(group);
-  return pin === undefined || range.has(pin.kind === 'term' ? pin.term.termType : 'Quad');
 }
 
 /**

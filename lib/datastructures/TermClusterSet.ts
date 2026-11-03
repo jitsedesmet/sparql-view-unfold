@@ -279,16 +279,20 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     const resolved = this.resolveGroup(group);
     // The stored range rather than {@link rangeOf}, which a subclass may meet with ranges it keeps apart.
     this.groupToRange[resolved] = (this.groupToRange[resolved] ?? objectRange).meet(range);
-    return this.admitsAValue(resolved);
+    return this.admitsRange(resolved);
   }
 
   /**
-   * Whether a group can still hold a value: its range is not empty, and holds the term type of its pin.
-   * @param group - The resolved group to check
+   * Whether a group can still hold a value of one of these term types, its pin included.
+   * @param group - The group to check
+   * @param range - The term types to admit
    * @returns whether something is left for it to be
    */
-  protected admitsAValue(group: number): boolean {
-    return this.rangeOf(group).size > 0 && this.rangeAdmits(group, this.groupToPin[group]);
+  public admitsRange(group: number, range: RangeSet = objectRange): boolean {
+    const resolved = this.resolveGroup(group);
+    const admitted = this.rangeOf(resolved).meet(range);
+    const pin = this.groupToPin[resolved];
+    return admitted.size > 0 && (pin === undefined || admitted.has(pin.kind === 'term' ? pin.term.termType : 'Quad'));
   }
 
   /**
@@ -410,19 +414,6 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
       group,
       keptPin.kind === 'triple' ? tripleTermRange : new RangeSet([ keptPin.term.termType ]),
     );
-  }
-
-  /**
-   * Whether the pin - if there is one - is a term the group's range still admits.
-   * @param group - The group whose range to read
-   * @param pin - The pin to check
-   * @returns whether the two agree
-   */
-  private rangeAdmits(group: number, pin: Pin<Term> | undefined): boolean {
-    if (pin === undefined) {
-      return true;
-    }
-    return this.rangeOf(group).has(pin.kind === 'term' ? pin.term.termType : 'Quad');
   }
 
   /**

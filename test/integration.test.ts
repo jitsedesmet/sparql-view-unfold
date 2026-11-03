@@ -564,7 +564,7 @@ describe('integration tests', () => {
     // has to survive the equality being pushed past it. repeatedVariable.ttl holds a literal pair beside an IRI one.
     const prefix = 'PREFIX : <ex://>\nPREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n';
     const pairConstruct = `${prefix}CONSTRUCT { ?o :p ?o2 } WHERE { ?t :x ?o ; :y ?o2 }`;
-    // Not `reificationConstruct`: its `rdf:type` pattern changes the plan to one that never lost the test.
+    // Not the shared `rdfReificationConstruct`: its `rdf:type` pattern makes a plan that never lost the test.
     const reificationConstruct =
       `${prefix}CONSTRUCT { ?r rdf:reifies <<( ?s ?p ?o )>> } WHERE { ?r rdf:subject ?s ; rdf:predicate ?p ; rdf:object ?o }`;
 

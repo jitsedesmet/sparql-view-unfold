@@ -19,7 +19,7 @@ import { meetShapes, TermClusterSet, triplePositions } from './TermClusterSet.js
  * asserted half never decides anything the effective half does not, and forgetting it widens the effective one.
  */
 export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
-  /** Maps group ID to the part of its range a condition asserted, rather than the set working it out */
+  /** Maps group ID to the part of its range a condition asserted, rather than worked out; absent when nothing was */
   protected groupToAssertedRange: Record<number, RangeSet>;
 
   public constructor() {
@@ -60,7 +60,9 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
   }
 
   public override rangeOf(group: number): RangeSet {
-    return super.rangeOf(group).meet(this.assertedRangeOf(group));
+    const resolved = this.resolveGroup(group);
+    const asserted = this.groupToAssertedRange[resolved];
+    return asserted === undefined ? super.rangeOf(resolved) : super.rangeOf(resolved).meet(asserted);
   }
 
   /**
@@ -74,7 +76,7 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
     this.touch();
     const resolved = this.resolveGroup(group);
     this.groupToAssertedRange[resolved] = this.assertedRangeOf(resolved).meet(range);
-    return this.admitsAValue(resolved);
+    return this.admitsRange(resolved);
   }
 
   /**
@@ -85,7 +87,7 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
   public forgetAssertedRange(group: number): void {
     this.touch();
     const resolved = this.resolveGroup(group);
-    this.groupToAssertedRange[resolved] = objectRange;
+    delete this.groupToAssertedRange[resolved];
     if (!this.isLive(resolved)) {
       this.dropGroup(resolved);
     }
@@ -99,9 +101,11 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
    */
   protected override migrateGroupData(oldGroup: number, newGroup: number): void {
     super.migrateGroupData(oldGroup, newGroup);
-    this.groupToAssertedRange[newGroup] = this.assertedRangeOf(newGroup)
-      .meet(this.groupToAssertedRange[oldGroup] ?? objectRange);
-    delete this.groupToAssertedRange[oldGroup];
+    const inherited = this.groupToAssertedRange[oldGroup];
+    if (inherited !== undefined) {
+      this.groupToAssertedRange[newGroup] = this.assertedRangeOf(newGroup).meet(inherited);
+      delete this.groupToAssertedRange[oldGroup];
+    }
   }
 
   /**
@@ -113,12 +117,6 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
   protected override carriesInformation(group: number): boolean {
     // A meet only ever shrinks, so a range that is not the top is one something narrowed.
     return super.carriesInformation(group) || this.assertedRangeOf(group).size < objectRange.size;
-  }
-
-  protected override createEmptyGroup(): number {
-    const group = super.createEmptyGroup();
-    this.groupToAssertedRange[group] = objectRange;
-    return group;
   }
 
   protected override dropGroup(group: number): void {
