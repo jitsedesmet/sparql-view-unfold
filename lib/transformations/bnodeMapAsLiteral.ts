@@ -9,8 +9,8 @@ import { componentOf } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import {
   cpMetaOf,
+  expressionCertainlyEvaluates,
   rewriteInExistenceScopes,
-  termCertainlyEvaluates,
   withoutCpVars,
 } from '../utils/certainlyBoundVars.js';
 import {
@@ -227,7 +227,7 @@ function encodeInternalBnode(
     const term = constructedTermOf(argument);
     const termExpression = term === undefined ? argument : AF.createTermExpression(term);
     const encoding = encodeTerm(termExpression, c.expressionRange(c, termExpression, scope), c.tripleTermArgumentDepth);
-    return term !== undefined && scope !== undefined && termCertainlyEvaluates(term, scope) ?
+    return scope !== undefined && expressionCertainlyEvaluates(c, termExpression, scope) ?
       encoding :
       orUnbound(termExpression, encoding);
   }
