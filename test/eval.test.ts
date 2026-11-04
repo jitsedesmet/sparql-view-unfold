@@ -7,6 +7,7 @@ import { DataFactory } from 'rdf-data-factory';
 import type { ExpectStatic } from 'vitest';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
+import type { QueryRewriter } from '../lib/queryRewriter.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import { filterFalseTransformation } from '../lib/transformations/filterFalse.js';
 import {
@@ -64,8 +65,7 @@ describe('evaluation tests', () => {
    * @param source - The data to run it over
    * @returns one string per row, in sequence
    */
-  async function sequence(query: string, source: string | Store = './test/statics/assertionPushdown.ttl'):
-  Promise<string[]> {
+  async function sequence(query: string, source: string | Store): Promise<string[]> {
     const rows: RDF.Bindings[] = await arrayifyStream(await engine.queryBindings(query, { sources: [ source ]}));
     return rows.map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${value.value}`).sort().join('|'));
   }
@@ -76,9 +76,11 @@ describe('evaluation tests', () => {
    * @param source - The data to run it over
    * @returns one string per row, sorted
    */
-  async function bindings(query: string, source?: string | Store): Promise<string[]> {
+  async function bindings(query: string, source: string | Store): Promise<string[]> {
     return (await sequence(query, source)).sort();
   }
+
+  const prefixes = 'PREFIX : <ex://>\n';
 
   describe('rdf reification', () => {
     it ('fails without mapping', async({ expect }) => {
@@ -121,7 +123,7 @@ describe('evaluation tests', () => {
      * compare the answers, duplicates and all. The four operations below are the ones where a solution may
      * leave a variable unbound, which is exactly where a lost `cVars` is observable.
      */
-    const pullUpPrefixes = 'PREFIX : <ex://>\n';
+    const pullUpData = './test/statics/assertionPushdown.ttl';
     const c = createTransformationContext();
 
     async function assertEquivalent(
@@ -129,11 +131,11 @@ describe('evaluation tests', () => {
       query: string,
       expectedRows: number,
     ): Promise<void> {
-      const evalQuery = pullUpPrefixes + query;
+      const evalQuery = prefixes + query;
       const rewritten = c.generator.generate(toAst(pullUpExtends(c, parseQuery(c, evalQuery)))).trim();
-      const original = await bindings(evalQuery);
+      const original = await bindings(evalQuery, pullUpData);
       // Result is equal
-      expect(await bindings(rewritten)).toEqual(original);
+      expect(await bindings(rewritten, pullUpData)).toEqual(original);
       // And has the requested length
       expect(original).toHaveLength(expectedRows);
     }
@@ -149,10 +151,10 @@ describe('evaluation tests', () => {
       query: string,
       expected: string[],
     ): Promise<void> {
-      const evalQuery = pullUpPrefixes + query;
+      const evalQuery = prefixes + query;
       const rewritten = c.generator.generate(toAst(pullUpExtends(c, parseQuery(c, evalQuery)))).trim();
-      const original = await sequence(evalQuery);
-      expect(await sequence(pullUpPrefixes + rewritten)).toEqual(original);
+      const original = await sequence(evalQuery, pullUpData);
+      expect(await sequence(prefixes + rewritten, pullUpData)).toEqual(original);
       expect(original).toEqual(expected);
     }
 
@@ -224,10 +226,29 @@ describe('evaluation tests', () => {
   });
 
   describe('unfolding in an EXISTS', () => {
-    const prefixes = 'PREFIX : <ex://>\n';
     const plainView = 'CONSTRUCT { ?s :q ?o } WHERE { ?s :p ?o }';
     const data = new Store(new Parser()
       .parse('@prefix : <ex://> . :a :p :b . :b :p :c . :c :p :d . :x :p "l" . :a :hidden true .'));
+
+    const rewritersByView = new Map<string, { unfoldOnly: QueryRewriter; pipeline: QueryRewriter }>();
+
+    /**
+     * The rewriters over a view, unfolding alone and the default pipeline, built once per view.
+     * @param view - The view, without its prefixes
+     * @returns both rewriters
+     */
+    function rewritersOver(view: string): { unfoldOnly: QueryRewriter; pipeline: QueryRewriter } {
+      let rewriters = rewritersByView.get(view);
+      if (rewriters === undefined) {
+        const mapping = mappingFromConstructQueries([ prefixes + view ]);
+        rewriters = {
+          unfoldOnly: createQueryRewriter([ unfoldingTransformation(mapping) ]),
+          pipeline: createQueryRewriter(createDefaultTransformationPipeline(mapping)),
+        };
+        rewritersByView.set(view, rewriters);
+      }
+      return rewriters;
+    }
 
     /**
      * Asserts that the unfolded query over the data, optimised or not, answers what the query answers over the view.
@@ -242,12 +263,8 @@ describe('evaluation tests', () => {
       expectedRows: number,
       view = plainView,
     ): Promise<void> {
-      const mapping = mappingFromConstructQueries([ prefixes + view ]);
       const overView = await bindings(prefixes + query, await sourceToStore([ data ], prefixes + view));
-      for (const rewriter of [
-        createQueryRewriter([ unfoldingTransformation(mapping) ]),
-        createQueryRewriter(createDefaultTransformationPipeline(mapping)),
-      ]) {
+      for (const rewriter of Object.values(rewritersOver(view))) {
         expect(await bindings(await rewriter.rewriteQuery(prefixes + query), data)).toEqual(overView);
       }
       expect(overView).toHaveLength(expectedRows);
@@ -298,9 +315,7 @@ describe('evaluation tests', () => {
     });
 
     it('leaves an EXISTS in a SERVICE as it stands', async({ expect }) => {
-      const mapping = mappingFromConstructQueries([ prefixes + plainView ]);
-      const rewriter = createQueryRewriter([ unfoldingTransformation(mapping) ]);
-      const rewritten = await rewriter.rewriteQuery(
+      const rewritten = await rewritersOver(plainView).unfoldOnly.rewriteQuery(
         `${prefixes}SELECT * { SERVICE <http://e/> { ?s :q ?o FILTER EXISTS { ?o :q ?x } } }`,
       );
       expect(rewritten).not.toContain('ex://p');
@@ -317,8 +332,7 @@ describe('evaluation tests', () => {
     });
 
     it('asserts rather than binds a variable the solution certainly binds', async({ expect }) => {
-      const mapping = mappingFromConstructQueries([ prefixes + plainView ]);
-      const rewritten = await createQueryRewriter([ unfoldingTransformation(mapping) ])
+      const rewritten = await rewritersOver(plainView).unfoldOnly
         .rewriteQuery(`${prefixes}SELECT * { ?s :q ?o FILTER EXISTS { ?o :q ?x } }`);
       const pattern = rewritten.slice(rewritten.indexOf('EXISTS'));
       expect(pattern).not.toMatch(/BIND\( \?\w+ AS \?o \)/u);

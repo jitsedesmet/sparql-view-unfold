@@ -248,10 +248,10 @@ function bindPatternTerms(
   const { AF, DF } = c;
   // Sorted, for stable tests.
   const sortedBinds = [ ...triplePatternBinds ].sort((a, b) => a[0].localeCompare(b[0]));
-  const certainlyBound = (variable: string): boolean => c.existenceScope?.cVars.has(variable) ?? false;
-  // TODO: a variable the outer solution only may bind is both bound and compared, which relies on the engine dropping
-  //  that BIND where the solution binds it. A UNION of both cases would be defined.
-  const maybeBound = (variable: string): boolean => c.existenceScope?.vRanges.canBind(variable) ?? false;
+  const scope = c.existenceScope;
+  const certainlyBound = (variable: string): boolean => scope?.cVars.has(variable) ?? false;
+  // TODO: binding a variable the solution only may bind relies on the engine (ARCHITECTURE.md, "A BIND of a variable").
+  const maybeBound = (variable: string): boolean => scope?.vRanges.canBind(variable) ?? false;
   const boundOperation = sortedBinds
     .filter(([ variable ]) => !certainlyBound(variable))
     .reduce<Alg.Operation>(
