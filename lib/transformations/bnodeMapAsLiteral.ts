@@ -20,7 +20,10 @@ import {
 import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
 import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
 import { materialiseInternalBnodesByExtensionFunction } from './bnodeExtensionFunction.js';
-import type { InternalBnodeMaterialisation } from './internalBnodeMaterialisation.js';
+import type {
+  InternalBnodeExpressionCallbacks,
+  InternalBnodeMaterialisation,
+} from './internalBnodeMaterialisation.js';
 import {
   holdsInternalBnodeOrIsBlank,
   internalBnodeEncodingTags,
@@ -262,6 +265,20 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   const coinArgumentVariable = freshVarGenerator(markVariableNamesUsed(c, op), 'mBnodeArgument');
 
   /**
+   * The expression callbacks materialising internal blank nodes and rewriting `ISBLANK`s, outside EXISTS patterns.
+   * @param encodeArguments - Encodes one internal blank node with arguments, which are materialised already.
+   * @returns The callbacks per expression subType.
+   */
+  function materialisingCallbacks(
+    encodeArguments: (named: Algebra.NamedExpression) => Algebra.Expression,
+  ): InternalBnodeExpressionCallbacks & { existence: typeof leaveExistencePatterns } {
+    return {
+      existence: leaveExistencePatterns,
+      ...internalBnodeExpressionCallbacks(c, materialisation, encodeArguments),
+    };
+  }
+
+  /**
    * Materialises the internal blank nodes in an expression and rewrites its `ISBLANK`s.
    * @param expression - The expression to transform.
    * @param encodeArguments - Encodes one internal blank node with arguments, which are materialised already.
@@ -271,10 +288,9 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
     expression: Algebra.Expression,
     encodeArguments: (named: Algebra.NamedExpression) => Algebra.Expression,
   ): Algebra.Expression {
-    return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: {
-      existence: leaveExistencePatterns,
-      ...internalBnodeExpressionCallbacks(c, materialisation, encodeArguments),
-    }});
+    return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, {
+      expression: materialisingCallbacks(encodeArguments),
+    });
   }
 
   /**
@@ -330,18 +346,15 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
         },
       };
     }
-    return algebraUtils.mapOperation<'unsafe', Algebra.Operation>(operation, {
+    return algebraUtils.mapOperationSub<'unsafe', Algebra.Operation>(operation, {
       [Algebra.Types.EXTEND]: overInput('expression'),
       [Algebra.Types.FILTER]: overInput('expression'),
       [Algebra.Types.ORDER_BY]: overInput('expressions'),
       [Algebra.Types.GROUP]: overInput('aggregates'),
+    }, {
       // The condition of an OPTIONAL, the one expression left, has no input to bind an argument in, so it gets every
       // branch.
-      [Algebra.Types.EXPRESSION]: {
-        preVisitor: () => ({ continue: false }),
-        transform: expression =>
-          materialiseInExpression(expression, named => encodeInternalBnode(context, named)),
-      },
+      expression: materialisingCallbacks(named => encodeInternalBnode(context, named)),
     });
   }
 
