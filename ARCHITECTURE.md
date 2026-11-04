@@ -133,14 +133,27 @@ standard mappings between RDF 1.1 and RDF 1.2.
 
 So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
 
-**An EXISTS sees the solution it is evaluated for.** SPARQL 1.2 joins that solution into every group of the
-pattern ([spec](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution)). A pass reading ranges therefore
-runs through `rewriteInExistenceScopes`: the pass first rewrites the plan around EXISTS patterns, and then each
-pattern with that solution as `existenceScope`. The order matters, as the scope depends on where the pass leaves the
-EXISTS. The pushdown writes no term for a variable of that solution, and `pullUpExtends` moves no BIND of one. The
-unfolding moves no EXISTS, so `rewriteInExistenceScopesBeforePass` unfolds each pattern where it sits, before the
-mapping bodies come in. It follows `BIND(e AS ?v)` of a variable the solution may bind with `FILTER(sameTerm(e, ?v))`,
-as an engine may leave that BIND out and keep the solution's value.
+**An EXISTS sees the solution it is evaluated for.** In SPARQL 1.2 every group starts with `ContextSolution`
+([translation](https://www.w3.org/TR/sparql12-query/#sparqlTranslateGraphPatterns)). At the top level it is the empty
+mapping, but inside an EXISTS it is the solution μ the EXISTS is evaluated for
+([ContextSolution](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution),
+[EXISTS](https://www.w3.org/TR/sparql12-query/#func-filter-exists)), also through a sub-SELECT. So what μ binds is
+bound from the start of every group in the pattern. A pass reading ranges therefore runs through
+`rewriteInExistenceScopes`: the pass first rewrites the plan around EXISTS patterns, and then each pattern with μ as
+`existenceScope`. The order matters, as the scope depends on where the pass leaves the EXISTS. The pushdown writes no
+term for a variable of μ, and `pullUpExtends` moves no BIND of one.
+
+**A BIND of a variable μ binds is undefined** ([Extend](https://www.w3.org/TR/sparql12-query/#defn_extend)). The syntax
+only rules out a BIND of a variable the group itself bound before. The unfolding writes `BIND(?mi_s AS ?o)` for each
+pattern variable, so inside an EXISTS it picks the outcome itself, per variable:
+
+- μ certainly binds `?o` (`existenceScope.cVars`): no BIND, only `FILTER(sameTerm(?mi_s, ?o))`.
+- μ may bind `?o` (an OPTIONAL, `VALUES` with `UNDEF`, a BIND that can fail): the BIND and that FILTER. This relies on
+  the engine leaving the BIND out where μ binds `?o`, as Comunica does. A UNION of both cases would be defined.
+- Otherwise: the BIND alone.
+
+The unfolding moves no EXISTS, so `rewriteInExistenceScopesBeforePass` unfolds each pattern where it sits, before the
+mapping bodies come in.
 
 ## Still to settle
 

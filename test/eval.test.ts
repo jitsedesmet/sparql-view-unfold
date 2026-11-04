@@ -308,6 +308,21 @@ describe('evaluation tests', () => {
 
     it('matches a variable the solution leaves unbound to anything', async({ expect }) => {
       await assertUnfoldsLikeView(expect, 'SELECT * { ?s :q ?o OPTIONAL { ?o :q ?z } FILTER EXISTS { ?z :q ?x } }', 3);
+      await assertUnfoldsLikeView(expect, 'SELECT * { VALUES ?z { :b UNDEF } FILTER EXISTS { ?z :q ?x } }', 2);
+      await assertUnfoldsLikeView(
+        expect,
+        'SELECT * { ?s :q ?o BIND(IF(isLiteral(?o), ?nothing, ?o) AS ?z) FILTER EXISTS { ?z :q ?x } }',
+        3,
+      );
+    });
+
+    it('asserts rather than binds a variable the solution certainly binds', async({ expect }) => {
+      const mapping = mappingFromConstructQueries([ prefixes + plainView ]);
+      const rewritten = await createQueryRewriter([ unfoldingTransformation(mapping) ])
+        .rewriteQuery(`${prefixes}SELECT * { ?s :q ?o FILTER EXISTS { ?o :q ?x } }`);
+      const pattern = rewritten.slice(rewritten.indexOf('EXISTS'));
+      expect(pattern).not.toMatch(/BIND\( \?\w+ AS \?o \)/u);
+      expect(pattern).toMatch(/SAMETERM\( \?\w+ , \?o \)/u);
     });
   });
 });

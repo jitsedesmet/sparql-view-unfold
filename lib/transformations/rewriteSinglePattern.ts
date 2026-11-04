@@ -233,12 +233,12 @@ function wrapOperationInProject({ triplePatternBinds, operation, coinExistenceVa
 }
 
 /**
- * Adds the EXTEND operations that bind the user query's variables to what the subquery found. Inside an EXISTS, a
- * FILTER then compares each to the value the outer solution may already give it, as the engine leaves that BIND out.
- * @param c - The transformation context, whose `existenceScope` says what the outer solution may bind
+ * Binds the user query's variables to what the subquery found. Inside an EXISTS, a variable the outer solution binds
+ * is compared to the found term instead, as SPARQL 1.2 leaves a BIND of a bound variable undefined.
+ * @param c - The transformation context, whose `existenceScope` says what the outer solution binds
  * @param operation - The subquery
  * @param triplePatternBinds - What each pattern variable is bound to
- * @returns the subquery with one EXTEND per pattern variable, then that FILTER where needed
+ * @returns the subquery with an EXTEND per variable to bind, then a FILTER comparing the others
  */
 function bindPatternTerms(
   c: TransformationContext,
@@ -248,12 +248,18 @@ function bindPatternTerms(
   const { AF, DF } = c;
   // Sorted, for stable tests.
   const sortedBinds = [ ...triplePatternBinds ].sort((a, b) => a[0].localeCompare(b[0]));
-  const boundOperation = sortedBinds.reduce<Alg.Operation>(
-    (input, [ variable, expression ]) => AF.createExtend(input, DF.variable(variable), expression),
-    operation,
-  );
+  const certainlyBound = (variable: string): boolean => c.existenceScope?.cVars.has(variable) ?? false;
+  // TODO: a variable the outer solution only may bind is both bound and compared, which relies on the engine dropping
+  //  that BIND where the solution binds it. A UNION of both cases would be defined.
+  const maybeBound = (variable: string): boolean => c.existenceScope?.vRanges.canBind(variable) ?? false;
+  const boundOperation = sortedBinds
+    .filter(([ variable ]) => !certainlyBound(variable))
+    .reduce<Alg.Operation>(
+      (input, [ variable, expression ]) => AF.createExtend(input, DF.variable(variable), expression),
+      operation,
+    );
   const comparisons = sortedBinds
-    .filter(([ variable ]) => c.existenceScope?.vRanges.canBind(variable))
+    .filter(([ variable ]) => maybeBound(variable))
     .map(([ variable, expression ]) => sameTermExpression(c, deepCopy(c, expression), DF.variable(variable)));
   return comparisons.length === 0 ? boundOperation : AF.createFilter(boundOperation, conjunctionOf(c, comparisons));
 }
