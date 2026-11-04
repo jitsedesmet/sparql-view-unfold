@@ -149,8 +149,8 @@ only rules out a BIND of a variable the group itself bound before. The unfolding
 pattern variable, so inside an EXISTS it picks the outcome itself, per variable:
 
 - μ certainly binds `?o` (`existenceScope.cVars`): no BIND, only `FILTER(sameTerm(?mi_s, ?o))`.
-- μ may bind `?o` (an OPTIONAL, `VALUES` with `UNDEF`, a BIND that can fail): the BIND and that FILTER. This relies on
-  the engine leaving the BIND out where μ binds `?o`, as Comunica does. A UNION of both cases would be defined.
+- μ may bind `?o` (an OPTIONAL, `VALUES` with `UNDEF`, a BIND that can fail): a UNION of that FILTER and
+  `{ … FILTER(!BOUND(?o)) } BIND(?mi_s AS ?o)`.
 - Otherwise: the BIND alone.
 
 The unfolding moves no EXISTS, so `rewriteInExistenceScopesBeforePass` unfolds each pattern where it sits, before the

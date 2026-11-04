@@ -344,6 +344,14 @@ describe('evaluation tests', () => {
       expect(havingPattern).toMatch(/BIND\( \?\w+ AS \?o \)/u);
     });
 
+    it('binds a variable the solution may bind only where it does not', async({ expect }) => {
+      const rewritten = await rewritersOver(plainView).unfoldOnly
+        .rewriteQuery(`${prefixes}SELECT * { ?s :q ?o OPTIONAL { ?o :q ?z } FILTER EXISTS { ?z :q ?x } }`);
+      const pattern = rewritten.slice(rewritten.indexOf('EXISTS'));
+      expect(pattern).toMatch(/SAMETERM\( \?\w+ , \?z \)/u);
+      expect(pattern).toMatch(/FILTER \( ! BOUND\( \?z \) \)\s*\}\s*BIND\( \?\w+ AS \?z \)/u);
+    });
+
     it('asserts rather than binds a variable the solution certainly binds', async({ expect }) => {
       const rewritten = await rewritersOver(plainView).unfoldOnly
         .rewriteQuery(`${prefixes}SELECT * { ?s :q ?o FILTER EXISTS { ?o :q ?x } }`);

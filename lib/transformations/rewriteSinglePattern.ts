@@ -238,7 +238,7 @@ function wrapOperationInProject({ triplePatternBinds, operation, coinExistenceVa
  * @param c - The transformation context, whose `existenceScope` says what the outer solution binds
  * @param operation - The subquery
  * @param triplePatternBinds - What each pattern variable is bound to
- * @returns the subquery with an EXTEND per variable to bind, then a FILTER comparing the others
+ * @returns the subquery with its variables bound or compared
  */
 function bindPatternTerms(
   c: TransformationContext,
@@ -246,22 +246,64 @@ function bindPatternTerms(
   triplePatternBinds: ReadonlyMap<string, Alg.Expression>,
 ): Alg.Operation {
   const { AF, DF } = c;
+  const scope = c.existenceScope;
   // Sorted, for stable tests.
   const sortedBinds = [ ...triplePatternBinds ].sort((a, b) => a[0].localeCompare(b[0]));
-  const scope = c.existenceScope;
-  const certainlyBound = (variable: string): boolean => scope?.cVars.has(variable) ?? false;
-  // TODO: binding a variable the solution only may bind relies on the engine (ARCHITECTURE.md, "A BIND of a variable").
-  const maybeBound = (variable: string): boolean => scope?.vRanges.canBind(variable) ?? false;
-  const boundOperation = sortedBinds
-    .filter(([ variable ]) => !certainlyBound(variable))
-    .reduce<Alg.Operation>(
-      (input, [ variable, expression ]) => AF.createExtend(input, DF.variable(variable), expression),
-      operation,
-    );
-  const comparisons = sortedBinds
-    .filter(([ variable ]) => certainlyBound(variable) || maybeBound(variable))
-    .map(([ variable, expression ]) => sameTermExpression(c, deepCopy(c, expression), DF.variable(variable)));
-  return comparisons.length === 0 ? boundOperation : AF.createFilter(boundOperation, conjunctionOf(c, comparisons));
+  const isCertainlyBound = (variable: string): boolean => scope?.cVars.has(variable) ?? false;
+  const isMaybeBound = (variable: string): boolean => !isCertainlyBound(variable) &&
+    (scope?.vRanges.canBind(variable) ?? false);
+  const certainlyBound = sortedBinds.filter(([ variable ]) => isCertainlyBound(variable));
+  const maybeBound = sortedBinds.filter(([ variable ]) => isMaybeBound(variable));
+  const unbound = sortedBinds.filter(([ variable ]) => !isCertainlyBound(variable) && !isMaybeBound(variable));
+  const bound = unbound.reduce<Alg.Operation>(
+    (input, [ variable, expression ]) => AF.createExtend(input, DF.variable(variable), expression),
+    operation,
+  );
+  return maybeBound.reduce<Alg.Operation>(
+    (input, [ variable, expression ]) => bindOrCompare(c, input, variable, expression),
+    compared(c, bound, certainlyBound),
+  );
+}
+
+/**
+ * Filters an operation on each variable having the term an expression gives.
+ * @param c - The transformation context
+ * @param operation - The operation to filter
+ * @param comparisons - Each variable with its expression
+ * @returns the filtered operation, or the operation itself without comparisons
+ */
+function compared(
+  c: TransformationContext,
+  operation: Alg.Operation,
+  comparisons: [string, Alg.Expression][],
+): Alg.Operation {
+  const conditions = comparisons
+    .map(([ variable, expression ]) => sameTermExpression(c, deepCopy(c, expression), c.DF.variable(variable)));
+  return conditions.length === 0 ? operation : c.AF.createFilter(operation, conjunctionOf(c, conditions));
+}
+
+/**
+ * Compares a variable the outer solution of an EXISTS may bind to an expression where it does, and binds it where it
+ * does not: a UNION of both cases, as a BIND of a bound variable is undefined.
+ * @param c - The transformation context
+ * @param operation - The operation to bind or compare on
+ * @param variable - The variable
+ * @param expression - What the variable is bound to
+ * @returns the UNION of both cases
+ */
+function bindOrCompare(
+  c: TransformationContext,
+  operation: Alg.Operation,
+  variable: string,
+  expression: Alg.Expression,
+): Alg.Operation {
+  const { AF, DF } = c;
+  const isBound = AF.createOperatorExpression('bound', [ AF.createTermExpression(DF.variable(variable)) ]);
+  const whereUnbound = AF.createFilter(deepCopy(c, operation), AF.createOperatorExpression('!', [ isBound ]));
+  return AF.createUnion([
+    compared(c, operation, [[ variable, expression ]]),
+    AF.createExtend(whereUnbound, DF.variable(variable), deepCopy(c, expression)),
+  ], false);
 }
 
 /**
