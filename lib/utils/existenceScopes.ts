@@ -116,10 +116,13 @@ function rewriteExistencePatternsOf<C extends RangeContext>(
   enterServices: boolean,
 ): Algebra.Operation {
   const skipped = enterServices ? {} : { [Types.SERVICE]: { preVisitor: () => ({ continue: false }) }};
-  return operationTransformer.transformNode<'unsafe', Algebra.Operation>(op, forEveryNodeType(
-    { transform: (copy: Algebra.Operation) => withExistencePatternsRewritten(c, copy, rewritePattern) },
-    { [Types.EXPRESSION]: leaveExistencePatterns, ...skipped },
-  ));
+  return operationTransformer.transformNode<'unsafe', Algebra.Operation>(
+    op,
+    forEveryNodeType(
+      { transform: (copy: Algebra.Operation) => withExistencePatternsRewritten(c, copy, rewritePattern) },
+      { [Types.EXPRESSION]: leaveExistencePatterns, ...skipped },
+    ),
+  );
 }
 
 /**

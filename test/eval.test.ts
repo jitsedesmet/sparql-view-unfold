@@ -227,6 +227,7 @@ describe('evaluation tests', () => {
 
   describe('unfolding in an EXISTS', () => {
     const plainView = 'CONSTRUCT { ?s :q ?o } WHERE { ?s :p ?o }';
+    // 5 triples, 4 in the view
     const data = new Store(new Parser()
       .parse('@prefix : <ex://> . :a :p :b . :b :p :c . :c :p :d . :x :p "l" . :a :hidden true .'));
 

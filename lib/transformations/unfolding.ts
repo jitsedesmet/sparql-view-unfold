@@ -88,8 +88,11 @@ export function unfoldingTransformation(mapping: Mapping, options: UnfoldingOpti
     const unfoldedMapping = options.preserveCardinality === true ?
       withDeduplicatedBody(context, mappingApart) :
       mappingApart;
-    return rewriteInExistenceScopesBeforePass(context, operation, (scopedContext, input) =>
-      unfoldTriplePatternsAgainstMapping(scopedContext, unfoldedMapping, input));
+    return rewriteInExistenceScopesBeforePass(
+      context,
+      operation,
+      (scopedContext, input) => unfoldTriplePatternsAgainstMapping(scopedContext, unfoldedMapping, input),
+    );
   };
 }
 
