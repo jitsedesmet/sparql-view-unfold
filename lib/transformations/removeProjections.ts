@@ -1,7 +1,12 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import { leaveExistencePatterns, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
+import {
+  holdsExistence,
+  leaveExistencePatterns,
+  outerBinding,
+  rewriteInExistenceScopes,
+} from '../utils/existenceScopes.js';
 import { collectVariableNames, freshVarGenerator, markVariableNamesUsed, renameVariables } from '../utils.js';
 
 /**
@@ -30,8 +35,7 @@ import { collectVariableNames, freshVarGenerator, markVariableNamesUsed, renameV
  * one the grouping would be printed on the enclosing query.
  *
  * Inside an EXISTS, SPARQL 1.2 joins the outer solution into the sub-SELECT too. A hidden variable it certainly binds
- * keeps its name, as every `?o` there has its value. A projection hiding a variable it may bind is kept: renaming
- * breaks the correlation where it binds it, keeping the name joins siblings where it does not.
+ * keeps its name, and a projection hiding a variable it may bind is kept.
  *
  * @param c - The transformation context
  * @param op - The operation to transform
@@ -42,19 +46,26 @@ import { collectVariableNames, freshVarGenerator, markVariableNamesUsed, renameV
  * // After:  ?x ?v_0 ?v_1                  (projection removed, hidden vars anonymized)
  */
 export function removeProjections<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  return rewriteInExistenceScopes(c, op, removeProjectionsAroundExistence);
+  // Coined against every name in use, EXISTS patterns included, so fresh names never collide.
+  const usedNames = markVariableNamesUsed(c, op);
+  const pass = (context: TransformationContext, operation: Algebra.Operation): Algebra.Operation =>
+    removeProjectionsAroundExistence(context, operation, usedNames);
+  return holdsExistence(op) ? rewriteInExistenceScopes(c, op, pass) : <T> pass(c, op);
 }
 
 /**
  * Removes the projections of an operation, leaving EXISTS patterns alone.
  * @param c - The transformation context, whose `existenceScope` is the solution of the EXISTS the operation is in
  * @param op - The operation to transform
+ * @param usedNames - The names in use, which fresh names avoid
  * @returns the operation without the projections it can drop
  */
-function removeProjectionsAroundExistence(c: TransformationContext, op: Algebra.Operation): Algebra.Operation {
-  const scope = c.existenceScope;
-  // Coined against every name in use, so fresh names never collide.
-  const nextVar = freshVarGenerator(markVariableNamesUsed(c, op));
+function removeProjectionsAroundExistence(
+  c: TransformationContext,
+  op: Algebra.Operation,
+  usedNames: Set<string>,
+): Algebra.Operation {
+  const nextVar = freshVarGenerator(usedNames);
 
   // Filled top-down (preVisitor) before the projection itself is transformed bottom-up.
   const keptProjections = new Set<Algebra.Operation>();
@@ -98,13 +109,13 @@ function removeProjectionsAroundExistence(c: TransformationContext, op: Algebra.
         return project;
       }
       const projected = new Set(project.variables.map(variable => variable.value));
-      // The variables of the subquery, which holds no other subqueries, that the projection hides.
+      // The variables the projection hides, also in an EXISTS pattern this pass has yet to enter.
       const hidden = [ ...collectVariableNames(c.astTransformer, project.input) ].filter(name => !projected.has(name));
-      if (hidden.some(name => !scope?.cVars.has(name) && scope?.vRanges.canBind(name))) {
+      if (hidden.some(name => outerBinding(c.existenceScope, name) === 'maybe')) {
         return project;
       }
       const renames = new Map(hidden
-        .filter(name => !scope?.cVars.has(name))
+        .filter(name => outerBinding(c.existenceScope, name) === 'none')
         .map(name => [ name, nextVar().value ]));
       return renameVariables(c, project.input, renames);
     } },

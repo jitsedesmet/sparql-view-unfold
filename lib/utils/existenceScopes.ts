@@ -2,7 +2,7 @@ import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
 import { forEveryNodeType } from '@traqula/core';
-import type { RangeContext } from './certainlyBoundVars.js';
+import type { CPMeta, RangeContext } from './certainlyBoundVars.js';
 import { cpMetaOf, joinedMeta, operationTransformer, withoutCpVars } from './certainlyBoundVars.js';
 import { containsExistenceExpression, holdsExpression } from './expressionHelpers.js';
 
@@ -76,12 +76,28 @@ export function rewriteInExistenceScopesBeforePass<C extends RangeContext, T ext
   return <T> withoutCpVars(rewriteTree(c, entered));
 }
 
+/** How the solution an EXISTS is evaluated for binds a variable. */
+export type OuterBinding = 'certain' | 'maybe' | 'none';
+
+/**
+ * How the solution an EXISTS is evaluated for binds a variable.
+ * @param scope - The `existenceScope`, undefined outside an EXISTS
+ * @param name - The name of the variable
+ * @returns whether it binds it certainly, maybe, or not at all
+ */
+export function outerBinding(scope: CPMeta | undefined, name: string): OuterBinding {
+  if (scope?.cVars.has(name)) {
+    return 'certain';
+  }
+  return scope?.vRanges.canBind(name) ? 'maybe' : 'none';
+}
+
 /**
  * Whether an operation holds an EXISTS.
  * @param op - The operation to read
  * @returns whether it does
  */
-function holdsExistence(op: Algebra.Operation): boolean {
+export function holdsExistence(op: Algebra.Operation): boolean {
   return holdsExpression(op, expression => expression.subType === ExpressionTypes.EXISTENCE);
 }
 

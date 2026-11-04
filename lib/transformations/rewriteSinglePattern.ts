@@ -7,6 +7,9 @@ import { rangeOfPosition } from '../RangeSet.js';
 import { RewriteNoMatchError } from '../RewriteNoMatchError.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
+import { access, assertUnbound, conjunctAsExpression } from '../utils/assertions.js';
+import type { OuterBinding } from '../utils/existenceScopes.js';
+import { outerBinding } from '../utils/existenceScopes.js';
 import { conjunctionOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
 import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
@@ -233,9 +236,9 @@ function wrapOperationInProject({ triplePatternBinds, operation, coinExistenceVa
 }
 
 /**
- * Binds the user query's variables to what the subquery found. Inside an EXISTS, a variable the outer solution binds
- * is compared to the found term instead, as SPARQL 1.2 leaves a BIND of a bound variable undefined.
- * @param c - The transformation context, whose `existenceScope` says what the outer solution binds
+ * Binds the user query's variables to what the subquery found. Inside an EXISTS, SPARQL 1.2 leaves a BIND of a variable
+ * the outer solution binds undefined, so such a variable is compared instead, or both where the solution may bind it.
+ * @param c - The transformation context, whose `existenceScope` is the outer solution
  * @param operation - The subquery
  * @param triplePatternBinds - What each pattern variable is bound to
  * @returns the subquery with its variables bound or compared
@@ -246,23 +249,20 @@ function bindPatternTerms(
   triplePatternBinds: ReadonlyMap<string, Alg.Expression>,
 ): Alg.Operation {
   const { AF, DF } = c;
-  const scope = c.existenceScope;
+  const binds: Record<OuterBinding, [string, Alg.Expression][]> = { certain: [], maybe: [], none: []};
   // Sorted, for stable tests.
-  const sortedBinds = [ ...triplePatternBinds ].sort((a, b) => a[0].localeCompare(b[0]));
-  const isCertainlyBound = (variable: string): boolean => scope?.cVars.has(variable) ?? false;
-  const isMaybeBound = (variable: string): boolean => !isCertainlyBound(variable) &&
-    (scope?.vRanges.canBind(variable) ?? false);
-  const certainlyBound = sortedBinds.filter(([ variable ]) => isCertainlyBound(variable));
-  const maybeBound = sortedBinds.filter(([ variable ]) => isMaybeBound(variable));
-  const unbound = sortedBinds.filter(([ variable ]) => !isCertainlyBound(variable) && !isMaybeBound(variable));
-  const bound = unbound.reduce<Alg.Operation>(
-    (input, [ variable, expression ]) => AF.createExtend(input, DF.variable(variable), expression),
+  for (const bind of [ ...triplePatternBinds ].sort((a, b) => a[0].localeCompare(b[0]))) {
+    binds[outerBinding(c.existenceScope, bind[0])].push(bind);
+  }
+  const boundOrCompared = binds.maybe.reduce<Alg.Operation>(
+    (input, [ variable, expression ]) => bindOrCompare(c, input, variable, expression),
     operation,
   );
-  return maybeBound.reduce<Alg.Operation>(
-    (input, [ variable, expression ]) => bindOrCompare(c, input, variable, expression),
-    compared(c, bound, certainlyBound),
+  const bound = binds.none.reduce<Alg.Operation>(
+    (input, [ variable, expression ]) => AF.createExtend(input, DF.variable(variable), expression),
+    boundOrCompared,
   );
+  return compared(c, bound, binds.certain);
 }
 
 /**
@@ -283,12 +283,12 @@ function compared(
 }
 
 /**
- * Compares a variable the outer solution of an EXISTS may bind to an expression where it does, and binds it where it
- * does not: a UNION of both cases, as a BIND of a bound variable is undefined.
+ * A UNION comparing a variable to an expression where the outer solution of an EXISTS binds it, and binding it where
+ * not. Each such variable doubles the operation.
  * @param c - The transformation context
  * @param operation - The operation to bind or compare on
- * @param variable - The variable
- * @param expression - What the variable is bound to
+ * @param variable - The name of the variable the outer solution may bind
+ * @param expression - The term the variable stands for
  * @returns the UNION of both cases
  */
 function bindOrCompare(
@@ -298,8 +298,8 @@ function bindOrCompare(
   expression: Alg.Expression,
 ): Alg.Operation {
   const { AF, DF } = c;
-  const isBound = AF.createOperatorExpression('bound', [ AF.createTermExpression(DF.variable(variable)) ]);
-  const whereUnbound = AF.createFilter(deepCopy(c, operation), AF.createOperatorExpression('!', [ isBound ]));
+  const isUnbound = conjunctAsExpression(c, { access: access(variable), assertion: assertUnbound() });
+  const whereUnbound = AF.createFilter(deepCopy(c, operation), isUnbound);
   return AF.createUnion([
     compared(c, operation, [[ variable, expression ]]),
     AF.createExtend(whereUnbound, DF.variable(variable), deepCopy(c, expression)),

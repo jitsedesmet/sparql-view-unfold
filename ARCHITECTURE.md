@@ -151,7 +151,7 @@ pattern variable, so inside an EXISTS it picks the outcome itself, per variable:
 
 - μ certainly binds `?o` (`existenceScope.cVars`): no BIND, only `FILTER(sameTerm(?mi_s, ?o))`.
 - μ may bind `?o` (an OPTIONAL, `VALUES` with `UNDEF`, a BIND that can fail): a UNION of that FILTER and
-  `{ … FILTER(!BOUND(?o)) } BIND(?mi_s AS ?o)`.
+  `{ … FILTER(!BOUND(?o)) } BIND(?mi_s AS ?o)`. Each such variable doubles the subquery.
 - Otherwise: the BIND alone.
 
 The unfolding moves no EXISTS, so `rewriteInExistenceScopesBeforePass` unfolds each pattern where it sits, before the
