@@ -225,24 +225,29 @@ describe('evaluation tests', () => {
 
   describe('unfolding in an EXISTS', () => {
     const prefixes = 'PREFIX : <ex://>\n';
-    const view = `${prefixes}CONSTRUCT { ?s :q ?o } WHERE { ?s :p ?o }`;
-    const data = new Store(new Parser().parse('@prefix : <ex://> . :a :p :b . :b :p :c . :c :p :d . :x :p "l" .'));
-    const viewData = sourceToStore([ data ], view);
-    const mapping = mappingFromConstructQueries([ view ]);
-    const rewriters = [
-      createQueryRewriter([ unfoldingTransformation(mapping) ]),
-      createQueryRewriter(createDefaultTransformationPipeline(mapping)),
-    ];
+    const plainView = 'CONSTRUCT { ?s :q ?o } WHERE { ?s :p ?o }';
+    const data = new Store(new Parser()
+      .parse('@prefix : <ex://> . :a :p :b . :b :p :c . :c :p :d . :x :p "l" . :a :hidden true .'));
 
     /**
      * Asserts that the unfolded query over the data, optimised or not, answers what the query answers over the view.
      * @param expect - The assertion API of the running test
      * @param query - The query, without its prefixes
      * @param expectedRows - The number of rows it returns
+     * @param view - The view, without its prefixes
      */
-    async function assertUnfoldsLikeView(expect: ExpectStatic, query: string, expectedRows: number): Promise<void> {
-      const overView = await bindings(prefixes + query, await viewData);
-      for (const rewriter of rewriters) {
+    async function assertUnfoldsLikeView(
+      expect: ExpectStatic,
+      query: string,
+      expectedRows: number,
+      view = plainView,
+    ): Promise<void> {
+      const mapping = mappingFromConstructQueries([ prefixes + view ]);
+      const overView = await bindings(prefixes + query, await sourceToStore([ data ], prefixes + view));
+      for (const rewriter of [
+        createQueryRewriter([ unfoldingTransformation(mapping) ]),
+        createQueryRewriter(createDefaultTransformationPipeline(mapping)),
+      ]) {
         expect(await bindings(await rewriter.rewriteQuery(prefixes + query), data)).toEqual(overView);
       }
       expect(overView).toHaveLength(expectedRows);
@@ -267,6 +272,38 @@ describe('evaluation tests', () => {
         'SELECT * { ?s :q ?o FILTER EXISTS { ?o :q ?x FILTER EXISTS { ?x :q ?y } } }',
         1,
       );
+    });
+
+    it('compares a variable only the outer solution binds in a nested EXISTS', async({ expect }) => {
+      await assertUnfoldsLikeView(
+        expect,
+        'SELECT * { ?s :q ?o FILTER EXISTS { ?x :q ?y FILTER EXISTS { ?o :q ?x } } }',
+        1,
+      );
+    });
+
+    it('leaves an EXISTS in the view as it stands', async({ expect }) => {
+      await assertUnfoldsLikeView(
+        expect,
+        'SELECT * { ?s :q ?o FILTER EXISTS { ?o :q ?x } }',
+        1,
+        'CONSTRUCT { ?s :q ?o } WHERE { ?s :p ?o FILTER NOT EXISTS { ?s :hidden true } }',
+      );
+      await assertUnfoldsLikeView(
+        expect,
+        'SELECT * { ?s :p ?o FILTER EXISTS { ?o :p ?x } }',
+        2,
+        'CONSTRUCT { ?s :p ?o } WHERE { ?s :p ?o FILTER NOT EXISTS { ?o :p ?s } }',
+      );
+    });
+
+    it('leaves an EXISTS in a SERVICE as it stands', async({ expect }) => {
+      const mapping = mappingFromConstructQueries([ prefixes + plainView ]);
+      const rewriter = createQueryRewriter([ unfoldingTransformation(mapping) ]);
+      const rewritten = await rewriter.rewriteQuery(
+        `${prefixes}SELECT * { SERVICE <http://e/> { ?s :q ?o FILTER EXISTS { ?o :q ?x } } }`,
+      );
+      expect(rewritten).not.toContain('ex://p');
     });
 
     it('matches a variable the solution leaves unbound to anything', async({ expect }) => {

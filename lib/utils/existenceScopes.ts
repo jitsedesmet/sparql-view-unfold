@@ -11,7 +11,7 @@ import { containsExistenceExpression, holdsExpression } from './expressionHelper
  *
  * SPARQL 1.2 joins that solution into every group of the pattern. A pass therefore first rewrites the plan around
  * the EXISTS patterns, and then each pattern with that solution as `existenceScope`: the scope is only known once the
- * pass has placed the EXISTS.
+ * pass has placed the EXISTS. A pass that places no EXISTS, such as the unfolding, can rewrite the patterns first.
  */
 
 /** A pass that leaves EXISTS patterns alone, rewriting an operation in a context. */
@@ -45,45 +45,83 @@ export function rewriteInExistenceScopes<C extends RangeContext, T extends Algeb
   op: T,
   pass: ExistenceScopedPass<C>,
 ): T {
+  const rewriteTree: ExistenceScopedPass<C> = (context, tree) =>
+    rewriteExistencePatternsOf(context, pass(context, tree), rewriteTree);
+  return withExistencePatternsTreated(c, op, pass, rewriteTree);
+}
+
+/**
+ * Rewrites the pattern of each EXISTS in an operation where it sits, with the solution it is evaluated for as
+ * `existenceScope`, then the operation with a pass. For a pass that moves no EXISTS and adds operations not to rewrite,
+ * such as mapping bodies. A `SERVICE` is left as it stands.
+ * @param c - The context to rewrite in
+ * @param op - The operation to rewrite, which is left untouched
+ * @param pass - The pass, which leaves EXISTS patterns alone
+ * @returns the rewritten operation
+ */
+export function rewriteInExistenceScopesBeforePass<C extends RangeContext, T extends Algebra.Operation>(
+  c: C,
+  op: T,
+  pass: ExistenceScopedPass<C>,
+): T {
+  const rewriteTree: ExistenceScopedPass<C> = (context, tree) =>
+    pass(context, rewriteExistencePatternsOf(context, tree, rewriteTree, { [Types.SERVICE]: leaveExistencePatterns }));
+  return withExistencePatternsTreated(c, op, pass, rewriteTree);
+}
+
+/**
+ * Rewrites a copy of an operation without cached metadata, skipping the EXISTS patterns where it holds none.
+ * @param c - The context to rewrite in
+ * @param op - The operation to rewrite
+ * @param pass - The pass, used alone where the operation holds no EXISTS
+ * @param rewriteTree - The rewrite of the pass and of each EXISTS pattern
+ * @returns the rewritten operation, without cached metadata
+ */
+function withExistencePatternsTreated<C extends RangeContext, T extends Algebra.Operation>(
+  c: C,
+  op: T,
+  pass: ExistenceScopedPass<C>,
+  rewriteTree: ExistenceScopedPass<C>,
+): T {
   const entered = withoutCpVars(op);
   const isExistence = (expression: Algebra.Expression): boolean => expression.subType === ExpressionTypes.EXISTENCE;
-  // A plan without EXISTS, the common case, skips the walk over the rewritten plan.
-  const rewritten = holdsExpression(entered, isExistence) ?
-    rewriteTreeInExistenceScopes(c, entered, pass) :
-    pass(c, entered);
+  // A plan without EXISTS, the common case, skips the walk over the plan.
+  const rewritten = holdsExpression(entered, isExistence) ? rewriteTree(c, entered) : pass(c, entered);
   return <T> withoutCpVars(rewritten);
 }
 
 /**
- * Rewrites an operation without cached metadata with a pass, then the pattern of each EXISTS in its result.
- * @param c - The context to rewrite in
- * @param op - The operation to rewrite
- * @param pass - The pass
+ * Rewrites the pattern of each EXISTS in an operation, with the solution it is evaluated for as `existenceScope`.
+ * @param c - The context the operation is in
+ * @param op - The operation, without cached metadata
+ * @param rewritePattern - The rewrite of one pattern, without cached metadata, in its scope
+ * @param leftAlone - The callbacks of operation types not to walk into
  * @returns the rewritten operation, a new tree
  */
-function rewriteTreeInExistenceScopes<C extends RangeContext>(
+function rewriteExistencePatternsOf<C extends RangeContext>(
   c: C,
   op: Algebra.Operation,
-  pass: ExistenceScopedPass<C>,
+  rewritePattern: ExistenceScopedPass<C>,
+  leftAlone: Partial<Record<Types, typeof leaveExistencePatterns>> = {},
 ): Algebra.Operation {
-  return operationTransformer.transformNode<'unsafe', Algebra.Operation>(pass(c, op), forEveryNodeType(
-    { transform: (copy: Algebra.Operation) => withExistencePatternsRewritten(c, copy, pass) },
-    { [Types.EXPRESSION]: leaveExistencePatterns },
+  return operationTransformer.transformNode<'unsafe', Algebra.Operation>(op, forEveryNodeType(
+    { transform: (copy: Algebra.Operation) => withExistencePatternsRewritten(c, copy, rewritePattern) },
+    { [Types.EXPRESSION]: leaveExistencePatterns, ...leftAlone },
   ));
 }
 
 /**
  * Rewrites the pattern of every EXISTS an operation evaluates, with the solution it is evaluated for as
  * `existenceScope`. Each EXISTS gets a pattern of its own, as a pass may share one EXISTS between operations.
- * @param c - The context the operation was rewritten in
- * @param copy - A copy of the operation, whose cached metadata describes the plan before the pass
- * @param pass - The pass
+ * @param c - The context the operation is in
+ * @param copy - A copy of the operation, whose cached metadata may be stale
+ * @param rewritePattern - The rewrite of one pattern, in its scope
  * @returns the copy, without metadata and with its expressions replaced
  */
 function withExistencePatternsRewritten<C extends RangeContext>(
   c: C,
   copy: Algebra.Operation,
-  pass: ExistenceScopedPass<C>,
+  rewritePattern: ExistenceScopedPass<C>,
 ): Algebra.Operation {
   delete (<{ metadata?: unknown }> copy).metadata;
   if (!expressionsEvaluatedBy(copy).some(containsExistenceExpression)) {
@@ -97,7 +135,7 @@ function withExistencePatternsRewritten<C extends RangeContext>(
       ...leaveExistencePatterns,
       transform: (existence: Algebra.ExistenceExpression) => ({
         ...existence,
-        input: rewriteTreeInExistenceScopes(patternContext, withoutCpVars(existence.input), pass),
+        input: rewritePattern(patternContext, withoutCpVars(existence.input)),
       }),
     }}}));
   return copy;

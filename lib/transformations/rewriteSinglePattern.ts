@@ -253,7 +253,7 @@ function bindPatternTerms(
     operation,
   );
   const comparisons = sortedBinds
-    .filter(([ variable ]) => c.existenceScope?.vRanges.has(variable))
+    .filter(([ variable ]) => c.existenceScope?.vRanges.canBind(variable))
     .map(([ variable, expression ]) => sameTermExpression(c, deepCopy(c, expression), DF.variable(variable)));
   return comparisons.length === 0 ? boundOperation : AF.createFilter(boundOperation, conjunctionOf(c, comparisons));
 }

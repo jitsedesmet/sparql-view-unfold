@@ -4,7 +4,7 @@ import { VAR_PREFIX_MAPPING } from '../consts.js';
 import { withDeduplicatedBody } from '../mapping.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, QueryTransformation } from '../types.js';
-import { leaveExistencePatterns, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
+import { leaveExistencePatterns, rewriteInExistenceScopesBeforePass } from '../utils/existenceScopes.js';
 import { claimVariableName, collectVariableNames, markVariableNamesUsed, renameVariables } from '../utils.js';
 import { rewriteSinglePattern } from './rewriteSinglePattern.js';
 
@@ -88,7 +88,7 @@ export function unfoldingTransformation(mapping: Mapping, options: UnfoldingOpti
     const unfoldedMapping = options.preserveCardinality === true ?
       withDeduplicatedBody(context, mappingApart) :
       mappingApart;
-    return rewriteInExistenceScopes(context, operation, (scopedContext, input) =>
+    return rewriteInExistenceScopesBeforePass(context, operation, (scopedContext, input) =>
       unfoldTriplePatternsAgainstMapping(scopedContext, unfoldedMapping, input));
   };
 }
