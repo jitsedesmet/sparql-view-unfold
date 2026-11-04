@@ -1,6 +1,8 @@
+import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
+import type { OuterBinding } from '../utils/existenceScopes.js';
 import {
   holdsExistence,
   leaveExistencePatterns,
@@ -39,7 +41,7 @@ import { collectVariableNames, freshVarGenerator, markVariableNamesUsed, renameV
  *
  * @param c - The transformation context
  * @param op - The operation to transform
- * @returns The transformed operation without any PROJECT operations
+ * @returns The transformed operation, without the PROJECT operations it can drop
  *
  * @example
  * // Before: SELECT ?x { ?x ?y ?z }        (?y and ?z are not projected)
@@ -47,9 +49,9 @@ import { collectVariableNames, freshVarGenerator, markVariableNamesUsed, renameV
  */
 export function removeProjections<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   // Coined against every name in use, EXISTS patterns included, so fresh names never collide.
-  const usedNames = markVariableNamesUsed(c, op);
+  const nextVar = freshVarGenerator(markVariableNamesUsed(c, op));
   const pass = (context: TransformationContext, operation: Algebra.Operation): Algebra.Operation =>
-    removeProjectionsAroundExistence(context, operation, usedNames);
+    removeProjectionsAroundExistence(context, operation, nextVar);
   return holdsExistence(op) ? rewriteInExistenceScopes(c, op, pass) : <T> pass(c, op);
 }
 
@@ -57,16 +59,14 @@ export function removeProjections<T extends Algebra.Operation>(c: Transformation
  * Removes the projections of an operation, leaving EXISTS patterns alone.
  * @param c - The transformation context, whose `existenceScope` is the solution of the EXISTS the operation is in
  * @param op - The operation to transform
- * @param usedNames - The names in use, which fresh names avoid
+ * @param nextVar - Coins a fresh variable
  * @returns the operation without the projections it can drop
  */
 function removeProjectionsAroundExistence(
   c: TransformationContext,
   op: Algebra.Operation,
-  usedNames: Set<string>,
+  nextVar: () => RDF.Variable,
 ): Algebra.Operation {
-  const nextVar = freshVarGenerator(usedNames);
-
   // Filled top-down (preVisitor) before the projection itself is transformed bottom-up.
   const keptProjections = new Set<Algebra.Operation>();
   const keepProjectedInput = (operation: Algebra.Distinct | Algebra.Reduced | Algebra.Slice): object => {
@@ -109,14 +109,18 @@ function removeProjectionsAroundExistence(
         return project;
       }
       const projected = new Set(project.variables.map(variable => variable.value));
-      // The variables the projection hides, also in an EXISTS pattern this pass has yet to enter.
-      const hidden = [ ...collectVariableNames(c.astTransformer, project.input) ].filter(name => !projected.has(name));
-      if (hidden.some(name => outerBinding(c.existenceScope, name) === 'maybe')) {
+      // The variables the projection hides, also in an EXISTS pattern this pass has yet to enter, where renaming
+      // must reach too.
+      const hidden: Record<OuterBinding, string[]> = { certain: [], maybe: [], none: []};
+      for (const name of collectVariableNames(c.astTransformer, project.input)) {
+        if (!projected.has(name)) {
+          hidden[outerBinding(c.existenceScope, name)].push(name);
+        }
+      }
+      if (hidden.maybe.length > 0) {
         return project;
       }
-      const renames = new Map(hidden
-        .filter(name => outerBinding(c.existenceScope, name) === 'none')
-        .map(name => [ name, nextVar().value ]));
+      const renames = new Map(hidden.none.map(name => [ name, nextVar().value ]));
       return renameVariables(c, project.input, renames);
     } },
   });
