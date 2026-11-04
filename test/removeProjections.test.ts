@@ -1,5 +1,6 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
 import * as arrayifyStreamNS from 'arrayify-stream';
+import { Parser, Store } from 'n3';
 import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
 import { createQueryRewriter } from '../lib/queryRewriter.js';
@@ -18,10 +19,11 @@ describe('removeProjections', () => {
 
   const engine = new QueryEngine();
 
-  async function bindings(query: string): Promise<string[]> {
-    const rows: any[] = await arrayifyStream(await engine.queryBindings(query, {
-      sources: [ './test/statics/multipleRdfReifiedTriples.ttl' ],
-    }));
+  async function bindings(
+    query: string,
+    source: string | Store = './test/statics/multipleRdfReifiedTriples.ttl',
+  ): Promise<string[]> {
+    const rows: any[] = await arrayifyStream(await engine.queryBindings(query, { sources: [ source ]}));
     return rows
       .map(row => [ ...row ].map(([ key, value ]: [any, any]) => `${key.value}=${value.value}`).sort().join('|'))
       .sort();
@@ -94,6 +96,60 @@ describe('removeProjections', () => {
         expect,
         'SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s } OPTIONAL { ?s ?q ?r } }',
       );
+    });
+  });
+
+  describe('a sub-SELECT inside an EXISTS', () => {
+    // SPARQL 1.2 joins the solution the EXISTS is evaluated for into the sub-SELECT too.
+    const chain = new Store(new Parser().parse('@prefix : <ex://> . :a :p :b . :b :p :c . :c :p :d .'));
+
+    /**
+     * Asserts that a query answers the same over the chain once its projections are removed.
+     * @param expect - The assertion API of the running test
+     * @param query - The query, without its prefixes
+     * @param expectedRows - The number of rows it returns
+     * @returns the rewritten query
+     */
+    async function assertEquivalentOverChain(
+      expect: typeof Expect,
+      query: string,
+      expectedRows: number,
+    ): Promise<string> {
+      const prefixed = `PREFIX : <ex://>\n${query}`;
+      const rewritten = await transform(prefixed);
+      const original = await bindings(prefixed, chain);
+      expect(await bindings(rewritten, chain)).toEqual(original);
+      expect(original).toHaveLength(expectedRows);
+      return rewritten;
+    }
+
+    it('keeps the name of a hidden variable the solution certainly binds', async({ expect }) => {
+      const rewritten = await assertEquivalentOverChain(
+        expect,
+        'SELECT * { ?s :p ?o FILTER EXISTS { SELECT ?x { ?o :p ?x } } }',
+        2,
+      );
+      expect(rewritten).not.toContain('SELECT ?x');
+      expect(rewritten).toMatch(/\?o <ex:\/\/p> \?x/u);
+    });
+
+    it('keeps the projection hiding a variable the solution may bind', async({ expect }) => {
+      const rewritten = await assertEquivalentOverChain(
+        expect,
+        'SELECT * { ?s :p ?o OPTIONAL { ?o :p ?z } FILTER EXISTS { SELECT ?x { ?z :p ?x } } }',
+        2,
+      );
+      expect(rewritten).toContain('SELECT ?x');
+    });
+
+    it('renames a hidden variable the solution does not bind', async({ expect }) => {
+      const rewritten = await assertEquivalentOverChain(
+        expect,
+        'SELECT * { ?s :p ?o FILTER EXISTS { { SELECT ?x { ?y :p ?x } } ?y :p ?o } }',
+        3,
+      );
+      expect(rewritten).not.toContain('SELECT ?x');
+      expect(rewritten).toMatch(/\?v_\d+ <ex:\/\/p> \?x/u);
     });
   });
 });

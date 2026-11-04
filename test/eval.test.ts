@@ -331,6 +331,15 @@ describe('evaluation tests', () => {
       );
     });
 
+    it('compares a variable the solution binds through a sub-SELECT', async({ expect }) => {
+      await assertUnfoldsLikeView(expect, 'SELECT * { ?s :q ?o FILTER EXISTS { SELECT ?x { ?o :q ?x } } }', 2);
+      await assertUnfoldsLikeView(
+        expect,
+        'SELECT * { ?s :q ?o OPTIONAL { ?o :q ?z } FILTER EXISTS { SELECT ?x { ?z :q ?x } } }',
+        3,
+      );
+    });
+
     it('compares a variable the solution binds in an EXISTS a BIND evaluates', async({ expect }) => {
       await assertUnfoldsLikeView(expect, 'SELECT * { ?s :q ?o BIND(EXISTS { ?o :q ?x } AS ?hasNext) }', 4);
     });

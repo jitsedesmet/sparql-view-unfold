@@ -142,7 +142,8 @@ bound from the start of every group in the pattern, though not above a GROUP, wh
 aggregates. A pass reading ranges therefore runs through
 `rewriteInExistenceScopes`: the pass first rewrites the plan around EXISTS patterns, and then each pattern with μ as
 `existenceScope`. The order matters, as the scope depends on where the pass leaves the EXISTS. The pushdown writes no
-term for a variable of μ, and `pullUpExtends` moves no BIND of one.
+term for a variable of μ, and `pullUpExtends` moves no BIND of one. `removeProjections` keeps the name of a variable
+μ certainly binds, and keeps a projection hiding one μ may bind.
 
 **A BIND of a variable μ binds is undefined** ([Extend](https://www.w3.org/TR/sparql12-query/#defn_extend)). The syntax
 only rules out a BIND of a variable the group itself bound before. The unfolding writes `BIND(?mi_s AS ?o)` for each
