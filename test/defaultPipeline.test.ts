@@ -157,3 +157,25 @@ describe('the default pipeline over an empty group', () => {
 }`);
   });
 });
+
+describe('the default pipeline over a head variable the pattern writes a triple term into', () => {
+  // The body builds the triple term with a subject read from an object position, so it is type tested.
+  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+    'CONSTRUCT { <ex://all> <ex://p> ?o } WHERE { ?x <ex://r> ?s BIND(TRIPLE(?s, <ex://q>, ?x) AS ?o) }',
+  ])));
+
+  it('reads the components from the body once the type test makes the construction infallible', async({ expect }) => {
+    expect((await rewriter.rewriteQuery('SELECT * { <ex://all> <ex://p> <<( ?a <ex://q> ?b )>> }')).trim())
+      .toEqual(`SELECT ?a ?b WHERE {
+  {
+    {
+      ?v_0 <ex://r> ?v_1 .
+      FILTER ( ( ISIRI( ?v_1 ) || ISBLANK( ?v_1 ) ) )
+    }
+    FILTER ( TRUE )
+  }
+  BIND( ?v_1 AS ?a )
+  BIND( ?v_0 AS ?b )
+}`);
+  });
+});

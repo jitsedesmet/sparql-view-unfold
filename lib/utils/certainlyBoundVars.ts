@@ -1,9 +1,11 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
+import { forEveryNodeType } from '@traqula/core';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
-import { triplePositions } from '../datastructures/TermClusterSet.js';
+import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import {
+  asAssertableTermType,
   blankNodeRange,
   emptyRange,
   graphRange,
@@ -18,8 +20,7 @@ import {
   tripleTermRange,
 } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
-import { collectVariableNames } from '../utils.js';
-import { constructedTermOf, containsExistenceExpression } from './expressionHelpers.js';
+import { constructedTermOf, splitConjunction, splitDisjunction } from './expressionHelpers.js';
 import { xsd } from './rdfDatatypes.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
@@ -124,24 +125,23 @@ function intersectRanges(inputs: readonly CPMeta[]): VRanges {
       }
     } else {
       const binders = inputs.filter(input => input.vRanges.has(name));
-      result.set(name, new RangeSet(binders.flatMap(input => [ ...input.vRanges.rangeOf(name) ])));
+      result.set(name, RangeSet.join(binders.map(input => input.vRanges.rangeOf(name))));
     }
   }
   return result;
 }
 
 /**
- * What the operands an operation *merges* bind: every variable one of them binds certainly, with the ranges of
- * {@link intersectRanges}.
+ * What the join of some operands binds.
  * @param inputs - The metadata of the operands
- * @returns the merged metadata
+ * @returns the metadata of their join
  */
-function joinedMeta(inputs: readonly CPMeta[]): CPMeta {
+export function joinedMeta(inputs: readonly CPMeta[]): CPMeta {
   return { cVars: unionSets(inputs.map(input => input.cVars)), vRanges: intersectRanges(inputs) };
 }
 
 /**
- * What an operation binds of some variables only, which is all that stays in scope above a projection of them.
+ * What an operation binds of some variables only, as a projection on them keeps.
  * @param meta - The metadata of the operation
  * @param names - The variables to keep
  * @returns the restricted metadata
@@ -154,39 +154,15 @@ function metaRestrictedTo(meta: CPMeta, names: SSet): CPMeta {
 }
 
 /**
- * The range of a variable a BIND or an aggregate writes. One the solution an EXISTS is evaluated for binds already is
- * written undefined, which the engine leaves out, so it can also keep the value it had.
- * @param c - The context whose `existenceScope` holds that solution
+ * The range of a variable after a BIND or an aggregate writes it. A variable its input may bind already, as the outer
+ * solution of an EXISTS does, may keep its value: SPARQL 1.2 leaves such a write undefined.
  * @param name - The variable written
- * @param written - The range of what is written
- * @param input - The metadata of the solutions it is written in
+ * @param written - The range of the value written
+ * @param input - The metadata of the solutions written in
  * @returns the range of the variable afterwards
  */
-function writtenRange(c: RangeContext, name: string, written: RangeSet, input: CPMeta): RangeSet {
-  return c.existenceScope?.vRanges.has(name) ? new RangeSet([ ...input.vRanges.rangeOf(name), ...written ]) : written;
-}
-
-/**
- * Joins the solution an EXISTS is evaluated for into what an operation in its pattern binds, by the rule of
- * {@link joinedMeta} for the variables of that solution alone, in place so that an operation already holding the join
- * allocates nothing.
- * @param meta - The metadata of the operation, which is changed in place
- * @param scope - What the solution may bind
- */
-function joinExistenceScope(meta: CPMeta, scope: CPMeta): void {
-  for (const [ name, range ] of scope.vRanges) {
-    const own = meta.vRanges.rangeOf(name);
-    if (!scope.cVars.has(name)) {
-      if (!meta.cVars.has(name) && !isSubsetOf(range, own)) {
-        meta.vRanges.set(name, new RangeSet([ ...own, ...range ]));
-      }
-    } else if (!meta.cVars.has(name)) {
-      meta.vRanges.set(name, range);
-      meta.cVars.add(name);
-    } else if (!isSubsetOf(own, range)) {
-      meta.vRanges.set(name, own.meet(range));
-    }
-  }
+function rangeAfterWrite(name: string, written: RangeSet, input: CPMeta): RangeSet {
+  return input.vRanges.has(name) ? RangeSet.join([ input.vRanges.rangeOf(name), written ]) : written;
 }
 
 /**
@@ -201,7 +177,7 @@ function unionRanges(inputs: readonly CPMeta[]): VRanges {
   const names = unionSets(inputs.map(input => new Set(input.vRanges.keys())));
   for (const name of names) {
     const binders = inputs.filter(input => input.vRanges.has(name));
-    result.set(name, new RangeSet(binders.flatMap(input => [ ...input.vRanges.rangeOf(name) ])));
+    result.set(name, RangeSet.join(binders.map(input => input.vRanges.rangeOf(name))));
   }
   return result;
 }
@@ -279,7 +255,7 @@ export function standardExpressionRange(c: RangeContext, expression: Algebra.Exp
       // COALESCE gives one of its arguments, IF one of its branches, so the range is the union of theirs.
       if (expression.operator === 'coalesce' || expression.operator === 'if') {
         const choices = expression.operator === 'if' ? expression.args.slice(1) : expression.args;
-        return new RangeSet(choices.flatMap(choice => [ ...c.expressionRange(c, choice, input) ]));
+        return RangeSet.join(choices.map(choice => c.expressionRange(c, choice, input)));
       }
       return operatorRanges.get(expression.operator) ?? objectRange;
     }
@@ -312,7 +288,10 @@ const dropMetadata = { transform: (copy: { metadata?: unknown }): unknown => {
 } };
 
 /** Drops the metadata of every operation, no matter its type. */
-const dropAllMetadata = Object.fromEntries(Object.values(Types).map(type => [ type, dropMetadata ]));
+const dropAllMetadata = forEveryNodeType(dropMetadata);
+
+/** A transformer over the algebra that only visits the keys holding operations, so no RDF term and no metadata. */
+export const operationTransformer = algebraUtils.algebraTransformer({}).clone({}, algebraUtils.knownKeysAllowlist);
 
 /**
  * Returns a copy of `op` without any cached metadata, the state {@link withCpVars} recomputes from. Since
@@ -321,7 +300,7 @@ const dropAllMetadata = Object.fromEntries(Object.values(Types).map(type => [ ty
  * @returns the stripped copy
  */
 export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
-  return algebraUtils.mapOperation<'unsafe', T>(op, dropAllMetadata);
+  return operationTransformer.transformNode<'unsafe', T>(op, dropAllMetadata);
 }
 
 /**
@@ -360,43 +339,70 @@ function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
  * @param input - The metadata of the operation it is evaluated over
  * @returns whether it certainly evaluates
  */
-export function termCertainlyEvaluates(term: RDF.Term, input: CPMeta): boolean {
+function termCertainlyEvaluates(term: RDF.Term, input: CPMeta): boolean {
   return isSubsetOf(termVars(term), input.cVars) &&
     (term.termType !== 'Quad' || constructionCannotFail(term, input.vRanges));
 }
 
 /**
+ * Whether an expression evaluates in every solution of an operation: a term it constructs certainly evaluates, or it
+ * is `SUBJECT`, `PREDICATE` or `OBJECT` of an expression that certainly evaluates to a triple term.
+ * @param c - The context whose `expressionRange` gives what an accessor reads
+ * @param expression - The expression, like `?v`, `<<( ?s ?p ?o )>>` or `SUBJECT(?v)`
+ * @param input - The metadata of the operation it is evaluated over
+ * @returns whether it certainly evaluates, `false` where it cannot tell
+ */
+export function expressionCertainlyEvaluates(c: RangeContext, expression: Algebra.Expression, input: CPMeta): boolean {
+  // Read through {@link constructedTermOf}, so that `<<( s p o )>>` and `TRIPLE(s, p, o)` are the same fact here.
+  const constructed = constructedTermOf(expression);
+  if (constructed !== undefined) {
+    return termCertainlyEvaluates(constructed, input);
+  }
+  if (expression.subType !== ExpressionTypes.OPERATOR || !isTriplePosition(expression.operator) ||
+    expression.args.length !== 1) {
+    return false;
+  }
+  // An accessor only raises on an argument that is no triple term.
+  const [ argument ] = expression.args;
+  if (!expressionCertainlyEvaluates(c, argument, input)) {
+    return false;
+  }
+  const range = c.expressionRange(c, argument, input);
+  return range.size > 0 && isSubsetOf(range, tripleTermRange);
+}
+
+/**
  * The operation with its certainly and possibly bound variables assigned, computed by dynamic programming:
  * callers are responsible for keeping the metadata up to date when they manipulate the operation.
- * @param c - The context whose `expressionRange` gives what a BIND or an aggregate binds, and whose `existenceScope` is
- * joined into an operation in the pattern of an EXISTS
+ * @param c - The context whose `expressionRange` gives what a BIND or an aggregate binds, and whose `existenceScope`
+ * is joined in
  * @param op - The operation to annotate
  * @returns the same operation, with its metadata attached
  */
 export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPOp<T> {
   const cached = (<T & { metadata?: Partial<ScopedCPMeta> }> op).metadata;
-  // Metadata read in another scope describes another operation, so it is computed again.
+  // Metadata computed in another scope does not hold here.
   if (cached?.cVars !== undefined && cached.vRanges !== undefined && cached.existenceScope === c.existenceScope) {
     return <CPOp<T>> op;
   }
-  const annotated = computeCpVars(c, op);
+  const annotated = computeCpVarsOutsideExistenceScope(c, op);
   if (c.existenceScope !== undefined) {
-    joinExistenceScope(annotated.metadata, c.existenceScope);
+    Object.assign(annotated.metadata, joinedMeta([ annotated.metadata, c.existenceScope ]));
   }
   (<ScopedCPMeta> annotated.metadata).existenceScope = c.existenceScope;
   return annotated;
 }
 
-/** Cached metadata, with the `existenceScope` it was read in. */
+/** Cached metadata, with the `existenceScope` it was computed in. */
 type ScopedCPMeta = CPMeta & Pick<RangeContext, 'existenceScope'>;
 
 /**
- * Computes what {@link withCpVars} caches, before it joins in the scope of an EXISTS.
+ * Computes the metadata {@link withCpVars} caches, without joining in the `existenceScope`.
  * @param c - The context whose `expressionRange` gives what a BIND or an aggregate binds
  * @param op - The operation to annotate
  * @returns the same operation, with its metadata attached
  */
-function computeCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPOp<T> {
+function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: RangeContext, op: T): CPOp<T> {
   function asCPVars<T extends Algebra.Operation>(op: T): CPOp<T> {
     const casted = <CPOp<T>> op;
     if (!Object.hasOwn(op, 'metadata')) {
@@ -466,7 +472,7 @@ function computeCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPO
       const ranges = new VRanges(left.metadata.vRanges);
       for (const [ name, range ] of right.metadata.vRanges) {
         if (!left.metadata.cVars.has(name)) {
-          ranges.set(name, new RangeSet([ ...ranges.rangeOf(name), ...range ]));
+          ranges.set(name, RangeSet.join([ ranges.rangeOf(name), range ]));
         }
       }
       resOp.metadata.vRanges = ranges;
@@ -497,7 +503,7 @@ function computeCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPO
       const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
       for (const aggregate of resOp.aggregates) {
         const target = aggregate.variable.value;
-        ranges.set(target, writtenRange(c, target, c.expressionRange(c, aggregate, input.metadata), input.metadata));
+        ranges.set(target, rangeAfterWrite(target, c.expressionRange(c, aggregate, input.metadata), input.metadata));
       }
       resOp.metadata.vRanges = ranges;
       return resOp;
@@ -521,18 +527,14 @@ function computeCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPO
       const input = withCpVars(c, resOp.input);
       const certain = new Set(input.metadata.cVars);
       const ranges = new VRanges(input.metadata.vRanges);
-      // Maybe the var we will create is also certain. Read through {@link constructedTermOf}, so that the
-      // two spellings of one construction - `<<( s p o )>>` and the `TRIPLE(s, p, o)` the parser keeps
-      // distinct from it - are the same fact here.
-      const constructed = constructedTermOf(resOp.expression);
-      if (constructed !== undefined && termCertainlyEvaluates(constructed, input.metadata)) {
+      if (expressionCertainlyEvaluates(c, resOp.expression, input.metadata)) {
         certain.add(resOp.variable.value);
       }
       resOp.metadata.cVars = certain;
       // The EXTEND brings its target into scope, and what the expression yields overrides whatever the
       // input had to say about it - binding an already bound variable is an error, not a narrowing.
       const written = c.expressionRange(c, resOp.expression, input.metadata);
-      ranges.set(resOp.variable.value, writtenRange(c, resOp.variable.value, written, input.metadata));
+      ranges.set(resOp.variable.value, rangeAfterWrite(resOp.variable.value, written, input.metadata));
       resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.FILTER: {
@@ -542,15 +544,18 @@ function computeCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPO
       // Keep in mind: Filter False is a special case.
       const input = withCpVars(c, resOp.input);
       const unbound = variablesImpliedUnboundBy(resOp.expression);
-      resOp.metadata.cVars = differenceSets(unionSets([
-        input.metadata.cVars,
-        variablesImpliedBoundBy(resOp.expression),
-      ]), unbound);
-      // A filter only drops solutions, so what survives still holds what the input put there. What the
-      // *condition* narrows is the business of the pushdown, which reads it into an assertion instead.
+      const implied = rangesImpliedBy(c, resOp.expression, input.metadata);
+      resOp.metadata.cVars = differenceSets(unionSets([ input.metadata.cVars, new Set(implied.keys()) ]), unbound);
+      // A filter only drops solutions, so what survives holds what the input put there, narrowed by what the
+      // condition confines it to. A variable out of scope stays out: the condition never holds for it.
       // A `!bound(?x)` takes `?x` out of scope entirely, as it did out of `pVars` - see the note in the
       // file header on why this is not the bottom range instead.
       const ranges = new VRanges(input.metadata.vRanges);
+      for (const [ name, range ] of implied) {
+        if (ranges.has(name)) {
+          ranges.narrow(name, range);
+        }
+      }
       for (const name of unbound) {
         ranges.delete(name);
       }
@@ -641,124 +646,68 @@ export function cpMetaOf(c: RangeContext, op: Algebra.Operation): CPMeta {
 }
 
 /**
- * The expressions an operation evaluates for each solution of its input, or of its two inputs joined for an OPTIONAL.
- * @param op - The operation to read
- * @returns its expressions
+ * The term types an operator confines a variable argument to where it holds.
+ * @param c - The context whose `expressionRange` reads the other argument of a `SAMETERM`
+ * @param expression - The operator, like `ISIRI(?x)` or `SAMETERM(?x, ?y)`
+ * @param index - The position of the variable among its arguments
+ * @param input - The metadata of the solutions it is evaluated over
+ * @returns the range, `undefined` where the operator does not confine its argument
  */
-function expressionsEvaluatedBy(op: Algebra.Operation): Algebra.Expression[] {
-  switch (op.type) {
-    case Types.FILTER:
-    case Types.EXTEND: {
-      return [ op.expression ];
+function rangeConfinedBy(c: RangeContext, expression: A.OperatorExpression, index: number, input: CPMeta):
+RangeSet | undefined {
+  switch (expression.operator) {
+    case 'bound': {
+      // Bound to any term.
+      return objectRange;
     }
-    case Types.LEFT_JOIN: {
-      return op.expression === undefined ? [] : [ op.expression ];
-    }
-    case Types.ORDER_BY: {
-      return op.expressions;
-    }
-    case Types.GROUP: {
-      return op.aggregates;
+    case 'sameterm': {
+      // The same term as the other argument.
+      return c.expressionRange(c, expression.args[1 - index], input);
     }
     default: {
-      return [];
+      const termType = asAssertableTermType(expression.operator);
+      return termType === undefined ? undefined : new RangeSet([ termType ]);
     }
   }
 }
 
 /**
- * Rewrites the pattern of every EXISTS an operation evaluates, in a context whose `existenceScope` is what the
- * solutions it evaluates them for bind of the variables the pattern mentions.
- * @param c - The context the operation is rewritten in
- * @param op - The operation, whose expressions are rewritten in place
- * @param rewritePattern - Rewrites one pattern in the context it is given
- */
-function rewriteExistencePatterns<C extends ExistenceScopeContext>(
-  c: C,
-  op: Algebra.Operation,
-  rewritePattern: (patternContext: C, pattern: Algebra.Operation) => Algebra.Operation,
-): void {
-  const expressions = expressionsEvaluatedBy(op).filter(containsExistenceExpression);
-  if (expressions.length === 0) {
-    return;
-  }
-  const inputs = [ (<A.Single | A.Multi> op).input ].flat().map(input => cpMetaOf(c, input));
-  const solutions = inputs.length === 1 ? inputs[0] : joinedMeta(inputs);
-  // A pass may write one EXISTS into an expression more than once, and its pattern is rewritten once.
-  const rewritten = new Set<Algebra.ExistenceExpression>();
-  const rewrite = (existence: Algebra.ExistenceExpression): { continue: false } => {
-    if (!rewritten.has(existence)) {
-      rewritten.add(existence);
-      const existenceScope = metaRestrictedTo(solutions, collectVariableNames(c.astTransformer, existence.input));
-      existence.input = rewritePattern({ ...c, existenceScope }, existence.input);
-    }
-    // A nested EXISTS is the business of the rewrite of the pattern holding it.
-    return { continue: false };
-  };
-  for (const expression of expressions) {
-    algebraUtils.visitOperationSub(expression, {}, { expression: { existence: { preVisitor: rewrite }}});
-  }
-}
-
-/** What {@link rewriteInExistenceScopes} reads of a {@link TransformationContext}. */
-export type ExistenceScopeContext = RangeContext & Pick<TransformationContext, 'astTransformer'>;
-
-/**
- * Rewrites an operation with a pass that leaves the pattern of an EXISTS alone, and then each such pattern in a context
- * whose `existenceScope` joins in the solution it is evaluated for, as SPARQL 1.2 does.
- * @param c - The context to rewrite in
- * @param op - The operation to rewrite, a tree of the pass's own
- * @param rewrite - The pass, which does not descend into an EXISTS
- * @returns the rewritten operation
- */
-export function rewriteInExistenceScopes<C extends ExistenceScopeContext, T extends Algebra.Operation>(
-  c: C,
-  op: T,
-  rewrite: (context: C, op: Algebra.Operation) => Algebra.Operation,
-): T {
-  const rewritten = rewrite(c, op);
-  const rewritePattern = (patternContext: C, pattern: Algebra.Operation): Algebra.Operation =>
-    rewriteInExistenceScopes(patternContext, pattern, rewrite);
-  const callbacks = {
-    // What the pass cached describes the plan it was handed, and the visitor below reads the plan it hands back.
-    preVisitor: (operation: { metadata?: unknown }) => {
-      delete operation.metadata;
-      return {};
-    },
-    visitor: (operation: Algebra.Operation) => rewriteExistencePatterns(c, operation, rewritePattern),
-  };
-  algebraUtils.visitOperation(rewritten, {
-    ...Object.fromEntries(Object.values(Types).map(type => [ type, callbacks ])),
-    [Types.EXPRESSION]: { preVisitor: () => ({ continue: false }) },
-  });
-  return <T> rewritten;
-}
-
-/**
- * Collects the variables a filter condition can only hold for when they are bound.
+ * The variables a filter condition can only hold for when they are bound, each with the term types it confines them to.
+ * @param c - The context whose `expressionRange` reads the other argument of a `SAMETERM`
  * @param expression - The condition to read
- * @param agg - The variables collected so far, filled in by the recursion
- * @returns those variables
+ * @param input - The metadata of the solutions it is evaluated over
+ * @returns those variables with their range, a disjunction keeping only what every disjunct confines
  */
-function variablesImpliedBoundBy(expression: A.Expression, agg = new Set<string>()): Set<string> {
-  if (expression.subType !== ExpressionTypes.OPERATOR) {
-    return agg;
-  }
-  // Every conjunct of a `&&` has to hold, so each of them contributes.
-  if (expression.operator === '&&') {
-    for (const arg of expression.args) {
-      variablesImpliedBoundBy(arg, agg);
-    }
-    return agg;
-  }
-  if (expression.operator === 'bound' || expression.operator === 'sameterm') {
-    for (const arg of expression.args) {
-      if (arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
-        agg.add(arg.term.value);
+function rangesImpliedBy(c: RangeContext, expression: A.Expression, input: CPMeta): VRanges {
+  const implied = new VRanges();
+  const conjuncts = splitConjunction(expression);
+  if (conjuncts.length > 1) {
+    for (const conjunct of conjuncts) {
+      for (const [ name, range ] of rangesImpliedBy(c, conjunct, input)) {
+        implied.narrow(name, range);
       }
     }
+    return implied;
   }
-  return agg;
+  const disjuncts = splitDisjunction(expression);
+  if (disjuncts.length > 1) {
+    // An erroring disjunct does not fail the disjunction where another one holds.
+    const disjunctRanges = disjuncts.map(disjunct => rangesImpliedBy(c, disjunct, input));
+    for (const name of intersectSets(disjunctRanges.map(ranges => new Set(ranges.keys())))) {
+      implied.set(name, RangeSet.join(disjunctRanges.map(ranges => ranges.rangeOf(name))));
+    }
+    return implied;
+  }
+  if (expression.subType !== ExpressionTypes.OPERATOR) {
+    return implied;
+  }
+  for (const [ index, arg ] of expression.args.entries()) {
+    const range = rangeConfinedBy(c, expression, index, input);
+    if (range !== undefined && arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
+      implied.narrow(arg.term.value, range);
+    }
+  }
+  return implied;
 }
 
 /**
@@ -797,11 +746,7 @@ function variablesImpliedUnboundBy(expression: A.Expression, agg = new Set<strin
  * @returns its variables
  */
 export function termVars(term: RDF.Term): Set<string> {
-  if (term.termType === 'Variable') {
-    return new Set([ term.value ]);
-  }
-  if (term.termType === 'Quad') {
-    return unionSets([ termVars(term.subject), termVars(term.predicate), termVars(term.object) ]);
-  }
-  return new Set<string>();
+  const names = new Set<string>();
+  algebraUtils.forEachTermVariable(term, variable => names.add(variable.value));
+  return names;
 }

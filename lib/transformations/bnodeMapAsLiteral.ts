@@ -1,4 +1,5 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import type { VisitChildrenHelpers } from '@traqula/core';
 import type { DataFactory } from 'rdf-data-factory';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
 import { triplePositions } from '../datastructures/TermClusterSet.js';
@@ -9,10 +10,9 @@ import { componentOf } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import {
   cpMetaOf,
-  rewriteInExistenceScopes,
-  termCertainlyEvaluates,
-  withoutCpVars,
+  expressionCertainlyEvaluates,
 } from '../utils/certainlyBoundVars.js';
+import { leaveExistencePatterns, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
 import {
   constructedTermOf,
   createBooleanExpression,
@@ -20,7 +20,10 @@ import {
 import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
 import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
 import { materialiseInternalBnodesByExtensionFunction } from './bnodeExtensionFunction.js';
-import type { InternalBnodeMaterialisation } from './internalBnodeMaterialisation.js';
+import type {
+  InternalBnodeExpressionCallbacks,
+  InternalBnodeMaterialisation,
+} from './internalBnodeMaterialisation.js';
 import {
   holdsInternalBnodeOrIsBlank,
   internalBnodeEncodingTags,
@@ -227,7 +230,7 @@ function encodeInternalBnode(
     const term = constructedTermOf(argument);
     const termExpression = term === undefined ? argument : AF.createTermExpression(term);
     const encoding = encodeTerm(termExpression, c.expressionRange(c, termExpression, scope), c.tripleTermArgumentDepth);
-    return term !== undefined && scope !== undefined && termCertainlyEvaluates(term, scope) ?
+    return scope !== undefined && expressionCertainlyEvaluates(c, termExpression, scope) ?
       encoding :
       orUnbound(termExpression, encoding);
   }
@@ -238,6 +241,11 @@ function encodeInternalBnode(
   // so an order read off their names would differ between two patterns constructing the same node.
   return concat(expression.args.map(encodeArgument));
 }
+
+/** Visits only the input of an operation, leaving its expressions to the transform. */
+const visitInputOnly = {
+  visitChildren: (op: Algebra.Single, { visitKey }: VisitChildrenHelpers) => visitKey(op, 'input'),
+};
 
 /**
  * Materialises every internal blank node in an operation and rewrites `ISBLANK` to recognise what they became.
@@ -257,6 +265,20 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   const coinArgumentVariable = freshVarGenerator(markVariableNamesUsed(c, op), 'mBnodeArgument');
 
   /**
+   * The expression callbacks materialising internal blank nodes and rewriting `ISBLANK`s, outside EXISTS patterns.
+   * @param encodeArguments - Encodes one internal blank node with arguments, which are materialised already.
+   * @returns The callbacks per expression subType.
+   */
+  function materialisingCallbacks(
+    encodeArguments: (named: Algebra.NamedExpression) => Algebra.Expression,
+  ): InternalBnodeExpressionCallbacks & { existence: typeof leaveExistencePatterns } {
+    return {
+      existence: leaveExistencePatterns,
+      ...internalBnodeExpressionCallbacks(c, materialisation, encodeArguments),
+    };
+  }
+
+  /**
    * Materialises the internal blank nodes in an expression and rewrites its `ISBLANK`s.
    * @param expression - The expression to transform.
    * @param encodeArguments - Encodes one internal blank node with arguments, which are materialised already.
@@ -266,11 +288,9 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
     expression: Algebra.Expression,
     encodeArguments: (named: Algebra.NamedExpression) => Algebra.Expression,
   ): Algebra.Expression {
-    return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: {
-      // The pattern of an EXISTS is materialised in its own scope, by `rewriteInExistenceScopes`.
-      existence: { preVisitor: () => ({ continue: false }) },
-      ...internalBnodeExpressionCallbacks(c, materialisation, encodeArguments),
-    }});
+    return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, {
+      expression: materialisingCallbacks(encodeArguments),
+    });
   }
 
   /**
@@ -300,7 +320,7 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
   }
 
   /**
-   * Materialises the internal blank nodes in an operation, leaving an EXISTS pattern to `rewriteInExistenceScopes`.
+   * Materialises the internal blank nodes in an operation, outside EXISTS patterns.
    * @param context - The context to read ranges in.
    * @param operation - The operation to transform.
    * @returns The transformed operation.
@@ -312,12 +332,11 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
      * @returns The callbacks doing so.
      */
     function overInput(key: 'expression' | 'expressions' | 'aggregates'): {
-      preVisitor: () => { ignoreKeys: Set<string> };
+      preVisitor: () => typeof visitInputOnly;
       transform: (copy: Algebra.Single) => Algebra.Single;
     } {
-      const ignoreKeys = new Set([ key ]);
       return {
-        preVisitor: () => ({ ignoreKeys }),
+        preVisitor: () => visitInputOnly,
         transform: (copy) => {
           const holder = <Record<typeof key, Algebra.Expression | Algebra.Expression[]>> <unknown> copy;
           const materialise = materialiserOverInputOf(context, copy);
@@ -327,23 +346,19 @@ function materialiseInternalBnodes<T extends Algebra.Operation>(
         },
       };
     }
-    return algebraUtils.mapOperation<'unsafe', Algebra.Operation>(operation, {
+    return algebraUtils.mapOperationSub<'unsafe', Algebra.Operation>(operation, {
       [Algebra.Types.EXTEND]: overInput('expression'),
       [Algebra.Types.FILTER]: overInput('expression'),
       [Algebra.Types.ORDER_BY]: overInput('expressions'),
       [Algebra.Types.GROUP]: overInput('aggregates'),
+    }, {
       // The condition of an OPTIONAL, the one expression left, has no input to bind an argument in, so it gets every
       // branch.
-      [Algebra.Types.EXPRESSION]: {
-        preVisitor: () => ({ continue: false }),
-        transform: expression =>
-          materialiseInExpression(expression, named => encodeInternalBnode(context, named)),
-      },
+      expression: materialisingCallbacks(named => encodeInternalBnode(context, named)),
     });
   }
 
-  // The ranges cache metadata on the copy, so it starts and ends without any.
-  return withoutCpVars(rewriteInExistenceScopes(c, withoutCpVars(op), materialiseAll));
+  return rewriteInExistenceScopes(c, op, materialiseAll);
 }
 
 /** How a pipeline step materialises internal blank nodes. */

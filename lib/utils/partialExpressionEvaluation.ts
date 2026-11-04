@@ -1,11 +1,11 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
-import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { RangeSet } from '../RangeSet.js';
+import { objectRange, predicateRange, subjectRange, asAssertableTermType } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Access } from './assertions.js';
-import { asAccess, asAssertableTermType, asTermTypeTest, componentOf, isAssertableTerm } from './assertions.js';
+import { asAccess, asTermTypeTest, componentOf, isAssertableTerm } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
 import { DF } from './rdfDatatypes.js';
 import { isSubsetOf, unionSets } from './setUtils.js';
