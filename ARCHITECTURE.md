@@ -138,7 +138,8 @@ So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
 mapping, but inside an EXISTS it is the solution μ the EXISTS is evaluated for
 ([ContextSolution](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution),
 [EXISTS](https://www.w3.org/TR/sparql12-query/#func-filter-exists)), also through a sub-SELECT. So what μ binds is
-bound from the start of every group in the pattern. A pass reading ranges therefore runs through
+bound from the start of every group in the pattern, though not above a GROUP, whose solutions hold only its keys and
+aggregates. A pass reading ranges therefore runs through
 `rewriteInExistenceScopes`: the pass first rewrites the plan around EXISTS patterns, and then each pattern with μ as
 `existenceScope`. The order matters, as the scope depends on where the pass leaves the EXISTS. The pushdown writes no
 term for a variable of μ, and `pullUpExtends` moves no BIND of one.

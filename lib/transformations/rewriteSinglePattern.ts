@@ -259,7 +259,7 @@ function bindPatternTerms(
       operation,
     );
   const comparisons = sortedBinds
-    .filter(([ variable ]) => maybeBound(variable))
+    .filter(([ variable ]) => certainlyBound(variable) || maybeBound(variable))
     .map(([ variable, expression ]) => sameTermExpression(c, deepCopy(c, expression), DF.variable(variable)));
   return comparisons.length === 0 ? boundOperation : AF.createFilter(boundOperation, conjunctionOf(c, comparisons));
 }

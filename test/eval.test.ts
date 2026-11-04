@@ -331,6 +331,19 @@ describe('evaluation tests', () => {
       );
     });
 
+    it('compares a variable the solution binds in an EXISTS a BIND evaluates', async({ expect }) => {
+      await assertUnfoldsLikeView(expect, 'SELECT * { ?s :q ?o BIND(EXISTS { ?o :q ?x } AS ?hasNext) }', 4);
+    });
+
+    it('binds a variable a GROUP drops from the solution of an EXISTS in its HAVING', async({ expect }) => {
+      // Not compared to the view: Comunica substitutes ?o into that EXISTS too, where SPARQL 1.2 leaves it free.
+      const query =
+        'SELECT * { ?s :q ?o FILTER EXISTS { SELECT ?y { ?y :q ?x } GROUP BY ?y HAVING EXISTS { ?o :q ?y } } }';
+      const rewritten = await rewritersOver(plainView).unfoldOnly.rewriteQuery(prefixes + query);
+      const havingPattern = rewritten.slice(rewritten.lastIndexOf('EXISTS'));
+      expect(havingPattern).toMatch(/BIND\( \?\w+ AS \?o \)/u);
+    });
+
     it('asserts rather than binds a variable the solution certainly binds', async({ expect }) => {
       const rewritten = await rewritersOver(plainView).unfoldOnly
         .rewriteQuery(`${prefixes}SELECT * { ?s :q ?o FILTER EXISTS { ?o :q ?x } }`);

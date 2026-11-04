@@ -386,11 +386,33 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
     return <CPOp<T>> op;
   }
   const annotated = computeCpVarsOutsideExistenceScope(c, op);
-  if (c.existenceScope !== undefined) {
+  if (c.existenceScope !== undefined && !aggregatesOver(op)) {
     Object.assign(annotated.metadata, joinedMeta([ annotated.metadata, c.existenceScope ]));
   }
   (<ScopedCPMeta> annotated.metadata).existenceScope = c.existenceScope;
   return annotated;
+}
+
+/**
+ * Whether an operation is a GROUP, or a HAVING, select expression or ORDER BY over one. Its solutions hold only the
+ * group keys and aggregates, not the solution an EXISTS is evaluated for, which SPARQL 1.2 joins into groups only.
+ * @param op - The operation to read
+ * @returns whether it aggregates
+ */
+function aggregatesOver(op: Algebra.Operation): boolean {
+  switch (op.type) {
+    case Types.GROUP: {
+      return true;
+    }
+    case Types.FILTER:
+    case Types.EXTEND:
+    case Types.ORDER_BY: {
+      return aggregatesOver(op.input);
+    }
+    default: {
+      return false;
+    }
+  }
 }
 
 /** Cached metadata, with the `existenceScope` it was computed in. */
