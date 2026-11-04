@@ -276,6 +276,79 @@ LIMIT 10`,
 }`,
       ));
 
+      it('takes every node a triple pattern endpoint matches as a zero length match', ({ expect }) => testPath(
+        expect,
+        'SELECT * { ?x <ex://p>? <<( ?a <ex://q> ?b )>> }',
+        `SELECT ?a ?b ?x WHERE {
+  SELECT DISTINCT ?x ?a ?b WHERE {
+    {
+      {
+        SELECT ( SUBJECT( ?o ) AS ?a ) ( OBJECT( ?o ) AS ?b ) ( ?s AS ?x ) WHERE {
+          {
+            {
+              ?s ?p ?o .
+              FILTER ( SAMETERM( ?p , <ex://p> ) )
+            }
+            FILTER ( SAMETERM( <ex://q> , PREDICATE( ?o ) ) )
+          }
+          FILTER ( ISTRIPLE( ?o ) )
+        }
+      }
+    }
+    UNION {
+      {
+        SELECT DISTINCT ?a ?b WHERE {
+          SELECT ( SUBJECT( ?o ) AS ?a ) ( OBJECT( ?o ) AS ?b ) ( ?p AS ?path_0 ) ( ?s AS ?path_1 ) WHERE {
+            {
+              ?s ?p ?o .
+              FILTER ( SAMETERM( <ex://q> , PREDICATE( ?o ) ) )
+            }
+            FILTER ( ISTRIPLE( ?o ) )
+          }
+        }
+      }
+      BIND( <<( ?a <ex://q> ?b )>> AS ?x )
+    }
+  }
+}`,
+      ));
+
+      it('binds a triple pattern endpoint to the components of a ground triple term endpoint', ({ expect }) => testPath(
+        expect,
+        'SELECT * { <<( <ex://a> <ex://q> <ex://b> )>> <ex://p>? <<( ?a <ex://q> ?b )>> }',
+        `SELECT ?a ?b WHERE {
+  SELECT DISTINCT ?a ?b WHERE {
+    {
+      {
+        SELECT ( SUBJECT( ?o ) AS ?a ) ( OBJECT( ?o ) AS ?b ) WHERE {
+          {
+            {
+              {
+                {
+                  {
+                    ?s ?p ?o .
+                    FILTER ( SAMETERM( ?p , <ex://p> ) )
+                  }
+                  FILTER ( SAMETERM( <ex://a> , SUBJECT( ?s ) ) )
+                }
+                FILTER ( SAMETERM( <ex://q> , PREDICATE( ?s ) ) )
+              }
+              FILTER ( SAMETERM( <ex://b> , OBJECT( ?s ) ) )
+            }
+            FILTER ( SAMETERM( <ex://q> , PREDICATE( ?o ) ) )
+          }
+          FILTER ( ISTRIPLE( ?o ) )
+        }
+      }
+    }
+    UNION {
+      BIND( <ex://a> AS ?a )
+      BIND( <ex://b> AS ?b )
+    }
+  }
+}`,
+      ));
+
       it('yields one solution when a ground subject and object match over two alternatives', ({ expect }) => testPath(
         expect,
         'SELECT * { <ex://a> (<ex://q>|<ex://r>)? <ex://b> }',

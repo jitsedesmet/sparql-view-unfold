@@ -1,0 +1,44 @@
+import { describe, it } from 'vitest';
+import { createQueryRewriter } from '../lib/queryRewriter.js';
+import {
+  extendsToValuesTransformation,
+  transformExtendsToValues,
+} from '../lib/transformations/extendsToValues.js';
+import { createTransformationContext } from '../lib/transformContext.js';
+import { DF } from '../lib/utils/rdfDatatypes.js';
+
+describe('extendsToValues', () => {
+  const rewriter = createQueryRewriter([ extendsToValuesTransformation() ]);
+
+  it('turns a bind of a ground triple term over a VALUES into a column', async({ expect }) => {
+    expect((await rewriter.rewriteQuery(
+      'SELECT * { VALUES ?s { <ex://me> } BIND(<<( <ex://me> <ex://name> "jitse" )>> AS ?claim) }',
+    )).trim()).toBe(`SELECT ?claim ?s WHERE {
+  VALUES( ?s ?claim ){
+    ( <ex://me> <<( <ex://me> <ex://name> "jitse" )>> )
+  }
+}`);
+  });
+
+  it('keeps the bind of a triple term over variables, which no VALUES row can hold', async({ expect }) => {
+    expect((await rewriter.rewriteQuery(
+      'SELECT * { VALUES ?s { <ex://me> } BIND(<<( ?s <ex://name> "jitse" )>> AS ?claim) }',
+    )).trim()).toBe(`SELECT ( <<( ?s <ex://name> "jitse" )>> AS ?claim ) ?s WHERE {
+  VALUES ?s {
+    <ex://me>
+  }
+}`);
+  });
+
+  it('keeps a bind no VALUES row can hold', ({ expect }) => {
+    const c = createTransformationContext();
+    for (const term of [
+      DF.quad(DF.literal('x'), DF.namedNode('ex://p'), DF.namedNode('ex://o')),
+      DF.quad(DF.blankNode('b'), DF.namedNode('ex://p'), DF.namedNode('ex://o')),
+      DF.blankNode('b'),
+    ]) {
+      const bind = c.AF.createExtend(c.AF.createBgp([]), DF.variable('t'), c.AF.createTermExpression(term));
+      expect(transformExtendsToValues(c, bind)).toEqual(bind);
+    }
+  });
+});

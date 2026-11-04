@@ -2,8 +2,9 @@ import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import * as arrayifyStreamNS from 'arrayify-stream';
-import { Store } from 'n3';
+import { Parser, Store } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
+import { termToString } from 'rdf-string';
 import type { ExpectStatic } from 'vitest';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
@@ -13,6 +14,7 @@ import {
   nullifyJoinOverIncompatibleBoundsTransformation,
 } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { nullifyUnbindableVarsTransformation } from '../lib/transformations/nullifyUnbindableVars.js';
+import { rewriteNonRecursivePathsTransformation } from '../lib/transformations/pathTransformation.js';
 import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
@@ -58,6 +60,24 @@ describe('evaluation tests', () => {
     return result;
   }
 
+  /**
+   * Evaluates a query.
+   * @param query - The query to evaluate
+   * @param sources - The sources to evaluate it over
+   * @returns one string per row, sorted, but duplicates kept: the multiplicity of every row is part of the answer
+   */
+  async function bindings(
+    query: string,
+    sources: NonNullable<Parameters<typeof engine.queryBindings>[1]>['sources'] = [
+      './test/statics/assertionPushdown.ttl',
+    ],
+  ): Promise<string[]> {
+    const rows: RDF.Bindings[] = await arrayifyStream(await engine.queryBindings(query, { sources }));
+    return rows
+      .map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${termToString(value)}`).sort().join('|'))
+      .sort();
+  }
+
   describe('rdf reification', () => {
     it ('fails without mapping', async({ expect }) => {
       const store11 = await sourceToStore([ './test/statics/singleRdfReifiedTriple.ttl' ]);
@@ -101,16 +121,6 @@ describe('evaluation tests', () => {
      */
     const pullUpPrefixes = 'PREFIX : <ex://>\n';
     const c = createTransformationContext();
-
-    async function bindings(query: string): Promise<string[]> {
-      const rows: RDF.Bindings[] = await arrayifyStream(
-        await engine.queryBindings(query, { sources: [ './test/statics/assertionPushdown.ttl' ]}),
-      );
-      // Sorted, but duplicates kept: the multiplicity of every row is part of the answer.
-      return rows
-        .map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${value.value}`).sort().join('|'))
-        .sort();
-    }
 
     async function assertEquivalent(
       expect: ExpectStatic,
@@ -220,6 +230,54 @@ describe('evaluation tests', () => {
         ?x :p ?y
         BIND(:a AS ?b)
       }`, 1);
+    });
+  });
+
+  // The spec defines the zero length match for term and variable endpoints only; a triple pattern is unified.
+  describe('a zero or one path with a triple pattern endpoint', () => {
+    const tripleTermStore = new Store(new Parser().parse(`
+      <ex://s> <ex://p> <<( <ex://a> <ex://q> <ex://b> )>> .
+      <ex://n> <ex://r> <<( <ex://c> <ex://q> <ex://d> )>> .
+    `));
+    const rewriter = createQueryRewriter([ rewriteNonRecursivePathsTransformation() ]);
+
+    /**
+     * Evaluates a query with its paths expanded.
+     * @param query - The query to expand and evaluate
+     * @returns one string per row, sorted
+     */
+    async function expandedBindings(query: string): Promise<string[]> {
+      return bindings(await rewriter.rewriteQuery(query), [ tripleTermStore ]);
+    }
+
+    it('binds the variable to every triple term node the pattern matches', async({ expect }) => {
+      await expect(expandedBindings('SELECT ?x ?a ?b { ?x <ex://p>? <<( ?a <ex://q> ?b )>> }')).resolves.toEqual([
+        'a=ex://a|b=ex://b|x=<<ex://a ex://q ex://b>>',
+        'a=ex://a|b=ex://b|x=ex://s',
+        'a=ex://c|b=ex://d|x=<<ex://c ex://q ex://d>>',
+      ]);
+    });
+
+    it('binds the pattern to a ground triple term without asking for it in the data', async({ expect }) => {
+      await expect(expandedBindings('SELECT * { <<( <ex://e> <ex://q> <ex://f> )>> <ex://p>? <<( ?a <ex://q> ?b )>> }'))
+        .resolves.toEqual([ 'a=ex://e|b=ex://f' ]);
+    });
+
+    it('equates the variables of two triple pattern endpoints', async({ expect }) => {
+      await expect(expandedBindings('SELECT * { <<( ?a <ex://q> ?b )>> <ex://p>? <<( ?c <ex://q> ?d )>> }'))
+        .resolves.toEqual([
+          'a=ex://a|b=ex://b|c=ex://a|d=ex://b',
+          'a=ex://c|b=ex://d|c=ex://c|d=ex://d',
+        ]);
+    });
+
+    it('has no zero length match when unification puts a literal in subject position', async({ expect }) => {
+      await expect(expandedBindings('SELECT * { <<( ?a <ex://q> "x" )>> <ex://p>? <<( ?b <ex://q> ?a )>> }'))
+        .resolves.toEqual([]);
+    });
+
+    it('has no zero length match when the pattern holds the variable', async({ expect }) => {
+      await expect(expandedBindings('SELECT * { ?a <ex://p>? <<( ?a <ex://q> ?b )>> }')).resolves.toEqual([]);
     });
   });
 });

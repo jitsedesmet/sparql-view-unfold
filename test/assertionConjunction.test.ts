@@ -102,7 +102,7 @@ function stateOf(assertions: AssertionConjunction | undefined, name: string): st
  */
 function assertionString(assertion: Assertion): string {
   if (assertion.subType === 'strong' || assertion.subType === 'weak') {
-    const target = 'positions' in assertion.term ? accessId(assertion.term) : assertion.term.value;
+    const target = 'positions' in assertion.term ? accessId(assertion.term) : termString(assertion.term);
     return `${assertion.subType}(${target})`;
   }
   if (assertion.subType === 'termType') {
@@ -854,15 +854,42 @@ describe('assertionConjunction', () => {
         [ access('s'), assertStrong(subjectOfO) ],
         [ access('o'), assertStrong(DF.quad(termC, DF.namedNode('ex://p'), termD)) ],
       );
-      // `?s` is the subject of that triple term, so it is `:c` - and the compact form of the shape is
-      // gone, every position of it being decided on its own now.
+      // `?s` is the subject of that triple term, so it is `:c`, and the shape, every position of it fixed, is
+      // written back as the one triple term it is.
       expect(stateOf(assertions, 's')).toBe('strong(ex://c)');
+      expect(stateOf(assertions, 'o')).toBe('strong(<<( ex://c ex://p ex://d )>>)');
       expect(conjunctsOf(assertions)).toEqual([
         's=strong(ex://c)',
-        'o.subject=strong(ex://c)',
-        'o.predicate=strong(ex://p)',
-        'o.object=strong(ex://d)',
+        'o=strong(<<( ex://c ex://p ex://d )>>)',
       ]);
+    });
+
+    describe('written back as the triple term every position of it fixes', () => {
+      it.for([
+        [
+          'positions fixed one at a time',
+          'sameTerm(SUBJECT(?x), <ex://a>) && sameTerm(PREDICATE(?x), <ex://b>) && sameTerm(OBJECT(?x), <ex://c>)',
+          'FILTER ( SAMETERM( ?x , <<( <ex://a> <ex://b> <ex://c> )>> ) )',
+        ],
+        [
+          'a position also read by a variable',
+          'sameTerm(?x, <<( <ex://a> <ex://b> <ex://c> )>>) && sameTerm(SUBJECT(?x), ?s)',
+          'FILTER ( ( SAMETERM( ?x , <<( <ex://a> <ex://b> <ex://c> )>> ) && SAMETERM( ?s , <ex://a> ) ) )',
+        ],
+        [
+          'a nested triple term',
+          'sameTerm(?x, <<( <ex://a> <ex://b> <<( <ex://c> <ex://d> <ex://e> )>> )>>) && sameTerm(OBJECT(?x), ?y)',
+          'FILTER ( ( SAMETERM( ?x , <<( <ex://a> <ex://b> <<( <ex://c> <ex://d> <ex://e> )>> )>> ) && ' +
+          'SAMETERM( ?y , <<( <ex://c> <ex://d> <ex://e> )>> ) ) )',
+        ],
+        [
+          'not a shape with a position left open',
+          'sameTerm(SUBJECT(?x), <ex://a>) && sameTerm(PREDICATE(?x), <ex://b>)',
+          'FILTER ( ( SAMETERM( SUBJECT( ?x ) , <ex://a> ) && SAMETERM( PREDICATE( ?x ) , <ex://b> ) ) )',
+        ],
+      ])('%s', ([ , condition, written ], { expect }) => {
+        expect(conditionOf(collectedFrom(condition)!.assertions)).toBe(written);
+      });
     });
 
     it('contradicts a shape against a term that is no triple term', ({ expect }) => {

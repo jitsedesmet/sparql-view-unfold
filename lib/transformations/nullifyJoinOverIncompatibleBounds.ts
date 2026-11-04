@@ -1,8 +1,8 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
+import { cpMetaOf, expressionCertainlyEvaluates, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
-import { termIsStaticTerm } from '../utils/typeGuards.js';
 import { directExtensions } from '../utils.js';
 import { VariableSet } from './variableSet.js';
 
@@ -83,7 +83,10 @@ function restrictOperations(
     if (op.type === Algebra.Types.EXTEND) {
       const varSet = varSets.get(op.variable.value);
       if (op.expression.subType === Algebra.ExpressionTypes.TERM && varSet &&
-        !varSet.termIsCompatible(op.expression.term)) {
+        !varSet.termIsCompatible(op.expression.term) &&
+        // A bind that fails leaves its variable unbound, which joins with anything. The certainty is read off a
+        // copy, so that none is left cached on operations this pass goes on to change.
+        expressionCertainlyEvaluates(c, op.expression, cpMetaOf(c, withoutCpVars(op.input)))) {
         return createFilterFalse(c, op);
       }
       op.input = recurse(op.input);
@@ -111,22 +114,26 @@ function variableExtensionsOverJoin(join: Algebra.Join): Map<string, VariableSet
 }
 
 function directExtensionOverUnionsAndMore(op: Algebra.Operation): Map<string, VariableSet> {
-  const varSets = new Map<string, VariableSet>();
-  const traverse = (op: Algebra.Operation): void => {
-    if (op.type === Algebra.Types.EXTEND) {
-      if (op.expression.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(op.expression.term)) {
-        varSets.set(op.variable.value, new VariableSet(op.expression.term));
-      }
-      traverse(op.input);
-    } else if (op.type === Algebra.Types.UNION) {
-      for (const [ var_, varSet ] of directExtensionOverUnions(op)) {
-        varSets.set(var_, varSet);
-      }
+  const varSets = variableSetsOf(op);
+  let below = op;
+  while (below.type === Algebra.Types.EXTEND) {
+    below = below.input;
+  }
+  if (below.type === Algebra.Types.UNION) {
+    for (const [ var_, varSet ] of directExtensionOverUnions(below)) {
+      varSets.set(var_, varSet);
     }
-  };
-
-  traverse(op);
+  }
   return varSets;
+}
+
+/**
+ * The term each variable the EXTEND chain at the top of an operation binds to a ground term is bound to.
+ * @param op - The operation to read
+ * @returns one value set per such variable
+ */
+function variableSetsOf(op: Algebra.Operation): Map<string, VariableSet> {
+  return new Map([ ...directExtensions(op) ].map(([ var_, term ]) => [ var_, new VariableSet(term) ]));
 }
 
 function directExtensionOverUnions(union: Algebra.Union): Map<string, VariableSet> {
@@ -136,7 +143,7 @@ function directExtensionOverUnions(union: Algebra.Union): Map<string, VariableSe
   }
   const head = union.input[0];
   // Not knowing the variable makes it be noFixed, which is absorbing element under union
-  const varSets = new Map([ ...directExtensions(head) ].map(([ var_, term ]) => [ var_, new VariableSet(term) ]));
+  const varSets = variableSetsOf(head);
   for (const op of union.input.slice(1)) {
     let trackedVars = [ ...varSets.keys() ];
     for (const [ var_, term ] of directExtensions(op)) {

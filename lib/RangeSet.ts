@@ -1,18 +1,59 @@
 import type * as RDF from '@rdfjs/types';
+import { isSubsetOf } from './utils/setUtils.js';
+
+/** The ranges done being built, kept off the ranges themselves so that a range holds its term types and no more. */
+const builtRanges = new WeakSet<RangeSet>();
 
 /**
- * The term types a position or a variable may hold, ordered by set inclusion.
+ * The term types a position or a variable may hold, ordered by set inclusion. A range is not changed once built,
+ * so one can be shared.
  * @example
  * const subjectRange = new RangeSet(['BlankNode', 'NamedNode']);
  * subjectRange.meet(objectRange); // RangeSet(['BlankNode', 'NamedNode'])
  */
 export class RangeSet extends Set<RDF.Term['termType']> {
   /**
+   * @param termTypes - The term types the range holds
+   */
+  public constructor(termTypes?: Iterable<RDF.Term['termType']>) {
+    super(termTypes);
+    builtRanges.add(this);
+  }
+
+  /**
+   * Refused once built, typed so that a call does not compile: the Set constructor alone adds.
+   * @param termType - The term type the constructor adds
+   * @returns this range, while it is being built
+   */
+  public override add(termType: never): never {
+    if (builtRanges.has(this)) {
+      throw new Error('A range is not changed once built');
+    }
+    return <never> super.add(termType);
+  }
+
+  /** Refused, typed so that a call does not compile. */
+  public override delete(): never {
+    throw new Error('A range is not changed once built');
+  }
+
+  /** Refused, typed so that a call does not compile. */
+  public override clear(): never {
+    throw new Error('A range is not changed once built');
+  }
+
+  /**
    * The term types this range and another both admit.
    * @param other - The range to meet with
-   * @returns a new range holding their intersection
+   * @returns their intersection, which is one of the two where it narrows the other
    */
   public meet(other: RangeSet): RangeSet {
+    if (isSubsetOf(this, other)) {
+      return this;
+    }
+    if (isSubsetOf(other, this)) {
+      return other;
+    }
     return new RangeSet([ ...other.values() ].filter(x => this.has(x)));
   }
 
@@ -78,6 +119,31 @@ export const serviceNameRange = new RangeSet([ 'NamedNode' ]);
  * {@link utils/certainlyBoundVars!VRanges}.
  */
 export const emptyRange = new RangeSet([]);
+
+/**
+ * The range of one term type.
+ * @param termType - The term type
+ * @returns the range holding only that term type
+ */
+export function rangeOfTermType(termType: RDF.Term['termType']): RangeSet {
+  switch (termType) {
+    case 'NamedNode': {
+      return iriRange;
+    }
+    case 'Literal': {
+      return literalRange;
+    }
+    case 'BlankNode': {
+      return blankNodeRange;
+    }
+    case 'Quad': {
+      return tripleTermRange;
+    }
+    default: {
+      return new RangeSet([ termType ]);
+    }
+  }
+}
 
 /**
  * The range of the position a triple term holds its component in.

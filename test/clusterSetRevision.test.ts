@@ -111,9 +111,9 @@ describe('cluster set revision', () => {
       expect(moves(set, () => void set.unifyGroups(set.getGroup('x'), set.getGroup('y')))).toBe(true);
     });
 
-    it('setTerm', ({ expect }) => {
+    it('assertTerm', ({ expect }) => {
       const set = twoGroups();
-      expect(moves(set, () => void set.setTerm(set.getGroup('x'), termA))).toBe(true);
+      expect(moves(set, () => void set.assertTerm(set.getGroup('x'), termA))).toBe(true);
     });
 
     it('narrowRange', ({ expect }) => {
@@ -210,7 +210,7 @@ describe('cluster set revision', () => {
   describe('a read leaves the stamp alone', () => {
     it('so that a memo taken off the set survives being read again', ({ expect }) => {
       const set = twoGroups();
-      set.setTerm(set.getGroup('x'), termA);
+      set.assertTerm(set.getGroup('x'), termA);
       const children = <PinChildren> set.assertTriplePin(set.getGroup('y'));
       const before = set.revision;
 
@@ -220,7 +220,7 @@ describe('cluster set revision', () => {
       set.groupEntries();
       set.hasGroup(set.groupOf('x')!);
       set.pinOf(set.groupOf('y')!);
-      set.termOf(set.groupOf('x')!);
+      set.resolvedTermOf(set.groupOf('x')!);
       set.childrenOf(set.groupOf('y')!);
       set.rangeOf(set.groupOf('y')!);
       set.assertedRangeOf(set.groupOf('x')!);
@@ -235,11 +235,11 @@ describe('cluster set revision', () => {
   describe('a stamp is unique to one state of one set', () => {
     it('so a clone never reports what the set it came from reports', ({ expect }) => {
       const set = twoGroups();
-      set.setTerm(set.getGroup('x'), termA);
+      set.assertTerm(set.getGroup('x'), termA);
       const copy = set.clone();
       expect(copy.revision).not.toBe(set.revision);
       // The copy holds the same state, which is exactly why the stamp may not be the same.
-      expect(copy.termOf(copy.getGroup('x'))).toEqual(termA);
+      expect(copy.resolvedTermOf(copy.getGroup('x'))).toEqual(termA);
       expect(copy.revision).not.toBe(set.revision);
     });
 
@@ -261,7 +261,7 @@ describe('cluster set revision', () => {
       const seen = original.revision;
       // What `AssertionConjunction.assertWeakly` does: try on a clone, then take the clone's set over.
       const attempt = original.clone();
-      attempt.setTerm(attempt.getGroup('x'), termA);
+      attempt.assertTerm(attempt.getGroup('x'), termA);
       expect(attempt.revision).toBeGreaterThan(seen);
     });
   });

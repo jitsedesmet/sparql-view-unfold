@@ -67,6 +67,7 @@ import { isSubsetOf } from './setUtils.js';
  * | member of an unpinned group (clique) | `sameTerm(?x, ?rep)`                                       |
  * | group with asserted term types       | `isIRI(?x) ∨ isBLANK(?x)`, one test per term type          |
  * | the same, asserted weakly            | `!bound(?x) ∨ isIRI(?x) ∨ …`                               |
+ * | member of a group a fixed shape pins | `sameTerm(?x, <<( … )>>)`, the triple term it fixes        |
  * | member of a shaped group             | one conjunct per position of the shape that says something |
  * | unbound / bound                      | `!bound(?x)` / `bound(?x)`, no term                        |
  */
@@ -99,6 +100,33 @@ export interface EquatedGroup {
   readings: readonly Access[];
   /** The term types Θ asserts of the value, `undefined` where it asserts none. */
   range: RangeSet | undefined;
+}
+
+/**
+ * Values per group read off one state of a cluster set. It goes stale with that state and needs no invalidating:
+ * a {@link datastructures/ClusterSet!ClusterSet.revision | revision} stamp is unique to one state of one set.
+ */
+class GroupMemo<Value> {
+  private revision: number | undefined;
+  private readonly values = new Map<number, Value>();
+
+  /**
+   * The value of a group at a revision, computed the first time it is asked for there.
+   * @param revision - The revision of the set read
+   * @param group - The group to read
+   * @param compute - What the value is
+   * @returns the value
+   */
+  public get(revision: number, group: number, compute: () => Value): Value {
+    if (this.revision !== revision) {
+      this.revision = revision;
+      this.values.clear();
+    }
+    if (!this.values.has(group)) {
+      this.values.set(group, compute());
+    }
+    return this.values.get(group)!;
+  }
 }
 
 /**
@@ -142,7 +170,9 @@ export class AssertionConjunction {
    * stale the way {@link readings} does, and for the same reason: the members of a group are a function of
    * `clusters` alone, and no two states of any two sets share a stamp.
    */
-  private members: { revision: number; value: Map<number, readonly string[]> } | undefined;
+  private readonly members = new GroupMemo<readonly string[]>();
+  /** The groups {@link decidedTermOf} was asked about, stale the way {@link members} is. */
+  private readonly decidedTerms = new GroupMemo<RDF.Term | undefined>();
 
   public constructor() {
     this.clusters = new AssertionClusterSet();
@@ -205,7 +235,16 @@ export class AssertionConjunction {
    * @returns those variable names
    */
   private names(): string[] {
-    return [ ...this.order ].filter(name => this.get(name) !== undefined);
+    return [ ...this.order ].filter(name => this.saysAbout(name));
+  }
+
+  /**
+   * Whether the conjunction says something about a variable, which is where {@link get} answers.
+   * @param name - The variable to look up
+   * @returns whether it does
+   */
+  private saysAbout(name: string): boolean {
+    return this.unbound.has(name) || this.bound.has(name) || this.clusters.groupOf(name) !== undefined;
   }
 
   /** How many variables the conjunction says something about. */
@@ -231,9 +270,9 @@ export class AssertionConjunction {
       return undefined;
     }
     const isStrong = this.strength.get(name) !== 'weak';
-    const pin = this.clusters.pinOf(group);
-    if (pin?.kind === 'term') {
-      return isStrong ? assertStrong(pin.term) : assertWeak(pin.term);
+    const term = this.decidedTermOf(group);
+    if (term !== undefined) {
+      return isStrong ? assertStrong(term) : assertWeak(term);
     }
     const representative = this.representativeMemberOf(group);
     if (representative === undefined || representative === name) {
@@ -326,13 +365,13 @@ export class AssertionConjunction {
 
   /**
    * Every group Θ reads more than one way - as a member variable, or as a position of a shape - with the term types
-   * those readings hold. A group pinned to a term is left out, every reading of it being that term.
+   * those readings hold. A group fixed to a term is left out, every reading of it being that term.
    * @returns the groups, the readings of each representative first
    */
   public equatedGroups(): EquatedGroup[] {
     const result: EquatedGroup[] = [];
     for (const [ group, readings ] of this.readingsPerGroup()) {
-      if (this.clusters.pinOf(group)?.kind !== 'term' && readings.length > 1) {
+      if (this.decidedTermOf(group) === undefined && readings.length > 1) {
         result.push({ readings, range: this.assertedTermTypesOf(group) });
       }
     }
@@ -391,10 +430,11 @@ export class AssertionConjunction {
    * a pattern where S3 rules the materialised shape out ({@link intoPattern})
    */
   public rebuildingSubstitution(): Assertions {
-    return this.strongMembersReplacedBy(group => this.termDecidedByPin(group, (undecided) => {
+    const nameOf = (undecided: number): RDF.Term | undefined => {
       const representative = this.representativeMemberOf(undecided);
       return representative === undefined ? undefined : DF.variable(representative);
-    }));
+    };
+    return this.strongMembersReplacedBy(group => this.clusters.resolvedTermOrNameOf(group, nameOf));
   }
 
   /**
@@ -521,7 +561,7 @@ export class AssertionConjunction {
             if (!result.clusters.narrowRange(group, vRanges.rangeOf(name))) {
               return undefined;
             }
-          } else if (!admitsRange(result.clusters, group, vRanges.rangeOf(name))) {
+          } else if (result.clusters.rangeOf(group).meet(vRanges.rangeOf(name)).size === 0) {
             // W⟨?x ≡ v⟩ is `¬bnd(?x) ∨ ?x ≡ v`, and the right disjunct is false wherever `?x` is bound. So
             // the weak form *is* U⟨?x⟩ here - which is worth doing rather than leaving it: a weak member
             // says almost nothing, where `!bound(?x)` is a constraint the rest of the pass acts on.
@@ -599,14 +639,15 @@ export class AssertionConjunction {
   }
 
   /**
-   * Conjoins that reading the source yields a value of one of the term types of `range`: a construction
-   * yields one only where every position does, of a term type the position admits.
+   * Conjoins that reading the source yields a value of one of the term types of `range`: a construction, or a
+   * ground triple term like `<<( "x" :p :o )>>`, yields one only where every position does, of a term type the
+   * position admits.
    * @param source - What carries the target's value below
    * @param range - The term types the value may have
    * @returns `false` on a contradiction
    */
   private assertSourceYields(source: TransferSource, range: RangeSet): boolean {
-    if (isTripleConstruction(source)) {
+    if (('termType' in source && source.termType === 'Quad') || isTripleConstruction(source)) {
       return range.has('Quad') && triplePositions.every(position =>
         this.assertSourceYields(source[position], rangeOfPosition(position)));
     }
@@ -656,7 +697,7 @@ export class AssertionConjunction {
    * Conjoins A⟨?x ≡ c⟩ or W⟨?x ≡ c⟩, pinning the group of `?x` to `c` - which fixes every member of a clique
    * at once, and is how an assertion met above a unification travels onto all the variables it unified.
    * @param name - The variable to pin
-   * @param term - The term it equals
+   * @param term - The ground term it equals
    * @param strong - Whether it holds outright, rather than only where `?x` is bound
    * @returns `false` when the assertion contradicts what is already known
    */
@@ -668,12 +709,12 @@ export class AssertionConjunction {
    * Conjoins A⟨a ≡ c⟩ or W⟨a ≡ c⟩ for an arbitrary access, which pins the group that access names and shapes
    * the groups on the way to it.
    * @param access - The access to pin
-   * @param term - The term it equals
+   * @param term - The ground term it equals, a variable in it being unified rather than held
    * @param strong - Whether it holds outright, rather than only where its root is bound
    * @returns `false` on a contradiction
    */
   public assertPin(access: Access, term: RDF.Term, strong: boolean): boolean {
-    return this.narrowing(access, strong, (clusters, group) => clusters.setTerm(group, term));
+    return this.narrowing(access, strong, (clusters, group) => clusters.assertTerm(group, term));
   }
 
   /**
@@ -951,13 +992,13 @@ export class AssertionConjunction {
    */
   private writeOutGroup(group: number, walk: Decomposition): AssertionConjunct[] {
     const accesses = walk.accessesPerGroup.get(group)!;
-    const pin = this.clusters.pinOf(group);
+    const term = this.decidedTermOf(group);
     const result: AssertionConjunct[] = [];
-    if (pin?.kind === 'term') {
+    if (term !== undefined) {
       // Every reading is that term, which already says they are equal to each other.
       return accesses.map(access => ({
         access,
-        assertion: this.isStrong(access) ? assertStrong(pin.term) : assertWeak(pin.term),
+        assertion: this.isStrong(access) ? assertStrong(term) : assertWeak(term),
       }));
     }
     const [ representative, ...rest ] = accesses;
@@ -987,9 +1028,6 @@ export class AssertionConjunction {
    * @returns the term types, or `undefined` when nothing has to be told
    */
   private termTypesToState(group: number, walk: Decomposition): RangeSet | undefined {
-    if (this.clusters.pinOf(group)?.kind === 'term') {
-      return undefined;
-    }
     if (this.clusters.childrenOf(group) !== undefined) {
       // I have kids, so I should assert that if they don't speak up
       return this.shapeIsWitnessed(group, walk) ? undefined : tripleTermRange;
@@ -1085,7 +1123,7 @@ export class AssertionConjunction {
       }
       const next = new Map<number, Access>();
       for (const [ group, via ] of frontier) {
-        for (const [ position, child ] of childEntriesOf(this.clusters.childrenOf(group))) {
+        for (const [ position, child ] of childEntriesOf(this.readableChildrenOf(group))) {
           // We donnot yet know how to access this group
           if (!representatives.has(child)) {
             const candidate = wrapAccess(via, position);
@@ -1104,7 +1142,7 @@ export class AssertionConjunction {
       [ ...representatives.keys() ].map(group => <const> [ group, this.namedMembers(group).map(name => access(name)) ]),
     );
     for (const [ group, via ] of representatives) {
-      for (const [ position, child ] of childEntriesOf(this.clusters.childrenOf(group))) {
+      for (const [ position, child ] of childEntriesOf(this.readableChildrenOf(group))) {
         result.get(child)?.push(wrapAccess(via, position));
       }
     }
@@ -1112,6 +1150,25 @@ export class AssertionConjunction {
       reads.sort(compareAccesses);
     }
     return result;
+  }
+
+  /**
+   * The term the pins fix a group to, memoised per state of {@link clusters}.
+   * @param group - The group to read
+   * @returns the term, a shape every position of which is fixed being the triple term it makes, or `undefined`
+   */
+  private decidedTermOf(group: number): RDF.Term | undefined {
+    return this.decidedTerms.get(this.clusters.revision, group, () => this.clusters.resolvedTermOf(group));
+  }
+
+  /**
+   * The positions a group is read through: none for a shape every position of which is fixed, the triple term it
+   * fixes saying all they would.
+   * @param group - The group to read
+   * @returns the group per position, or `undefined`
+   */
+  private readableChildrenOf(group: number): PinChildren | undefined {
+    return this.decidedTermOf(group) === undefined ? this.clusters.childrenOf(group) : undefined;
   }
 
   /**
@@ -1127,17 +1184,8 @@ export class AssertionConjunction {
    * memo being shared
    */
   private namedMembers(group: number): readonly string[] {
-    const revision = this.clusters.revision;
-    if (this.members?.revision !== revision) {
-      this.members = { revision, value: new Map() };
-    }
-    const known = this.members.value.get(group);
-    if (known !== undefined) {
-      return known;
-    }
-    const sorted = [ ...this.clusters.valuesOf(group) ].sort((left, right) => left.localeCompare(right));
-    this.members.value.set(group, sorted);
-    return sorted;
+    return this.members.get(this.clusters.revision, group, () =>
+      [ ...this.clusters.valuesOf(group) ].sort((left, right) => left.localeCompare(right)));
   }
 
   /**
@@ -1169,53 +1217,6 @@ export class AssertionConjunction {
   }
 
   /**
-   * The term a group is fixed to, which for a shape is the triple term its decided positions make.
-   *
-   * One walk for both callers, so that the two cannot come to disagree about what a shape is. A caller that
-   * always has a value for an undecided group always gets a term back, which the second signature states:
-   * every way out of the walk is a pin's term, a quad built from three of those, or that value.
-   * @param group - The group to resolve
-   * @param valueForUndecidedGroup - What to put where the pins decide nothing; a substitution into an
-   * expression has nothing to offer (S3), a substitution into a pattern has the variable reading the group
-   * @returns the term, or `undefined` where a position is decided by nothing at all
-   */
-  private termDecidedByPin(group: number): RDF.Term | undefined;
-  private termDecidedByPin(group: number, valueForUndecidedGroup: (group: number) => RDF.Term): RDF.Term;
-  private termDecidedByPin(
-    group: number,
-    valueForUndecidedGroup: (group: number) => RDF.Term | undefined,
-  ): RDF.Term | undefined;
-  private termDecidedByPin(
-    group: number,
-    valueForUndecidedGroup?: (group: number) => RDF.Term | undefined,
-  ): RDF.Term | undefined {
-    // The walk is a function of its own so that it recurses on what it *is* rather than on what the
-    // signatures above promise: the two modes are one traversal, and only the promise is per caller.
-    // The positions need no type check: a position carries the range it admits from the moment it is
-    // created ({@link AssertionClusterSet.assertTriplePin}), and a pin the range refuses never gets here.
-    const recurse = (reached: number): RDF.Term | undefined => {
-      const term = this.clusters.termOf(reached);
-      if (term !== undefined) {
-        return term;
-      }
-      const children = this.clusters.childrenOf(reached);
-      if (children === undefined) {
-        return valueForUndecidedGroup?.(reached);
-      }
-      const subject = recurse(children.subject);
-      const predicate = recurse(children.predicate);
-      const object = recurse(children.object);
-      if (subject === undefined || predicate === undefined || object === undefined) {
-        // A position nothing decides leaves the whole shape undecided, so the group is read the way any
-        // other undecided one is - which for the caller that has no reading is the `undefined` above.
-        return valueForUndecidedGroup?.(reached);
-      }
-      return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
-    };
-    return recurse(group);
-  }
-
-  /**
    * The value a pattern holds for every group a variable of Θ names: the term it is pinned to, the triple
    * term its shape is written out as, or the variable that reads it.
    * @param namer - Coins the variable for a position nothing names
@@ -1233,8 +1234,8 @@ export class AssertionConjunction {
       );
     };
 
-    const materialisedTerm = (group: number): RDF.Term =>
-      this.termDecidedByPin(group, undecided => DF.variable(nameOfGroup(undecided)));
+    const nameOf = (undecided: number): RDF.Term => DF.variable(nameOfGroup(undecided));
+    const materialisedTerm = (group: number): RDF.Term => this.clusters.resolvedTermOrNameOf(group, nameOf);
 
     const result = new Map<number, RDF.Term>();
     for (const [ group, [ representative ]] of accessesPerGroup) {
@@ -1245,7 +1246,7 @@ export class AssertionConjunction {
         // pinned to, or the representative every member of a clique substitutes to.
         result.set(group, this.shapeIsWorthWriting(group) ?
           materialisedTerm(group) :
-          this.clusters.termOf(group) ?? DF.variable(representative.name));
+          this.decidedTermOf(group) ?? DF.variable(representative.name));
       }
     }
     return result;
@@ -1263,7 +1264,7 @@ export class AssertionConjunction {
       return false;
     }
     return childGroupsOf(children).some(child =>
-      this.clusters.termOf(child) !== undefined ||
+      this.decidedTermOf(child) !== undefined ||
       this.namedMembers(child).length > 0 ||
       this.shapeIsWorthWriting(child));
   }
@@ -1329,7 +1330,7 @@ export class AssertionConjunction {
     if (group === undefined) {
       return undefined;
     }
-    const term = this.termDecidedByPin(group);
+    const term = this.clusters.resolvedTermOf(group);
     if (term !== undefined) {
       return term;
     }
@@ -1384,22 +1385,6 @@ export function termTypesOfReadings(group: EquatedGroup): AssertionConjunct[] {
   return range === undefined ?
       [] :
     group.readings.map(reading => ({ access: reading, assertion: assertTermType(range) }));
-}
-
-/**
- * Whether a group can still hold a value of one of these types, its pin included.
- * @param clusters - The clusters holding the group
- * @param group - The group to check
- * @param range - The term types to admit
- * @returns whether something is left for the group to be
- */
-function admitsRange(clusters: AssertionClusterSet, group: number, range: RangeSet): boolean {
-  const pin = clusters.pinOf(group);
-  if (pin === undefined) {
-    return clusters.rangeOf(group).meet(range).size > 0;
-  }
-  const type = pin.kind === 'term' ? pin.term.termType : 'Quad';
-  return clusters.rangeOf(group).meet(range).size > 0 && range.has(type);
 }
 
 /**
