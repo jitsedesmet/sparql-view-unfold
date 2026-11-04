@@ -138,8 +138,8 @@ pattern ([spec](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution))
 runs through `rewriteInExistenceScopes`: the pass first rewrites the plan around EXISTS patterns, and then each
 pattern with that solution as `existenceScope`. The order matters, as the scope depends on where the pass leaves the
 EXISTS. The pushdown writes no term for a variable of that solution, and `pullUpExtends` moves no BIND of one. The
-unfolding follows each BIND of a pattern variable in an EXISTS with `FILTER(sameTerm(...))`, which compares it to the
-value of the solution where the engine leaves that BIND out.
+unfolding goes through it too: it follows `BIND(e AS ?v)` of such a variable with `FILTER(sameTerm(e, ?v))`, as the
+engine leaves that BIND out where the solution binds `?v`.
 
 ## Still to settle
 

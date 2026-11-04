@@ -4,7 +4,7 @@ import { VAR_PREFIX_MAPPING } from '../consts.js';
 import { withDeduplicatedBody } from '../mapping.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, QueryTransformation } from '../types.js';
-import { leaveExistencePatterns } from '../utils/existenceScopes.js';
+import { leaveExistencePatterns, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
 import { claimVariableName, collectVariableNames, markVariableNamesUsed, renameVariables } from '../utils.js';
 import { rewriteSinglePattern } from './rewriteSinglePattern.js';
 
@@ -43,41 +43,32 @@ export interface UnfoldingOptions {
 }
 
 /**
- * Rewrites every non-empty BGP of an operation outside a `SERVICE` into a join of its patterns unfolded against
- * the mapping.
- * @param c - The transformation context
+ * Rewrites every non-empty BGP of an operation outside a `SERVICE` and EXISTS patterns into a join of its patterns
+ * unfolded against the mapping.
+ * @param c - The transformation context, whose `existenceScope` is the outer solution inside an EXISTS
  * @param mapping - The mapping to unfold, its variables named apart from the operation's
  * @param input - The operation to rewrite
- * @param inExistence - Whether the operation is in the pattern of an EXISTS
  * @returns the rewritten operation
  */
 function unfoldTriplePatternsAgainstMapping(
   c: TransformationContext,
   mapping: Mapping,
   input: Algebra.Operation,
-  inExistence = false,
 ): Algebra.Operation {
-  return algebraUtils.mapOperationSub<'unsafe', typeof input>(
+  return algebraUtils.mapOperation<'unsafe', typeof input>(
     input,
     {
       // An empty BGP has no pattern to unfold and is already the join identity.
       [Algebra.Types.BGP]: { transform: input => input.patterns.length === 0 ?
         input :
         c.AF.createJoin(
-          input.patterns.map(pattern => rewriteSinglePattern(c, pattern, mapping, inExistence)),
+          input.patterns.map(pattern => rewriteSinglePattern(c, pattern, mapping)),
           true,
         ),
       },
       [Algebra.Types.SERVICE]: { preVisitor: () => ({ continue: false }) },
+      [Algebra.Types.EXPRESSION]: leaveExistencePatterns,
     },
-    { expression: { existence: {
-      // The pattern of an EXISTS is unfolded here, knowing it is one.
-      ...leaveExistencePatterns,
-      transform: existence => ({
-        ...existence,
-        input: unfoldTriplePatternsAgainstMapping(c, mapping, existence.input, true),
-      }),
-    }}},
   );
 }
 
@@ -94,11 +85,11 @@ export function unfoldingTransformation(mapping: Mapping, options: UnfoldingOpti
   return (context, operation) => {
     const usedNames = markVariableNamesUsed(context, operation);
     const mappingApart = renameMappingApart(context, mapping, mappingVariableNames, usedNames);
-    return unfoldTriplePatternsAgainstMapping(
-      context,
-      options.preserveCardinality === true ? withDeduplicatedBody(context, mappingApart) : mappingApart,
-      operation,
-    );
+    const unfoldedMapping = options.preserveCardinality === true ?
+      withDeduplicatedBody(context, mappingApart) :
+      mappingApart;
+    return rewriteInExistenceScopes(context, operation, (scopedContext, input) =>
+      unfoldTriplePatternsAgainstMapping(scopedContext, unfoldedMapping, input));
   };
 }
 

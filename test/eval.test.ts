@@ -58,13 +58,26 @@ describe('evaluation tests', () => {
     return result;
   }
 
-  async function bindings(query: string, source: string | Store = './test/statics/assertionPushdown.ttl'):
+  /**
+   * The rows of a query in the order it returns them.
+   * @param query - The query to run, prefixes included
+   * @param source - The data to run it over
+   * @returns one string per row, in sequence
+   */
+  async function sequence(query: string, source: string | Store = './test/statics/assertionPushdown.ttl'):
   Promise<string[]> {
     const rows: RDF.Bindings[] = await arrayifyStream(await engine.queryBindings(query, { sources: [ source ]}));
-    // Sorted, but duplicates kept: the multiplicity of every row is part of the answer.
-    return rows
-      .map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${value.value}`).sort().join('|'))
-      .sort();
+    return rows.map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${value.value}`).sort().join('|'));
+  }
+
+  /**
+   * The rows of a query, sorted but with duplicates kept: the multiplicity of every row is part of the answer.
+   * @param query - The query to run, prefixes included
+   * @param source - The data to run it over
+   * @returns one string per row, sorted
+   */
+  async function bindings(query: string, source?: string | Store): Promise<string[]> {
+    return (await sequence(query, source)).sort();
   }
 
   describe('rdf reification', () => {
@@ -123,18 +136,6 @@ describe('evaluation tests', () => {
       expect(await bindings(rewritten)).toEqual(original);
       // And has the requested length
       expect(original).toHaveLength(expectedRows);
-    }
-
-    /**
-     * The rows of a query in the order it returns them, which {@link bindings} deliberately throws away.
-     * @param query - The query to run, prefixes included
-     * @returns one string per row, in sequence
-     */
-    async function sequence(query: string): Promise<string[]> {
-      const rows: RDF.Bindings[] = await arrayifyStream(
-        await engine.queryBindings(query, { sources: [ './test/statics/assertionPushdown.ttl' ]}),
-      );
-      return rows.map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${value.value}`).sort().join('|'));
     }
 
     /**
@@ -257,6 +258,14 @@ describe('evaluation tests', () => {
         expect,
         'SELECT * { ?s :q ?o FILTER EXISTS { ?x :q ?o FILTER EXISTS { ?o :q ?y } } }',
         2,
+      );
+    });
+
+    it('compares a variable the enclosing EXISTS binds in a nested EXISTS', async({ expect }) => {
+      await assertUnfoldsLikeView(
+        expect,
+        'SELECT * { ?s :q ?o FILTER EXISTS { ?o :q ?x FILTER EXISTS { ?x :q ?y } } }',
+        1,
       );
     });
 

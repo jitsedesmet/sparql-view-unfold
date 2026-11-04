@@ -7,7 +7,7 @@ import { rangeOfPosition } from '../RangeSet.js';
 import { RewriteNoMatchError } from '../RewriteNoMatchError.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
-import { sameTermExpression } from '../utils/expressionHelpers.js';
+import { conjunctionOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
 import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
 import { deepCopy } from '../utils.js';
@@ -233,38 +233,29 @@ function wrapOperationInProject({ triplePatternBinds, operation, coinExistenceVa
 }
 
 /**
- * Adds the EXTEND operations that bind the user query's variables to what the subquery found.
- * @param c - The transformation context
+ * Adds the EXTEND operations that bind the user query's variables to what the subquery found. Inside an EXISTS, a
+ * FILTER then compares each to the value the outer solution may already give it, as the engine leaves that BIND out.
+ * @param c - The transformation context, whose `existenceScope` says what the outer solution may bind
  * @param operation - The subquery
  * @param triplePatternBinds - What each pattern variable is bound to
- * @param inExistence - Whether the pattern is in the pattern of an EXISTS
- * @returns the subquery with one EXTEND per pattern variable
+ * @returns the subquery with one EXTEND per pattern variable, then that FILTER where needed
  */
 function bindPatternTerms(
   c: TransformationContext,
   operation: Alg.Operation,
   triplePatternBinds: ReadonlyMap<string, Alg.Expression>,
-  inExistence: boolean,
 ): Alg.Operation {
   const { AF, DF } = c;
-  let buildOperation: Alg.Operation = operation;
-  // Finally add the binds after the subselect - Sort to create stable tests
-  for (const [ variable, expression ] of [ ...triplePatternBinds ].sort((a, b) => a[0].localeCompare(b[0]))) {
-    buildOperation = AF.createExtend(
-      buildOperation,
-      DF.variable(variable),
-      expression,
-    );
-    if (inExistence) {
-      // The solution an EXISTS is evaluated for can bind the variable already, and the engine then leaves the bind out,
-      // so compare the two as the pattern would.
-      buildOperation = AF.createFilter(
-        buildOperation,
-        sameTermExpression(c, deepCopy(c, expression), DF.variable(variable)),
-      );
-    }
-  }
-  return buildOperation;
+  // Sorted, for stable tests.
+  const sortedBinds = [ ...triplePatternBinds ].sort((a, b) => a[0].localeCompare(b[0]));
+  const boundOperation = sortedBinds.reduce<Alg.Operation>(
+    (input, [ variable, expression ]) => AF.createExtend(input, DF.variable(variable), expression),
+    operation,
+  );
+  const comparisons = sortedBinds
+    .filter(([ variable ]) => c.existenceScope?.vRanges.has(variable))
+    .map(([ variable, expression ]) => sameTermExpression(c, deepCopy(c, expression), DF.variable(variable)));
+  return comparisons.length === 0 ? boundOperation : AF.createFilter(boundOperation, conjunctionOf(c, comparisons));
 }
 
 /**
@@ -296,7 +287,6 @@ function bindEvaluationGuards(c: TransformationContext, expression: Alg.Expressi
  * @param c - The transformation context
  * @param pattern - The triple pattern to rewrite
  * @param mapping - The mapping to unfold within it
- * @param inExistence - Whether the pattern is in the pattern of an EXISTS
  * @returns the subselect over the mapping body, with the pattern's variables bound on top of it
  * @throws RewriteNoMatchError if the pattern and the mapping head cannot be unified
  */
@@ -304,7 +294,6 @@ function unfoldMappingWithinPattern(
   c: TransformationContext,
   pattern: Alg.Pattern,
   mapping: Mapping,
-  inExistence: boolean,
 ): Alg.Project | Alg.Extend {
   const { clusterSolver, coinExistenceVariable, AF, DF } = c;
   clusterSolver.clear();
@@ -345,7 +334,7 @@ function unfoldMappingWithinPattern(
   ]) {
     inProject = AF.createFilter(inProject, expression);
   }
-  inProject = bindPatternTerms(c, inProject, triplePatternBinds, inExistence);
+  inProject = bindPatternTerms(c, inProject, triplePatternBinds);
   return wrapOperationInProject({ operation: inProject, triplePatternBinds, coinExistenceVariable, AF, DF });
 }
 
@@ -354,7 +343,6 @@ function unfoldMappingWithinPattern(
  * @param c - The transformation context
  * @param pattern - The triple pattern to rewrite
  * @param mapping - The mapping to unfold within it
- * @param inExistence - Whether the pattern is in the pattern of an EXISTS
  * @returns the subselect over the mapping body, or `FILTER(FALSE)` where the pattern cannot match the
  * mapping at all
  */
@@ -362,10 +350,9 @@ export function rewriteSinglePattern(
   c: TransformationContext,
   pattern: Alg.Pattern,
   mapping: Mapping,
-  inExistence = false,
 ): Alg.Operation {
   try {
-    return unfoldMappingWithinPattern(c, pattern, mapping, inExistence);
+    return unfoldMappingWithinPattern(c, pattern, mapping);
   } catch (error: unknown) {
     // A pattern that cannot match the mapping is ordinary - it contributes the empty solution multiset -
     // where any other error is a bug, and has to keep propagating rather than become an empty branch.
