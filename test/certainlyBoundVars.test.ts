@@ -1,8 +1,15 @@
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
 import { iriRange } from '../lib/RangeSet.js';
 import type { TransformationContext } from '../lib/transformContext.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
-import { standardExpressionRange, withCpVars } from '../lib/utils/certainlyBoundVars.js';
+import type { CPMeta } from '../lib/utils/certainlyBoundVars.js';
+import {
+  cpMetaOf,
+  standardExpressionRange,
+  withCpVars,
+} from '../lib/utils/certainlyBoundVars.js';
+import { rewriteInExistenceScopes } from '../lib/utils/existenceScopes.js';
 import { constructedTermOf } from '../lib/utils/expressionHelpers.js';
 
 const c = createTransformationContext();
@@ -391,6 +398,71 @@ describe('the range of a service variable', () => {
     const meta = withCpVars(c, c.AF.createService(impossible, endpoint, true)).metadata;
     expect(meta.vRanges.neverBinds('x')).toBe(true);
     expect(meta.cVars.has('x')).toBe(false);
+  });
+});
+
+describe('the pattern of an EXISTS', () => {
+  /**
+   * What the pattern of the one EXISTS in a query binds, read in the context {@link rewriteInExistenceScopes} gives it.
+   * @param query - The WHERE clause
+   * @returns the metadata of the pattern
+   */
+  function existsMeta(query: string): CPMeta {
+    let meta: CPMeta | undefined;
+    rewriteInExistenceScopes(c, parseQuery(c, `SELECT * WHERE { ${query} }`), (context, operation) => {
+      if (context.existenceScope !== undefined) {
+        meta = cpMetaOf(context, operation);
+      }
+      return operation;
+    });
+    return meta!;
+  }
+
+  it('binds what the solution it is evaluated for binds', ({ expect }) => {
+    const { cVars, vRanges } = existsMeta('?s ?p ?o FILTER EXISTS { ?w ?q ?v BIND(?s AS ?t) }');
+    expect(cVars.has('s')).toBe(true);
+    expect([ ...vRanges.rangeOf('s') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
+    expect([ ...vRanges.rangeOf('o') ].sort()).toEqual([ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]);
+  });
+
+  it('binds a variable that solution may leave unbound possibly', ({ expect }) => {
+    const { cVars, vRanges } = existsMeta('?s ?p ?o OPTIONAL { ?s ?q ?v } FILTER EXISTS { ?w ?r ?u BIND(?v AS ?t) }');
+    expect(cVars.has('v')).toBe(false);
+    expect(vRanges.canBind('v')).toBe(true);
+  });
+
+  it('meets that range with the one it binds itself', ({ expect }) => {
+    const { vRanges } = existsMeta('?s <ex://p> ?o FILTER EXISTS { ?o ?q ?v }');
+    expect([ ...vRanges.rangeOf('o') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
+  });
+
+  it('reads a BIND over a variable of that solution with its range', ({ expect }) => {
+    const { vRanges } = existsMeta('?s ?p ?o FILTER EXISTS { ?w ?q ?v BIND(COALESCE(?s, "x") AS ?t) }');
+    expect([ ...vRanges.rangeOf('t') ].sort()).toEqual([ 'BlankNode', 'Literal', 'NamedNode' ]);
+  });
+
+  it('rewrites an EXISTS a pass shares between operations once per operation, in its scope', ({ expect }) => {
+    const query = parseQuery(c, 'SELECT * WHERE { VALUES ?o { "l" } FILTER EXISTS { ?s ?p ?o } }');
+    const rewritten = rewriteInExistenceScopes(c, query, (context, operation) => {
+      if (context.existenceScope !== undefined) {
+        // Marks the pattern with the range of ?o it was rewritten for.
+        const range = [ ...context.existenceScope.vRanges.rangeOf('o') ].join(',');
+        return context.AF.createFilter(operation, context.AF.createTermExpression(context.DF.literal(range)));
+      }
+      const filter = <Algebra.Filter> (<Algebra.Project> operation).input;
+      const iris = (<Algebra.Project> parseQuery(c, 'SELECT * WHERE { VALUES ?o { <ex://a> } }')).input;
+      return context.AF.createUnion([ filter, context.AF.createFilter(iris, filter.expression) ]);
+    });
+    const marks = (<Algebra.Union> rewritten).input.map((branch) => {
+      const pattern = <Algebra.Filter> (<Algebra.ExistenceExpression> (<Algebra.Filter> branch).expression).input;
+      return [ pattern.input.type, (<Algebra.TermExpression> pattern.expression).term.value ];
+    });
+    expect(marks).toEqual([[ 'bgp', 'Literal' ], [ 'bgp', 'NamedNode' ]]);
+  });
+
+  it('sees both sides of the OPTIONAL whose condition it is in', ({ expect }) => {
+    const { cVars } = existsMeta('?s ?p ?o OPTIONAL { ?s ?q ?v FILTER EXISTS { ?w ?r ?v } }');
+    expect(cVars.has('v')).toBe(true);
   });
 });
 

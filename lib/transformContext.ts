@@ -57,6 +57,11 @@ export interface TransformationContext {
     expression: Algebra.Expression,
     input?: CPMeta,
   ) => RangeSet;
+  /**
+   * While a pass rewrites an EXISTS pattern: what the outer solution binds of the pattern's variables. SPARQL 1.2
+   * joins that solution into every group of the pattern.
+   */
+  existenceScope?: CPMeta;
 }
 
 /** What a rewrite configures of its {@link TransformationContext}. */

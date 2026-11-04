@@ -133,6 +133,12 @@ standard mappings between RDF 1.1 and RDF 1.2.
 
 So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
 
+**An EXISTS sees the solution it is evaluated for.** SPARQL 1.2 joins that solution into every group of the
+pattern ([spec](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution)). A pass reading ranges therefore
+runs through `rewriteInExistenceScopes`: the pass first rewrites the plan around EXISTS patterns, and then each
+pattern with that solution as `existenceScope`. The order matters, as the scope depends on where the pass leaves the
+EXISTS. The pushdown writes no term for a variable of that solution, and `pullUpExtends` moves no BIND of one.
+
 ## Still to settle
 
 - **Named graphs.** `GRAPH` is rejected by the precheck: what unfolding a mapping *inside* a named graph
