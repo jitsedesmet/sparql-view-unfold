@@ -4,6 +4,7 @@ import { VAR_PREFIX_MAPPING } from '../consts.js';
 import { withDeduplicatedBody } from '../mapping.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, QueryTransformation } from '../types.js';
+import { leaveExistencePatterns } from '../utils/existenceScopes.js';
 import { claimVariableName, collectVariableNames, markVariableNamesUsed, renameVariables } from '../utils.js';
 import { rewriteSinglePattern } from './rewriteSinglePattern.js';
 
@@ -56,7 +57,7 @@ function unfoldTriplePatternsAgainstMapping(
   input: Algebra.Operation,
   inExistence = false,
 ): Algebra.Operation {
-  return algebraUtils.mapOperation<'unsafe', typeof input>(
+  return algebraUtils.mapOperationSub<'unsafe', typeof input>(
     input,
     {
       // An empty BGP has no pattern to unfold and is already the join identity.
@@ -68,17 +69,15 @@ function unfoldTriplePatternsAgainstMapping(
         ),
       },
       [Algebra.Types.SERVICE]: { preVisitor: () => ({ continue: false }) },
-      // The pattern of an EXISTS is unfolded here, knowing it is one.
-      [Algebra.Types.EXPRESSION]: {
-        preVisitor: expression => expression.subType === Algebra.ExpressionTypes.EXISTENCE ? { continue: false } : {},
-        transform: (expression) => {
-          if (expression.subType === Algebra.ExpressionTypes.EXISTENCE) {
-            expression.input = unfoldTriplePatternsAgainstMapping(c, mapping, expression.input, true);
-          }
-          return expression;
-        },
-      },
     },
+    { expression: { existence: {
+      // The pattern of an EXISTS is unfolded here, knowing it is one.
+      ...leaveExistencePatterns,
+      transform: existence => ({
+        ...existence,
+        input: unfoldTriplePatternsAgainstMapping(c, mapping, existence.input, true),
+      }),
+    }}},
   );
 }
 
