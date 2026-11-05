@@ -995,7 +995,8 @@ function collapseGroup(group: FloatingBind[], representative: 'rise' | 'stay'): 
 function variableOutOfScopeInOtherOperands(floatingBind: FloatingBind, operands: readonly CPMeta[]): boolean {
   const variableName = floatingBind.bind.variable.value;
   const carrying = new Set(floatingBind.mustLeaveWith.map(carrier => carrier.inputIndex));
-  return operands.every((operand, index) => carrying.has(index) || !operand.vRanges.has(variableName));
+  return operands.every((operand, index) =>
+    carrying.has(index) || !operand.vRanges.has(variableName));
 }
 
 /**
