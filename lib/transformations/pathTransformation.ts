@@ -3,7 +3,7 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import { termVars } from '../utils/certainlyBoundVars.js';
-import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
+import { createFilterFalse, projectOntoVariablesOrExistence } from '../utils/operationhelpers.js';
 
 import { isRdfVar } from '../utils/typeGuards.js';
 import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
@@ -56,10 +56,7 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
   function overSubjectAndObject(operation: Algebra.Operation, path: Algebra.Path): Algebra.Operation {
     const visible = [ ...new Set([ path.subject, path.object, path.graph ].flatMap(term => [ ...termVars(term) ])) ]
       .map(name => DF.variable(name));
-    if (visible.length === 0) {
-      return AF.createDistinct(projectSolutionExistence(c, operation));
-    }
-    return AF.createDistinct(AF.createProject(operation, visible));
+    return AF.createDistinct(projectOntoVariablesOrExistence(c, operation, visible));
   }
 
   /**

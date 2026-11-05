@@ -2,6 +2,11 @@
   "name": "sparql-view-unfold",
   "type": "module",
   "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "comunica/engines/*",
+    "comunica/packages/*"
+  ],
   "packageManager": "yarn@1.22.22",
   "description": "View unfolding and query optimisation for SPARQL 1.2, with views defined as CONSTRUCT queries",
   "lsd:module": true,
@@ -73,9 +78,6 @@
     "rdf-data-factory": "^2.0.2"
   },
   "devDependencies": {
-    "@comunica/actor-function-factory-term-triple": "^5.4.0",
-    "@comunica/bus-function-factory": "^5.4.0",
-    "@comunica/utils-expression-evaluator": "^5.4.0",
     "@rdfjs/types": "^2.0.0",
     "@rubensworks/eslint-config": "^3.1.0",
     "@vitest/coverage-v8": "4.0.18",

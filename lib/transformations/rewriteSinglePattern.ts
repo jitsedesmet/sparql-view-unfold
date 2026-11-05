@@ -11,7 +11,7 @@ import { access, assertUnbound, conjunctAsExpression } from '../utils/assertions
 import type { OuterBinding } from '../utils/existenceScopes.js';
 import { outerBinding } from '../utils/existenceScopes.js';
 import { conjunctionOf, sameTermExpression } from '../utils/expressionHelpers.js';
-import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
+import { createFilterFalse, projectOntoVariablesOrExistence } from '../utils/operationhelpers.js';
 import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
 import { deepCopy } from '../utils.js';
 
@@ -226,13 +226,9 @@ function wrapOperationInProject({ triplePatternBinds, operation, coinExistenceVa
 } & Pick<TransformationContext, 'DF' | 'AF' | 'coinExistenceVariable'>): Alg.Project {
   // All variables required from subselect -- recursive search needed for triple terms
   const variablesToSelect = [ ...triplePatternBinds.keys() ].map(x => DF.variable(x));
-  if (variablesToSelect.length === 0) {
-    // Nothing to select, so all this subquery has to say is whether the data is there.
-    return projectSolutionExistence({ AF, coinExistenceVariable }, operation);
-  }
   // Sort allows for stable tests but does not practically change anything.
   variablesToSelect.sort((a, b) => a.value.localeCompare(b.value));
-  return AF.createProject(operation, variablesToSelect);
+  return projectOntoVariablesOrExistence({ AF, coinExistenceVariable }, operation, variablesToSelect);
 }
 
 /**

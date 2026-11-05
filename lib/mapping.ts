@@ -1,7 +1,6 @@
 /* eslint-disable jsdoc/check-param-names */
 import type * as RDF from '@rdfjs/types';
-import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_MERGED_HEAD } from './consts.js';
 import type { TriplePosition } from './datastructures/TermClusterSet.js';
 import { triplePositions } from './datastructures/TermClusterSet.js';
@@ -14,7 +13,7 @@ import { access, assertBound, assertTermType, conjunctAsExpression } from './uti
 import type { VRanges } from './utils/certainlyBoundVars.js';
 import { withCpVars } from './utils/certainlyBoundVars.js';
 import { conjunctionOf, unstableOperators } from './utils/expressionHelpers.js';
-import { projectSolutionExistence } from './utils/operationhelpers.js';
+import { projectOntoVariablesOrExistence } from './utils/operationhelpers.js';
 import { isSubsetOf, unionSets } from './utils/setUtils.js';
 import { claimVariableName, collectVariableNames, deepCopy } from './utils.js';
 
@@ -61,7 +60,7 @@ export interface MappingOptions extends Pick<TransformationContextOptions, 'expr
 }
 
 /** The factories building a mapping needs; the solver and the generator of a full context play no part. */
-type MappingConstructionTools =
+export type MappingConstructionTools =
   Pick<TransformationContext, 'parser' | 'AF' | 'DF' | 'astTransformer' | 'expressionRange' | 'generalizedRdf'>;
 
 /**
@@ -158,19 +157,18 @@ function mappingOfSingleTemplateTriple(
 }
 
 /**
- * Builds every single-triple mapping a CONSTRUCT query denotes.
+ * Builds every single-triple mapping a CONSTRUCT denotes.
  * @param tools - The factories to build with
  * @param options - What the mapping is configured with
- * @param constructQuery - The SPARQL CONSTRUCT query string
+ * @param construct - The CONSTRUCT in algebra form
  * @returns one mapping per triple of the CONSTRUCT template
  * @throws Error if the body calls an unstable function, or the template holds an inadmissible term
  */
-function mappingsOfConstructQuery(
+function mappingsOfConstruct(
   tools: MappingConstructionTools,
   options: MappingOptions,
-  constructQuery: string,
+  construct: Algebra.Construct,
 ): Mapping[] {
-  const construct = <Algebra.Construct> parseQuery(tools, constructQuery);
   const body = construct.input;
   assertBodyCallsNoUnstableFunction(body);
   // Copied per template triple, so that no two mappings share a body.
@@ -234,8 +232,46 @@ export function mappingFromConstructQueries(
   options: MappingOptions = {},
 ): Mapping {
   const tools = createTransformationContext({ expressionRange: options.expressionRange });
-  const mappings = constructQueries
-    .flatMap(constructQuery => mappingsOfConstructQuery(tools, options, constructQuery));
+  return mappingFromConstructs(
+    tools,
+    constructQueries.map(constructQuery => parseConstructQuery(tools, constructQuery)),
+    options,
+  );
+}
+
+/**
+ * Parses a CONSTRUCT query string into its algebra form.
+ * @param tools - The context to parse with
+ * @param constructQuery - The SPARQL CONSTRUCT query string
+ * @returns the CONSTRUCT
+ * @throws Error if the query is not a CONSTRUCT, or wraps one in a solution modifier
+ */
+export function parseConstructQuery(
+  tools: Pick<TransformationContext, 'parser'>,
+  constructQuery: string,
+): Algebra.Construct {
+  const construct = parseQuery(tools, constructQuery);
+  if (construct.type !== Algebra.Types.CONSTRUCT) {
+    throw new Error('A mapping is defined by a CONSTRUCT query without ORDER BY, LIMIT or OFFSET.');
+  }
+  return construct;
+}
+
+/**
+ * Builds the {@link Mapping} a set of CONSTRUCTs in algebra form denotes, as
+ * {@link mappingFromConstructQueries} does for query strings.
+ * @param tools - The factories to build with
+ * @param constructs - The CONSTRUCTs defining the mappings
+ * @param options - What the mapping is configured with
+ * @returns the mapping
+ * @throws Error under the same conditions as {@link mappingFromConstructQueries}
+ */
+export function mappingFromConstructs(
+  tools: MappingConstructionTools,
+  constructs: readonly Algebra.Construct[],
+  options: MappingOptions,
+): Mapping {
+  const mappings = constructs.flatMap(construct => mappingsOfConstruct(tools, options, construct));
 
   if (mappings.length === 0) {
     throw new Error('A mapping needs at least one CONSTRUCT query with at least one template triple.');
@@ -271,7 +307,7 @@ export function withDeduplicatedBody(
     // single row. Deduplicating over the head's (zero) variables cannot express that: a SELECT over no
     // variables is not SPARQL, and generating one yields `SELECT *`, which deduplicates over the body's
     // own variables and so does not deduplicate at all.
-    const existenceOfBody = projectSolutionExistence(c, mapping.body.input);
+    const existenceOfBody = projectOntoVariablesOrExistence(c, mapping.body.input);
     return {
       ...mapping,
       body: AF.createProject(AF.createDistinct(existenceOfBody), existenceOfBody.variables),

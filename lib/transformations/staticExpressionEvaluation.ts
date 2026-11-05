@@ -75,8 +75,8 @@ async function prepareStaticEvaluator(
     [KeysInitQuery.queryTimestamp.name]: new Date(),
     [KeysInitQuery.dataFactory.name]: c.DF,
     [KeysInitQuery.functionArgumentsCache.name]: {},
-    // Comunica's key for an engine whose TRIPLE() builds generalized triple terms (comunica/comunica#1886).
-    ...c.generalizedRdf ? { '@comunica/actor-init-query:rdfVariant': 'generalizedRDF' } : {},
+    // `KeysInitQuery.rdfVariant` of comunica/comunica#1886, spelled out until a Comunica release includes it.
+    ...c.generalizedRdf ? { '@comunica/actor-init-query:rdfVariant': 'generalizedRdf' } : {},
   });
   return async(expression) => {
     try {
