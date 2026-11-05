@@ -1,4 +1,5 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import type { VisitContext } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import { datatypeBoolean, DF } from './rdfDatatypes.js';
 
@@ -57,20 +58,22 @@ export function projectSolutionExistence(
 /**
  * Whether a property path can match zero steps, and so relate a term to itself.
  * @param path - The property path to check
- * @returns whether the path can match zero steps; `true` for a path type this does not know, to stay safe
+ * @returns whether the path can match zero steps
  */
 export function canMatchZeroLength(path: Algebra.PropertyPathSymbol): boolean {
-  const canMatch = (operand: unknown): boolean => operand !== false;
-  // Bottom-up, so every operand has already been replaced by whether it can match zero steps, and a path
-  // type without a callback is left an object, which `canMatch` takes as able to.
-  return canMatch(algebraUtils.mapOperation(path, {
-    [Algebra.Types.LINK]: { transform: () => false },
-    [Algebra.Types.NPS]: { transform: () => false },
-    [Algebra.Types.ZERO_OR_ONE_PATH]: { transform: () => true, preVisitor: () => ({ continue: false }) },
-    [Algebra.Types.ZERO_OR_MORE_PATH]: { transform: () => true, preVisitor: () => ({ continue: false }) },
-    [Algebra.Types.INV]: { transform: copy => canMatch(copy.path) },
-    [Algebra.Types.ONE_OR_MORE_PATH]: { transform: copy => canMatch(copy.path) },
-    [Algebra.Types.SEQ]: { transform: copy => (<unknown[]> copy.input).every(canMatch) },
-    [Algebra.Types.ALT]: { transform: copy => (<unknown[]> copy.input).some(canMatch) },
-  }));
+  let canMatch = true;
+  const decide = (decision: boolean): VisitContext => {
+    canMatch = decision;
+    return { shortcut: true };
+  };
+  // An inverse and a `+` have no callback: the visitor goes on into their operand, which decides for them.
+  algebraUtils.visitOperation(path, {
+    [Algebra.Types.LINK]: { preVisitor: () => decide(false) },
+    [Algebra.Types.NPS]: { preVisitor: () => decide(false) },
+    [Algebra.Types.ZERO_OR_ONE_PATH]: { preVisitor: () => decide(true) },
+    [Algebra.Types.ZERO_OR_MORE_PATH]: { preVisitor: () => decide(true) },
+    [Algebra.Types.SEQ]: { preVisitor: seq => decide(seq.input.every(canMatchZeroLength)) },
+    [Algebra.Types.ALT]: { preVisitor: alt => decide(alt.input.some(canMatchZeroLength)) },
+  });
+  return canMatch;
 }
