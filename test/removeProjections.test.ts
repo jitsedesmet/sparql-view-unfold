@@ -1,5 +1,6 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
 import * as arrayifyStreamNS from 'arrayify-stream';
+import { Parser, Store } from 'n3';
 import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
 import { createQueryRewriter } from '../lib/queryRewriter.js';
@@ -18,20 +19,30 @@ describe('removeProjections', () => {
 
   const engine = new QueryEngine();
 
-  async function bindings(query: string): Promise<string[]> {
-    const rows: any[] = await arrayifyStream(await engine.queryBindings(query, {
-      sources: [ './test/statics/multipleRdfReifiedTriples.ttl' ],
-    }));
+  async function bindings(
+    query: string,
+    source: string | Store = './test/statics/multipleRdfReifiedTriples.ttl',
+  ): Promise<string[]> {
+    const rows: any[] = await arrayifyStream(await engine.queryBindings(query, { sources: [ source ]}));
     return rows
       .map(row => [ ...row ].map(([ key, value ]: [any, any]) => `${key.value}=${value.value}`).sort().join('|'))
       .sort();
   }
 
-  async function assertEquivalent(expect: typeof Expect, query: string): Promise<void> {
-    const original = await bindings(query);
-    expect(await bindings(await transform(query))).toEqual(original);
+  /**
+   * Asserts that a query answers the same once its projections are removed.
+   * @param expect - The assertion API of the running test
+   * @param query - The query
+   * @param source - The data to run it over
+   * @returns the rewritten query
+   */
+  async function assertEquivalent(expect: typeof Expect, query: string, source?: string | Store): Promise<string> {
+    const rewritten = await transform(query);
+    const original = await bindings(query, source);
+    expect(await bindings(rewritten, source)).toEqual(original);
     // Sanity: the query actually returns something so the test is meaningful.
     expect(original.length).toBeGreaterThan(0);
+    return rewritten;
   }
 
   it('anonymizes the variables a subselect hides', async({ expect }) => {
@@ -44,12 +55,12 @@ describe('removeProjections', () => {
     // DISTINCT consider the anonymized variables as well, turning duplicates into distinct rows.
     it('keeps the projection of a sub-SELECT DISTINCT', async({ expect }) => {
       expect(await transform('SELECT * WHERE { { SELECT DISTINCT ?s WHERE { ?s ?p ?o } } }'))
-        .toContain('SELECT DISTINCT ?uq_s WHERE');
+        .toContain('SELECT DISTINCT ?s WHERE');
     });
 
     it('keeps the projection of a sub-SELECT REDUCED', async({ expect }) => {
       expect(await transform('SELECT * WHERE { { SELECT REDUCED ?s WHERE { ?s ?p ?o } } }'))
-        .toContain('SELECT REDUCED ?uq_s WHERE');
+        .toContain('SELECT REDUCED ?s WHERE');
     });
 
     it('a sub-SELECT DISTINCT returns the same results', async({ expect }) => {
@@ -78,6 +89,58 @@ describe('removeProjections', () => {
 
     it('a sub-SELECT with LIMIT returns the same results', async({ expect }) => {
       await assertEquivalent(expect, 'SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } LIMIT 1 } }');
+    });
+  });
+
+  describe('a GROUP below a projection', () => {
+    // SPARQL cannot write a GROUP BY that is not on a SELECT, so dropping the projection would group the
+    // enclosing query instead.
+    it('keeps the projection of a grouped sub-SELECT', async({ expect }) => {
+      expect(await transform('SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s } OPTIONAL { ?s ?q ?r } }'))
+        .toMatch(/\{\s*SELECT \?s WHERE/u);
+    });
+
+    it('a grouped sub-SELECT returns the same results', async({ expect }) => {
+      await assertEquivalent(
+        expect,
+        'SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s } OPTIONAL { ?s ?q ?r } }',
+      );
+    });
+  });
+
+  describe('a sub-SELECT inside an EXISTS', () => {
+    // SPARQL 1.2 joins the solution the EXISTS is evaluated for into the sub-SELECT too.
+    const chain = new Store(new Parser().parse('@prefix : <ex://> . :a :p :b . :b :p :c . :c :p :d .'));
+
+    const prefixes = 'PREFIX : <ex://>\n';
+
+    it('keeps the name of a hidden variable the solution certainly binds', async({ expect }) => {
+      const rewritten = await assertEquivalent(
+        expect,
+        `${prefixes}SELECT * { ?s :p ?o FILTER EXISTS { SELECT ?x { ?o :p ?x } } }`,
+        chain,
+      );
+      expect(rewritten).not.toContain('SELECT ?x');
+      expect(rewritten).toMatch(/\?o <ex:\/\/p> \?x/u);
+    });
+
+    it('keeps the projection hiding a variable the solution may bind', async({ expect }) => {
+      const rewritten = await assertEquivalent(
+        expect,
+        `${prefixes}SELECT * { ?s :p ?o OPTIONAL { ?o :p ?z } FILTER EXISTS { SELECT ?x { ?z :p ?x } } }`,
+        chain,
+      );
+      expect(rewritten).toContain('SELECT ?x');
+    });
+
+    it('renames a hidden variable the solution does not bind', async({ expect }) => {
+      const rewritten = await assertEquivalent(
+        expect,
+        `${prefixes}SELECT * { ?s :p ?o FILTER EXISTS { { SELECT ?x { ?y :p ?x } } ?y :p ?o } }`,
+        chain,
+      );
+      expect(rewritten).not.toContain('SELECT ?x');
+      expect(rewritten).toMatch(/\?v_\d+ <ex:\/\/p> \?x/u);
     });
   });
 });

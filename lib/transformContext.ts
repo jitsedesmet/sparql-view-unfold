@@ -9,8 +9,11 @@ import { AstFactory, AstTransformer } from '@traqula/rules-sparql-1-2';
 import { DataFactory } from 'rdf-data-factory';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
+import type { RangeSet } from './RangeSet.js';
 import { rangeOfPosition } from './RangeSet.js';
-import { isRdfTerm } from './utils/typeGuards.js';
+import type { CPMeta } from './utils/certainlyBoundVars.js';
+import { standardExpressionRange } from './utils/certainlyBoundVars.js';
+import { freshVarGenerator } from './utils.js';
 
 /**
  * The factories and the solver every transformation works through.
@@ -39,13 +42,37 @@ export interface TransformationContext {
   astTransformer: AstTransformer;
   /** Solver for variable clustering and unification during rewriting */
   clusterSolver: ClusterSolver;
+  /** Every variable name in use in this rewrite, which every coined name is claimed against. */
+  usedVariableNames: Set<string>;
   /**
    * Coins the variable a pattern that binds nothing projects, SPARQL having no sub-ASK and no empty
-   * projection. It is the one variable the unfolding lets out of a pattern's sub-SELECT, so every call
-   * hands back a name no other pattern of this rewrite uses.
+   * projection.
    */
   coinExistenceVariable: () => RDF.Variable;
+  /**
+   * How many triple terms deep an argument of `<internal://blank>` is encoded, since an expression cannot recurse.
+   * A more deeply nested one leaves the node unbound, and the encoding grows quadratically with it.
+   */
+  tripleTermArgumentDepth: number;
+  /**
+   * The term types an expression can evaluate to, reading its subexpressions back through the context. Replace it for
+   * an engine that turns an error into a value, falling back to {@link standardExpressionRange} for the rest.
+   */
+  expressionRange: (
+    c: Pick<TransformationContext, 'expressionRange' | 'generalizedRdf'>,
+    expression: Algebra.Expression,
+    input?: CPMeta,
+  ) => RangeSet;
+  /**
+   * While a pass rewrites an EXISTS pattern: what the outer solution binds of the pattern's variables. SPARQL 1.2
+   * joins that solution into every group of the pattern.
+   */
+  existenceScope?: CPMeta;
 }
+
+/** What a rewrite configures of its {@link TransformationContext}. */
+export type TransformationContextOptions =
+  Partial<Pick<TransformationContext, 'expressionRange' | 'tripleTermArgumentDepth'>>;
 
 /**
  * Parses a SPARQL query or update string into its algebra representation, with blank nodes converted to
@@ -70,39 +97,30 @@ export function parseQuery(
 }
 
 /**
- * Prefixes all variable names in an operation, so that patterns combined later cannot collide.
- * @param context - Object containing astTransformer and DF
- * @param obj - The object to transform
- * @param prefix - The prefix to add to all variable names
- * @returns the object with all variables prefixed
+ * Checks what a {@link TransformationContext} is configured with and fills in the defaults.
+ * @param options - What to configure.
+ * @returns The options, with a `tripleTermArgumentDepth` of 2 and the {@link standardExpressionRange} by default.
+ * @throws Error if the `tripleTermArgumentDepth` is not a non-negative integer
  */
-export function prefixVarsInOperation<T extends object>(
-  { astTransformer, DF }: Pick<TransformationContext, 'astTransformer' | 'DF'>,
-  obj: T,
-  prefix: string,
-): T {
-  return <T> astTransformer.transformObject(obj, (obj) => {
-    if (isRdfTerm(obj) && obj.termType === 'Variable') {
-      return DF.variable(prefix + (obj).value);
-    }
-    // Values.bindings uses string keys for variable names — rename those too.
-    if ('type' in obj && obj.type === 'values' && 'bindings' in obj) {
-      const valuesOp = <Algebra.Values> obj;
-      valuesOp.bindings = valuesOp.bindings.map(binding => Object.fromEntries(
-        Object.entries(binding).map(([ key, value ]) => [ prefix + key, value ]),
-      ));
-    }
-    return obj;
-  });
+export function resolveTransformationContextOptions(
+  { tripleTermArgumentDepth = 2, expressionRange = standardExpressionRange }: TransformationContextOptions = {},
+): Required<TransformationContextOptions> {
+  if (!Number.isInteger(tripleTermArgumentDepth) || tripleTermArgumentDepth < 0) {
+    throw new Error(`The tripleTermArgumentDepth must be a non-negative integer, not ${tripleTermArgumentDepth}.`);
+  }
+  return { tripleTermArgumentDepth, expressionRange };
 }
 
 /**
  * Creates a {@link TransformationContext} with a solver of its own, one rewrite's worth of state.
+ * @param options - What to configure, see {@link resolveTransformationContextOptions}.
  * @returns the context
+ * @throws Error if the options are invalid
  */
-export function createTransformationContext(): TransformationContext {
+export function createTransformationContext(options: TransformationContextOptions = {}): TransformationContext {
+  const { tripleTermArgumentDepth, expressionRange } = resolveTransformationContextOptions(options);
   const DF = new DataFactory();
-  let existenceVariablesCoined = 0;
+  const usedVariableNames = new Set<string>();
   const context: TransformationContext = {
     parser: new Parser(),
     generator: new MyGenerator(),
@@ -112,8 +130,10 @@ export function createTransformationContext(): TransformationContext {
     DF,
     astTransformer: new AstTransformer(),
     clusterSolver: new ClusterSolver(position => rangeOfPosition(position, context.generalizedRdf)),
-    // Since we prefix with `m` we know it will not name-clash
-    coinExistenceVariable: () => DF.variable(`mExists${existenceVariablesCoined++}`),
+    usedVariableNames,
+    coinExistenceVariable: freshVarGenerator(usedVariableNames, 'mExists'),
+    tripleTermArgumentDepth,
+    expressionRange,
   };
   return context;
 }

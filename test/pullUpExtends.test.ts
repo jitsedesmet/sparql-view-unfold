@@ -31,7 +31,7 @@ describe('pullUpExtends', () => {
 
   /** What an operation puts in scope: the variables every solution binds, and what `SELECT *` expands to. */
   function scopeOf(op: Algebra.Operation): { cVars: string[]; pVars: string[] } {
-    const { cVars, vRanges } = withCpVars(withoutCpVars(op)).metadata;
+    const { cVars, vRanges } = withCpVars(c, withoutCpVars(op)).metadata;
     return { cVars: [ ...cVars ].sort(), pVars: [ ...vRanges.keys() ].sort() };
   }
 
@@ -877,6 +877,51 @@ ORDER BY ASC ( ?x )`,
     )
   }
   ?a <ex://q> ?b .
+}`,
+      );
+    });
+
+    it('leaves a bind in an EXISTS whose target a sibling binds to the solution of the EXISTS', ({ expect }) => {
+      // `COALESCE(?y)` gives the ?y of that solution, so ?t is bound on the left and the bind may not rise past it.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?x :p ?y FILTER EXISTS { { ?a :p ?b BIND(COALESCE(?y) AS ?t) } { ?c :q ?d BIND(:k AS ?t) } }
+        }`,
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      ?a <ex://p> ?b .
+      BIND( COALESCE( ?y ) AS ?t )
+    }
+    {
+      ?c <ex://q> ?d .
+      BIND( <ex://k> AS ?t )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('leaves a bind in an EXISTS of a variable the solution of the EXISTS binds', ({ expect }) => {
+      // The engine leaves that bind out, so ?y keeps the value of the solution, which `sameTerm(?z, ?z)` misses.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w BIND(?z AS ?y) FILTER(sameTerm(?y, ?z)) } }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      {
+        ?z <ex://q> ?w .
+        BIND( ?z AS ?y )
+      }
+      FILTER ( SAMETERM( ?y , ?z ) )
+    }
+  }
+  )
 }`,
       );
     });

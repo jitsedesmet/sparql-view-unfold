@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
+import { forEveryNodeType } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import type { AssertionFilter, EquatedGroup } from '../utils/assertionConjunction.js';
@@ -28,13 +29,14 @@ import {
   variablesOfTransferSource,
   asWeakenedConjunct,
 } from '../utils/assertions.js';
-import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { cpMetaOf } from '../utils/certainlyBoundVars.js';
+import { leaveExistencePatternsPreOrder, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import { unionSets } from '../utils/setUtils.js';
 import type { DerivedVarNamer } from '../utils.js';
-import { collectVariableNames, derivedVarNamer } from '../utils.js';
+import { derivedVarNamer, markVariableNamesUsed } from '../utils.js';
 
 /**
  * @fileoverview Assertion filter pushdown.
@@ -116,20 +118,20 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // After:  SELECT * WHERE { ?o ?p ?o . BIND(?o AS ?s) }
  */
 export function pushDownAssertions<T extends Algebra.Operation>(c: TransformationContext, rootOp: T): T {
-  const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
-    Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]),
-  );
   // One namer for the whole pass, over every variable of the query as it stands *before* anything is
   // rewritten (D4). Both halves of that matter: a materialised position has to get the same name
   // wherever it is written, and a name coined against a part of the tree would collide with a variable
   // in the part that has not been met yet - which is also why this takes the root, see above.
-  const namer = derivedVarNamer(collectVariableNames(c.astTransformer, rootOp));
-  callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(c, namer, filter);
-  // Starting from a copy without metadata gives both a tree of our own to rewrite and the guarantee that
-  // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out
-  // for the same reason, the rewrites having since changed what the traversal cached. Not *inside*
-  // `mapOperationPreOrder`: `keepMetadata` is how a filter hands its conjunction to the next `pushFilter`.
-  return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(rootOp), callbacks));
+  const namer = derivedVarNamer(markVariableNamesUsed(c, rootOp));
+  // Metadata is cleared around the pass, not inside it: `keepMetadata` is how a filter hands its conjunction to the
+  // next `pushFilter`.
+  return rewriteInExistenceScopes(c, rootOp, (context, op) => {
+    const callbacks = forEveryNodeType(keep, {
+      [Algebra.Types.FILTER]: (filter: Algebra.Filter) => pushFilter(context, namer, filter),
+      [Algebra.Types.EXPRESSION]: leaveExistencePatternsPreOrder,
+    });
+    return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(op, callbacks);
+  });
 }
 
 /**
@@ -171,9 +173,18 @@ function pushAssertions(
   assertions: AssertionConjunction,
   op: Algebra.Operation,
 ): PreOrderMappingReturn {
-  const normalised = assertions.normalisedFor(cpMetaOf(op));
+  const normalised = assertions.normalisedFor(cpMetaOf(c, op));
   if (normalised === undefined) {
     return empty(c, op);
+  }
+  // A conjunct on a variable of the outer solution of an EXISTS stays here: below, a rule could write a term for it, or
+  // carry it past a sub-SELECT that does not project it.
+  const scope = c.existenceScope?.vRanges;
+  if (scope !== undefined) {
+    const { inside, outside } = normalised.split(name => !scope.has(name));
+    if (outside.size > 0) {
+      return keep(assertionFilter(c, assertionFilter(c, op, inside), outside));
+    }
   }
   if (normalised.size === 0) {
     return keep(op);
@@ -231,7 +242,7 @@ function swapWith(
     }
     case Algebra.Types.FILTER: {
       // The conjunction we manage absorbs the assertions of the filter we pass (SDecompI),
-      const collected = collectAssertions(c, op.expression, assertions, cpMetaOf(op.input).cVars);
+      const collected = collectAssertions(c, op.expression, assertions, cpMetaOf(c, op.input).cVars);
       if (collected === undefined) {
         return empty(c, op);
       }
@@ -389,7 +400,7 @@ function rewritePattern(
   // for it. So it reads what the pattern itself binds, and belongs as deep as that goes.
   const condition = residual.size === 0 ?
     undefined :
-    substituteInExpression(c, residual.toExpression(c), asWritten, cpMetaOf(pattern).cVars);
+    substituteInExpression(c, residual.toExpression(c), asWritten, cpMetaOf(c, pattern).cVars);
   // A conjunct the values decide - `bound(?x)` of a variable the pattern writes, say - leaves nothing to
   // ask. `false` is not the mirror of this and keeps its filter: that is the empty operation, which
   // {@link transformFilterFalse} normalises away afterwards.
@@ -549,7 +560,7 @@ function pushIntoExtend(
   const expression = extend.expression;
   const assertionOfTarget = assertions.get(target);
   // The expression is evaluated over the input of the EXTEND, wherever this rewrite ends up putting it.
-  const { cVars } = cpMetaOf(extend.input);
+  const { cVars } = cpMetaOf(c, extend.input);
   // A BIND of something Θ can name carries below the EXTEND whatever the target carries above it, so Θ
   // transfers onto it. A source *reading the target* is not one of them: `BIND(?x AS ?x)` binds nothing,
   // the target being unbound below itself, and a construction mentioning it reads a variable that is
@@ -653,7 +664,7 @@ function pushIntoGraph(
     // the second falls through to the general path below rather than being treated as an emptiness.
     assertedGraphName.term.termType === 'NamedNode') {
     // Read before the rewrite, which preserves the scope exactly and never shrinks `cVars`.
-    const { cVars, vRanges } = cpMetaOf(graph.input);
+    const { cVars, vRanges } = cpMetaOf(c, graph.input);
     // `?g` travels on into the pattern, in the *weak* form: `P` need not bind it at all, and the join
     // with `{?g ↦ c}` is what would have dropped the solutions binding it to anything else.
     const graphIndependentAssertions = assertions.split(name => name !== graphVar).inside;
@@ -739,7 +750,7 @@ function pushIntoJoin(
 
   // Read before any rewriting: every rewrite preserves pVars and never shrinks cVars, so these licences
   // stay valid while the operands are rewritten.
-  const operands = join.input.map(operand => cpMetaOf(operand));
+  const operands = join.input.map(operand => cpMetaOf(c, operand));
   // Memoization for binderCountOf
   const binderCounts = new Map<string, number>();
   const binderCountOf = (name: string): number => {
@@ -823,7 +834,7 @@ function pushIntoLeftJoin(
 ): PreOrderMappingReturn {
   const { AF } = c;
   const [ left, right ] = leftJoin.input;
-  const leftVars = cpMetaOf(left);
+  const leftVars = cpMetaOf(c, left);
 
   if ([ ...assertions.boundImpliedBy() ].some(name => leftVars.vRanges.neverBinds(name))) {
     // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
@@ -832,7 +843,7 @@ function pushIntoLeftJoin(
     return { ...keepMetadata, newValue: assertionFilter(c, rebuilt, assertions), reTransform: true };
   }
 
-  const rightVars = cpMetaOf(right);
+  const rightVars = cpMetaOf(c, right);
   // (FLPush) on the left, and `?x ∈ cVars(A₁) ∩ cVars(A₂)` on the right - which implies the left's
   // licence, so the replication only ever happens beside a push the LHS already took.
   //

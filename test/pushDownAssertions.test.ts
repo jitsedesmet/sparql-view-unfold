@@ -22,14 +22,19 @@ describe('pushDownAssertions', () => {
   // mapping, so a mapping-less partial context is sufficient here.
   const c = createTransformationContext();
 
+  /** A context for a new rewrite: the shared factories, with no variable name in use yet. */
+  function newRewriteContext(): typeof c {
+    return { ...c, usedVariableNames: new Set() };
+  }
+
   function transform(query: string): string {
-    const transformed = pushDownAssertions(c, parseQuery(c, prefixes + query));
+    const transformed = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query));
     return c.generator.generate(toAst(transformed)).trim();
   }
 
   /** Runs the FILTER(FALSE) normalisation of the design's normalisation pass on top of the pushdown. */
   function transformAndNormalise(query: string): string {
-    const pushed = pushDownAssertions(c, parseQuery(c, prefixes + query));
+    const pushed = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query));
     return c.generator.generate(toAst(transformFilterFalse(c, pushed))).trim();
   }
 
@@ -45,7 +50,8 @@ describe('pushDownAssertions', () => {
    */
   function expectIdempotent(expect: typeof Expect, query: string): void {
     const once = transform(query);
-    const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
+    const rewrite = newRewriteContext();
+    const twice = pushDownAssertions(rewrite, pushDownAssertions(rewrite, parseQuery(c, prefixes + query)));
     expect(c.generator.generate(toAst(twice)).trim()).toEqual(once);
     expect(transform(once)).toEqual(once);
   }
@@ -68,7 +74,8 @@ describe('pushDownAssertions', () => {
    * about.
    */
   function transformOverQuads(query: string): string {
-    return c.generator.generate(toAst(pushDownAssertions(c, parseQuery(c, prefixes + query, { quads: true })))).trim();
+    const pushed = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query, { quads: true }));
+    return c.generator.generate(toAst(pushed)).trim();
   }
 
   function expectTransformOverQuads(expect: typeof Expect, query: string, expected: string): void {
@@ -497,7 +504,8 @@ GROUP BY ( <ex://c> AS ?x )`,
           false,
         ) ],
       );
-      const pushed = pushDownAssertions(c, AF.createFilter(group, AF.createOperatorExpression('sameterm', [
+      const rewrite = newRewriteContext();
+      const pushed = pushDownAssertions(rewrite, AF.createFilter(group, AF.createOperatorExpression('sameterm', [
         AF.createTermExpression(DF.variable('total')),
         AF.createTermExpression(DF.namedNode('ex://c')),
       ])));
@@ -1258,9 +1266,8 @@ GROUP BY ?x ( ?x AS ?y )`,
       );
     });
 
-    it('keeps a clique above a BIND whose expression is compound', ({ expect }) => {
-      // `sameTerm(e, ?y)` over a compound `e` is a multi-variable condition, which this pass has no
-      // licence for - so nothing transfers and the edge stays where it was.
+    it('empties a clique whose BIND gives a term type no other member can take', ({ expect }) => {
+      // CONCAT gives a literal, which the subject ?y is never.
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND(CONCAT(?w, "x") AS ?t) FILTER(sameTerm(?t, ?y)) }',
@@ -1268,6 +1275,22 @@ GROUP BY ?x ( ?x AS ?y )`,
   {
     ?y <ex://p> ?w .
     BIND( CONCAT( ?w , "x" ) AS ?t )
+  }
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('keeps a clique above a BIND whose expression is compound', ({ expect }) => {
+      // `sameTerm(e, ?y)` over a compound `e` is a multi-variable condition, which this pass has no
+      // licence for - so nothing transfers and the edge stays where it was.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?w BIND(IRI(CONCAT(?w, "x")) AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        `SELECT ?t ?w ?y WHERE {
+  {
+    ?y <ex://p> ?w .
+    BIND( IRI( CONCAT( ?w , "x" ) ) AS ?t )
   }
   FILTER ( SAMETERM( ?y , ?t ) )
 }`,
@@ -1375,7 +1398,7 @@ GROUP BY ?x ( ?x AS ?y )`,
         FILTER(sameTerm(?w, ?x) && sameTerm(?x, ?y) && sameTerm(?y, ?z))
       }`);
       const before = JSON.stringify(algebra);
-      pushDownAssertions(c, algebra);
+      pushDownAssertions(newRewriteContext(), algebra);
       expect(JSON.stringify(algebra)).toEqual(before);
     });
 
@@ -1431,8 +1454,9 @@ GROUP BY ?x ( ?x AS ?y )`,
         // which it only does where the first one left the rows saying everything the condition said.
         'SELECT * WHERE { VALUES (?o ?s) { (<<( :a :b :c )>> :a) } FILTER(sameTerm(subject(?o), ?s)) }',
       ]) {
-        const once = pushDownAssertions(c, parseQuery(c, prefixes + query));
-        const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
+        const once = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query));
+        const rewrite = newRewriteContext();
+        const twice = pushDownAssertions(rewrite, pushDownAssertions(rewrite, parseQuery(c, prefixes + query)));
         expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
       }
     });
@@ -1468,14 +1492,29 @@ GROUP BY ?x ( ?x AS ?y )`,
       );
     });
 
-    it('turns the assertion on a fallible BIND target into a condition on its expression', ({ expect }) => {
+    it('empties the plan where a BIND gives a term type the assertion rules out', ({ expect }) => {
       expectTransform(
         expect,
         'SELECT * WHERE { { SELECT ?x ?a WHERE { ?a :p ?b BIND(?a + ?b AS ?x) } } FILTER(sameTerm(?x, :c)) }',
         `SELECT ?a ?x WHERE {
+  {
+    SELECT ( ( ?a + ?b ) AS ?x ) ?a WHERE {
+      ?a <ex://p> ?b .
+    }
+  }
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('turns the assertion on a fallible BIND target into a condition on its expression', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { SELECT ?x ?a WHERE { ?a :p ?b BIND(IRI(?b) AS ?x) } } FILTER(sameTerm(?x, :c)) }',
+        `SELECT ?a ?x WHERE {
   SELECT ( <ex://c> AS ?x ) ?a WHERE {
     ?a <ex://p> ?b .
-    FILTER ( SAMETERM( ( ?a + ?b ) , <ex://c> ) )
+    FILTER ( SAMETERM( IRI( ?b ) , <ex://c> ) )
   }
 }`,
       );
@@ -1563,6 +1602,79 @@ GROUP BY ?x ( ?x AS ?y )`,
   }
   FILTER ( EXISTS {
     ?x <ex://q> ?w .
+  }
+  )
+}`,
+      );
+    });
+
+    it('keeps a condition on a variable the solution of an EXISTS binds inside its pattern', ({ expect }) => {
+      // SPARQL 1.2 joins that solution into the pattern, so ?y is bound there, and a BIND of it is undefined.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) } }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> ?w .
+      FILTER ( SAMETERM( ?y , ?w ) )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('still pushes a condition on a variable only the pattern of an EXISTS binds', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, :c)) } }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> <ex://c> .
+      BIND( <ex://c> AS ?w )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('pushes into an EXISTS whose filter the pushdown rebuilt', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, :d)) } } FILTER(sameTerm(?x, :c)) }',
+        `SELECT ?x ?y WHERE {
+  {
+    <ex://c> <ex://p> ?y .
+    BIND( <ex://c> AS ?x )
+  }
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> <ex://d> .
+      BIND( <ex://d> AS ?w )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('decides a condition on a variable of the solution of an EXISTS by its range', ({ expect }) => {
+      // ?y is a subject outside, so no solution the EXISTS is evaluated for makes it a literal.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?o FILTER EXISTS { ?z :q ?w FILTER(isLiteral(?y)) } }',
+        `SELECT ?o ?y WHERE {
+  ?y <ex://p> ?o .
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> ?w .
+      FILTER ( FALSE )
+    }
   }
   )
 }`,
@@ -1742,8 +1854,9 @@ GROUP BY ?x ( ?x AS ?y )`,
         { SELECT ?x ?d WHERE { ?x :r ?d } }
         FILTER(sameTerm(?x, :c))
       }`;
-      const once = pushDownAssertions(c, parseQuery(c, query));
-      const twice = pushDownAssertions(c, once);
+      const rewrite = newRewriteContext();
+      const once = pushDownAssertions(rewrite, parseQuery(c, query));
+      const twice = pushDownAssertions(rewrite, once);
       expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
     });
 
@@ -1771,14 +1884,14 @@ GROUP BY ?x ( ?x AS ?y )`,
 
   describe('soundness guards', () => {
     it('demotes rather than pushes into a join operand whose BIND may leave the variable unbound', ({ expect }) => {
-      // ?x is not certainly bound in the left operand (`?a / ?b` errors when ?b is 0), and it is
+      // ?x is not certainly bound in the left operand (`IRI(?b)` errors when ?b is a blank node), and it is
       // possible in the right one, so L fails for the left: only the right operand may take the strong
       // assertion. The left still gets the weak one, which is what prunes it - and which stops above
-      // the BIND, since it does not say `?a / ?b` evaluated to anything.
+      // the BIND, since it does not say `IRI(?b)` evaluated to anything.
       expectTransform(
         expect,
         `SELECT * WHERE {
-          { SELECT ?x ?a ?b WHERE { ?a :p ?b BIND(?a / ?b AS ?x) } }
+          { SELECT ?x ?a ?b WHERE { ?a :p ?b BIND(IRI(?b) AS ?x) } }
           { SELECT ?x ?d WHERE { ?x :q ?d } }
           FILTER(sameTerm(?x, :c))
         }`,
@@ -1787,7 +1900,7 @@ GROUP BY ?x ( ?x AS ?y )`,
     SELECT ?x ?a ?b WHERE {
       {
         ?a <ex://p> ?b .
-        BIND( ( ?a / ?b ) AS ?x )
+        BIND( IRI( ?b ) AS ?x )
       }
       FILTER ( ( ! BOUND( ?x ) || SAMETERM( ?x , <ex://c> ) ) )
     }
@@ -1971,7 +2084,7 @@ GROUP BY ?x ( ?x AS ?y )`,
         FILTER(sameTerm(?x, :c))
       }`);
       const before = JSON.stringify(algebra);
-      pushDownAssertions(c, algebra);
+      pushDownAssertions(newRewriteContext(), algebra);
       expect(JSON.stringify(algebra)).toEqual(before);
     });
 
@@ -1982,8 +2095,9 @@ GROUP BY ?x ( ?x AS ?y )`,
         { SELECT ?x ?b WHERE { ?x :r ?b } LIMIT 5 }
         FILTER(sameTerm(?x, :c))
       }`;
-      const once = pushDownAssertions(c, parseQuery(c, query));
-      const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, query)));
+      const once = pushDownAssertions(newRewriteContext(), parseQuery(c, query));
+      const rewrite = newRewriteContext();
+      const twice = pushDownAssertions(rewrite, pushDownAssertions(rewrite, parseQuery(c, query)));
       expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
     });
   });
@@ -2574,7 +2688,7 @@ GROUP BY ?x ( ?x AS ?y )`,
         FILTER(sameTerm(subject(?o), ?s) && isTRIPLE(?z) && isIRI(?p))
       }`);
       const before = JSON.stringify(algebra);
-      pushDownAssertions(c, algebra);
+      pushDownAssertions(newRewriteContext(), algebra);
       expect(JSON.stringify(algebra)).toEqual(before);
     });
   });
@@ -3296,14 +3410,14 @@ GROUP BY ?x ( ?x AS ?y )`,
     });
 
     it('puts the type below a BIND the clique cannot pass, onto the member bound there', ({ expect }) => {
-      // `CONCAT(...)` is nothing Θ can name, so the edge stays above the BIND. The type holds of ?o as much as
+      // `COALESCE(...)` is nothing Θ can name, so the edge stays above the BIND. The type holds of ?o as much as
       // of the target, and ?o is bound below - whether or not the target is the representative of the group,
       // which ?t is not and ?a is.
       expectStableTransform(
         expect,
         `SELECT * WHERE {
           ?s :p ?o
-          BIND(CONCAT(STR(?s), "x") AS ?t)
+          BIND(COALESCE(?s, "x") AS ?t)
           FILTER(sameTerm(?t, ?o) && (isIRI(?t) || isLITERAL(?t)))
         }`,
         `SELECT ?o ?s ?t WHERE {
@@ -3312,7 +3426,7 @@ GROUP BY ?x ( ?x AS ?y )`,
       ?s <ex://p> ?o .
       FILTER ( ( ISIRI( ?o ) || ISLITERAL( ?o ) ) )
     }
-    BIND( CONCAT( STR( ?s ) , "x" ) AS ?t )
+    BIND( COALESCE( ?s , "x" ) AS ?t )
   }
   FILTER ( SAMETERM( ?t , ?o ) )
 }`,
@@ -3321,7 +3435,7 @@ GROUP BY ?x ( ?x AS ?y )`,
         expect,
         `SELECT * WHERE {
           ?s :p ?o
-          BIND(CONCAT(STR(?s), "x") AS ?a)
+          BIND(COALESCE(?s, "x") AS ?a)
           FILTER(sameTerm(?a, ?o) && (isIRI(?a) || isLITERAL(?a)))
         }`,
         `SELECT ?a ?o ?s WHERE {
@@ -3330,7 +3444,7 @@ GROUP BY ?x ( ?x AS ?y )`,
       ?s <ex://p> ?o .
       FILTER ( ( ISIRI( ?o ) || ISLITERAL( ?o ) ) )
     }
-    BIND( CONCAT( STR( ?s ) , "x" ) AS ?a )
+    BIND( COALESCE( ?s , "x" ) AS ?a )
   }
   FILTER ( SAMETERM( ?o , ?a ) )
 }`,
@@ -3473,7 +3587,7 @@ HAVING SAMETERM( ?y , SAMPLE( ?x ) )`,
         FILTER(sameTerm(?b, ?d) && sameTerm(?d, ?e) && (isLITERAL(?e) || isBLANK(?e)) && (!bound(?c) || isIRI(?c)))
       }`);
       const before = JSON.stringify(algebra);
-      pushDownAssertions(c, algebra);
+      pushDownAssertions(newRewriteContext(), algebra);
       expect(JSON.stringify(algebra)).toEqual(before);
     });
 
@@ -3530,6 +3644,79 @@ HAVING SAMETERM( ?y , SAMPLE( ?x ) )`,
       await assertEquivalent(expect, `SELECT * WHERE {
         VALUES (?x) { (:a) (:b) }
         FILTER(sameTerm(?x, :a))
+      }`, 1);
+    });
+
+    it('matches a condition in an EXISTS against the solution it is evaluated for', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) }
+      }`, 1);
+    });
+
+    it('rejects a solution that matches no row of the pattern of an EXISTS', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :r ?y
+        FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) }
+      }`, 0);
+    });
+
+    it('writes no term for a variable of the pattern of an EXISTS the solution binds too', async({ expect }) => {
+      // The engine leaves out a BIND of ?w, so `BIND(:shared AS ?w)` would stop comparing it to the ?w of the solution.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :r ?w
+        FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, :shared)) }
+      }`, 0);
+    });
+
+    it('reads a BIND in an EXISTS over a variable of the solution with its range', async({ expect }) => {
+      // `COALESCE(?y, "x")` gives the IRI ?y holds, which a literal range would rule out as a subject.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :step ?y
+        FILTER EXISTS { ?z :onwards ?w BIND(COALESCE(?y, "x") AS ?t) FILTER(sameTerm(?t, ?z)) }
+      }`, 4);
+    });
+
+    it('keeps a condition on a variable a sub-SELECT in an EXISTS does not project above it', async({ expect }) => {
+      // The ?y of the sub-SELECT is its own, and the condition reads the one of the solution, which the OPTIONAL leaves
+      // unbound for :a.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?o OPTIONAL { ?x :q ?y }
+        FILTER EXISTS { { SELECT ?a WHERE { ?a :r ?y } } FILTER(!bound(?y)) }
+      }`, 1);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?o OPTIONAL { ?x :q ?y }
+        FILTER EXISTS { { SELECT ?a WHERE { ?a :r ?y } } FILTER(sameTerm(?y, :rd)) }
+      }`, 0);
+    });
+
+    it('keeps a condition on a BIND in an EXISTS of a variable the solution binds above it', async({ expect }) => {
+      // SPARQL 1.2 leaves that BIND undefined, and the engine leaves it out, so ?y keeps the value of the solution.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w BIND(?z AS ?y) FILTER(sameTerm(?y, :b)) }
+      }`, 0);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w BIND(?z AS ?y) FILTER(sameTerm(?y, :shared)) }
+      }`, 1);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?y :p ?o
+        FILTER EXISTS { ?z :q ?w BIND("l" AS ?y) FILTER(isIRI(?y)) }
+      }`, 1);
+    });
+
+    it('matches a condition in a nested EXISTS against the outermost solution', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w FILTER EXISTS { ?a :q ?b FILTER(sameTerm(?b, ?y)) } }
+      }`, 1);
+    });
+
+    it('matches a condition in an EXISTS of an OPTIONAL against both of its sides', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        OPTIONAL { ?x :r ?v FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) } }
       }`, 1);
     });
 

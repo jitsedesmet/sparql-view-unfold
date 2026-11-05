@@ -14,7 +14,7 @@ Running SPARQL 1.2 queries — triple terms and all — against RDF 1.1 data is 
 the one the examples below use: a view says how your RDF 1.1 data represents RDF 1.2, and the rewrite hands
 you plain SPARQL 1.1.
 
-The idea is explained in our [demo paper accepted at SEMANTiCS](https://2026-semantics-rewriting.jitsedesmet.be/).
+The idea is explained in our [demo paper published at SEMANTiCS 2026](https://2026-semantics-rewriting.jitsedesmet.be/).
 [View that demo live](https://2026-query-rewriting.demo.jitsedesmet.be/). [ARCHITECTURE.md](ARCHITECTURE.md) maps the code.
 
 ## Installation
@@ -128,13 +128,39 @@ view that means to present generalized RDF: any term in any position, inside tri
 source stays RDF. The rewritten query must then run on an engine whose `TRIPLE()` builds generalized triple
 terms, such as Comunica with `rdfVariant: 'generalizedRDF'`.
 
+### Extended engines
+
+The rewriting reads the term type an expression gives off the SPARQL operator tables: `STR(?x)` gives a literal,
+`IRI(?x)` an IRI. An engine may extend an operator to give a value where SPARQL raises a type error (SPARQL 1.1
+§17.3.1). For such an engine, pass an `expressionRange` to `createQueryRewriter` and `mappingFromConstructQueries`
+that answers for what it extends and calls `standardExpressionRange` for the rest.
+
 ### Blank nodes
 
-An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to
-construct a blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: the same inputs
-always give the same identity. Add `internalBnodeAsSpecialLiteralTransformation()` or
-`internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed
-literal or as a prefixed IRI respectively.
+An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to construct a
+blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: the same inputs always give the
+same identity. An argument can be any expression, and one that is unbound or errors counts as a value of its own,
+so a node is still built, one that differs from every node built from a value. A triple term argument is encoded
+through its subject, predicate and object, up to two triple terms deep or the `tripleTermArgumentDepth` given to
+`createQueryRewriter`. Add `internalBnodeAsSpecialLiteralTransformation()` or
+`internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed literal or
+as a prefixed IRI respectively.
+
+Evaluating the rewritten query with Comunica, the engine can encode those identities itself, for a triple term of any
+depth too: pass `{ encodedByExtensionFunction: true }` to the transformation and `internalBnodeExtensionFunctions()` as
+`extensionFunctions`. Both give the same nodes, except where the SPARQL encoding falls short: a triple term deeper
+than it unrolls, a blank node, or an unstable argument in an `OPTIONAL` condition, which it evaluates repeatedly.
+
+```typescript
+const query = await createQueryRewriter([
+  ...createDefaultTransformationPipeline(mapping),
+  internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
+]).rewriteQuery('SELECT * WHERE { ?s ?p ?o }');
+const bindings = await new QueryEngine().queryBindings(query, {
+  sources,
+  extensionFunctions: internalBnodeExtensionFunctions(),
+});
+```
 
 ## Restrictions
 
@@ -168,7 +194,7 @@ The tables below are the short version; the generated
 | Function | Description |
 |---|---|
 | `mappingFromConstructQueries(constructQueries, options?)` | Builds the `Mapping` a set of CONSTRUCT query strings denotes. The only way to build one. |
-| `createQueryRewriter(transformations)` | Builds a `QueryRewriter` running those transformations, in order. |
+| `createQueryRewriter(transformations, options?)` | Builds a `QueryRewriter` running those transformations, in order. |
 | `createDefaultTransformationPipeline(mapping, options?)` | The pipeline to use when you have no reason to build your own. |
 | `rewriter.rewriteQuery(query)` | Rewrites a SPARQL query string, asynchronously. |
 | `rewriter.rewriteOperation(operation)` | The same over SPARQL algebra, for callers already holding some. |
@@ -206,6 +232,26 @@ resolution and so imports `node:module` and `node:path`. Bundlers resolve every 
 before they tree-shake it, so re-exporting this step from the main entry point would make the whole package
 unresolvable for the browser — even in a build that never calls the step. The main entry point stays
 platform-neutral; reach for this subpath from Node.
+
+## Cite
+
+If you are using or extending sparql-view-unfold as part of a scientific publication,
+we would appreciate a citation of our [article](https://2026-semantics-rewriting.jitsedesmet.be/).
+
+```bibtex
+@inproceedings{De_Smet_Demonstration_of_RDF_2026,
+    address = {Ghent, BE},
+    author = {De Smet, Jitse and Jakubowski, Maxime},
+    booktitle = {Companion Volume of the 22nd International Conference on Semantic Systems (SEMANTiCS-C 2026)},
+    month = sep,
+    publisher = {CEUR-WS.org},
+    series = {CEUR Workshop Proceedings},
+    title = {{Demonstration of RDF and SPARQL 1.2 Interoperability through Query Rewriting}},
+    url = {https://2026-semantics-rewriting.jitsedesmet.be/},
+    volume = {4293},
+    year = {2026}
+}
+```
 
 ## License
 

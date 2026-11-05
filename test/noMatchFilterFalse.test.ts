@@ -33,7 +33,7 @@ describe('a pattern that cannot match the mapping', () => {
   it('unfolds to FILTER(FALSE) rather than throwing', async({ expect }) => {
     expect((await rewriter.rewriteQuery(
       'SELECT * { <ex://b> <ex://p> ?o1 . <ex://b> <ex://q> ?o2 }',
-    )).trim()).toEqual(`SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_o2 AS ?o2 ) WHERE {
+    )).trim()).toEqual(`SELECT ?o1 ?o2 WHERE {
   FILTER ( FALSE )
 }`);
   });

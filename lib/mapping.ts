@@ -2,12 +2,12 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils } from '@traqula/algebra-transformations-1-2';
-import { VAR_PREFIX_MAPPING, VAR_PREFIX_MERGED_HEAD } from './consts.js';
+import { VAR_PREFIX_MERGED_HEAD } from './consts.js';
 import type { TriplePosition } from './datastructures/TermClusterSet.js';
 import { triplePositions } from './datastructures/TermClusterSet.js';
 import { rangeOfPosition } from './RangeSet.js';
-import type { TransformationContext } from './transformContext.js';
-import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
+import type { TransformationContext, TransformationContextOptions } from './transformContext.js';
+import { createTransformationContext, parseQuery } from './transformContext.js';
 import type { Mapping, MappingHead } from './types.js';
 import type { AssertionConjunct } from './utils/assertions.js';
 import { access, assertBound, assertTermType, conjunctAsExpression } from './utils/assertions.js';
@@ -15,8 +15,8 @@ import type { VRanges } from './utils/certainlyBoundVars.js';
 import { withCpVars } from './utils/certainlyBoundVars.js';
 import { conjunctionOf, unstableOperators } from './utils/expressionHelpers.js';
 import { projectSolutionExistence } from './utils/operationhelpers.js';
-import { isSubsetOf } from './utils/setUtils.js';
-import { collectVariableNames } from './utils.js';
+import { isSubsetOf, unionSets } from './utils/setUtils.js';
+import { claimVariableName, collectVariableNames, deepCopy } from './utils.js';
 
 /**
  * @fileoverview Building the {@link Mapping} the unfolding runs on, out of SPARQL CONSTRUCT queries.
@@ -52,7 +52,7 @@ import { collectVariableNames } from './utils.js';
  */
 
 /** What building a mapping may be configured with. */
-export interface MappingOptions {
+export interface MappingOptions extends Pick<TransformationContextOptions, 'expressionRange'> {
   /**
    * Whether the view the mapping defines is generalized RDF, admitting any term in any position, triple terms
    * included. The source is RDF either way.
@@ -61,7 +61,8 @@ export interface MappingOptions {
 }
 
 /** The factories building a mapping needs; the solver and the generator of a full context play no part. */
-type MappingConstructionTools = Pick<TransformationContext, 'parser' | 'AF' | 'DF' | 'astTransformer'>;
+type MappingConstructionTools =
+  Pick<TransformationContext, 'parser' | 'AF' | 'DF' | 'astTransformer' | 'expressionRange' | 'generalizedRdf'>;
 
 /**
  * The type tests making a template term one its position admits, recursing into a triple term.
@@ -135,7 +136,7 @@ function mappingOfSingleTemplateTriple(
   // A CONSTRUCT only instantiates its template when every variable in it is bound and every term it writes
   // is one its position can hold, so the solutions failing either do not belong to the mapping. Variables
   // that are certainly bound, or certainly of a term type the position admits, already need no condition.
-  const { cVars: certainlyBoundVariableNames, vRanges: bodyRanges } = withCpVars(constructBody).metadata;
+  const { cVars: certainlyBoundVariableNames, vRanges: bodyRanges } = withCpVars(tools, constructBody).metadata;
   const typeTests = triplePositions.flatMap(position =>
     admissibilityTypeTests(head[position], position, bodyRanges, generalizedRdfView));
   const conditions: AssertionConjunct[] = [
@@ -172,10 +173,9 @@ function mappingsOfConstructQuery(
   const construct = <Algebra.Construct> parseQuery(tools, constructQuery);
   const body = construct.input;
   assertBodyCallsNoUnstableFunction(body);
-  // The mappings share this body object, which is safe because `prefixVarsInOperation` copies what it
-  // renames, so every mapping leaving `mappingFromConstructQueries` owns its own tree.
+  // Copied per template triple, so that no two mappings share a body.
   return construct.template
-    .map(templateTriple => mappingOfSingleTemplateTriple(tools, options, templateTriple, body));
+    .map(templateTriple => mappingOfSingleTemplateTriple(tools, options, templateTriple, deepCopy(tools, body)));
 }
 
 /**
@@ -186,11 +186,12 @@ function mappingsOfConstructQuery(
  * @returns the merged mapping
  */
 function mergeMappingsOverGenericHead(
-  { AF, DF }: MappingConstructionTools,
+  { AF, DF, astTransformer }: MappingConstructionTools,
   mappings: readonly Mapping[],
 ): Mapping {
+  const usedNames = unionSets(mappings.map(mapping => collectVariableNames(astTransformer, mapping)));
   const genericHeadVariables = [ 's', 'p', 'o' ]
-    .map(position => DF.variable(`${VAR_PREFIX_MERGED_HEAD}${position}`));
+    .map(position => DF.variable(claimVariableName(`${VAR_PREFIX_MERGED_HEAD}${position}`, usedNames)));
   const [ genericSubject, genericPredicate, genericObject ] = genericHeadVariables;
 
   const bodiesBindingTheGenericHead = mappings.map(({ head, body }) => {
@@ -232,10 +233,9 @@ export function mappingFromConstructQueries(
   constructQueries: readonly string[],
   options: MappingOptions = {},
 ): Mapping {
-  const tools = createTransformationContext();
+  const tools = createTransformationContext({ expressionRange: options.expressionRange });
   const mappings = constructQueries
-    .flatMap(constructQuery => mappingsOfConstructQuery(tools, options, constructQuery))
-    .map(mapping => prefixVarsInOperation(tools, mapping, VAR_PREFIX_MAPPING));
+    .flatMap(constructQuery => mappingsOfConstructQuery(tools, options, constructQuery));
 
   if (mappings.length === 0) {
     throw new Error('A mapping needs at least one CONSTRUCT query with at least one template triple.');
