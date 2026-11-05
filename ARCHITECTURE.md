@@ -133,11 +133,23 @@ standard mappings between RDF 1.1 and RDF 1.2.
 
 So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
 
-**An EXISTS sees the solution it is evaluated for.** SPARQL 1.2 joins that solution into every group of the
-pattern ([spec](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution)). A pass reading ranges therefore
-runs through `rewriteInExistenceScopes`: the pass first rewrites the plan around EXISTS patterns, and then each
-pattern with that solution as `existenceScope`. The order matters, as the scope depends on where the pass leaves the
-EXISTS. The pushdown writes no term for a variable of that solution, and `pullUpExtends` moves no BIND of one.
+**An EXISTS sees the solution μ it is evaluated for.** SPARQL 1.2 starts every group of its pattern, also in a
+sub-SELECT, from μ ([ContextSolution](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution)); above a GROUP
+only its keys and aggregates remain. A pass reading ranges runs through `rewriteInExistenceScopes`, which rewrites each
+pattern with μ as `existenceScope` once the pass has placed the EXISTS. The unfolding moves no EXISTS, so it uses
+`rewriteInExistenceScopesBeforePass`, which leaves the mapping bodies alone.
+
+A BIND of a variable μ binds is undefined ([Extend](https://www.w3.org/TR/sparql12-query/#defn_extend)), so per
+variable `?o` of μ (`outerBinding`):
+
+| μ binds `?o` | unfolding (`BIND(?mi_s AS ?o)`)                             | `removeProjections`  |
+|--------------|-------------------------------------------------------------|----------------------|
+| certainly    | `FILTER(sameTerm(?mi_s, ?o))` instead                       | keeps the name       |
+| maybe        | UNION of that FILTER and `{ … FILTER(!BOUND(?o)) } BIND(…)` | keeps the projection |
+| not          | the BIND                                                    | renames              |
+
+Each variable μ may bind doubles the subquery. The pushdown writes no term for a variable of μ, and `pullUpExtends`
+moves no BIND of one.
 
 ## Still to settle
 
