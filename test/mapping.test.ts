@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { describe, it } from 'vitest';
-import { VAR_PREFIX_MAPPING, VAR_PREFIX_MERGED_HEAD } from '../lib/consts.js';
+import { VAR_PREFIX_MERGED_HEAD } from '../lib/consts.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createTransformationContext } from '../lib/transformContext.js';
 import type { Mapping } from '../lib/types.js';
@@ -46,9 +46,9 @@ describe('mappingFromConstructQueries', () => {
         PREFIX : <ex://>
         CONSTRUCT { ?s ?p ?o . ?s :alias ?o } WHERE { ?s ?p ?o }` ]);
 
-      // Every mapping variable is prefixed, merged or not, so "its own head" is `?s` under that prefix
-      // rather than the `?m_s` the merge coins.
-      expect(oneTemplateTriple.head.subject.value).toBe(`${VAR_PREFIX_MAPPING}s`);
+      // A mapping keeps the names it was written with, so "its own head" is `?s` rather than the `?m_s` the
+      // merge coins.
+      expect(oneTemplateTriple.head.subject.value).toBe('s');
       expect(twoTemplateTriples.head.subject.value).toBe(`${VAR_PREFIX_MERGED_HEAD}s`);
       expect(twoTemplateTriples.head.predicate.value).toBe(`${VAR_PREFIX_MERGED_HEAD}p`);
       expect(twoTemplateTriples.head.object.value).toBe(`${VAR_PREFIX_MERGED_HEAD}o`);
@@ -60,9 +60,9 @@ describe('mappingFromConstructQueries', () => {
       const mapping = mappingFromConstructQueries([
         'PREFIX : <ex://>\nCONSTRUCT { ?t :reifies ?o } WHERE { ?t :src ?o }',
       ]);
-      expect(mapping.head.subject).toEqual(expect.objectContaining({ termType: 'Variable', value: 'mi_t' }));
+      expect(mapping.head.subject).toEqual(expect.objectContaining({ termType: 'Variable', value: 't' }));
       expect(mapping.head.predicate).toEqual(expect.objectContaining({ termType: 'NamedNode', value: 'ex://reifies' }));
-      expect(mapping.head.object).toEqual(expect.objectContaining({ termType: 'Variable', value: 'mi_o' }));
+      expect(mapping.head.object).toEqual(expect.objectContaining({ termType: 'Variable', value: 'o' }));
     });
 
     it('is the generic one as soon as there are two mappings', ({ expect }) => {
@@ -87,6 +87,12 @@ describe('mappingFromConstructQueries', () => {
         'PREFIX : <ex://>\nCONSTRUCT { "literalSubject" :p ?o } WHERE { ?s :p ?o }',
       ])).toThrow('cannot use Literal in this position');
     });
+
+    it('rejects a blank node, which the template mints afresh per solution', ({ expect }) => {
+      expect(() => mappingFromConstructQueries([
+        'PREFIX : <ex://>\nCONSTRUCT { ?s :p _:fresh } WHERE { ?s :p ?o }',
+      ])).toThrow('cannot use BlankNode in this position');
+    });
   });
 
   /**
@@ -98,13 +104,13 @@ describe('mappingFromConstructQueries', () => {
       // `?o` is read in object position, where a literal is fine, and written in subject position.
       expect(mappingAsStrings(mappingFromConstructQueries([
         'CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?o }',
-      ])).body).toContain('( ISBLANK( ?mi_o ) || ISIRI( ?mi_o ) )');
+      ])).body).toContain('( ISIRI( ?o ) || ISBLANK( ?o ) )');
     });
 
     it('is filtered inside a triple term the head constructs', ({ expect }) => {
       expect(mappingAsStrings(mappingFromConstructQueries([
         'PREFIX : <ex://>\nCONSTRUCT { ?t :reifies <<( ?o :p ?s )>> } WHERE { ?t :src ?s . ?s :p ?o }',
-      ])).body).toContain('( ISBLANK( ?mi_o ) || ISIRI( ?mi_o ) )');
+      ])).body).toContain('( ISIRI( ?o ) || ISBLANK( ?o ) )');
     });
 
     it('is left alone where the body already proves the position, filtering nothing at all', ({ expect }) => {
@@ -113,11 +119,59 @@ describe('mappingFromConstructQueries', () => {
       ])).body).not.toContain('FILTER');
     });
 
+    it('is only asked to be bound where a BIND gives it an IRI', ({ expect }) => {
+      expect(mappingAsStrings(mappingFromConstructQueries([
+        'PREFIX : <ex://>\nCONSTRUCT { ?s :p ?o } WHERE { ?x :src ?o BIND(IRI(CONCAT("ex://", STR(?o))) AS ?s) }',
+      ])).body.trim()).toEqual(`SELECT ?o ?s WHERE {
+  {
+    ?x <ex://src> ?o .
+    BIND( IRI( CONCAT( "ex://" , STR( ?o ) ) ) AS ?s )
+  }
+  FILTER ( BOUND( ?s ) )
+}`);
+    });
+
     it('is left alone for a view that means to present generalized RDF', ({ expect }) => {
       expect(mappingAsStrings(mappingFromConstructQueries(
         [ 'CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?o }' ],
         { generalizedRdfView: true },
       )).body).not.toContain('FILTER');
+    });
+  });
+
+  describe('a generalized RDF view', () => {
+    it('is what the mapping says it denotes, merged or not', ({ expect }) => {
+      const construct = 'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }';
+      expect(mappingFromConstructQueries([ construct ]).generalizedRdfView).toBe(false);
+      expect(mappingFromConstructQueries([ construct ], { generalizedRdfView: true }).generalizedRdfView).toBe(true);
+      expect(mappingFromConstructQueries([ construct, construct ], { generalizedRdfView: true }).generalizedRdfView)
+        .toBe(true);
+    });
+
+    it('admits a literal or a triple term as subject, inside a triple term too', ({ expect }) => {
+      const literalSubject = mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { "literalSubject" :p ?o } WHERE { ?s :p ?o }' ],
+        { generalizedRdfView: true },
+      );
+      expect(literalSubject.head.subject).toEqual(expect.objectContaining({ termType: 'Literal' }));
+      const tripleTermSubject = mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { <<( ?s :p ?o )>> :q ?o } WHERE { ?s :p ?o }' ],
+        { generalizedRdfView: true },
+      );
+      expect(tripleTermSubject.head.subject).toEqual(expect.objectContaining({ termType: 'Quad' }));
+      const nestedLiteralSubject = mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { ?s :p <<( "literalSubject" :q ?o )>> } WHERE { ?s :p ?o }' ],
+        { generalizedRdfView: true },
+      );
+      expect(nestedLiteralSubject.head.object).toEqual(expect.objectContaining({ termType: 'Quad' }));
+    });
+
+    it('does not filter a head variable inside a triple term', ({ expect }) => {
+      // `?o` is read in object position and written in the subject position of the triple term.
+      expect(mappingAsStrings(mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { ?t :reifies <<( ?o :p ?s )>> } WHERE { ?t :src ?s . ?s :p ?o }' ],
+        { generalizedRdfView: true },
+      )).body).not.toContain('ISIRI');
     });
   });
 

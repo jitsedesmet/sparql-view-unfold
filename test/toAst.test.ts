@@ -1,5 +1,5 @@
+import { toAst } from '@traqula/algebra-sparql-1-2';
 import { describe, it } from 'vitest';
-import { toAst } from '../lib/generator/toAst.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 
 const c = createTransformationContext();

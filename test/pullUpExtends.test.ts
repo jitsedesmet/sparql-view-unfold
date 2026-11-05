@@ -1,4 +1,4 @@
-import { toAlgebra, toAst } from '@traqula/algebra-sparql-1-2';
+import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { expect as Expect } from 'vitest';
@@ -10,6 +10,7 @@ import { createTransformationContext, parseQuery } from '../lib/transformContext
 import { withCpVars, withoutCpVars } from '../lib/utils/certainlyBoundVars.js';
 import { expressionsEqual, isStableExpression } from '../lib/utils/expressionHelpers.js';
 import { peelExtends } from '../lib/utils/extendChain.js';
+import { generateValidQuery } from './validQuery.js';
 
 const prefixes = `PREFIX : <ex://>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
@@ -21,7 +22,7 @@ describe('pullUpExtends', () => {
   const c = createTransformationContext();
 
   function transform(query: string): string {
-    return c.generator.generate(toAst(pullUpExtends(c, parseQuery(c, prefixes + query)))).trim();
+    return generateValidQuery(c, pullUpExtends(c, parseQuery(c, prefixes + query))).trim();
   }
 
   /** The variables bound by the EXTEND chain at the top of an operation, in evaluation order. */
@@ -31,7 +32,7 @@ describe('pullUpExtends', () => {
 
   /** What an operation puts in scope: the variables every solution binds, and what `SELECT *` expands to. */
   function scopeOf(op: Algebra.Operation): { cVars: string[]; pVars: string[] } {
-    const { cVars, vRanges } = withCpVars(withoutCpVars(op)).metadata;
+    const { cVars, vRanges } = withCpVars(c, withoutCpVars(op)).metadata;
     return { cVars: [ ...cVars ].sort(), pVars: [ ...vRanges.keys() ].sort() };
   }
 
@@ -48,8 +49,8 @@ describe('pullUpExtends', () => {
   }
 
   /**
-   * Asserts the rewritten query, and with it the three checks every case owes: the scope invariant, the
-   * idempotence of the pass, and the metadata hygiene the licences depend on.
+   * Asserts the rewritten query, and with it the checks every case owes: valid SPARQL, the scope invariant,
+   * the idempotence of the pass, and the metadata hygiene the licences depend on.
    * @param expect - The assertion API of the running test
    * @param query - The query to rewrite, without its prefixes
    * @param expected - The query the rewrite has to generate
@@ -67,7 +68,7 @@ describe('pullUpExtends', () => {
     // leaves something unbound.
     const input = parseQuery(c, prefixes + query);
     const output = pullUpExtends(c, input);
-    expect(c.generator.generate(toAst(output)).trim()).toEqual(expected.trim());
+    expect(generateValidQuery(c, output).trim()).toEqual(expected.trim());
     const inputScope = scopeOf(parseQuery(c, prefixes + query));
     expect(scopeOf(output)).toEqual({
       ...inputScope,
@@ -75,7 +76,7 @@ describe('pullUpExtends', () => {
     });
     expect(holdsCachedMetadata(output)).toBe(false);
     // Idempotence: what the pass produced is a fixpoint of it.
-    expect(c.generator.generate(toAst(pullUpExtends(c, output))).trim()).toEqual(expected.trim());
+    expect(generateValidQuery(c, pullUpExtends(c, output)).trim()).toEqual(expected.trim());
   }
 
   /** Parses a query *without* quads, so that a GRAPH survives as an operation of its own. */
@@ -92,10 +93,11 @@ describe('pullUpExtends', () => {
    */
   function expectTransformGraphOperation(expect: typeof Expect, query: string, expected: string): void {
     const output = pullUpExtends(c, parseWithGraphOperation(query));
-    expect(c.generator.generate(toAst(output)).trim()).toEqual(expected.trim());
+    const generated = generateValidQuery(c, output).trim();
+    expect(generated).toEqual(expected.trim());
     expect(scopeOf(output)).toEqual(scopeOf(parseWithGraphOperation(query)));
     expect(holdsCachedMetadata(output)).toBe(false);
-    expect(c.generator.generate(toAst(pullUpExtends(c, output))).trim()).toEqual(expected.trim());
+    expect(generateValidQuery(c, pullUpExtends(c, output)).trim()).toEqual(expected.trim());
   }
 
   describe('congruent operations', () => {
@@ -435,9 +437,8 @@ ORDER BY ASC ( ?x )`,
         `SELECT ?n ?x WHERE {
   SELECT ?x ( COUNT( ?o ) AS ?n ) WHERE {
     ?s <ex://p> ?o .
-    BIND( <ex://a> AS ?x )
   }
-  GROUP BY ?x
+  GROUP BY ( <ex://a> AS ?x )
 }`,
       );
     });
@@ -455,17 +456,41 @@ ORDER BY ASC ( ?x )`,
       );
     });
 
-    it('rises past a sibling that has the variable in scope but never binds it', ({ expect }) => {
-      // (C1) is read on the ranges, so an all-UNDEF VALUES column is a legitimate hoist target.
+    it('stays when a sibling has the variable in scope but never binds it (C1)', ({ expect }) => {
+      // `BIND` requires `?x` out of scope, so an all-UNDEF VALUES column blocks the hoist.
       expectTransform(
         expect,
         'SELECT * WHERE { { ?s :p ?o BIND(:a AS ?x) } { VALUES ?x { UNDEF } ?a :q ?b } }',
-        `SELECT ?a ?b ?o ?s ( <ex://a> AS ?x ) WHERE {
-  ?s <ex://p> ?o .
+        `SELECT ?a ?b ?o ?s ?x WHERE {
+  {
+    ?s <ex://p> ?o .
+    BIND( <ex://a> AS ?x )
+  }
   VALUES ?x {
     UNDEF
   }
   ?a <ex://q> ?b .
+}`,
+      );
+    });
+
+    it('stays when a sibling has the variable in scope only under a !bound filter (C1)', ({ expect }) => {
+      // It has to stay: parsers reject a `BIND` on scope alone, not on whether `?x` can ever be bound.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o BIND(:a AS ?x) } { ?a :q ?b OPTIONAL { ?b :r ?x } FILTER(!bound(?x)) } }',
+        `SELECT ?a ?b ?o ?s ?x WHERE {
+  {
+    ?s <ex://p> ?o .
+    BIND( <ex://a> AS ?x )
+  }
+  {
+    ?a <ex://q> ?b .
+    OPTIONAL {
+      ?b <ex://r> ?x .
+    }
+    FILTER ( ! BOUND( ?x ) )
+  }
 }`,
       );
     });
@@ -732,6 +757,32 @@ ORDER BY ASC ( ?x )`,
       );
     });
 
+    it('stays on the left of an OPTIONAL whose right has the variable under a !bound filter', ({ expect }) => {
+      expectTransform(
+        expect,
+        `SELECT * WHERE { 
+          { ?s :p ?o BIND(:a AS ?x) }
+          OPTIONAL { ?a :q ?b { ?b :r ?c OPTIONAL { ?c :r ?x } FILTER(!bound(?x)) } }
+        }`,
+        `SELECT ?a ?b ?c ?o ?s ?x WHERE {
+  {
+    ?s <ex://p> ?o .
+    BIND( <ex://a> AS ?x )
+  }
+  OPTIONAL {
+    ?a <ex://q> ?b .
+    {
+      ?b <ex://r> ?c .
+      OPTIONAL {
+        ?c <ex://r> ?x .
+      }
+      FILTER ( ! BOUND( ?x ) )
+    }
+  }
+}`,
+      );
+    });
+
     it('rises out of the left of a MINUS', ({ expect }) => {
       expectTransform(
         expect,
@@ -758,6 +809,23 @@ ORDER BY ASC ( ?x )`,
   }
   MINUS {
     ?a <ex://q> ?x .
+  }
+}`,
+      );
+    });
+
+    it('rises out of the left of a MINUS whose right has the variable in scope but never binds it', ({ expect }) => {
+      // The right's scope does not reach above the MINUS, so only binding `?x` there blocks the hoist.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o BIND(:a AS ?x) } MINUS { VALUES ?x { UNDEF } ?a :q ?b } }',
+        `SELECT ?o ?s ( <ex://a> AS ?x ) WHERE {
+  ?s <ex://p> ?o .
+  MINUS {
+    VALUES ?x {
+      UNDEF
+    }
+    ?a <ex://q> ?b .
   }
 }`,
       );
@@ -896,6 +964,51 @@ ORDER BY ASC ( ?x )`,
       );
     });
 
+    it('leaves a bind in an EXISTS whose target a sibling binds to the solution of the EXISTS', ({ expect }) => {
+      // `COALESCE(?y)` gives the ?y of that solution, so ?t is bound on the left and the bind may not rise past it.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?x :p ?y FILTER EXISTS { { ?a :p ?b BIND(COALESCE(?y) AS ?t) } { ?c :q ?d BIND(:k AS ?t) } }
+        }`,
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      ?a <ex://p> ?b .
+      BIND( COALESCE( ?y ) AS ?t )
+    }
+    {
+      ?c <ex://q> ?d .
+      BIND( <ex://k> AS ?t )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('leaves a bind in an EXISTS of a variable the solution of the EXISTS binds', ({ expect }) => {
+      // The engine leaves that bind out, so ?y keeps the value of the solution, which `sameTerm(?z, ?z)` misses.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w BIND(?z AS ?y) FILTER(sameTerm(?y, ?z)) } }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      {
+        ?z <ex://q> ?w .
+        BIND( ?z AS ?y )
+      }
+      FILTER ( SAMETERM( ?y , ?z ) )
+    }
+  }
+  )
+}`,
+      );
+    });
+
     it('is a barrier at a FILTER whose EXISTS reads the variable', ({ expect }) => {
       // A term may not be written into a nested pattern: an unbound `?x` there is a variable matching
       // anything, where the term it would be replaced by matches one thing.
@@ -1009,7 +1122,7 @@ ORDER BY ASC ( ?x )`,
       const once = pullUpExtends(c, pushDownAssertions(c, parseQuery(c, query)));
       const twice = pullUpExtends(c, pushDownAssertions(c, once));
       const thrice = pullUpExtends(c, pushDownAssertions(c, twice));
-      const generated = (op: Algebra.Operation): string => c.generator.generate(toAst(op)).trim();
+      const generated = (op: Algebra.Operation): string => generateValidQuery(c, op).trim();
       expect(generated(twice)).toEqual(generated(once));
       expect(generated(thrice)).toEqual(generated(once));
     });

@@ -1,10 +1,8 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
-import { toAst } from '@traqula/algebra-sparql-1-2';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createQueryRewriter } from '../lib/queryRewriter.js';
 import { filterFalseTransformation, transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import {
   nullifyJoinOverIncompatibleBoundsTransformation,
@@ -16,6 +14,7 @@ import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import type { QueryTransformation } from '../lib/types.js';
 import { nonReificationTripleConstruct, rdfReificationConstruct } from './queryConsts.js';
+import { createValidatingQueryRewriter, generateValidQuery } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -49,7 +48,7 @@ describe('transformFilterFalse', () => {
   /** Asserts the rewritten query, and that running the pass again changes nothing. */
   function expectTransform(expect: typeof Expect, query: string, expected: string): void {
     const transformedOnce = transformFilterFalse(c, parseQuery(c, prefixes + query));
-    expect(c.generator.generate(toAst(transformedOnce)).trim()).toEqual(expected.trim());
+    expect(generateValidQuery(c, transformedOnce).trim()).toEqual(expected.trim());
     expect(transformFilterFalse(c, transformFilterFalse(c, parseQuery(c, prefixes + query)))).toEqual(transformedOnce);
   }
 
@@ -213,6 +212,40 @@ describe('transformFilterFalse', () => {
     });
   });
 
+  describe('an EXISTS over FILTER(FALSE)', () => {
+    it('becomes FALSE, emptying its filter', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s :p ?o FILTER EXISTS { ?s :q ?w FILTER(false) } }',
+        `SELECT ?o ?s WHERE {
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('becomes TRUE under a NOT', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s :p ?o FILTER NOT EXISTS { ?s :q ?w FILTER(false) } }',
+        `SELECT ?o ?s WHERE {
+  ?s <ex://p> ?o .
+  FILTER ( TRUE )
+}`,
+      );
+    });
+
+    it('becomes FALSE inside a larger condition, also over an empty sub-SELECT', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s :p ?o FILTER(?o = 1 || EXISTS { { SELECT ?s WHERE { ?s :q ?w FILTER(false) } } }) }',
+        `SELECT ?o ?s WHERE {
+  ?s <ex://p> ?o .
+  FILTER ( ( ( ?o = "1"^^<http://www.w3.org/2001/XMLSchema#integer> ) || FALSE ) )
+}`,
+      );
+    });
+  });
+
   describe('the projection of an empty sub-SELECT', () => {
     it('collapses into a fresh FILTER(FALSE), without bringing its hidden variables back', ({ expect }) => {
       // The sub-SELECT hides ?b, which is what makes the BIND beside it legal.
@@ -292,7 +325,7 @@ OFFSET 5`,
 
     // No unfolding: the pass is the whole pipeline, so every pattern is left as it was.
     async function rewriteWithFilterFalse(query: string): Promise<string> {
-      return createQueryRewriter([ filterFalseTransformation() ]).rewriteQuery(query);
+      return createValidatingQueryRewriter([ filterFalseTransformation() ]).rewriteQuery(query);
     }
 
     it('exposes the same variables and rows when a SELECT * loses an empty sub-SELECT', async({ expect }) => {
@@ -362,7 +395,7 @@ SELECT ?o ?source WHERE { << bkr:META_C0040300-INST bkr_sn:PART_OF ?o >> proveni
   ];
 
   async function rewriteWithPipeline(pipeline: readonly QueryTransformation[]): Promise<string> {
-    return createQueryRewriter(pipeline).rewriteQuery(query);
+    return createValidatingQueryRewriter(pipeline).rewriteQuery(query);
   }
 
   it('leaves no dead branch in the pushdown pipeline', async({ expect }) => {

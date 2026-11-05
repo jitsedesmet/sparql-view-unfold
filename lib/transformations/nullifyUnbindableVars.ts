@@ -1,9 +1,9 @@
-import { Algebra } from '@traqula/algebra-transformations-1-2';
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import { withCpVars } from '../utils/certainlyBoundVars.js';
-import { keepMetadata, mapOperationPreOrderKeepingMetadata } from '../utils/metadataKeepingTraversal.js';
+import { keepMetadata, mapPreOrderInExistenceScopes } from '../utils/metadataKeepingTraversal.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 
 /**
@@ -39,8 +39,7 @@ import { createFilterFalse } from '../utils/operationhelpers.js';
  * // After:  the GRAPH replaced by FILTER(false), since no graph is named by a literal.
  */
 export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  return mapOperationPreOrderKeepingMetadata(op, Object.fromEntries(Object.values(Algebra.Types)
-    .map(type => [ type, (copy: Algebra.Operation) => nullifyIfProvenEmpty(c, copy) ])));
+  return mapPreOrderInExistenceScopes(c, op, () => ({}), context => copy => nullifyIfProvenEmpty(context, copy));
 }
 
 /**
@@ -52,7 +51,7 @@ export function nullifyUnbindableVars<T extends Algebra.Operation>(c: Transforma
  * an operation without solutions being able to contribute any
  */
 function nullifyIfProvenEmpty(c: TransformationContext, op: Algebra.Operation): PreOrderMappingReturn {
-  const { cVars, vRanges } = withCpVars(op).metadata;
+  const { cVars, vRanges } = withCpVars(c, op).metadata;
   for (const name of cVars) {
     if (vRanges.neverBinds(name)) {
       return { ...keepMetadata, newValue: createFilterFalse(c, op), continue: false };

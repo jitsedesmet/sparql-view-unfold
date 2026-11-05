@@ -3,6 +3,7 @@ import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { Access } from './assertions.js';
 import { componentOf } from './assertions.js';
+import type { RangeContext } from './certainlyBoundVars.js';
 import { cpMetaOf } from './certainlyBoundVars.js';
 import { asksBoundOfVariable, constructedTermOf, containsExistenceExpression } from './expressionHelpers.js';
 import { substituteInExpression } from './partialExpressionEvaluation.js';
@@ -33,14 +34,15 @@ export interface BindConstruction {
 
 /**
  * Reads what a reader of an EXTEND's variable needs to know of it.
+ * @param c - The context whose `expressionRange` decides whether the construction can fail
  * @param extend - The EXTEND to read
  * @returns its construction
  */
-export function bindConstructionOf(extend: Algebra.Extend): BindConstruction {
+export function bindConstructionOf(c: RangeContext, extend: Algebra.Extend): BindConstruction {
   return {
     variable: extend.variable,
     constructedTerm: constructedTermOf(extend.expression),
-    bindsCertainly: cpMetaOf(extend).cVars.has(extend.variable.value),
+    bindsCertainly: cpMetaOf(c, extend).cVars.has(extend.variable.value),
   };
 }
 

@@ -3,26 +3,26 @@ import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import type { AssertionFilter } from '../utils/assertionConjunction.js';
+import type { AssertionFilter, EquatedGroup } from '../utils/assertionConjunction.js';
 import {
   AssertionConjunction,
   collectAssertions,
   isAssertionFilter,
+  termTypesOfReadings,
 } from '../utils/assertionConjunction.js';
 import type { Access, AssertionConjunct, Assertions } from '../utils/assertions.js';
 import {
   accessId,
   asTransferSource,
-  assertBound,
   assertStrong,
   assertTermType,
   compareAccesses,
+  entailedByReading,
   variablesReadByConjunct,
   hasTarget,
   impliesBound,
   targetIsAccess,
   isAssertableTerm,
-  isBareAccess,
   substituteInPattern,
   substituteInTerm,
   variablesOfTransferSource,
@@ -30,8 +30,14 @@ import {
 } from '../utils/assertions.js';
 import { cpMetaOf } from '../utils/certainlyBoundVars.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
-import { keep, keepMetadata, mapOperationPreOrderKeepingMetadata } from '../utils/metadataKeepingTraversal.js';
-import { createFilterFalse, groupingKeysOf, rebuildMinus, rebuildOverInput } from '../utils/operationhelpers.js';
+import { keep, keepMetadata, mapPreOrderInExistenceScopes } from '../utils/metadataKeepingTraversal.js';
+import {
+  canMatchZeroLength,
+  createFilterFalse,
+  groupingKeysOf,
+  rebuildMinus,
+  rebuildOverInput,
+} from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import {
   everyOperandBindsCertainly,
@@ -40,15 +46,17 @@ import {
 } from '../utils/pushdownLicences.js';
 import { unionSets } from '../utils/setUtils.js';
 import type { DerivedVarNamer } from '../utils.js';
-import { collectVariableNames, derivedVarNamer } from '../utils.js';
+import { derivedVarNamer, markVariableNamesUsed } from '../utils.js';
 
 /**
  * @fileoverview Assertion filter pushdown.
  *
  * An earlier rewriting stage produces queries carrying *assertion filters*: `FILTER(sameTerm(?x, :p))`
- * fixing one variable to one term, and `FILTER(sameTerm(?x, ?y))` unifying two. Left where they are, they
- * only discard rows at the end; pushed down, they substitute into BGPs, prune VALUES rows and columns,
- * delete UNION branches, and can turn an OPTIONAL into a plain join.
+ * fixing one variable to one term, `FILTER(sameTerm(?x, ?y))` unifying two, and `FILTER(isIRI(?x) ||
+ * isBLANK(?x))` confining one to some kinds of term - the test a mapping writes for a head variable its body
+ * could bind to a term its position cannot hold. Left where they are, they only discard rows at the end;
+ * pushed down, they substitute into BGPs, prune VALUES rows and columns, delete UNION branches, and can turn
+ * an OPTIONAL into a plain join.
  *
  * Rule names in parentheses refer to Figure 2 of Schmidt et al., "Foundations of SPARQL Query
  * Optimization" (https://dl.acm.org/doi/pdf/10.1145/1804669.1804675). Writing A⟨?x ≡ c⟩ for
@@ -64,7 +72,9 @@ import { collectVariableNames, derivedVarNamer } from '../utils.js';
  * and splitting one means splitting its *edges*, never its variables ({@link splitClique}): a clique is
  * transitively closed, so what a rule pushes down plus what it keeps has to span it again. There is no
  * sound weak form of a clique, so a rule that cannot take a whole edge sends down what the edge *entails*
- * instead - every member is bound - which is what collapses an OPTIONAL over a right-only variable.
+ * instead - every member is bound - which is what collapses an OPTIONAL over a right-only variable. The
+ * term types of a clique are entailed of every member alike, so each piece takes them of the members it
+ * holds, and they are restated above only where no piece enforces them.
  *
  * ## What a triple term adds
  *
@@ -119,11 +129,12 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: Transformatio
   // rewritten (D4). Both halves of that matter: a materialised position has to get the same name
   // wherever it is written, and a name coined against a part of the tree would collide with a variable
   // in the part that has not been met yet - which is also why this takes the root, see above.
-  const namer = derivedVarNamer(collectVariableNames(c.astTransformer, rootOp));
-  // `keepMetadata` is how a filter hands its conjunction to the next `pushFilter`.
-  return mapOperationPreOrderKeepingMetadata(rootOp, {
-    [Algebra.Types.FILTER]: (filter: Algebra.Filter) => pushFilter(c, namer, filter),
-  });
+  const namer = derivedVarNamer(markVariableNamesUsed(c, rootOp));
+  // Metadata is cleared around the pass, not inside it: `keepMetadata` is how a filter hands its conjunction to the
+  // next `pushFilter`.
+  return mapPreOrderInExistenceScopes(c, rootOp, context => ({
+    [Algebra.Types.FILTER]: (filter: Algebra.Filter) => pushFilter(context, namer, filter),
+  }));
 }
 
 /**
@@ -165,9 +176,18 @@ function pushAssertions(
   assertions: AssertionConjunction,
   op: Algebra.Operation,
 ): PreOrderMappingReturn {
-  const normalised = assertions.normalisedFor(cpMetaOf(op));
+  const normalised = assertions.normalisedFor(cpMetaOf(c, op));
   if (normalised === undefined) {
     return empty(c, op);
+  }
+  // A conjunct on a variable of the outer solution of an EXISTS stays here: below, a rule could write a term for it, or
+  // carry it past a sub-SELECT that does not project it.
+  const scope = c.existenceScope?.vRanges;
+  if (scope !== undefined) {
+    const { inside, outside } = normalised.split(name => !scope.has(name));
+    if (outside.size > 0) {
+      return keep(assertionFilter(c, assertionFilter(c, op, inside), outside));
+    }
   }
   if (normalised.size === 0) {
     return keep(op);
@@ -198,15 +218,29 @@ function swapWith(
   const { AF } = c;
   switch (op.type) {
     // A BGP and a path bind all of their variables, so normalisation has made every assertion reaching
-    // them strong, and a clique is substituted to its representative. Every leaf is handed the *same*
-    // conjunction; what differs is what each can pay off with the rewrite it makes, and so what has to
-    // be restated over it. A pattern settles what a pattern can state - a term, an equality, a shape -
+    // them strong, and a clique is substituted to its representative. A path that can match zero steps
+    // between two variables takes no term at its ends: from a fixed term, that match yields the term even
+    // where the graph lacks it, where from a variable it ranges over the nodes of the graph. Every leaf is
+    // handed the *same* conjunction; what differs is what each can pay off with the rewrite it makes, and
+    // so what has to be restated over it. A pattern settles what a pattern can state - a term, an equality, a shape -
     // and no more, `isIRI(?x)` staying; a VALUES row settles everything at once ({@link pruneValues}).
     case Algebra.Types.BGP: {
       return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPatterns(c, op, substitution)));
     }
     case Algebra.Types.PATH: {
-      return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPath(c, op, substitution)));
+      // Paths containing only vars are completely grounded in D and should remain so.
+      const { subject, object } = op;
+      const variableOnlyNames =
+        [ subject, object ].every(x => x.termType === 'Variable') && canMatchZeroLength(op.predicate) ?
+          new Set([ subject.value, object.value ]) :
+          undefined;
+      return keep(rewritePattern(
+        c,
+        assertions,
+        namer,
+        substitution => substituteIntoPath(c, op, substitution),
+        variableOnlyNames,
+      ));
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
@@ -225,7 +259,7 @@ function swapWith(
     }
     case Algebra.Types.FILTER: {
       // The conjunction we manage absorbs the assertions of the filter we pass (SDecompI),
-      const collected = collectAssertions(c, op.expression, assertions, cpMetaOf(op.input).cVars);
+      const collected = collectAssertions(c, op.expression, assertions, cpMetaOf(c, op.input).cVars);
       if (collected === undefined) {
         return empty(c, op);
       }
@@ -331,7 +365,8 @@ function substituteIntoPatterns(
  *
  * Unlike a BGP a path may legitimately have a literal in its subject slot (`?lit ^:p ?s`), so only the
  * graph position is checked. Paths are not duplicate-free, but substituting only restricts the set of
- * start nodes and leaves the witness count of every surviving pair untouched.
+ * start nodes and leaves the witness count of every surviving pair untouched - provided no term is written
+ * into the variable ends of a path that can match zero steps ({@link swapWith}).
  * @param c - The transformation context
  * @param path - The path to substitute into
  * @param assertions - The substitution to write in
@@ -352,15 +387,16 @@ function substituteIntoPath(c: TransformationContext, path: Algebra.Path, assert
  * took out of it, and a condition for what a pattern cannot state.
  *
  * The three come from one call ({@link AssertionConjunction.intoPattern}) because they are one decision;
- * `substituteInto` is the only thing a BGP and a property path differ in. The condition goes on the
- * pattern, below the re-binding, and is written against the values the pattern holds rather than against
- * the accesses Θ reads them by: `isIRI(OBJECT(?o))` becomes `isIRI(?o_o)`, a condition over a variable
- * the pattern binds and one an engine can push into the scan.
+ * `substituteInto` and `variableOnlyNames` are the only things a BGP and a property path differ in. The
+ * condition goes on the pattern, below the re-binding, and is written against the values the pattern holds
+ * rather than against the accesses Θ reads them by: `isIRI(OBJECT(?o))` becomes `isIRI(?o_o)`, a condition
+ * over a variable the pattern binds and one an engine can push into the scan.
  * @param c - The transformation context
  * @param assertions - The conjunction to write into the pattern
  * @param namer - Coins the variables a materialised shape needs
  * @param substituteInto - Writes the substitution into the pattern, checking the positions its own kind of
  * pattern can hold
+ * @param variableOnlyNames - The variables the pattern may only have a variable written in for
  * @returns the rewritten pattern, its condition and its re-bindings
  */
 function rewritePattern(
@@ -368,8 +404,9 @@ function rewritePattern(
   assertions: AssertionConjunction,
   namer: DerivedVarNamer,
   substituteInto: (substitution: Assertions) => Algebra.Operation,
+  variableOnlyNames?: ReadonlySet<string>,
 ): Algebra.Operation {
-  const { substitution, residual, asWritten } = assertions.intoPattern(namer);
+  const { substitution, residual, asWritten } = assertions.intoPattern(namer, variableOnlyNames);
   const pattern = substituteInto(substitution);
   // Read against what the pattern now binds, which is what decides `sameTerm(?x, ?x)` for it. Placing the
   // condition below the re-binding rather than above needs no check: a name the substitution re-binds
@@ -377,7 +414,7 @@ function rewritePattern(
   // for it. So it reads what the pattern itself binds, and belongs as deep as that goes.
   const condition = residual.size === 0 ?
     undefined :
-    substituteInExpression(c, residual.toExpression(c), asWritten, cpMetaOf(pattern).cVars);
+    substituteInExpression(c, residual.toExpression(c), asWritten, cpMetaOf(c, pattern).cVars);
   // A conjunct the values decide - `bound(?x)` of a variable the pattern writes, say - leaves nothing to
   // ask. `false` is not the mirror of this and keeps its filter: that is the empty operation, which
   // {@link transformFilterFalse} normalises away afterwards.
@@ -519,23 +556,9 @@ function rowSatisfies(
 }
 
 /**
- * Pushes the assertions through an EXTEND (BIND).
- *
- * Asserting the variable the BIND targets is the interesting case:
- * `σ_{?x=c}(Extend(A,?x,e)) == Extend(σ_{sameTerm(e,c)}(A), ?x, c)`. Whenever `e` is something
- * Θ can *name* ({@link asTransferSource}), everything the conjunction says about `?x`
- * {@link AssertionConjunction.transferred | transfers} onto it below, which is one rule covering every
- * combination of what `?x` had to equal with what now carries it:
- *
- * - `BIND(?z AS ?t)` under A⟨?t ≡ c⟩ leaves A⟨?z ≡ c⟩ below, so a renaming propagates an assertion;
- * - `BIND(?z AS ?t)` under A⟨?t ≡ ?y⟩ propagates a unification, which may then reach a BGP;
- * - `BIND(:c AS ?t)` under A⟨?t ≡ ?y⟩ pins a clique the assertions had found no term for;
- * - `BIND(SUBJECT(?o) AS ?t)` leaves what was said about `?t` on the *access* below, giving `?o` a shape;
- * - `BIND(<<( ?a ?b ?c )>> AS ?t)` under a shape on `?t` is that shape taken apart, so `sameTerm(SUBJECT(
- *   ?t), :a)` reaches the pattern binding `?a` as `sameTerm(?a, :a)`.
- *
- * Only the forms that imply `bound(?x)` do any of that: W⟨?x ≡ c⟩ is also satisfied by the solutions where
- * `e` errored and left `?x` unbound, so it says nothing about `e`, and neither does U⟨?x⟩.
+ * Pushes the assertions through an EXTEND (BIND). Where Θ implies `bound(?x)` for `BIND(e AS ?x)` and can name `e`
+ * ({@link asTransferSource}), what it says about `?x` {@link AssertionConjunction.transferred | transfers} onto `e`
+ * below.
  * @param c - The transformation context
  * @param extend - The EXTEND the filter sits on
  * @param assertions - The conjunction to place
@@ -551,12 +574,7 @@ function pushIntoExtend(
   const expression = extend.expression;
   const assertionOfTarget = assertions.get(target);
   // The expression is evaluated over the input of the EXTEND, wherever this rewrite ends up putting it.
-  const { cVars } = cpMetaOf(extend.input);
-  // SPARQL spec keeps BINDing an in-scope variable explicitly undefined. We assume it errors,
-  // so in `bind(e AS ?x)` ?x is not bound below the EXTEND. It has to leave Θ before descending,
-  // or the (FBndII) check at the top of the swap wrongly yields empty.
-  const { inside: notAboutTarget, outside: aboutTarget } = assertions.split(name => name !== target);
-
+  const { cVars } = cpMetaOf(c, extend.input);
   // A BIND of something Θ can name carries below the EXTEND whatever the target carries above it, so Θ
   // transfers onto it. A source *reading the target* is not one of them: `BIND(?x AS ?x)` binds nothing,
   // the target being unbound below itself, and a construction mentioning it reads a variable that is
@@ -582,6 +600,11 @@ function pushIntoExtend(
       substituteInExpression(c, expression, below.expressionSubstitution(), cVars),
     ));
   }
+
+  // SPARQL spec keeps BINDing an in-scope variable explicitly undefined. We assume it errors,
+  // so in `bind(e AS ?x)` ?x is not bound below the EXTEND. It has to leave Θ before descending,
+  // or the (FBndII) check at the top of the swap wrongly yields empty.
+  const { inside: notAboutTarget, outside: aboutTarget } = assertions.split(name => name !== target);
 
   if (assertionOfTarget?.subType === 'strong' && !targetIsAccess(assertionOfTarget.term) &&
     isAssertableTerm(assertionOfTarget.term)) {
@@ -655,7 +678,7 @@ function pushIntoGraph(
     // the second falls through to the general path below rather than being treated as an emptiness.
     assertedGraphName.term.termType === 'NamedNode') {
     // Read before the rewrite, which preserves the scope exactly and never shrinks `cVars`.
-    const { cVars, vRanges } = cpMetaOf(graph.input);
+    const { cVars, vRanges } = cpMetaOf(c, graph.input);
     // `?g` travels on into the pattern, in the *weak* form: `P` need not bind it at all, and the join
     // with `{?g ↦ c}` is what would have dropped the solutions binding it to anything else.
     const graphIndependentAssertions = assertions.split(name => name !== graphVar).inside;
@@ -713,20 +736,15 @@ function pushIntoGraph(
   }]);
   return keep(assertionFilter(
     c,
-    AF.createGraph(assertionFilter(c, graph.input, AssertionConjunction.of(placed.intoTarget[0])), graphName),
-    AssertionConjunction.of(placed.kept),
+    AF.createGraph(assertionFilter(c, graph.input, AssertionConjunction.of(c, placed.intoTarget[0])), graphName),
+    AssertionConjunction.of(c, placed.kept),
   ));
 }
 
 /**
- * Pushes the assertions into the operands of a JOIN their licence holds for (FJPush).
- *
- * The licence is per variable: `L(?x, A_i) := ?x in cVars(A_i) or no other operand ever binds ?x`. Under it
- * the value `?x` takes in a merged mapping is the one `A_i` gave it, so a condition over licensed variables
- * evaluates the same on the operand as on the join - and an assertion goes into *every* operand it is
- * licensed for, which is sideways information passing rather than a push. What no operand is licensed for
- * is demoted rather than left behind, `σ_W(A1 join A2) == σ_W(A1) join σ_W(A2)` holding
- * unconditionally; B⟨?x⟩ has no such form and stays on top when unlicensed.
+ * Pushes the assertions into the operands of a JOIN their licence holds for (FJPush): an operand is licensed for `?x`
+ * where it certainly binds `?x` or no other operand can. Any other operand that may bind `?x` takes the weakened
+ * form, and what has no weak form stays on top.
  * @param c - The transformation context
  * @param join - The JOIN the filter sits on
  * @param assertions - The conjunction to place
@@ -746,7 +764,7 @@ function pushIntoJoin(
 
   // Read before any rewriting: every rewrite preserves pVars and never shrinks cVars, so these licences
   // stay valid while the operands are rewritten.
-  const operands = join.input.map(operand => cpMetaOf(operand));
+  const operands = join.input.map(operand => cpMetaOf(c, operand));
   // An operand takes what it certainly binds, or what nothing else can bind; it takes the weakened form
   // of anything else it can bind, which the join consumes; and it *connects* what it takes, join
   // compatibility being what enforces an equality between two accesses it binds on the output.
@@ -760,8 +778,8 @@ function pushIntoJoin(
   return keep(assertionFilter(
     c,
     c.AF.createJoin(join.input.map((operand, index) =>
-      assertionFilter(c, operand, AssertionConjunction.of(placed.intoTarget[index]))), false),
-    AssertionConjunction.of(placed.kept),
+      assertionFilter(c, operand, AssertionConjunction.of(c, placed.intoTarget[index]))), false),
+    AssertionConjunction.of(c, placed.kept),
   ));
 }
 
@@ -820,7 +838,7 @@ function pushIntoLeftJoin(
 ): PreOrderMappingReturn {
   const { AF } = c;
   const [ left, right ] = leftJoin.input;
-  const leftVars = cpMetaOf(left);
+  const leftVars = cpMetaOf(c, left);
 
   // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
   const innerJoin = innerJoinUnderRejectingFilter(c, leftJoin, assertions.boundImpliedBy(), leftVars);
@@ -828,7 +846,7 @@ function pushIntoLeftJoin(
     return { ...keepMetadata, newValue: assertionFilter(c, innerJoin, assertions), reTransform: true };
   }
 
-  const rightVars = cpMetaOf(right);
+  const rightVars = cpMetaOf(c, right);
   const operands = [ leftVars, rightVars ];
   // (FLPush) on the left, and `?x ∈ cVars(A₁) ∩ cVars(A₂)` on the right - which implies the left's
   // licence, so the replication only ever happens beside a push the LHS already took.
@@ -854,7 +872,7 @@ function pushIntoLeftJoin(
   const [ intoLeft, intoRight ] = placed.intoTarget;
   const kept = placed.kept;
 
-  const leftAssertions = AssertionConjunction.of(intoLeft);
+  const leftAssertions = AssertionConjunction.of(c, intoLeft);
   // Every candidate μ₁ binds the variables strongly asserted in intoLeft to their term once those are
   // pushed into A₁, so substituting them into the left join condition is sound.
   // The condition is only ever evaluated on a merged `μ₁ ∪ μ₂` - the anti-join half keeps a `μ₁` exactly
@@ -872,10 +890,10 @@ function pushIntoLeftJoin(
     c,
     AF.createLeftJoin(
       assertionFilter(c, left, leftAssertions),
-      assertionFilter(c, right, AssertionConjunction.of(intoRight)),
+      assertionFilter(c, right, AssertionConjunction.of(c, intoRight)),
       expression,
     ),
-    AssertionConjunction.of(kept),
+    AssertionConjunction.of(c, kept),
   ));
 }
 
@@ -906,13 +924,9 @@ interface PushTarget {
 }
 
 /**
- * Places a conjunction over the targets of an operation: each takes what it is licensed for, the weakened
- * form of what it is not, and the readings of a group it is licensed for.
- *
- * One routine for the join, the left join and the GRAPH, whose licences - (FJPush), (FLPush) and the join
- * with `{?g -> u_i}` of section 18.5 - are stated where their targets are built. A conjunct is discharged
- * rather than restated above in the two ways the identities give: one implying `bound(?x)` by a target that
- * took it *and* connects it, and a weak or unbound one by every target that may bind `?x` having taken it.
+ * Places a conjunction over the targets of a join, left join or GRAPH: each takes what it is licensed for, and the
+ * weakened form of what it may only bind. A group is split by its edges ({@link splitClique}), its term types going
+ * to every reading.
  * @param assertions - The conjunction to place
  * @param targets - The places it can go
  * @returns the conjuncts per target, and what has to be restated above the operation
@@ -923,50 +937,90 @@ function placeOverTargets(assertions: AssertionConjunction, targets: PushTarget[
 } {
   const intoTarget: AssertionConjunct[][] = targets.map(() => []);
   const kept: AssertionConjunct[] = [];
-  for (const conjunct of assertions.unaryConjuncts()) {
-    const [ name ] = variablesReadByConjunct(conjunct);
-    const impliesItIsBound = impliesBound(conjunct.assertion);
-    const weakened = asWeakenedConjunct(conjunct);
-    let enforced = false;
-    let toldEveryBinder = true;
-    for (const [ index, target ] of targets.entries()) {
-      if (impliesItIsBound && target.licensed(name)) {
-        intoTarget[index].push(conjunct);
-        enforced ||= target.connects;
-      } else if (weakened !== undefined && target.admitsWeakened(name)) {
-        intoTarget[index].push(weakened);
-      } else {
-        toldEveryBinder &&= !target.mayBind(name);
-      }
-    }
-    if (!(impliesItIsBound ? enforced : toldEveryBinder)) {
+  const { unaryConjuncts, equatedGroups } = assertions.unaryConjunctsAndEquatedGroups();
+  for (const conjunct of unaryConjuncts) {
+    if (placeConjunct(conjunct, targets, intoTarget)) {
       kept.push(conjunct);
     }
   }
-  for (const readings of assertions.equatedReadings()) {
-    const placed = splitClique(
-      readings,
-      targets.map(target => readings.filter(reading => target.licensed(reading.name))),
-      targets.map(target => target.connects),
-    );
+  for (const group of equatedGroups) {
+    const licensedPerTarget = targets.map(target => group.readings.filter(reading => target.licensed(reading.name)));
+    const placed = splitClique(group.readings, licensedPerTarget, targets.map(target => target.connects));
     for (const [ index, pushed ] of placed.intoTarget.entries()) {
       intoTarget[index].push(...pushed);
     }
-    kept.push(...placed.kept);
+    kept.push(...placed.kept, ...placeTermTypesOfGroup(group, licensedPerTarget, targets, intoTarget));
   }
   return { intoTarget, kept };
 }
 
 /**
- * Places one {@link AssertionConjunction.equatedReadings | group} over the targets of a join-like
- * operation: each takes the readings it licenses, and the edges connecting what no single target covered
- * stay on top.
- *
- * Splitting *edges* rather than readings is the point. For `w ≡ x ≡ y ≡ z` over a join with `cVars(LHS)`
- * holding `{w,x}` and `cVars(RHS)` holding `{y,z}` no operand is licensed for the whole group, yet each
- * takes half of it and one edge between the halves puts it back together. Two targets that *share* a
- * reading need no such edge, which is what `connects` records: a reading both are licensed for goes through
- * a variable certainly bound in both, so join compatibility already enforces the equality.
+ * Places the term types of a group over the targets of an operation: strongly on one licensed reading per target,
+ * whose edges carry them to the rest, and weakly on each reading a target may bind unlicensed.
+ * @param group - The group to place the term types of
+ * @param licensedPerTarget - Per target, the readings it is licensed for
+ * @param targets - The places they can go
+ * @param intoTarget - The conjuncts per target, which this adds to
+ * @returns the term types of the representative, unless a connecting target already enforces them
+ */
+function placeTermTypesOfGroup(
+  group: EquatedGroup,
+  licensedPerTarget: readonly Access[][],
+  targets: PushTarget[],
+  intoTarget: AssertionConjunct[][],
+): AssertionConjunct[] {
+  if (group.range === undefined) {
+    return [];
+  }
+  const strongly = assertTermType(group.range);
+  const weakly = assertTermType(group.range, false);
+  let enforced = false;
+  for (const [ index, target ] of targets.entries()) {
+    const [ licensed ] = licensedPerTarget[index];
+    if (licensed !== undefined) {
+      intoTarget[index].push({ access: licensed, assertion: strongly });
+      enforced ||= target.connects;
+    }
+    for (const reading of group.readings) {
+      if (!target.licensed(reading.name) && target.admitsWeakened(reading.name)) {
+        intoTarget[index].push({ access: reading, assertion: weakly });
+      }
+    }
+  }
+  return enforced ? [] : [{ access: group.readings[0], assertion: strongly }];
+}
+
+/**
+ * Places one conjunct about a single access over the targets of an operation. One implying `bound(?x)` is discharged
+ * by a connecting target taking it, any other by every target that may bind `?x` taking it.
+ * @param conjunct - The conjunct to place
+ * @param targets - The places it can go
+ * @param intoTarget - The conjuncts per target, which this adds to
+ * @returns whether it still has to be stated above the operation
+ */
+function placeConjunct(conjunct: AssertionConjunct, targets: PushTarget[], intoTarget: AssertionConjunct[][]): boolean {
+  const [ name ] = variablesReadByConjunct(conjunct);
+  const impliesItIsBound = impliesBound(conjunct.assertion);
+  const weakened = asWeakenedConjunct(conjunct);
+  let enforced = false;
+  let toldEveryBinder = true;
+  for (const [ index, target ] of targets.entries()) {
+    if (impliesItIsBound && target.licensed(name)) {
+      intoTarget[index].push(conjunct);
+      enforced ||= target.connects;
+    } else if (weakened !== undefined && target.admitsWeakened(name)) {
+      intoTarget[index].push(weakened);
+    } else {
+      toldEveryBinder &&= !target.mayBind(name);
+    }
+  }
+  return !(impliesItIsBound ? enforced : toldEveryBinder);
+}
+
+/**
+ * Places one {@link AssertionConjunction.equatedGroups | group} over the targets of a join-like operation, splitting
+ * its edges rather than its readings: each target takes the edges between the readings it is licensed for. The edges
+ * joining what the targets leave apart stay on top.
  * @param readings - The ways of reading the group, its representative first
  * @param licensedPer - Per target, the readings it is licensed for
  * @param connects - Per target, whether it enforces the equalities its sub-group states on the output
@@ -979,7 +1033,8 @@ function splitClique(readings: readonly Access[], licensedPer: Access[][], conne
   const edgesPerBranch = licensedPer.map(licensed => cliqueStar(licensed));
   const intoTarget: AssertionConjunct[][] = licensedPer.map((licensed, index) => edgesPerBranch[index].length > 0 ?
     edgesPerBranch[index].map(([ representative, hub ]) => unification(representative, hub)) :
-    // Means licensed.size is 0 or 1
+    // Licensed for one reading at most, a target learns what taking it entails, the equality it was part of
+    // being unable to travel (S6).
     licensed.map(reading => entailedByReading(reading)));
 
   // Union-find over the readings, joined by every sub-group that both went somewhere and holds above.
@@ -1037,39 +1092,18 @@ function unification(reading: Access, representative: Access): AssertionConjunct
 }
 
 /**
- * What a target licensed for a single reading of a group still learns from it: everything that *taking that
- * reading* entails, which is all that is left when the equality it was part of cannot travel (S6).
- * @param reading - The single reading the target is licensed for
- * @returns B⟨?x⟩ for a variable, and for a position that what it is read through is a triple term
- */
-function entailedByReading(reading: Access): AssertionConjunct {
-  return isBareAccess(reading) ?
-      { access: reading, assertion: assertBound() } :
-      { access: readThrough(reading), assertion: assertTermType('Quad') };
-}
-
-/**
- * The access one position short of this one - what it is read through, which it proves a triple term.
- * @param reading - The reading to shorten
- * @returns the shorter access
- */
-function readThrough(reading: Access): Access {
-  return { name: reading.name, positions: reading.positions.slice(0, -1) };
-}
-
-/**
- * The assertions of Θ that may enter the right hand side of a MINUS: the ones about a single variable
- * that Θ holds *strongly*, weakened.
- *
- * A surviving mapping of the LHS binds `?x` to a value, so an RHS mapping can only remove it by not binding
- * `?x` or binding it to that same value - which is why a shape and a term type travel here as readily as a
- * term does. The argument needs the LHS to *have* `?x` bound, which is exactly what the weak form does not
- * give, hence {@link impliesBound} rather than "says something about a value".
+ * The assertions of Θ that may enter the right-hand side of a MINUS: the weakened forms of what it holds strongly about
+ * a single access, a group's term types included for each of its readings. Only strong ones qualify, the argument
+ * needing every surviving left-hand mapping to bind `?x`.
  * @param assertions - The conjunction to filter
  * @returns what may be asserted on the right hand side
  */
 function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjunction {
-  return AssertionConjunction.of(assertions.unaryConjuncts()
+  const { unaryConjuncts, equatedGroups } = assertions.unaryConjunctsAndEquatedGroups();
+  return AssertionConjunction.of(assertions, [
+    ...unaryConjuncts,
+    ...equatedGroups.flatMap(group => termTypesOfReadings(group)),
+  ]
     .filter(({ assertion }) => impliesBound(assertion))
     .map(conjunct => asWeakenedConjunct(conjunct))
     .filter(conjunct => conjunct !== undefined));

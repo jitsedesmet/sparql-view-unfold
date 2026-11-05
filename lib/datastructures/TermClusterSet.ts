@@ -1,5 +1,5 @@
 import type * as RDF from '@rdfjs/types';
-import { objectRange, RangeSet, rangeOfPosition, tripleTermRange } from '../RangeSet.js';
+import { objectRange, RangeSet, tripleTermRange } from '../RangeSet.js';
 import { ClusterSet } from './ClusterSet.js';
 
 /** The position a triple term holds one of its three components in. */
@@ -80,9 +80,9 @@ export function meetShapes<Term>(left: TriplePin, right: TriplePin): PinMeet<Ter
  * pin may hold, hence the second type parameter, and in what meeting two pins comes to, hence
  * {@link meetPins}.
  *
- * **Ranges** live here rather than only in the solver, since the same question is asked on both sides: a
- * group in a subject position holds no Literal and no triple term, which is what confines the nesting of
- * shapes to the `object` chain.
+ * **Ranges** live here rather than only in the solver, since the same question is asked on both sides: in
+ * RDF, a group in a subject position of a triple term holds no Literal and no triple term, which is what
+ * confines the nesting of shapes to the `object` chain.
  *
  * A pin makes the child DAG a real graph, and two invariants keep it well founded:
  *
@@ -96,7 +96,7 @@ export function meetShapes<Term>(left: TriplePin, right: TriplePin): PinMeet<Ter
 export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> extends ClusterSet<T> {
   /** Maps group ID to what the group is pinned to (if anything) - read through {@link pinOf}. */
   protected groupToPin: Record<number, Pin<Term> | undefined>;
-  /** Maps group ID to the term types its value may have - read through {@link rangeOf}. */
+  /** Maps group ID to the term types its value may have - read through {@link storedRangeOf}. */
   protected groupToRange: Record<number, RangeSet>;
   /**
    * A history of oldGroups (keys) that got merged into newGroups (values).
@@ -129,10 +129,12 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    * @param toId - How to transform a value into its string key
    * @param meetPins - Meets the two pins a group is asked to carry at once, reporting `false` when no value
    * satisfies both
+   * @param positionRange - The term types a position of a triple term admits
    */
   public constructor(
     toId: (value: T) => string,
     protected readonly meetPins: (a: Pin<Term>, b: Pin<Term>) => PinMeet<Term> | false,
+    protected readonly positionRange: (position: TriplePosition) => RangeSet,
   ) {
     super(toId);
     this.clear();
@@ -148,7 +150,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   }
 
   public override clone(): TermClusterSet<T, Term> {
-    const copy = new TermClusterSet<T, Term>(this.toId, this.meetPins);
+    const copy = new TermClusterSet<T, Term>(this.toId, this.meetPins, this.positionRange);
     this.copyInto(copy);
     return copy;
   }
@@ -220,6 +222,16 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    * @returns its range, the top of the lattice when nothing narrowed it
    */
   public rangeOf(group: number): RangeSet {
+    return this.storedRangeOf(group);
+  }
+
+  /**
+   * The range this class stores for a group, which subclasses may meet with ranges they keep apart in {@link rangeOf}.
+   * Writes build on this rather than on {@link rangeOf}, so those ranges never leak into the stored one.
+   * @param group - The group to look up
+   * @returns its stored range, the top of the lattice when nothing narrowed it
+   */
+  protected storedRangeOf(group: number): RangeSet {
     return this.groupToRange[this.resolveGroup(group)] ?? objectRange;
   }
 
@@ -277,9 +289,30 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   public narrowRange(group: number, range: RangeSet): boolean {
     this.touch();
     const resolved = this.resolveGroup(group);
-    const narrowed = this.rangeOf(resolved).meet(range);
-    this.groupToRange[resolved] = narrowed;
-    return narrowed.size > 0 && this.rangeAdmits(resolved, this.groupToPin[resolved]);
+    this.groupToRange[resolved] = this.storedRangeOf(resolved).meet(range);
+    return this.admitsRange(resolved);
+  }
+
+  /**
+   * Whether a group can still hold a value of one of these term types, its pin included.
+   * @param group - The group to check
+   * @param range - The term types to admit
+   * @returns whether something is left for it to be
+   */
+  public admitsRange(group: number, range: RangeSet = objectRange): boolean {
+    const resolved = this.resolveGroup(group);
+    const groupRange = this.rangeOf(resolved);
+    const pin = this.groupToPin[resolved];
+    if (pin === undefined) {
+      for (const termType of range) {
+        if (groupRange.has(termType)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    const pinnedTermType = pin.kind === 'term' ? pin.term.termType : 'Quad';
+    return groupRange.has(pinnedTermType) && range.has(pinnedTermType);
   }
 
   /**
@@ -404,19 +437,6 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   }
 
   /**
-   * Whether the pin - if there is one - is a term the group's range still admits.
-   * @param group - The group whose range to read
-   * @param pin - The pin to check
-   * @returns whether the two agree
-   */
-  private rangeAdmits(group: number, pin: Pin<Term> | undefined): boolean {
-    if (pin === undefined) {
-      return true;
-    }
-    return this.rangeOf(group).has(pin.kind === 'term' ? pin.term.termType : 'Quad');
-  }
-
-  /**
    * Whether any group is its own descendant, which no value satisfies: a triple term is strictly larger than
    * each of its components, so `?o ≡ <<( ?o ... )>>` is unsatisfiable - and resolving such a group to a term
    * would not terminate.
@@ -526,7 +546,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    */
   private createPositionGroup(position: TriplePosition): number {
     const group = this.createEmptyGroup();
-    this.groupToRange[group] = rangeOfPosition(position);
+    this.groupToRange[group] = this.positionRange(position);
     return group;
   }
 

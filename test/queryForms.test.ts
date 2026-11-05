@@ -4,13 +4,13 @@ import * as arrayifyStreamNS from 'arrayify-stream';
 import { Store } from 'n3';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createQueryRewriter } from '../lib/queryRewriter.js';
 import { filterFalseTransformation } from '../lib/transformations/filterFalse.js';
 import { pullUpExtendsTransformation } from '../lib/transformations/pullUpExtends.js';
 import { removeProjectionsTransformation } from '../lib/transformations/removeProjections.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import { nonTripleTermConstruct, tripleTermConstruct } from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -22,9 +22,9 @@ PREFIX : <ex://>
 
 /**
  * Every query form, answered over the mapped RDF 1.2 data and over the rewrite of the same query against
- * the RDF 1.1 data it was mapped from. The `uq_` renaming is invisible in the answer of an `ASK`, and a
- * `CONSTRUCT` template and a `DESCRIBE` term are renamed along with the pattern they read, so `SELECT`,
- * `ASK` and `CONSTRUCT` have to answer exactly what the mapped data answers.
+ * the RDF 1.1 data it was mapped from. The user query keeps its variable names, so a `CONSTRUCT` template
+ * and a `DESCRIBE` term still name what the pattern they read binds, and `SELECT`, `ASK` and `CONSTRUCT`
+ * have to answer exactly what the mapped data answers.
  *
  * `DESCRIBE` is the one form that cannot: it answers with a description of the data it is run against, so
  * a rewritten `DESCRIBE` describes its resources in RDF 1.1. What it owes is that it picks the same
@@ -38,7 +38,7 @@ PREFIX : <ex://>
 describe('the query forms', () => {
   const engine = new QueryEngine();
   const mappers = [ tripleTermConstruct, nonTripleTermConstruct ];
-  const rewriter = createQueryRewriter([
+  const rewriter = createValidatingQueryRewriter([
     unfoldingTransformation(mappingFromConstructQueries(mappers)),
     filterFalseTransformation(),
     pullUpExtendsTransformation(),

@@ -1,7 +1,15 @@
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
+import { iriRange } from '../lib/RangeSet.js';
 import type { TransformationContext } from '../lib/transformContext.js';
-import { createTransformationContext } from '../lib/transformContext.js';
-import { withCpVars } from '../lib/utils/certainlyBoundVars.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import type { CPMeta } from '../lib/utils/certainlyBoundVars.js';
+import {
+  cpMetaOf,
+  standardExpressionRange,
+  withCpVars,
+} from '../lib/utils/certainlyBoundVars.js';
+import { rewriteInExistenceScopes } from '../lib/utils/existenceScopes.js';
 import { constructedTermOf } from '../lib/utils/expressionHelpers.js';
 
 const c = createTransformationContext();
@@ -14,8 +22,8 @@ function column(bound: boolean): ReturnType<TransformationContext['AF']['createV
 }
 
 /** The term types `?x` can take in `op`, sorted so the assertion does not depend on insertion order. */
-function rangeOfX(op: Parameters<typeof withCpVars>[0]): string[] {
-  return [ ...withCpVars(op).metadata.vRanges.rangeOf('x') ].sort();
+function rangeOfX(op: Parameters<typeof withCpVars>[1]): string[] {
+  return [ ...withCpVars(c, op).metadata.vRanges.rangeOf('x') ].sort();
 }
 
 describe('withCpVars', () => {
@@ -57,10 +65,60 @@ describe('withCpVars', () => {
 
   describe('an all-UNDEF column', () => {
     it('is in scope yet never bound, which the scope alone could not say', ({ expect }) => {
-      const meta = withCpVars(column(false)).metadata;
+      const meta = withCpVars(c, column(false)).metadata;
       expect(meta.vRanges.has('x')).toBe(true);
       expect(meta.vRanges.neverBinds('x')).toBe(true);
     });
+  });
+});
+
+describe('the range of what an expression gives', () => {
+  const top = [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ];
+  const subject = [ 'BlankNode', 'NamedNode' ];
+
+  it.for<[string, string[]]>([
+    [ 'STR(?o)', [ 'Literal' ]],
+    [ '?o + 1', [ 'Literal' ]],
+    [ 'EXISTS { ?o ?p ?s }', [ 'Literal' ]],
+    [ '<http://www.w3.org/2001/XMLSchema#integer>(?o)', [ 'Literal' ]],
+    [ 'IRI(?o)', [ 'NamedNode' ]],
+    [ 'DATATYPE(?o)', [ 'NamedNode' ]],
+    [ 'BNODE()', [ 'BlankNode' ]],
+    [ '<internal://blank>(?o)', [ 'BlankNode' ]],
+    [ 'SUBJECT(?o)', subject ],
+    [ 'COALESCE(?s, "x")', [ 'BlankNode', 'Literal', 'NamedNode' ]],
+    [ 'IF(BOUND(?o), ?s, IRI(?o))', subject ],
+    [ 'COALESCE(?unbound)', []],
+    [ '<ex://f>(?o)', top ],
+  ])('is read through the operators of a BIND of %s', ([ expression, range ], { expect }) => {
+    expect(rangeOfX(parseQuery(c, `SELECT * WHERE { ?s ?p ?o BIND(${expression} AS ?x) }`))).toEqual(range);
+  });
+
+  it.for<[string, string[]]>([
+    [ 'COUNT(*)', [ 'Literal' ]],
+    [ 'GROUP_CONCAT(?o)', [ 'Literal' ]],
+    [ 'SAMPLE(?s)', subject ],
+    [ 'MAX(?o)', top ],
+  ])('is read through the aggregate of %s', ([ aggregate, range ], { expect }) => {
+    expect(rangeOfX(parseQuery(c, `SELECT (${aggregate} AS ?x) WHERE { ?s ?p ?o }`))).toEqual(range);
+  });
+
+  it.for([ 'SUBJECT', 'PREDICATE' ])(
+    'is any term for %s of a triple term where triple terms are generalized',
+    (accessor, { expect }) => {
+      const generalized = { ...createTransformationContext(), generalizedRdf: true };
+      const op = parseQuery(generalized, `SELECT * WHERE { ?s ?p ?o BIND(${accessor}(?o) AS ?x) }`);
+      expect([ ...withCpVars(generalized, op).metadata.vRanges.rangeOf('x') ].sort()).toEqual(top);
+    },
+  );
+
+  it('is read through the expressionRange of the context, down to a subexpression', ({ expect }) => {
+    const extended = createTransformationContext({ expressionRange: (context, expression, input) =>
+      expression.subType === 'named' && expression.name.value === 'ex://f' ?
+        iriRange :
+        standardExpressionRange(context, expression, input) });
+    const op = parseQuery(c, 'SELECT * WHERE { ?s ?p ?o BIND(COALESCE(<ex://f>(?o)) AS ?x) }');
+    expect([ ...withCpVars(extended, op).metadata.vRanges.rangeOf('x') ]).toEqual([ 'NamedNode' ]);
   });
 });
 
@@ -75,9 +133,9 @@ describe('the target of a triple-term BIND', () => {
   const ground = c.DF.quad(c.DF.namedNode('ex://a'), c.DF.namedNode('ex://b'), c.DF.namedNode('ex://c'));
 
   /** Whether `BIND(<<( … )>> AS ?t)` over `input` binds `?t` in every solution. */
-  function bindsCertainly(input: Parameters<typeof withCpVars>[0], term: Parameters<typeof c.DF.quad>[2]): boolean {
+  function bindsCertainly(input: Parameters<typeof withCpVars>[1], term: Parameters<typeof c.DF.quad>[2]): boolean {
     const extend = c.AF.createExtend(input, t, c.AF.createTermExpression(term));
-    return withCpVars(extend).metadata.cVars.has('t');
+    return withCpVars(c, extend).metadata.cVars.has('t');
   }
 
   it('is certain for a ground construction, which no range can spoil', ({ expect }) => {
@@ -161,8 +219,8 @@ describe('the target of a nested TRIPLE() BIND', () => {
 
   /** The certainty and the range of `?t` after `BIND(expression AS ?t)` over `input`. */
   type Target = { certain: boolean; range: string[] };
-  function target(input: Parameters<typeof withCpVars>[0], expression: Expression): Target {
-    const meta = withCpVars(c.AF.createExtend(input, t, expression)).metadata;
+  function target(input: Parameters<typeof withCpVars>[1], expression: Expression): Target {
+    const meta = withCpVars(c, c.AF.createExtend(input, t, expression)).metadata;
     return { certain: meta.cVars.has('t'), range: [ ...meta.vRanges.rangeOf('t') ].sort() };
   }
 
@@ -227,13 +285,13 @@ describe('the target of a nested TRIPLE() BIND', () => {
 
 describe('the range of a graph variable', () => {
   it('is the graph name where the pattern does not certainly bind it', ({ expect }) => {
-    // `GRAPH ?g { OPTIONAL { VALUES ?g { "l" } } }`: every solution where the OPTIONAL misses binds `?g`
-    // to the name of the graph, so what the pattern says about it never applies on its own.
+    // `GRAPH ?g { ?x ?p ?o OPTIONAL { VALUES (?x ?g) { (:a "l") } } }`: every solution where the OPTIONAL
+    // misses binds `?g` to the name of the graph, so what the pattern says about it never applies on its own.
     const inner = c.AF.createLeftJoin(
-      c.AF.createBgp([]),
-      c.AF.createValues([ g ], [{ g: c.DF.literal('l') }]),
+      c.AF.createBgp([ c.AF.createPattern(x, c.DF.variable('p'), c.DF.variable('o')) ]),
+      c.AF.createValues([ x, g ], [{ x: c.DF.namedNode('ex://a'), g: c.DF.literal('l') }]),
     );
-    const meta = withCpVars(c.AF.createGraph(inner, g)).metadata;
+    const meta = withCpVars(c, c.AF.createGraph(inner, g)).metadata;
     expect([ ...meta.vRanges.rangeOf('g') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
     // `?g ∈ cVars` and an empty range would be a contradiction the pruning would act on.
     expect(meta.cVars.has('g')).toBe(true);
@@ -241,7 +299,7 @@ describe('the range of a graph variable', () => {
 
   it('narrows by what the pattern certainly binds it to', ({ expect }) => {
     const inner = c.AF.createValues([ g ], [{ g: c.DF.namedNode('ex://c') }]);
-    const meta = withCpVars(c.AF.createGraph(inner, g)).metadata;
+    const meta = withCpVars(c, c.AF.createGraph(inner, g)).metadata;
     expect([ ...meta.vRanges.rangeOf('g') ]).toEqual([ 'NamedNode' ]);
   });
 });
@@ -265,13 +323,13 @@ describe('the metadata of an operation', () => {
   const pattern = c.AF.createPattern(x, c.DF.namedNode('ex://p'), c.DF.variable('o'), g);
 
   /** The variables the metadata says are bound in every solution and bindable to nothing. */
-  function unbindableCertainVars(op: Parameters<typeof withCpVars>[0]): string[] {
-    const { cVars, vRanges } = withCpVars(op).metadata;
+  function unbindableCertainVars(op: Parameters<typeof withCpVars>[1]): string[] {
+    const { cVars, vRanges } = withCpVars(c, op).metadata;
     return [ ...cVars ].filter(variable => vRanges.neverBinds(variable)).sort();
   }
 
   describe('where it has solutions', () => {
-    const shapes: [ string, Parameters<typeof withCpVars>[0] ][] = [
+    const shapes: [ string, Parameters<typeof withCpVars>[1] ][] = [
       [ 'a join over an all-UNDEF column', c.AF.createJoin([ undefCol, literal ], false) ],
       [ 'a join over a partly bound column', c.AF.createJoin([ partial, literal ], false) ],
       [ 'an optional over an all-UNDEF left', c.AF.createLeftJoin(undefCol, literal) ],
@@ -280,7 +338,10 @@ describe('the metadata of an operation', () => {
       [ 'a minus of disagreeing sides', c.AF.createMinus(iri, literal) ],
       [ 'a graph over a pattern', c.AF.createGraph(pattern, g) ],
       [ 'a graph over an optional binding its name', c.AF.createGraph(
-        c.AF.createLeftJoin(c.AF.createBgp([]), c.AF.createValues([ g ], [{ g: c.DF.literal('l') }])),
+        c.AF.createLeftJoin(
+          c.AF.createBgp([ c.AF.createPattern(x, c.DF.variable('p'), c.DF.variable('o')) ]),
+          c.AF.createValues([ x, g ], [{ x: c.DF.namedNode('ex://a'), g: c.DF.literal('l') }]),
+        ),
         g,
       ) ],
       [ 'a projection over a join', c.AF.createProject(c.AF.createJoin([ undefCol, literal ], false), [ x ]) ],
@@ -312,7 +373,7 @@ describe('the range of a service variable', () => {
   const pattern = c.AF.createPattern(x, c.DF.variable('p'), c.DF.variable('o'), c.DF.defaultGraph());
 
   it('keeps what the pattern says, the endpoint evaluating the same algebra', ({ expect }) => {
-    const meta = withCpVars(c.AF.createService(pattern, endpoint, false)).metadata;
+    const meta = withCpVars(c, c.AF.createService(pattern, endpoint, false)).metadata;
     expect([ ...meta.vRanges.rangeOf('p') ]).toEqual([ 'NamedNode' ]);
     expect([ ...meta.vRanges.rangeOf('x') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
   });
@@ -320,7 +381,7 @@ describe('the range of a service variable', () => {
   it('takes a variable endpoint for an IRI, which is an assumption and not the spec', ({ expect }) => {
     // See the TODO on `serviceNameRange`: Federated Query §4 is informative and requires nothing.
     const variable = c.DF.variable('e');
-    const meta = withCpVars(c.AF.createService(pattern, variable, false)).metadata;
+    const meta = withCpVars(c, c.AF.createService(pattern, variable, false)).metadata;
     expect([ ...meta.vRanges.rangeOf('e') ]).toEqual([ 'NamedNode' ]);
   });
 
@@ -328,13 +389,13 @@ describe('the range of a service variable', () => {
     // `SERVICE ?e { ?e ?p ?o }`: a subject *and* an endpoint, so it has to satisfy both.
     const variable = c.DF.variable('e');
     const inner = c.AF.createPattern(variable, c.DF.variable('p'), c.DF.variable('o'), c.DF.defaultGraph());
-    const meta = withCpVars(c.AF.createService(inner, variable, false)).metadata;
+    const meta = withCpVars(c, c.AF.createService(inner, variable, false)).metadata;
     expect([ ...meta.vRanges.rangeOf('e') ]).toEqual([ 'NamedNode' ]);
   });
 
   it('leaves the endpoint variable out of cVars, the SERVICE reading it rather than binding it', ({ expect }) => {
     const variable = c.DF.variable('e');
-    expect(withCpVars(c.AF.createService(pattern, variable, false)).metadata.cVars.has('e')).toBe(false);
+    expect(withCpVars(c, c.AF.createService(pattern, variable, false)).metadata.cVars.has('e')).toBe(false);
   });
 
   it('cannot prove a SILENT service empty, a failing one yielding an empty solution', ({ expect }) => {
@@ -343,8 +404,118 @@ describe('the range of a service variable', () => {
       [ c.AF.createValues([ x ], [{ x: c.DF.namedNode('ex://c') }]), column(true) ],
       false,
     );
-    const meta = withCpVars(c.AF.createService(impossible, endpoint, true)).metadata;
+    const meta = withCpVars(c, c.AF.createService(impossible, endpoint, true)).metadata;
     expect(meta.vRanges.neverBinds('x')).toBe(true);
     expect(meta.cVars.has('x')).toBe(false);
+  });
+});
+
+describe('the pattern of an EXISTS', () => {
+  /**
+   * What the pattern of the one EXISTS in a query binds, read in the context {@link rewriteInExistenceScopes} gives it.
+   * @param query - The WHERE clause
+   * @returns the metadata of the pattern
+   */
+  function existsMeta(query: string): CPMeta {
+    let meta: CPMeta | undefined;
+    rewriteInExistenceScopes(c, parseQuery(c, `SELECT * WHERE { ${query} }`), (context, operation) => {
+      if (context.existenceScope !== undefined) {
+        meta = cpMetaOf(context, operation);
+      }
+      return operation;
+    });
+    return meta!;
+  }
+
+  it('binds what the solution it is evaluated for binds', ({ expect }) => {
+    const { cVars, vRanges } = existsMeta('?s ?p ?o FILTER EXISTS { ?w ?q ?v BIND(?s AS ?t) }');
+    expect(cVars.has('s')).toBe(true);
+    expect([ ...vRanges.rangeOf('s') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
+    expect([ ...vRanges.rangeOf('o') ].sort()).toEqual([ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]);
+  });
+
+  it('binds a variable that solution may leave unbound possibly', ({ expect }) => {
+    const { cVars, vRanges } = existsMeta('?s ?p ?o OPTIONAL { ?s ?q ?v } FILTER EXISTS { ?w ?r ?u BIND(?v AS ?t) }');
+    expect(cVars.has('v')).toBe(false);
+    expect(vRanges.canBind('v')).toBe(true);
+  });
+
+  it('meets that range with the one it binds itself', ({ expect }) => {
+    const { vRanges } = existsMeta('?s <ex://p> ?o FILTER EXISTS { ?o ?q ?v }');
+    expect([ ...vRanges.rangeOf('o') ].sort()).toEqual([ 'BlankNode', 'NamedNode' ]);
+  });
+
+  it('reads a BIND over a variable of that solution with its range', ({ expect }) => {
+    const { vRanges } = existsMeta('?s ?p ?o FILTER EXISTS { ?w ?q ?v BIND(COALESCE(?s, "x") AS ?t) }');
+    expect([ ...vRanges.rangeOf('t') ].sort()).toEqual([ 'BlankNode', 'Literal', 'NamedNode' ]);
+  });
+
+  it('rewrites an EXISTS a pass shares between operations once per operation, in its scope', ({ expect }) => {
+    const query = parseQuery(c, 'SELECT * WHERE { VALUES ?o { "l" } FILTER EXISTS { ?s ?p ?o } }');
+    const rewritten = rewriteInExistenceScopes(c, query, (context, operation) => {
+      if (context.existenceScope !== undefined) {
+        // Marks the pattern with the range of ?o it was rewritten for.
+        const range = [ ...context.existenceScope.vRanges.rangeOf('o') ].join(',');
+        return context.AF.createFilter(operation, context.AF.createTermExpression(context.DF.literal(range)));
+      }
+      const filter = <Algebra.Filter> (<Algebra.Project> operation).input;
+      const iris = (<Algebra.Project> parseQuery(c, 'SELECT * WHERE { VALUES ?o { <ex://a> } }')).input;
+      return context.AF.createUnion([ filter, context.AF.createFilter(iris, filter.expression) ]);
+    });
+    const marks = (<Algebra.Union> rewritten).input.map((branch) => {
+      const pattern = <Algebra.Filter> (<Algebra.ExistenceExpression> (<Algebra.Filter> branch).expression).input;
+      return [ pattern.input.type, (<Algebra.TermExpression> pattern.expression).term.value ];
+    });
+    expect(marks).toEqual([[ 'bgp', 'Literal' ], [ 'bgp', 'NamedNode' ]]);
+  });
+
+  it('sees both sides of the OPTIONAL whose condition it is in', ({ expect }) => {
+    const { cVars } = existsMeta('?s ?p ?o OPTIONAL { ?s ?q ?v FILTER EXISTS { ?w ?r ?v } }');
+    expect(cVars.has('v')).toBe(true);
+  });
+});
+
+describe('what a filter confines', () => {
+  /** The certainty and the range of `?x` after `FILTER(condition)` over `?s ?p ?x`. */
+  function filtered(condition: string): { certain: boolean; range: string[] } {
+    const meta = withCpVars(c, parseQuery(c, `SELECT * { OPTIONAL { ?s ?p ?x } FILTER(${condition}) }`)).metadata;
+    return { certain: meta.cVars.has('x'), range: [ ...meta.vRanges.rangeOf('x') ].sort() };
+  }
+
+  it.for<[string, boolean, string[]]>([
+    [ 'ISTRIPLE(?x)', true, [ 'Quad' ]],
+    [ 'ISIRI(?x) || ISBLANK(?x)', true, [ 'BlankNode', 'NamedNode' ]],
+    [ 'BOUND(?x) && ISLITERAL(?x)', true, [ 'Literal' ]],
+    [ 'SAMETERM(?x, "l")', true, [ 'Literal' ]],
+    [ 'SAMETERM(?x, ?s) || ISLITERAL(?x)', true, [ 'BlankNode', 'Literal', 'NamedNode' ]],
+    [ 'SAMETERM(?x, STR(?s))', true, [ 'Literal' ]],
+    [ 'SAMETERM(?x, <ex://a>) || ISBLANK(?x)', true, [ 'BlankNode', 'NamedNode' ]],
+    [ 'ISIRI(?x) || BOUND(?s)', false, [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]],
+    [ '!ISIRI(?x)', true, [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]],
+  ])('reads %s', ([ condition, certain, range ], { expect }) => {
+    expect(filtered(condition)).toEqual({ certain, range });
+  });
+
+  it('leaves a variable out of scope out of scope', ({ expect }) => {
+    const meta = withCpVars(c, parseQuery(c, 'SELECT * { ?s ?p ?o FILTER(ISIRI(?x)) }')).metadata;
+    expect(meta.vRanges.has('x')).toBe(false);
+  });
+});
+
+describe('the target of an accessor BIND', () => {
+  /** Whether `?a` is certain in `query`. */
+  function certain(query: string): boolean {
+    return withCpVars(c, parseQuery(c, query)).metadata.cVars.has('a');
+  }
+
+  it.for<[string, boolean]>([
+    [ 'SELECT * { { ?t ?p ?o FILTER(ISTRIPLE(?o)) } BIND(SUBJECT(?o) AS ?a) }', true ],
+    [ 'SELECT * { { ?t ?p ?o FILTER(ISTRIPLE(?o)) } BIND(SUBJECT(OBJECT(?o)) AS ?a) }', false ],
+    [ 'SELECT * { ?t ?p ?o BIND(SUBJECT(?o) AS ?a) }', false ],
+    [ 'SELECT * { OPTIONAL { ?t ?p ?o } BIND(SUBJECT(?o) AS ?a) }', false ],
+    [ 'SELECT * { { ?x ?p ?s FILTER(ISIRI(?s)) } BIND(SUBJECT(<<( ?s <ex://q> ?x )>>) AS ?a) }', true ],
+    [ 'SELECT * { ?x ?p ?s BIND(SUBJECT(<<( ?s <ex://q> ?x )>>) AS ?a) }', false ],
+  ])('reads %s', ([ query, expected ], { expect }) => {
+    expect(certain(query)).toBe(expected);
   });
 });

@@ -8,19 +8,20 @@ import { DF } from './rdfDatatypes.js';
 import { termIsStaticTerm } from './typeGuards.js';
 
 /**
- * Splits a filter expression on top level logical conjunctions (`&&`), implementing (SDecompI):
- * `FILTER_{R1 && R2}(A) == FILTER_R1(FILTER_R2(A))`.
- * @param expression - The condition to split
- * @param accumulator - The conjuncts collected so far, filled in by the recursion
- * @returns the conjuncts
+ * Splits an expression into the operands of the `&&` or `||` it nests at its top level.
+ * @param expression - The expression to split
+ * @param operator - The operator to split on
+ * @param accumulator - The operands collected so far, filled in by the recursion
+ * @returns the operands, the expression itself when it is not that operator
  */
-export function splitConjunction(
+function splitOnOperator(
   expression: Algebra.Expression,
-  accumulator: Algebra.Expression[] = [],
+  operator: '&&' | '||',
+  accumulator: Algebra.Expression[],
 ): Algebra.Expression[] {
-  if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === '&&') {
-    for (const agg of expression.args) {
-      splitConjunction(agg, accumulator);
+  if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === operator) {
+    for (const operand of expression.args) {
+      splitOnOperator(operand, operator, accumulator);
     }
   } else {
     accumulator.push(expression);
@@ -29,13 +30,63 @@ export function splitConjunction(
 }
 
 /**
+ * Splits a filter expression on top level logical conjunctions (`&&`), implementing (SDecompI):
+ * `FILTER_{R1 && R2}(A) == FILTER_R1(FILTER_R2(A))`.
+ * @param expression - The condition to split
+ * @returns the conjuncts
+ */
+export function splitConjunction(expression: Algebra.Expression): Algebra.Expression[] {
+  return splitOnOperator(expression, '&&', []);
+}
+
+/**
+ * Splits an expression on its top level logical disjunctions (`||`), however they nest.
+ * @param expression - The expression to split
+ * @returns the disjuncts
+ */
+export function splitDisjunction(expression: Algebra.Expression): Algebra.Expression[] {
+  return splitOnOperator(expression, '||', []);
+}
+
+/**
+ * Combines a non-empty list of expressions with `&&` or `||`, nested to the left as the parser nests them.
+ * @param c - Object containing the algebra factory
+ * @param operator - The operator to combine them with
+ * @param expressions - The operands to combine
+ * @returns the combined expression
+ */
+function joinOnOperator(
+  c: Pick<TransformationContext, 'AF'>,
+  operator: '&&' | '||',
+  expressions: Algebra.Expression[],
+): Algebra.Expression {
+  return expressions.reduce((joined, expression) => c.AF.createOperatorExpression(operator, [ joined, expression ]));
+}
+
+/**
  * Combines a non-empty list of expressions into a single conjunction (`&&`).
- * @param c - The transformation context
+ * @param c - Object containing the algebra factory
  * @param expressions - The conjuncts to combine
  * @returns the conjunction
  */
-export function conjunctionOf(c: TransformationContext, expressions: Algebra.Expression[]): Algebra.Expression {
-  return expressions.reduce((acc, expr) => c.AF.createOperatorExpression('&&', [ acc, expr ]));
+export function conjunctionOf(
+  c: Pick<TransformationContext, 'AF'>,
+  expressions: Algebra.Expression[],
+): Algebra.Expression {
+  return joinOnOperator(c, '&&', expressions);
+}
+
+/**
+ * Combines a non-empty list of expressions into a single disjunction (`||`).
+ * @param c - Object containing the algebra factory
+ * @param expressions - The disjuncts to combine
+ * @returns the disjunction
+ */
+export function disjunctionOf(
+  c: Pick<TransformationContext, 'AF'>,
+  expressions: Algebra.Expression[],
+): Algebra.Expression {
+  return joinOnOperator(c, '||', expressions);
 }
 
 /**
@@ -87,36 +138,41 @@ const stableNamedFunctions = new Set<string>([ EXTENSION_FUNCTION_BNODE ]);
  * @returns whether it is stable
  */
 export function isStableExpression(c: TransformationContext, expression: Algebra.Expression): boolean {
-  let isStable = true;
-  const neverStable = { preVisitor: () => {
-    isStable = false;
-    return { shortcut: true };
-  } };
-  algebraUtils.visitOperationSub(expression, {}, { expression: {
-    operator: { preVisitor: (operator) => {
-      if (unstableOperators.has(operator.operator)) {
-        isStable = false;
-        return { shortcut: true };
-      }
-      return {};
-    } },
-    named: { preVisitor: (named) => {
-      if (!stableNamedFunctions.has(named.name.value)) {
-        isStable = false;
-        return { shortcut: true };
-      }
-      return {};
-    } },
+  return !holdsExpression(expression, (held) => {
+    if (held.subType === Algebra.ExpressionTypes.OPERATOR) {
+      return unstableOperators.has(held.operator);
+    }
+    if (held.subType === Algebra.ExpressionTypes.NAMED) {
+      return !stableNamedFunctions.has(held.name.value);
+    }
     // An EXISTS is stable per solution, but it reads `vars(P)` of a nested pattern rather than anything
     // visible in the expression tree, and it is evaluated against the active graph. Nothing holding one
     // moves until that is worked out - the pushdown carries the same TODO.
     // TODO(phase 4): give EXISTENCE a reads-set and let it be stable where the active graph does not change.
-    existence: neverStable,
-    // Neither can occur in a BIND, and neither is a function of one solution mapping.
-    aggregate: neverStable,
-    wildcard: neverStable,
-  }});
-  return isStable;
+    // An aggregate or a wildcard cannot occur in a BIND, and neither is a function of one solution mapping.
+    return held.subType === Algebra.ExpressionTypes.EXISTENCE ||
+      held.subType === Algebra.ExpressionTypes.AGGREGATE ||
+      held.subType === Algebra.ExpressionTypes.WILDCARD;
+  });
+}
+
+/**
+ * Whether a node holds an expression a test accepts anywhere inside it, the pattern of an EXISTS included.
+ * @param node - The expression or operation to read
+ * @param accepts - The test an expression has to pass
+ * @returns whether it holds one
+ */
+export function holdsExpression(
+  node: Algebra.Operation,
+  accepts: (expression: Algebra.Expression) => boolean,
+): boolean {
+  let found = false;
+  const test = { preVisitor: (expression: Algebra.Expression) => {
+    found = accepts(expression);
+    return { shortcut: found };
+  } };
+  algebraUtils.visitOperation(node, { [Algebra.Types.EXPRESSION]: test });
+  return found;
 }
 
 /**
@@ -199,12 +255,7 @@ function argumentsEqual(left: readonly Algebra.Expression[], right: readonly Alg
  * @returns whether it holds one
  */
 export function containsExistenceExpression(expression: Algebra.Expression): boolean {
-  let found = false;
-  algebraUtils.visitOperationSub(expression, {}, { expression: { existence: { preVisitor: () => {
-    found = true;
-    return { shortcut: true };
-  } }}});
-  return found;
+  return holdsExpression(expression, held => held.subType === Algebra.ExpressionTypes.EXISTENCE);
 }
 
 /**
@@ -216,19 +267,11 @@ export function containsExistenceExpression(expression: Algebra.Expression): boo
  * @returns whether it is asked about
  */
 export function asksBoundOfVariable(expression: Algebra.Expression, name: string): boolean {
-  let found = false;
-  algebraUtils.visitOperationSub(expression, {}, { expression: {
-    operator: { preVisitor: (operator) => {
-      if (operator.operator === 'bound' && operator.args.some(argument =>
-        argument.subType === Algebra.ExpressionTypes.TERM &&
-        argument.term.termType === 'Variable' &&
-        argument.term.value === name)) {
-        found = true;
-      }
-      return {};
-    } },
-  }});
-  return found;
+  return holdsExpression(expression, held => held.subType === Algebra.ExpressionTypes.OPERATOR &&
+    held.operator === 'bound' && held.args.some(argument =>
+    argument.subType === Algebra.ExpressionTypes.TERM &&
+    argument.term.termType === 'Variable' &&
+    argument.term.value === name));
 }
 
 /** The term types each position of a triple term admits, in the order `TRIPLE()` takes its arguments. */

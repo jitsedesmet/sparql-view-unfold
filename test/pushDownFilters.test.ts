@@ -5,9 +5,9 @@ import * as arrayifyStreamNS from 'arrayify-stream';
 import { Parser, Store } from 'n3';
 import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
-import { toAst } from '../lib/generator/toAst.js';
 import { pushDownFilters, pushDownFiltersTransformation } from '../lib/transformations/pushDownFilters.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import { generateValidQuery } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -23,7 +23,7 @@ describe('pushDownFilters', () => {
   const c = createTransformationContext();
 
   function generate(op: Algebra.Operation): string {
-    return c.generator.generate(toAst(op)).trim();
+    return generateValidQuery(c, op).trim();
   }
 
   function transform(query: string): Algebra.Operation {
@@ -299,10 +299,8 @@ HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
         expect,
         'SELECT ?g (COUNT(*) AS ?n) WHERE { ?s :p ?g } GROUP BY ?g HAVING(?g != :a && COUNT(*) > 1)',
         `SELECT ?g ( COUNT( * ) AS ?n ) WHERE {
-  {
-    ?s <ex://p> ?g .
-    FILTER ( ( ?g != <ex://a> ) )
-  }
+  ?s <ex://p> ?g .
+  FILTER ( ( ?g != <ex://a> ) )
 }
 GROUP BY ?g
 HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
@@ -1039,7 +1037,7 @@ HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
       );
     });
 
-    it('leaves a filter inside an EXISTS pattern untouched', ({ expect }) => {
+    it('pushes a filter down inside an EXISTS pattern', ({ expect }) => {
       expectTransform(
         expect,
         'SELECT * WHERE { ?s :p ?o FILTER(EXISTS { { ?o :r ?w } UNION { ?o :t ?w } FILTER(?w > 1) }) }',
@@ -1047,12 +1045,11 @@ HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
   ?s <ex://p> ?o .
   FILTER ( EXISTS {
     {
-      {
-        ?o <ex://r> ?w .
-      }
-      UNION {
-        ?o <ex://t> ?w .
-      }
+      ?o <ex://r> ?w .
+      FILTER ( ( ?w > "1"^^<http://www.w3.org/2001/XMLSchema#integer> ) )
+    }
+    UNION {
+      ?o <ex://t> ?w .
       FILTER ( ( ?w > "1"^^<http://www.w3.org/2001/XMLSchema#integer> ) )
     }
   }
@@ -1061,7 +1058,7 @@ HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
       );
     });
 
-    it('leaves a filter inside a NOT EXISTS pattern untouched', ({ expect }) => {
+    it('pushes a filter down inside a NOT EXISTS pattern', ({ expect }) => {
       expectTransform(
         expect,
         'SELECT * WHERE { ?s :p ?o FILTER NOT EXISTS { { ?o :r ?w } UNION { ?o :t ?w } FILTER(?w > 1) } }',
@@ -1069,12 +1066,11 @@ HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
   ?s <ex://p> ?o .
   FILTER ( NOT EXISTS {
     {
-      {
-        ?o <ex://r> ?w .
-      }
-      UNION {
-        ?o <ex://t> ?w .
-      }
+      ?o <ex://r> ?w .
+      FILTER ( ( ?w > "1"^^<http://www.w3.org/2001/XMLSchema#integer> ) )
+    }
+    UNION {
+      ?o <ex://t> ?w .
       FILTER ( ( ?w > "1"^^<http://www.w3.org/2001/XMLSchema#integer> ) )
     }
   }

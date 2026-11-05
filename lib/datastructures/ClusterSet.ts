@@ -18,7 +18,7 @@ export class ClusterSet<T> {
   /** Maps group ID to the values in it - read through {@link valuesOf} and {@link groupEntries}. */
   protected groupToValues: Record<number, T[]>;
   /** Maps a value to the group it is in - read through {@link groupOf}. */
-  protected valueToGroup: Record<string, number | undefined>;
+  protected valueToGroup: Map<string, number>;
 
   /** Counter for generating unique group IDs */
   protected cleanNumber: number;
@@ -54,8 +54,9 @@ export class ClusterSet<T> {
    * point of this class covers it. Those are `narrowRange` and `resolveAllConstraints` on
    * {@link datastructures/TermClusterSet!TermClusterSet}, `assertTermTypeRange` on
    * {@link datastructures/AssertionClusterSet!AssertionClusterSet}, and `sortClusters`,
-   * `registerExpressionToGroup` and the static-validation branch of `register` on {@link ClusterSolver!ClusterSolver}
-   * - the last three of which write no group at all, which is exactly why they are easy to miss.
+   * `registerExpressionToGroup` and the classification and static-validation branch of `register` on
+   * {@link ClusterSolver!ClusterSolver} - the last three of which write no group at all, which is exactly why
+   * they are easy to miss.
    */
   protected touch(): void {
     revisions++;
@@ -66,7 +67,7 @@ export class ClusterSet<T> {
   public clear(): void {
     this.touch();
     this.groupToValues = {};
-    this.valueToGroup = {};
+    this.valueToGroup = new Map();
     this.cleanNumber = 1;
   }
 
@@ -76,7 +77,7 @@ export class ClusterSet<T> {
    * @returns the group ID
    */
   public getGroup(value: T): number {
-    const group = this.valueToGroup[this.toId(value)];
+    const group = this.valueToGroup.get(this.toId(value));
     // Return the group
     if (group !== undefined) {
       return group;
@@ -90,7 +91,7 @@ export class ClusterSet<T> {
    * @returns the group ID, or `undefined` when the value is in no group
    */
   public groupOf(value: T): number | undefined {
-    return this.valueToGroup[this.toId(value)];
+    return this.valueToGroup.get(this.toId(value));
   }
 
   /**
@@ -138,7 +139,7 @@ export class ClusterSet<T> {
     target.groupToValues = Object.fromEntries(
       Object.entries(this.groupToValues).map(([ group, values ]) => [ group, [ ...values ]]),
     );
-    target.valueToGroup = { ...this.valueToGroup };
+    target.valueToGroup = new Map(this.valueToGroup);
     target.cleanNumber = this.cleanNumber;
   }
 
@@ -163,7 +164,7 @@ export class ClusterSet<T> {
   protected createGroup(value: T): number {
     const group = this.createEmptyGroup();
     this.groupToValues[group].push(value);
-    this.valueToGroup[this.toId(value)] = group;
+    this.valueToGroup.set(this.toId(value), group);
     return group;
   }
 
@@ -175,11 +176,11 @@ export class ClusterSet<T> {
   public remove(value: T): void {
     this.touch();
     const id = this.toId(value);
-    const group = this.valueToGroup[id];
+    const group = this.valueToGroup.get(id);
     if (group === undefined) {
       return;
     }
-    delete this.valueToGroup[id];
+    this.valueToGroup.delete(id);
     this.groupToValues[group] = this.groupToValues[group].filter(other => this.toId(other) !== id);
     if (!this.isLive(group)) {
       this.dropGroup(group);
@@ -214,7 +215,7 @@ export class ClusterSet<T> {
   protected dropGroup(group: number): void {
     this.touch();
     for (const value of this.groupToValues[group] ?? []) {
-      delete this.valueToGroup[this.toId(value)];
+      this.valueToGroup.delete(this.toId(value));
     }
     delete this.groupToValues[group];
   }
@@ -253,7 +254,7 @@ export class ClusterSet<T> {
     delete this.groupToValues[oldGroup];
     this.groupToValues[newGroup].push(...oldValues);
     for (const value of oldValues) {
-      this.valueToGroup[this.toId(value)] = newGroup;
+      this.valueToGroup.set(this.toId(value), newGroup);
     }
     return { oldGroup, newGroup };
   }

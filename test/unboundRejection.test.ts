@@ -71,7 +71,7 @@ describe('variablesRequiredBoundBy', () => {
       c,
       'SELECT * { ?s ?p ?o OPTIONAL { ?s ?q ?x } FILTER(?x > 1 || ?x < 0) }',
     )).input;
-    expect([ ...withCpVars(filter.input).metadata.cVars ].sort()).toEqual([ 'o', 'p', 's' ]);
-    expect([ ...withCpVars(filter).metadata.cVars ].sort()).toEqual([ 'o', 'p', 's', 'x' ]);
+    expect([ ...withCpVars(c, filter.input).metadata.cVars ].sort()).toEqual([ 'o', 'p', 's' ]);
+    expect([ ...withCpVars(c, filter).metadata.cVars ].sort()).toEqual([ 'o', 'p', 's', 'x' ]);
   });
 });

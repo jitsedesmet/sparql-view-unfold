@@ -1,8 +1,8 @@
-import { toAst } from '@traqula/algebra-sparql-1-2';
 import { describe, it } from 'vitest';
 import { nullifyUnbindableVars } from '../lib/transformations/nullifyUnbindableVars.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import { isFilterFalse } from '../lib/utils/operationhelpers.js';
+import { generateValidQuery } from './validQuery.js';
 
 const c = createTransformationContext();
 const x = c.DF.variable('x');
@@ -47,11 +47,19 @@ describe('nullifyUnbindableVars', () => {
     expect(isFilterFalse(c, nullifyUnbindableVars(c, filtered))).toBe(true);
   });
 
-  it('leaves the pattern of an EXISTS alone, the solution substituting what it does not bind', ({ expect }) => {
-    // `?z > ?y` requires ?y bound, which the pattern never binds but the outer solution does.
-    const query = parseQuery(c, 'SELECT * WHERE { ?x <ex://p> ?y FILTER EXISTS { ?x <ex://q> ?z FILTER(?z > ?y) } }');
-    expect(c.generator.generate(toAst(nullifyUnbindableVars(c, query))))
-      .toEqual(c.generator.generate(toAst(query)));
+  it('leaves a `FILTER(bound(?y))` in an EXISTS whose solution may bind ?y alone', ({ expect }) => {
+    const query = 'SELECT * WHERE { ?x <ex://p> ?y FILTER EXISTS { ?z <ex://q> ?w FILTER(BOUND(?y)) } }';
+    expect(generateValidQuery(c, nullifyUnbindableVars(c, parseQuery(c, query)))).not.toContain('FALSE');
+  });
+
+  it('leaves a BIND in an EXISTS of a variable its solution binds alone, which the engine leaves out', ({ expect }) => {
+    const query = 'SELECT * WHERE { ?y <ex://p> ?o FILTER EXISTS { ?z <ex://q> ?w BIND("l" AS ?y) } }';
+    expect(generateValidQuery(c, nullifyUnbindableVars(c, parseQuery(c, query)))).not.toContain('FALSE');
+  });
+
+  it('nullifies a `FILTER(bound(?v))` in an EXISTS where nothing can bind ?v', ({ expect }) => {
+    const query = 'SELECT * WHERE { ?x <ex://p> ?y FILTER EXISTS { ?z <ex://q> ?w FILTER(BOUND(?v)) } }';
+    expect(generateValidQuery(c, nullifyUnbindableVars(c, parseQuery(c, query)))).toContain('FALSE');
   });
 
   it('leaves a join an UNDEF row keeps satisfiable alone', ({ expect }) => {
@@ -63,8 +71,8 @@ describe('nullifyUnbindableVars', () => {
 
   it('leaves a GRAPH whose name only an OPTIONAL disagrees with alone', ({ expect }) => {
     const inner = c.AF.createLeftJoin(
-      c.AF.createBgp([]),
-      c.AF.createValues([ g ], [{ g: c.DF.literal('l') }]),
+      c.AF.createBgp([ c.AF.createPattern(x, c.DF.variable('p'), c.DF.variable('o')) ]),
+      c.AF.createValues([ x, g ], [{ x: c.DF.namedNode('ex://a'), g: c.DF.literal('l') }]),
     );
     expect(isFilterFalse(c, nullifyUnbindableVars(c, c.AF.createGraph(inner, g)))).toBe(false);
   });

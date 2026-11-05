@@ -1,7 +1,7 @@
-import { toAst } from '@traqula/algebra-sparql-1-2';
 import { beforeAll, describe, it } from 'vitest';
 import { simplifyStaticExpressions } from '../lib/transformations/staticExpressionEvaluation.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import { generateValidQuery } from './validQuery.js';
 
 describe('simplifyStaticExpressions', () => {
   const c = createTransformationContext();
@@ -9,7 +9,7 @@ describe('simplifyStaticExpressions', () => {
   async function simplify(query: string): Promise<string> {
     const operation = parseQuery(c, query);
     const folded = await simplifyStaticExpressions(c, operation);
-    return c.generator.generate(toAst(folded));
+    return generateValidQuery(c, folded);
   }
 
   // The Comunica evaluator factory is built once, lazily, on the first evaluation; warming it up here keeps

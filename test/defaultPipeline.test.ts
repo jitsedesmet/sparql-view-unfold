@@ -1,6 +1,8 @@
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
+import type { QueryRewriter } from '../lib/queryRewriter.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 /**
  * `nullifyJoinOverIncompatibleBounds` reads each join operand's top-level `EXTEND` chain and its recursion
@@ -9,7 +11,7 @@ import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib
  */
 describe('the default pipeline', () => {
   // The two mappings pin the subject to two different terms, each under its own predicate.
-  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+  const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
     'CONSTRUCT { <ex://a> <ex://p> ?o } WHERE { ?o <ex://src1> ?x }',
     'CONSTRUCT { <ex://b> <ex://q> ?o } WHERE { ?o <ex://src2> ?x }',
   ])));
@@ -17,7 +19,7 @@ describe('the default pipeline', () => {
   it('collapses a join of two patterns that pin one variable to different terms', async({ expect }) => {
     // `?s` would have to be <ex://a> for the first pattern and <ex://b> for the second.
     expect((await rewriter.rewriteQuery('SELECT * { ?s <ex://p> ?o1 . ?s <ex://q> ?o2 }')).trim())
-      .toEqual(`SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_o2 AS ?o2 ) ( ?uq_s AS ?s ) WHERE {
+      .toEqual(`SELECT ?o1 ?o2 ?s WHERE {
   FILTER ( FALSE )
 }`);
   });
@@ -31,7 +33,7 @@ describe('the default pipeline', () => {
 
 describe('the default pipeline over an OPTIONAL', () => {
   // The first mapping pins the object to "1", the second maps a predicate straight through.
-  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+  const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
     'CONSTRUCT { ?s <ex://p> "1" } WHERE { ?s <ex://q> ?y }',
     'CONSTRUCT { ?s <ex://r> ?x } WHERE { ?s <ex://t> ?x }',
   ])));
@@ -40,10 +42,9 @@ describe('the default pipeline over an OPTIONAL', () => {
     // The outer filter pins `?o` to "1", which substituted into the OPTIONAL's condition asks "1" to be "2".
     expect((await rewriter.rewriteQuery(
       'SELECT * { ?s <ex://p> ?o FILTER(SAMETERM(?o, "1")) OPTIONAL { ?s <ex://r> ?x FILTER(SAMETERM(?o, "2")) } }',
-    )).trim()).toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) ( ?uq_x AS ?x ) WHERE {
+    )).trim()).toEqual(`SELECT ( "1" AS ?o ) ?s ?x WHERE {
   ?v_1 <ex://q> ?v_2 .
-  BIND( ?v_1 AS ?uq_s )
-  BIND( "1" AS ?uq_o )
+  BIND( ?v_1 AS ?s )
 }`);
   });
 
@@ -55,8 +56,201 @@ describe('the default pipeline over an OPTIONAL', () => {
   });
 });
 
+describe('the default pipeline over a mapping that types its head', () => {
+  // The head writes the body's object into its subject position, where a literal or a triple term makes no
+  // triple, so the mapping body tests it for an IRI or a blank node.
+  const construct = 'CONSTRUCT { ?o <ex://p> ?s } WHERE { ?s <ex://q> ?o }';
+  const rewriter = createValidatingQueryRewriter(
+    createDefaultTransformationPipeline(mappingFromConstructQueries([ construct ])),
+  );
+
+  it('keeps the type test where nothing guarantees it', async({ expect }) => {
+    // `?v_1` is read from an object position, which holds literals and triple terms as well.
+    expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b }')).trim())
+      .toEqual(`SELECT ?a ?b WHERE {
+  {
+    ?v_0 <ex://q> ?v_1 .
+    FILTER ( ( ISIRI( ?v_1 ) || ISBLANK( ?v_1 ) ) )
+  }
+  BIND( ?v_1 AS ?a )
+  BIND( ?v_0 AS ?b )
+}`);
+  });
+
+  it('drops the type test once a clique puts the variable in a subject position', async({ expect }) => {
+    // `sameTerm(?a, ?b)` equates the body's object with its subject, and a pattern binds its subject to an IRI or
+    // a blank node only: the pattern decides the test.
+    expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(sameTerm(?a, ?b)) }')).trim())
+      .toEqual(`SELECT ?a ( ?a AS ?b ) WHERE {
+  ?v_0 <ex://q> ?v_0 .
+  BIND( ?v_0 AS ?a )
+}`);
+  });
+
+  it('empties the query when a user type test contradicts the mapping\'s', async({ expect }) => {
+    // No triple of the view has a literal subject.
+    expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isLITERAL(?a)) }')).trim())
+      .toEqual(`SELECT ?a ?b WHERE {
+  FILTER ( FALSE )
+}`);
+  });
+
+  it('narrows the mapping\'s type test to a narrower one of the user', async({ expect }) => {
+    // The two tests are one assertion about `?v_1`, holding the term types both of them admit.
+    expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isIRI(?a)) }')).trim())
+      .toEqual(`SELECT ?a ?b WHERE {
+  {
+    ?v_0 <ex://q> ?v_1 .
+    FILTER ( ISIRI( ?v_1 ) )
+  }
+  BIND( ?v_1 AS ?a )
+  BIND( ?v_0 AS ?b )
+}`);
+  });
+});
+
+describe('the default pipeline over a generalized RDF view', () => {
+  /**
+   * The rewriter of the default pipeline over the generalized RDF view one CONSTRUCT query denotes.
+   * @param construct - The CONSTRUCT query of the mapping
+   * @returns the rewriter
+   */
+  function generalizedRdfViewRewriter(construct: string): QueryRewriter {
+    return createValidatingQueryRewriter(createDefaultTransformationPipeline(
+      mappingFromConstructQueries([ construct ], { generalizedRdfView: true }),
+    ));
+  }
+
+  it('writes no type test for a position of the triple itself', async({ expect }) => {
+    // The view keeps the triples with a literal subject, so the body is read as it stands, and a user isLITERAL is
+    // a condition on it rather than a contradiction.
+    const rewriter = generalizedRdfViewRewriter('CONSTRUCT { ?o <ex://p> ?s } WHERE { ?s <ex://q> ?o }');
+    expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b }')).trim())
+      .toEqual(`SELECT ?a ?b WHERE {
+  ?v_0 <ex://q> ?v_1 .
+  BIND( ?v_1 AS ?a )
+  BIND( ?v_0 AS ?b )
+}`);
+    expect((await rewriter.rewriteQuery('SELECT * { ?a <ex://p> ?b FILTER(isLITERAL(?a)) }')).trim())
+      .toEqual(`SELECT ?a ?b WHERE {
+  {
+    ?v_0 <ex://q> ?v_1 .
+    FILTER ( ISLITERAL( ?v_1 ) )
+  }
+  BIND( ?v_1 AS ?a )
+  BIND( ?v_0 AS ?b )
+}`);
+  });
+
+  it('unifies a variable in two positions with the literal the head writes', async({ expect }) => {
+    // The view holds `"lit" <ex://p> "lit"`: a rewrite holding `?x` to the subjects RDF admits empties the query.
+    const rewriter = generalizedRdfViewRewriter('CONSTRUCT { ?o <ex://p> "lit" } WHERE { ?s <ex://q> ?o }');
+    expect((await rewriter.rewriteQuery('SELECT * { ?x <ex://p> ?x }')).trim())
+      .toEqual(`SELECT ( "lit" AS ?x ) WHERE {
+  ?v_0 <ex://q> "lit" .
+}`);
+  });
+
+  it('writes no type test inside a triple term the head writes', async({ expect }) => {
+    const rewriter = generalizedRdfViewRewriter(
+      'CONSTRUCT { ?s <ex://p> <<( ?o <ex://q> ?s )>> } WHERE { ?s <ex://q> ?o }',
+    );
+    expect((await rewriter.rewriteQuery('SELECT * { ?s <ex://p> ?t }')).trim())
+      .toEqual(`SELECT ?s ?t WHERE {
+  ?v_0 <ex://q> ?v_1 .
+  BIND( ?v_0 AS ?s )
+  BIND( <<( ?v_1 <ex://q> ?v_0 )>> AS ?t )
+}`);
+  });
+
+  it('writes a generalized triple term as the TRIPLE() building it', async({ expect }) => {
+    // `<<( "lit" … )>>` is no SPARQL, so the term the pushdown pins `?t` to is printed as a TRIPLE().
+    const rewriter = generalizedRdfViewRewriter(
+      'CONSTRUCT { ?s <ex://p> <<( ?o <ex://q> ?s )>> } WHERE { ?s <ex://q> ?o }',
+    );
+    expect((await rewriter.rewriteQuery('SELECT * { ?s <ex://p> ?t FILTER(sameTerm(SUBJECT(?t), "lit")) }')).trim())
+      .toEqual(`SELECT ?s ?t WHERE {
+  ?v_0 <ex://q> "lit" .
+  BIND( ?v_0 AS ?s )
+  BIND( TRIPLE( "lit" , <ex://q> , ?v_0 ) AS ?t )
+}`);
+  });
+
+  it('empties a source pattern a generalized triple term would land in', async({ expect }) => {
+    // The source is RDF, so no triple of it holds `<<( "lit" … )>>`.
+    const rewriter = generalizedRdfViewRewriter('CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }');
+    expect((await rewriter.rewriteQuery('SELECT * { ?s <ex://p> ?t FILTER(sameTerm(SUBJECT(?t), "lit")) }')).trim())
+      .toEqual(`SELECT ?s ?t WHERE {
+  FILTER ( FALSE )
+}`);
+  });
+});
+
+describe('the default pipeline over an empty group', () => {
+  const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+    'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }',
+  ])));
+
+  // A zero-length path between equal terms expands to an empty group as well.
+  it.for([ 'SELECT * {}', 'SELECT * { <ex://a> <ex://p>? <ex://a> }' ])(
+    'keeps the empty group of %s as it stands',
+    async(query, { expect }) => {
+      expect((await rewriter.rewriteQuery(query)).trim()).toEqual(`SELECT * WHERE {
+}`);
+    },
+  );
+
+  it('keeps an empty group beside an unfolded pattern', async({ expect }) => {
+    expect((await rewriter.rewriteQuery('SELECT * { { } UNION { ?s <ex://p> ?o } }')).trim())
+      .toEqual(`SELECT ?o ?s WHERE {
+  {
+  }
+  UNION {
+    {
+      ?v_0 <ex://q> ?v_1 .
+      BIND( ?v_1 AS ?o )
+      BIND( ?v_0 AS ?s )
+    }
+  }
+}`);
+  });
+});
+
+describe('the default pipeline over a head variable the pattern writes a triple term into', () => {
+  // The body builds the triple term with a subject read from an object position, so it is type tested.
+  const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+    'CONSTRUCT { <ex://all> <ex://p> ?o } WHERE { ?x <ex://r> ?s BIND(TRIPLE(?s, <ex://q>, ?x) AS ?o) }',
+  ])));
+
+  it('reads the components from the body once the type test makes the construction infallible', async({ expect }) => {
+    expect((await rewriter.rewriteQuery('SELECT * { <ex://all> <ex://p> <<( ?a <ex://q> ?b )>> }')).trim())
+      .toEqual(`SELECT ?a ?b WHERE {
+  {
+    ?v_0 <ex://r> ?v_1 .
+    FILTER ( ( ISIRI( ?v_1 ) || ISBLANK( ?v_1 ) ) )
+  }
+  BIND( ?v_1 AS ?a )
+  BIND( ?v_0 AS ?b )
+}`);
+  });
+});
+
+describe('the default pipeline over an RDF view', () => {
+  it('writes a non-RDF triple term it substitutes as the TRIPLE() raising for it', async({ expect }) => {
+    const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(
+      mappingFromConstructQueries([ 'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }' ]),
+    ));
+    expect((await rewriter.rewriteQuery(
+      'SELECT * { ?a <ex://p> ?o BIND(<<( ?o <ex://p> ?a )>> AS ?t) FILTER(sameTerm(?o, "lit")) }',
+    )).trim()).toEqual(`SELECT ?a ( "lit" AS ?o ) ( TRIPLE( "lit" , <ex://p> , ?a ) AS ?t ) WHERE {
+  ?v_0 <ex://q> "lit" .
+  BIND( ?v_0 AS ?a )
+}`);
+  });
+});
+
 describe('the default pipeline over a generic FILTER', () => {
-  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+  const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
     'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }',
     'CONSTRUCT { ?s <ex://r> ?x } WHERE { ?s <ex://t> ?x . ?x <ex://u> ?z }',
   ])));
@@ -65,14 +259,14 @@ describe('the default pipeline over a generic FILTER', () => {
     // Each conjunct passes the join, the sub-SELECT of its pattern and the BIND renaming its variable.
     expect((await rewriter.rewriteQuery(
       'SELECT * { ?s <ex://p> ?o . ?s <ex://r> ?x FILTER(?x > 5 && REGEX(STR(?o), "a")) }',
-    )).trim()).toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) ( ?uq_x AS ?x ) WHERE {
+    )).trim()).toEqual(`SELECT ?o ?s ?x WHERE {
   {
     {
       ?v_0 <ex://q> ?v_1 .
       FILTER ( REGEX( STR( ?v_1 ) , "a" ) )
     }
-    BIND( ?v_1 AS ?uq_o )
-    BIND( ?v_0 AS ?uq_s )
+    BIND( ?v_1 AS ?o )
+    BIND( ?v_0 AS ?s )
   }
   {
     {
@@ -80,8 +274,8 @@ describe('the default pipeline over a generic FILTER', () => {
       ?v_3 <ex://u> ?v_5 .
       FILTER ( ( ?v_3 > "5"^^<http://www.w3.org/2001/XMLSchema#integer> ) )
     }
-    BIND( ?v_4 AS ?uq_s )
-    BIND( ?v_3 AS ?uq_x )
+    BIND( ?v_4 AS ?s )
+    BIND( ?v_3 AS ?x )
   }
 }`);
   });

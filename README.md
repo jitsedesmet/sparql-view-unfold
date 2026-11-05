@@ -14,7 +14,7 @@ Running SPARQL 1.2 queries — triple terms and all — against RDF 1.1 data is 
 the one the examples below use: a view says how your RDF 1.1 data represents RDF 1.2, and the rewrite hands
 you plain SPARQL 1.1.
 
-The idea is explained in our [demo paper accepted at SEMANTiCS](https://2026-semantics-rewriting.jitsedesmet.be/).
+The idea is explained in our [demo paper published at SEMANTiCS 2026](https://2026-semantics-rewriting.jitsedesmet.be/).
 [View that demo live](https://2026-query-rewriting.demo.jitsedesmet.be/). [ARCHITECTURE.md](ARCHITECTURE.md) maps the code.
 
 ## Installation
@@ -123,16 +123,46 @@ paid a little for the extra `DISTINCT` (Q14: 134 ms to 189 ms). Measure on your 
 
 By default the mapping denotes a standard RDF graph: a solution binding a head variable to a term its
 position cannot hold — a literal subject, a blank node predicate — instantiates no triple, exactly as the
-CONSTRUCT the mapping is written as would not. `mappingFromConstructQueries(constructs, {
-generalizedRdfView: true })` keeps those triples instead, for a view that means to present generalized RDF.
+CONSTRUCT the mapping is written as would not. A type test in the mapping body filters those solutions out,
+and the assertion pushdown drops it wherever the rewritten query already guarantees it.
+`mappingFromConstructQueries(constructs, { generalizedRdfView: true })` keeps those triples instead, for a
+view that means to present generalized RDF: any term in any position, inside triple terms included. The
+source stays RDF. The rewritten query must then run on an engine whose `TRIPLE()` builds generalized triple
+terms, such as Comunica with `rdfVariant: 'generalizedRDF'`.
+
+### Extended engines
+
+The rewriting reads the term type an expression gives off the SPARQL operator tables: `STR(?x)` gives a literal,
+`IRI(?x)` an IRI. An engine may extend an operator to give a value where SPARQL raises a type error (SPARQL 1.1
+§17.3.1). For such an engine, pass an `expressionRange` to `createQueryRewriter` and `mappingFromConstructQueries`
+that answers for what it extends and calls `standardExpressionRange` for the rest.
 
 ### Blank nodes
 
-An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to
-construct a blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: the same inputs
-always give the same identity. Add `internalBnodeAsSpecialLiteralTransformation()` or
-`internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed
-literal or as a prefixed IRI respectively.
+An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to construct a
+blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: the same inputs always give the
+same identity. An argument can be any expression, and one that is unbound or errors counts as a value of its own,
+so a node is still built, one that differs from every node built from a value. A triple term argument is encoded
+through its subject, predicate and object, up to two triple terms deep or the `tripleTermArgumentDepth` given to
+`createQueryRewriter`. Add `internalBnodeAsSpecialLiteralTransformation()` or
+`internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed literal or
+as a prefixed IRI respectively.
+
+Evaluating the rewritten query with Comunica, the engine can encode those identities itself, for a triple term of any
+depth too: pass `{ encodedByExtensionFunction: true }` to the transformation and `internalBnodeExtensionFunctions()` as
+`extensionFunctions`. Both give the same nodes, except where the SPARQL encoding falls short: a triple term deeper
+than it unrolls, a blank node, or an unstable argument in an `OPTIONAL` condition, which it evaluates repeatedly.
+
+```typescript
+const query = await createQueryRewriter([
+  ...createDefaultTransformationPipeline(mapping),
+  internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
+]).rewriteQuery('SELECT * WHERE { ?s ?p ?o }');
+const bindings = await new QueryEngine().queryBindings(query, {
+  sources,
+  extensionFunctions: internalBnodeExtensionFunctions(),
+});
+```
 
 ## Restrictions
 
@@ -154,6 +184,10 @@ only the `WHERE` is rewritten. That graph is virtual, so nothing can be written 
 rewritten `WHERE`. Writing RDF 1.2 through the mapping is a different problem (the view update problem) and
 is not what this does.
 
+`SERVICE` is supported and means what it always does: its endpoint evaluates the pattern over its own data.
+The mapping describes your data, not the endpoint's, so nothing inside a `SERVICE` is unfolded, and the
+restrictions on the user query do not apply inside one.
+
 ## API
 
 The tables below are the short version; the generated
@@ -162,17 +196,17 @@ The tables below are the short version; the generated
 | Function | Description |
 |---|---|
 | `mappingFromConstructQueries(constructQueries, options?)` | Builds the `Mapping` a set of CONSTRUCT query strings denotes. The only way to build one. |
-| `createQueryRewriter(transformations)` | Builds a `QueryRewriter` running those transformations, in order. |
+| `createQueryRewriter(transformations, options?)` | Builds a `QueryRewriter` running those transformations, in order. |
 | `createDefaultTransformationPipeline(mapping, options?)` | The pipeline to use when you have no reason to build your own. |
 | `rewriter.rewriteQuery(query)` | Rewrites a SPARQL query string, asynchronously. |
 | `rewriter.rewriteOperation(operation)` | The same over SPARQL algebra, for callers already holding some. |
 
 | Transformation | Description |
 |---|---|
-| `unfoldingTransformation(mapping, options?)` | The rewriting proper: every triple pattern replaced by the mapping body producing the triples it could match. |
-| `rewriteNonRecursivePathsTransformation()` | Expands non-recursive property paths into BGPs and UNIONs. Belongs before the unfolding. |
+| `unfoldingTransformation(mapping, options?)` | The rewriting proper: every triple pattern outside a `SERVICE` replaced by the mapping body producing the triples it could match. |
+| `rewriteNonRecursivePathsTransformation()` | Expands non-recursive property paths outside a `SERVICE` into BGPs and UNIONs. Belongs before the unfolding. |
 | `filterFalseTransformation()` | Lets every `FILTER(FALSE)` absorb what stands over it, sub-SELECTs included. |
-| `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))` as deep as it goes: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
+| `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))`, `FILTER(sameTerm(?x, ?y))` and term type tests like `FILTER(isIRI(?x) \|\| isBLANK(?x))` as deep as they go: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
 | `pushDownFiltersTransformation()` | Pushes every other filter condition as deep as it keeps its meaning: through DISTINCT, sub-SELECTs, GROUP keys and BINDs, into JOIN operands and UNION branches, and into an OPTIONAL, which becomes a plain join under a condition rejecting its unmatched side. |
 | `pullUpExtendsTransformation()` | Floats every `BIND` as high as the plan allows and drops the ones nothing reads. |
 | `removeProjectionsTransformation()` | Removes inner projections, renaming what they hid to keep the scoping. |
@@ -201,6 +235,26 @@ resolution and so imports `node:module` and `node:path`. Bundlers resolve every 
 before they tree-shake it, so re-exporting this step from the main entry point would make the whole package
 unresolvable for the browser — even in a build that never calls the step. The main entry point stays
 platform-neutral; reach for this subpath from Node.
+
+## Cite
+
+If you are using or extending sparql-view-unfold as part of a scientific publication,
+we would appreciate a citation of our [article](https://2026-semantics-rewriting.jitsedesmet.be/).
+
+```bibtex
+@inproceedings{De_Smet_Demonstration_of_RDF_2026,
+    address = {Ghent, BE},
+    author = {De Smet, Jitse and Jakubowski, Maxime},
+    booktitle = {Companion Volume of the 22nd International Conference on Semantic Systems (SEMANTiCS-C 2026)},
+    month = sep,
+    publisher = {CEUR-WS.org},
+    series = {CEUR Workshop Proceedings},
+    title = {{Demonstration of RDF and SPARQL 1.2 Interoperability through Query Rewriting}},
+    url = {https://2026-semantics-rewriting.jitsedesmet.be/},
+    volume = {4293},
+    year = {2026}
+}
+```
 
 ## License
 

@@ -2,9 +2,14 @@ import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import { DataFactory, Store } from 'n3';
+import { termToString } from 'rdf-string';
+import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
+import type { MappingOptions } from '../lib/mapping.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import type { QueryRewriter } from '../lib/queryRewriter.js';
+import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
+import { rdfVariantKey } from './permissiveTriple.js';
 import {
   nonSingletonTripleConstruct,
   nonTripleTermConstruct,
@@ -13,6 +18,7 @@ import {
   tripleTermConstruct,
 } from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -29,9 +35,16 @@ describe('integration tests', () => {
   const engine = new QueryEngine();
   const DF = DataFactory;
 
-  /** Every comparison below goes through the default pipeline, which is what these tests are here to check. */
-  function rewriterFor(mappers: string[]): ReturnType<typeof createQueryRewriter> {
-    return createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries(mappers)));
+  /**
+   * The rewriter of the default pipeline over the given mappings, which is what these tests are here to check.
+   * @param mappers - The CONSTRUCT queries of the mappings
+   * @param options - What the mapping is configured with
+   * @returns the rewriter
+   */
+  function rewriterFor(mappers: string[], options: MappingOptions = {}): QueryRewriter {
+    return createValidatingQueryRewriter(
+      createDefaultTransformationPipeline(mappingFromConstructQueries(mappers, options)),
+    );
   }
 
   async function sourceToStore(
@@ -44,11 +57,31 @@ describe('integration tests', () => {
     return new Store(queryRes);
   }
 
-  async function storeTo12Store(source: Store, mappers: string[]): Promise<Store> {
+  /**
+   * Whether RDF 1.2 admits a triple: an IRI or a blank node as subject, an IRI as predicate, and the same of a triple
+   * term in the object.
+   * @param triple - The triple to check
+   * @returns whether RDF 1.2 admits it
+   */
+  function isRdfTriple(triple: RDF.BaseQuad): boolean {
+    return (triple.subject.termType === 'NamedNode' || triple.subject.termType === 'BlankNode') &&
+      triple.predicate.termType === 'NamedNode' &&
+      (triple.object.termType !== 'Quad' || isRdfTriple(triple.object));
+  }
+
+  /**
+   * Materialises the graph the mappings denote. Comunica's CONSTRUCT keeps triples RDF does not admit, which
+   * SPARQL 1.1 §16.2 does not instantiate, so this drops them unless the view is generalized RDF.
+   * @param source - The RDF 1.1 store
+   * @param mappers - The CONSTRUCT queries of the mappings
+   * @param options - What the mapping is configured with
+   * @returns the materialised store
+   */
+  async function storeTo12Store(source: Store, mappers: string[], options: MappingOptions = {}): Promise<Store> {
     const result = new Store();
     for (const mapper of mappers) {
-      const subRes = await sourceToStore([ source ], mapper);
-      result.addAll(subRes);
+      const subRes = (await sourceToStore([ source ], mapper)).getQuads(null, null, null, null);
+      result.addQuads(options.generalizedRdfView === true ? subRes : subRes.filter(isRdfTriple));
     }
     return result;
   }
@@ -74,42 +107,114 @@ describe('integration tests', () => {
   }
 
   /**
-   * Converts a binding to a canonical sorted string representation for comparison.
-   * Variables are sorted alphabetically to ensure consistent ordering.
+   * Writes a term out as `rdf-string` does, so that triple terms and literals of different datatypes tell apart. A
+   * blank node is written by its label in the data file, without the prefixes N3 and Comunica give it.
+   * @param term - The term to write
+   * @returns the string
+   */
+  function termToComparableString(term: RDF.Term): string {
+    if (term.termType === 'Quad') {
+      const [ subject, predicate, object ] = [ term.subject, term.predicate, term.object ].map(termToComparableString);
+      return `<<${subject} ${predicate} ${object}>>`;
+    }
+    return term.termType === 'BlankNode' ? `_:${term.value.replace(/^(?:bc_\d+_)*(?:b\d+_)?/u, '')}` : termToString(term);
+  }
+
+  /**
+   * Writes a binding out for comparison, its variables sorted alphabetically.
+   * @param binding - The binding to write
+   * @returns the string
    */
   function bindingToString(binding: RDF.Bindings): string {
     const entries = [ ...binding ]
-      .map(([ variable, term ]) => `${variable.value}=${term.termType}:${term.value}`)
+      .map(([ variable, term ]) => `${variable.value}=${termToComparableString(term)}`)
       .sort()
       .join(',');
     return `{${entries}}`;
   }
 
   /**
-   * For a given RDF 1.1 store, mappers, and user SPARQL 1.2 SELECT query:
-   * - Maps the store to an RDF 1.2 store and runs the SELECT query on it.
-   * - Rewrites the SELECT query for the original store and runs it there.
-   * Returns both bindings arrays as sorted strings for comparison.
+   * Runs a SELECT over the RDF 1.2 store the mappings materialise, and its rewriting over the RDF 1.1 store.
+   * @param store11 - The RDF 1.1 store
+   * @param mappers - The CONSTRUCT queries of the mappings
+   * @param userQuery - The SELECT query
+   * @param options - What the mapping is configured with
+   * @returns the two answers, each as the sorted strings of its bindings
    */
   async function compareSelectRewrittenToMapped(
     store11: Store,
     mappers: string[],
     userQuery: string,
+    options: MappingOptions = {},
   ): Promise<{ resOnMappedData: string[]; resUsingRewriter: string[] }> {
-    const store12 = await storeTo12Store(store11, mappers);
+    const store12 = await storeTo12Store(store11, mappers, options);
+    // A generalized RDF view is evaluated on an engine whose TRIPLE() builds generalized triple terms.
+    const rdfVariant = options.generalizedRdfView === true ? { [rdfVariantKey.name]: 'generalizedRDF' } : {};
     const mappedBindings: RDF.Bindings[] = await arrayifyStream(
-      await engine.queryBindings(userQuery, { sources: [ store12 ]}),
+      await engine.queryBindings(userQuery, { sources: [ store12 ], ...rdfVariant }),
     );
 
-    const rewrittenQuery = await rewriterFor(mappers).rewriteQuery(userQuery);
+    const rewrittenQuery = await rewriterFor(mappers, options).rewriteQuery(userQuery);
     const rewrittenBindings: RDF.Bindings[] = await arrayifyStream(
-      await engine.queryBindings(rewrittenQuery, { sources: [ store11 ]}),
+      await engine.queryBindings(rewrittenQuery, { sources: [ store11 ], ...rdfVariant }),
     );
 
     return {
       resOnMappedData: mappedBindings.map(bindingToString).sort(),
       resUsingRewriter: rewrittenBindings.map(bindingToString).sort(),
     };
+  }
+
+  /**
+   * Checks that a SELECT over the mapped data and its rewriting over the RDF 1.1 data give the same rows, and that
+   * those are the rows expected.
+   * @param expect - The `expect` of the test
+   * @param dataFile - The RDF 1.1 data to load
+   * @param mappers - The CONSTRUCT queries of the mappings
+   * @param userQuery - The SELECT query
+   * @param rows - The rows it has to give
+   * @param options - What the mapping is configured with
+   */
+  async function expectSelectRowsOver(
+    expect: typeof Expect,
+    dataFile: string,
+    mappers: string[],
+    userQuery: string,
+    rows: string[],
+    options: MappingOptions = {},
+  ): Promise<void> {
+    const store11 = await sourceToStore([ dataFile ]);
+    const { resOnMappedData, resUsingRewriter } =
+      await compareSelectRewrittenToMapped(store11, mappers, userQuery, options);
+    expect(resOnMappedData).toEqual(resUsingRewriter);
+    expect(resOnMappedData).toEqual(rows);
+  }
+
+  const prefix = 'PREFIX : <ex://>\n';
+
+  /**
+   * {@link expectSelectRowsOver} permutedPositions.ttl, with the prefix `:` prepended to the query.
+   * @param expect - The `expect` of the test
+   * @param mappers - The CONSTRUCT queries of the view
+   * @param userQuery - The SELECT query, without its prefix
+   * @param rows - The rows it has to give
+   * @param options - What the mapping is configured with
+   */
+  async function expectRowsOverPermutedPositions(
+    expect: typeof Expect,
+    mappers: string[],
+    userQuery: string,
+    rows: string[],
+    options: MappingOptions = {},
+  ): Promise<void> {
+    await expectSelectRowsOver(
+      expect,
+      './test/statics/permutedPositions.ttl',
+      mappers,
+      `${prefix}${userQuery}`,
+      rows,
+      options,
+    );
   }
 
   describe('rdf interop reification - single reified triple', () => {
@@ -551,6 +656,516 @@ describe('integration tests', () => {
          }`,
       );
       expect(resOnMappedData).toEqual(resUsingRewriter);
+    });
+  });
+
+  describe('a repeated variable over mappings that type their head', () => {
+    // A query repeating a variable equates two objects a mapping writes into a subject position, whose type test
+    // has to survive the equality being pushed past it. repeatedVariable.ttl holds a literal pair beside an IRI one.
+    const prefixWithRdf = `${prefix}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n`;
+    const pairConstruct = `${prefixWithRdf}CONSTRUCT { ?o :p ?o2 } WHERE { ?t :x ?o ; :y ?o2 }`;
+    // Not the shared `rdfReificationConstruct`: its `rdf:type` pattern makes a plan that never lost the test.
+    const reificationConstruct =
+      `${prefixWithRdf}CONSTRUCT { ?r rdf:reifies <<( ?s ?p ?o )>> } WHERE { ?r rdf:subject ?s ; rdf:predicate ?p ; rdf:object ?o }`;
+
+    /**
+     * {@link expectSelectRowsOver} repeatedVariable.ttl.
+     * @param expect - The `expect` of the test
+     * @param mappers - The CONSTRUCT queries of the mappings
+     * @param userQuery - The SELECT query, without its prefix
+     * @param rows - The rows it has to give
+     */
+    async function expectRowsOverRepeatedVariable(
+      expect: typeof Expect,
+      mappers: string[],
+      userQuery: string,
+      rows: string[],
+    ): Promise<void> {
+      const query = `${prefixWithRdf}${userQuery}`;
+      await expectSelectRowsOver(expect, './test/statics/repeatedVariable.ttl', mappers, query, rows);
+    }
+
+    it('keeps the type test of a subject equated with its object', async({ expect }) => {
+      await expectRowsOverRepeatedVariable(expect, [ pairConstruct ], 'SELECT * { ?a :p ?a }', [ '{a=ex://c}' ]);
+    });
+
+    it('keeps the type test of a triple term subject equated with its object', async({ expect }) => {
+      await expectRowsOverRepeatedVariable(
+        expect,
+        [ reificationConstruct ],
+        'SELECT * { ?x rdf:reifies <<( ?a :q ?a )>> }',
+        [ '{a=ex://c,x=ex://r2}' ],
+      );
+    });
+
+    it('keeps the triple term test of a merged mapping', async({ expect }) => {
+      await expectRowsOverRepeatedVariable(
+        expect,
+        [ reificationConstruct, pairConstruct ],
+        'SELECT * { ?x rdf:reifies <<( ?a :q ?a )>> }',
+        [ '{a=ex://c,x=ex://r2}' ],
+      );
+    });
+  });
+
+  describe('mappings writing a variable into a position it was not read from', () => {
+    // Every mapping but the first writes a variable its body reads from an object position into a subject or a
+    // predicate position. A literal or a triple term cannot stand there, and a CONSTRUCT instantiates no triple
+    // for such a solution (SPARQL 1.1 §16.2), so the mapping body tests the term type of that variable.
+    // permutedPositions.ttl holds objects of every kind of term; the comment on each test names the rows that
+    // tell it apart from a rewrite that lost a type test, or that dropped what it should not have.
+    const mappers = [
+      // `:knows` as it stands, objects of every kind included.
+      `${prefix}CONSTRUCT WHERE { ?s :knows ?o }`,
+      // An object written into the subject position.
+      `${prefix}CONSTRUCT { ?o :knownBy ?s } WHERE { ?s :knows ?o }`,
+      // An object written into the subject position of a triple term the head builds.
+      `${prefix}CONSTRUCT { ?s :claims <<( ?o :knownBy ?s )>> } WHERE { ?s :knows ?o }`,
+      // Objects written into the subject and into the predicate position.
+      `${prefix}CONSTRUCT { ?s ?p ?o } WHERE { ?row :subj ?s ; :pred ?p ; :obj ?o }`,
+      // The object of either branch of a UNION written into the subject position.
+      `${prefix}CONSTRUCT { ?o :contactOf ?s } WHERE { { ?s :knows ?o } UNION { ?s :met ?o } }`,
+      // The same beside an OPTIONAL, whose variable the head needs bound as well.
+      `${prefix}CONSTRUCT { ?o :introducedBy ?w } WHERE { ?s :met ?o OPTIONAL { ?s :via ?w } }`,
+    ];
+
+    it('returns an object as subject only where it can be one', async({ expect }) => {
+      // "Bob", 42 and the triple term make no `:knownBy` triple: a rewrite without the type test returns them as
+      // `?x`. The blank node does make one, which a rewrite testing for an IRI alone would lose.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?x :knownBy ?y }',
+        [
+          '{x=_:someone,y=ex://dave}',
+          '{x=ex://bob,y=ex://alice}',
+          '{x=ex://carol,y=ex://bob}',
+          '{x=ex://carol,y=ex://carol}',
+          '{x=ex://erin,y=_:someone}',
+        ],
+      );
+    });
+
+    it('returns an object as predicate only where it is an IRI', async({ expect }) => {
+      // Of the table rows with `:obj :alice` only `:r1` is a triple: `:r3` has a literal subject, and `:r4`, `:r5`
+      // and `:r6` a literal, a blank node and a triple term as predicate - a rewrite admitting a blank node there,
+      // as a subject does, keeps `:r5`. "Bob" and "Zoe", objects of `:alice`, make no `:knownBy` or `:contactOf`
+      // triple.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s ?p :alice }',
+        [
+          '{p=ex://contactOf,s=ex://bob}',
+          '{p=ex://contactOf,s=ex://dave}',
+          '{p=ex://knownBy,s=ex://bob}',
+          '{p=ex://likes,s=ex://carol}',
+        ],
+      );
+    });
+
+    it('still tests the subject where the query fixes the predicate', async({ expect }) => {
+      // `:likes` decides the type test of the predicate, not the one of the subject: `:r3` ("Dave") would be back.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :likes ?o }',
+        [
+          '{o="tea",s=ex://carol}',
+          '{o=ex://alice,s=ex://carol}',
+        ],
+      );
+    });
+
+    it('builds a triple term only out of an object that can be its subject', async({ expect }) => {
+      // "Bob", 42 and the triple term make no `:claims` triple. Without the type test, building the triple term
+      // raises for them and leaves `?t` unbound: rows of `:alice`, `:bob` and `:carol` without a `?t` come back.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :claims ?t }',
+        [
+          '{s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
+          '{s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
+          '{s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
+          '{s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
+          '{s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
+        ],
+      );
+    });
+
+    it('matches a triple term pattern only where the head builds a triple term', async({ expect }) => {
+      // The same rows tell: without a type test, reading the positions of the triple term that could not be built
+      // binds neither `?x` nor `?y`, and `:alice`, `:bob` and `:carol` come back with `?s` alone.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :claims <<( ?x :knownBy ?y )>> }',
+        [
+          '{s=_:someone,x=ex://erin,y=_:someone}',
+          '{s=ex://alice,x=ex://bob,y=ex://alice}',
+          '{s=ex://bob,x=ex://carol,y=ex://bob}',
+          '{s=ex://carol,x=ex://carol,y=ex://carol}',
+          '{s=ex://dave,x=_:someone,y=ex://dave}',
+        ],
+      );
+    });
+
+    it('tests the objects of both branches of a UNION body', async({ expect }) => {
+      // "Bob", 42 and the triple term from the `:knows` branch, and "Zoe" from the `:met` one, make no triple.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?x :contactOf ?y }',
+        [
+          '{x=_:someone,y=ex://dave}',
+          '{x=ex://alice,y=ex://erin}',
+          '{x=ex://bob,y=ex://alice}',
+          '{x=ex://carol,y=ex://bob}',
+          '{x=ex://carol,y=ex://carol}',
+          '{x=ex://dave,y=ex://alice}',
+          '{x=ex://erin,y=_:someone}',
+        ],
+      );
+    });
+
+    it('tests an object beside an OPTIONAL whose variable has to be bound', async({ expect }) => {
+      // "Zoe" has an introducer, so only the type test keeps it out; `:alice`, met by `:erin`, has none, so only
+      // `bound(?w)` does - a rewrite without it returns `:alice` with no `?w`.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?x :introducedBy ?w }',
+        [
+          '{w=ex://bob,x=ex://dave}',
+        ],
+      );
+    });
+
+    it('drops only the branch a user isLITERAL contradicts', async({ expect }) => {
+      // No `:knownBy` triple has a literal subject, so only the `:knows` branch has rows here. A rewrite without
+      // the type test returns "Bob" and 42 from the `:knownBy` branch as well, twice over in all; one emptying the
+      // whole UNION loses both.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { { ?x :knownBy ?y } UNION { ?y :knows ?x } FILTER(isLITERAL(?x)) }',
+        [
+          '{x="42"^^http://www.w3.org/2001/XMLSchema#integer,y=ex://bob}',
+          '{x="Bob",y=ex://alice}',
+        ],
+      );
+    });
+
+    it('keeps the rows a user isIRI || isBLANK restating the mapping\'s test keeps', async({ expect }) => {
+      // The two tests are one, so the rewrite needs only one of them: a rewrite that took either for the other
+      // and dropped both returns "Bob", 42, "Zoe" and the triple term.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?x :contactOf ?y FILTER(isIRI(?x) || isBLANK(?x)) }',
+        [
+          '{x=_:someone,y=ex://dave}',
+          '{x=ex://alice,y=ex://erin}',
+          '{x=ex://bob,y=ex://alice}',
+          '{x=ex://carol,y=ex://bob}',
+          '{x=ex://carol,y=ex://carol}',
+          '{x=ex://dave,y=ex://alice}',
+          '{x=ex://erin,y=_:someone}',
+        ],
+      );
+    });
+
+    it('narrows the mapping\'s test to a user isIRI', async({ expect }) => {
+      // The blank node passes the mapping's test and fails the user's: a rewrite keeping only the wider of the two
+      // returns `_:someone` as `?x`.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?x :knownBy ?y FILTER(isIRI(?x)) }',
+        [
+          '{x=ex://bob,y=ex://alice}',
+          '{x=ex://carol,y=ex://bob}',
+          '{x=ex://carol,y=ex://carol}',
+          '{x=ex://erin,y=_:someone}',
+        ],
+      );
+    });
+
+    it('joins a variable in a subject position with one in an object position', async({ expect }) => {
+      // `?x` is the subject of `:knownBy`, typed, and an object of `:knows`, which holds anything: "Bob", 42 and
+      // the triple term are objects of `:knows` the join would keep if `:knownBy` had kept them as subjects.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?x :knownBy ?y . ?z :knows ?x }',
+        [
+          '{x=_:someone,y=ex://dave,z=ex://dave}',
+          '{x=ex://bob,y=ex://alice,z=ex://alice}',
+          '{x=ex://carol,y=ex://bob,z=ex://bob}',
+          '{x=ex://carol,y=ex://bob,z=ex://carol}',
+          '{x=ex://carol,y=ex://carol,z=ex://bob}',
+          '{x=ex://carol,y=ex://carol,z=ex://carol}',
+          '{x=ex://erin,y=_:someone,z=_:someone}',
+        ],
+      );
+    });
+
+    it('carries the type test across a sameTerm between the two patterns', async({ expect }) => {
+      // The join above as a clique `{ ?x, ?w }`: every reading of it holds only what `?x` can, so the same rows
+      // tell - "Bob", 42 and the triple term, as both `?x` and `?w`.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?x :knownBy ?y . ?z :knows ?w FILTER(sameTerm(?x, ?w)) }',
+        [
+          '{w=_:someone,x=_:someone,y=ex://dave,z=ex://dave}',
+          '{w=ex://bob,x=ex://bob,y=ex://alice,z=ex://alice}',
+          '{w=ex://carol,x=ex://carol,y=ex://bob,z=ex://bob}',
+          '{w=ex://carol,x=ex://carol,y=ex://bob,z=ex://carol}',
+          '{w=ex://carol,x=ex://carol,y=ex://carol,z=ex://bob}',
+          '{w=ex://carol,x=ex://carol,y=ex://carol,z=ex://carol}',
+          '{w=ex://erin,x=ex://erin,y=_:someone,z=_:someone}',
+        ],
+      );
+    });
+
+    it('drops nothing when a sameTerm makes the type test redundant', async({ expect }) => {
+      // Equating `?x` with `?y` puts the object the test is about in the subject position of `:knows`, which
+      // decides the test: what is left to tell is the loop on `:carol`, which a rewrite emptying the query loses.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?x :knownBy ?y FILTER(sameTerm(?x, ?y)) }',
+        [
+          '{x=ex://carol,y=ex://carol}',
+        ],
+      );
+    });
+
+    it('leaves an object no subject can be without a match in an OPTIONAL', async({ expect }) => {
+      // "Bob", 42 and the triple term keep their row, with no `?k`: a rewrite without the type test finds them a
+      // `?k`, and one making the OPTIONAL a join loses them.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :knows ?o OPTIONAL { ?o :knownBy ?k } }',
+        [
+          '{k=_:someone,o=ex://erin,s=_:someone}',
+          '{k=ex://alice,o=ex://bob,s=ex://alice}',
+          '{k=ex://bob,o=ex://carol,s=ex://bob}',
+          '{k=ex://bob,o=ex://carol,s=ex://carol}',
+          '{k=ex://carol,o=ex://carol,s=ex://bob}',
+          '{k=ex://carol,o=ex://carol,s=ex://carol}',
+          '{k=ex://dave,o=_:someone,s=ex://dave}',
+          '{o="42"^^http://www.w3.org/2001/XMLSchema#integer,s=ex://bob}',
+          '{o="Bob",s=ex://alice}',
+          '{o=<<ex://alice ex://knows ex://bob>>,s=ex://carol}',
+        ],
+      );
+    });
+
+    it('keeps a bound() on a triple term the query builds out of an object', async({ expect }) => {
+      // Building `<<( ?o :knownBy ?s )>>` raises for "Bob", 42 and the triple term, which leaves `?t` unbound: a
+      // rewrite dropping the condition returns their rows without a `?t`.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :knows ?o BIND(<<( ?o :knownBy ?s )>> AS ?t) FILTER(bound(?t)) }',
+        [
+          '{o=_:someone,s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
+          '{o=ex://bob,s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
+          '{o=ex://carol,s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
+          '{o=ex://carol,s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
+          '{o=ex://erin,s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
+        ],
+      );
+    });
+
+    it('keeps a sameTerm over a BIND of a variable one UNION branch leaves unbound', async({ expect }) => {
+      // `sameTerm(?t, ?z)` raises where `?z` is unbound, so the `:likes` branch has no rows: a rewrite dropping the
+      // filter returns `:carol` liking `:alice` and "tea". "Bob", 42 and the triple term tell the type test again.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { { ?a :knownBy ?z } UNION { ?a :likes ?b } BIND(?z AS ?t) FILTER(sameTerm(?t, ?z)) }',
+        [
+          '{a=_:someone,t=ex://dave,z=ex://dave}',
+          '{a=ex://bob,t=ex://alice,z=ex://alice}',
+          '{a=ex://carol,t=ex://bob,z=ex://bob}',
+          '{a=ex://carol,t=ex://carol,z=ex://carol}',
+          '{a=ex://erin,t=_:someone,z=_:someone}',
+        ],
+      );
+    });
+
+    it('returns the rows the type tests drop when the mapping is a generalized RDF view', async({ expect }) => {
+      // The query of the second test above: with `generalizedRdfView` there is no type test, and the triples it
+      // would drop - the ones Comunica's CONSTRUCT keeps - are what the view holds.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s ?p :alice }',
+        [
+          '{p="likes",s=ex://bob}',
+          '{p=<<ex://a ex://b ex://c>>,s=ex://erin}',
+          '{p=_:p,s=ex://dave}',
+          '{p=ex://contactOf,s="Bob"}',
+          '{p=ex://contactOf,s="Zoe"}',
+          '{p=ex://contactOf,s=ex://bob}',
+          '{p=ex://contactOf,s=ex://dave}',
+          '{p=ex://knownBy,s="Bob"}',
+          '{p=ex://knownBy,s=ex://bob}',
+          '{p=ex://likes,s="Dave"}',
+          '{p=ex://likes,s=ex://carol}',
+        ],
+        { generalizedRdfView: true },
+      );
+    });
+
+    it('matches a literal subject the query writes in a generalized RDF view', async({ expect }) => {
+      // "Bob" is the subject of a `:knownBy` and a `:contactOf` triple: a rewrite holding the subject to the terms RDF
+      // admits there contradicts the literal and finds nothing.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { "Bob" ?p ?o }',
+        [
+          '{o=ex://alice,p=ex://contactOf}',
+          '{o=ex://alice,p=ex://knownBy}',
+        ],
+        { generalizedRdfView: true },
+      );
+    });
+
+    it('matches a variable in two positions with the literal a generalized RDF head writes', async({ expect }) => {
+      // The view holds `"Bob" :named "Bob"`. A lone mapping keeps its head, constant and all, so a rewrite holding `?x`
+      // to the subjects RDF admits contradicts that literal and finds nothing.
+      await expectRowsOverPermutedPositions(
+        expect,
+        [ `${prefix}CONSTRUCT { ?o :named "Bob" } WHERE { :alice :knows ?o }` ],
+        'SELECT * WHERE { ?x :named ?x }',
+        [
+          '{x="Bob"}',
+        ],
+        { generalizedRdfView: true },
+      );
+    });
+
+    it('matches the literal subject a generalized RDF head writes', async({ expect }) => {
+      // Only a generalized RDF view admits a literal subject in its template.
+      await expectRowsOverPermutedPositions(
+        expect,
+        [ `${prefix}CONSTRUCT { "Bob" :names ?o } WHERE { :alice :knows ?o }` ],
+        'SELECT * WHERE { ?x :names ?x }',
+        [
+          '{x="Bob"}',
+        ],
+        { generalizedRdfView: true },
+      );
+    });
+
+    it('matches the triple term subject a generalized RDF head writes', async({ expect }) => {
+      // Only a generalized RDF view admits a triple term subject in its template. Reading the positions of that
+      // subject builds no triple term, so the rows are the `:knows` triples of `:carol`, triple term object and all.
+      await expectRowsOverPermutedPositions(
+        expect,
+        [ `${prefix}CONSTRUCT { <<( ?s :knows ?o )>> :statedBy ?s } WHERE { ?s :knows ?o }` ],
+        'SELECT * WHERE { <<( ?s :knows ?o )>> :statedBy :carol }',
+        [
+          '{o=<<ex://alice ex://knows ex://bob>>,s=ex://carol}',
+          '{o=ex://carol,s=ex://carol}',
+        ],
+        { generalizedRdfView: true },
+      );
+    });
+
+    it('builds a generalized triple term a generalized RDF view holds', async({ expect }) => {
+      // The triple term the head writes has "Bob", 42 or a triple term as subject for some rows.
+      await expectRowsOverPermutedPositions(
+        expect,
+        mappers,
+        'SELECT * WHERE { ?s :claims ?t }',
+        [
+          '{s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
+          '{s=ex://alice,t=<<"Bob" ex://knownBy ex://alice>>}',
+          '{s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
+          '{s=ex://bob,t=<<"42"^^http://www.w3.org/2001/XMLSchema#integer ex://knownBy ex://bob>>}',
+          '{s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
+          '{s=ex://carol,t=<<<<ex://alice ex://knows ex://bob>> ex://knownBy ex://carol>>}',
+          '{s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
+          '{s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
+        ],
+        { generalizedRdfView: true },
+      );
+    });
+
+    it('builds the generalized triple term a generalized RDF head writes', async({ expect }) => {
+      await expectRowsOverPermutedPositions(
+        expect,
+        [ `${prefix}CONSTRUCT { ?s :claims <<( ?o :knownBy ?s )>> } WHERE { ?s :knows ?o }` ],
+        'SELECT * WHERE { ?s :claims ?t }',
+        [
+          '{s=_:someone,t=<<ex://erin ex://knownBy _:someone>>}',
+          '{s=ex://alice,t=<<"Bob" ex://knownBy ex://alice>>}',
+          '{s=ex://alice,t=<<ex://bob ex://knownBy ex://alice>>}',
+          '{s=ex://bob,t=<<"42"^^http://www.w3.org/2001/XMLSchema#integer ex://knownBy ex://bob>>}',
+          '{s=ex://bob,t=<<ex://carol ex://knownBy ex://bob>>}',
+          '{s=ex://carol,t=<<<<ex://alice ex://knows ex://bob>> ex://knownBy ex://carol>>}',
+          '{s=ex://carol,t=<<ex://carol ex://knownBy ex://carol>>}',
+          '{s=ex://dave,t=<<_:someone ex://knownBy ex://dave>>}',
+        ],
+        { generalizedRdfView: true },
+      );
+    });
+
+    // The passes after the unfolding read a triple term the query builds as a generalized one, so none of these
+    // loses a row of a non-RDF triple term.
+    it.for([
+      'SELECT * WHERE { ?s :claims ?t FILTER(isLITERAL(SUBJECT(?t))) }',
+      'SELECT * WHERE { ?s :claims ?t BIND(SUBJECT(?t) AS ?x) FILTER(isLITERAL(?x)) }',
+      'SELECT * WHERE { ?s :claims <<( ?x :knownBy ?y )>> FILTER(isLITERAL(?x)) }',
+      'SELECT * WHERE { ?s :claims ?t FILTER(isTRIPLE(SUBJECT(?t))) }',
+      'SELECT * WHERE { ?s :claims ?t FILTER(?t = TRIPLE("Bob", :knownBy, :alice)) }',
+      'SELECT * WHERE { ?s :claims ?t FILTER(sameTerm(SUBJECT(?t), "Bob")) }',
+      'SELECT * WHERE { ?s :claims ?t BIND(TRIPLE(?s, :p, ?t) AS ?u) FILTER(isLITERAL(SUBJECT(OBJECT(?u)))) }',
+      'SELECT * WHERE { ?s :claims ?t . ?t2 ?p ?o FILTER(?t2 = SUBJECT(?t)) }',
+      'SELECT * WHERE { ?s :claims ?t BIND(TRIPLE(SUBJECT(?t), :p, ?s) AS ?u) }',
+      'SELECT * WHERE { ?s :claims ?t BIND(TRIPLE(?t, :p, ?s) AS ?u) FILTER(BOUND(?u)) }',
+      'SELECT * WHERE { ?s :claims ?t VALUES ?x { "Bob" 42 } FILTER(SUBJECT(?t) = ?x) }',
+      'SELECT * WHERE { ?s :claims ?t . ?s2 :claims ?t }',
+      'SELECT * WHERE { ?s :claims ?t OPTIONAL { ?s :claims ?t2 FILTER(isLITERAL(SUBJECT(?t2))) } }',
+      'SELECT ?x (COUNT(*) AS ?n) WHERE { ?s :claims ?t BIND(SUBJECT(?t) AS ?x) } GROUP BY ?x',
+      'SELECT * WHERE { ?s :claims ?t MINUS { ?s :claims ?t2 FILTER(isIRI(SUBJECT(?t2))) } }',
+    ])('agrees with a generalized RDF view inside its triple terms: %s', async(userQuery, { expect }) => {
+      const store11 = await sourceToStore([ './test/statics/permutedPositions.ttl' ]);
+      const headWritingTripleTerm = `${prefix}CONSTRUCT { ?s :claims <<( ?o :knownBy ?s )>> } WHERE { ?s :knows ?o }`;
+      for (const view of [ mappers, [ headWritingTripleTerm ]]) {
+        const { resOnMappedData, resUsingRewriter } =
+          await compareSelectRewrittenToMapped(store11, view, `${prefix}${userQuery}`, { generalizedRdfView: true });
+        expect(resUsingRewriter).toEqual(resOnMappedData);
+        expect(resOnMappedData).not.toHaveLength(0);
+      }
+    });
+
+    it('matches a triple term pattern of a generalized RDF head whatever its subject', async({ expect }) => {
+      // Unifying the two triple terms builds none, so "Bob", 42 and a triple term come back as `?x`.
+      await expectRowsOverPermutedPositions(
+        expect,
+        [ `${prefix}CONSTRUCT { ?s :claims <<( ?o :knownBy ?s )>> } WHERE { ?s :knows ?o }` ],
+        'SELECT * WHERE { ?s :claims <<( ?x :knownBy ?y )>> }',
+        [
+          '{s=_:someone,x=ex://erin,y=_:someone}',
+          '{s=ex://alice,x="Bob",y=ex://alice}',
+          '{s=ex://alice,x=ex://bob,y=ex://alice}',
+          '{s=ex://bob,x="42"^^http://www.w3.org/2001/XMLSchema#integer,y=ex://bob}',
+          '{s=ex://bob,x=ex://carol,y=ex://bob}',
+          '{s=ex://carol,x=<<ex://alice ex://knows ex://bob>>,y=ex://carol}',
+          '{s=ex://carol,x=ex://carol,y=ex://carol}',
+          '{s=ex://dave,x=_:someone,y=ex://dave}',
+        ],
+        { generalizedRdfView: true },
+      );
     });
   });
 });

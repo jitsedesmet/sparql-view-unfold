@@ -22,9 +22,12 @@ RDF 1.2 pattern and its RDF 1.1 representation. `mappingFromConstructQueries`
 
 The body also gets what SPARQL 1.1 §16.2 asks of a CONSTRUCT: a `FILTER(bound(?x))` per head variable the
 body does not certainly bind, and a type test per head variable whose `vRanges` range exceeds what its head
-position admits (`generalizedRdfView` turns those off). Both read one template triple, so both happen
-*before* the merge — after it the head is three plain variables and a triple term is a BIND whose interior
-nothing re-reads, which is exactly the case the type tests are for.
+position admits (`rangeOfPosition`: any term in a `generalizedRdfView`); a BIND's range is what its expression's
+operators give, so `BIND(IRI(…) AS ?s)` needs none. Both read one template triple, so both happen *before* the
+merge — after it the head is three plain variables and a triple term is a BIND whose interior nothing re-reads,
+which is exactly the case the type tests are for. The unfolding of a generalized RDF view also sets
+`TransformationContext.generalizedRdf`, so the later passes read a triple term the query builds as a generalized
+one (`rangeOfPosition(position, c.generalizedRdf)`).
 
 ## The rewriting, step by step
 
@@ -33,13 +36,13 @@ Given a query Q without recursive paths and a mapping with head H and body B:
 1. **Rewrite the paths** to triple patterns without any paths — `lib/transformations/pathTransformation.ts`.
 2. **For each triple pattern of Q, unfold B into it** — `lib/transformations/rewriteSinglePattern.ts`:
    1. unify H with the pattern, giving groups of equality between expressions, head variables and triple
-      term variables (`lib/ClusterSolver.ts`);
+      term variables (`lib/ClusterSolver.ts`), each held to what its position of H admits;
    2. `B' = FILTER(B)` with the equality between head variables that have to be equal;
    3. `B' = FILTER(B')` with the other constraints found on those variables (equality with a static term);
-   4. `B' = EXTEND(B')` with how the pattern's variables are constructed from the head variables;
-   5. `B' = FILTER(B')` asserting those variables really are assigned — reading `SUBJECT`/`PREDICATE`/
-      `OBJECT` of a non-triple-term raises, which would leave the BIND target unbound rather than reject
-      the solution;
+   4. `B' = FILTER(B')` with `isTRIPLE(x)` per `SUBJECT(x)`/`PREDICATE(x)`/`OBJECT(x)` the binds of step 5 read:
+      on a non-triple-term these raise, and a raising BIND leaves its target unbound rather than rejecting the
+      solution (`bindEvaluationGuards`);
+   5. `B' = EXTEND(B')` with how the pattern's variables are constructed from the head variables;
    6. `B' = PROJECT(B')` onto the pattern's own variables.
 
    A pattern that cannot be unified with H at all raises `RewriteNoMatchError` and unfolds to
@@ -61,7 +64,8 @@ Given a query Q without recursive paths and a mapping with head H and body B:
    substituted to the lexicographically first member, with a BIND per member replacing the ones it
    substituted away (`?s ?p ?o FILTER(sameTerm(?s, ?o))` becomes `?o ?p ?o . BIND(?o AS ?s)`, keeping
    `pVars` and `cVars` unchanged). The two interact: a term meeting a clique fixes every variable in it at
-   once.
+   once. It also moves the type tests of the mapping (`isIRI(?x) || isBLANK(?x)`), which hold of every member
+   of a clique alike and are dropped wherever the plan already confines the variable to those types.
 
    Two invariants that are not guessable from the code, and are argued for in the pass's `@fileoverview`:
    a clique is split by *edges* rather than by variables, so that what is pushed down plus what is kept on
@@ -80,35 +84,50 @@ Given a query Q without recursive paths and a mapping with head H and body B:
    SPARQL's error propagation (`lib/utils/unboundRejection.ts`) says which variables it needs bound, which
    is what turns an OPTIONAL under it into a JOIN.
 
+A `SERVICE` is evaluated by its endpoint over that endpoint's own data, so its answer does not depend on the
+data the mapping is defined over: steps 1 and 2 leave it as it stands. The later
+steps are equivalences over any data and may still rewrite inside it.
+
 `pullUpExtends` is the mirror of steps 5 and 8: it floats the BINDs the pushdowns left at the leaves back
 up the plan and deletes the ones nothing above reads. A bind and a condition reading it swap by the same
 substitution either way (`lib/utils/bindSubstitution.ts`), and the three passes read one set of licences
 for what an operand of a JOIN decides (`lib/utils/pushdownLicences.ts`).
 
-## Variable prefixes
+## Variable names
 
-Three prefixes, in `lib/consts.ts`, and two of them are load-bearing:
+Nothing is told apart by its name. The `ClusterSolver` learns which variables are the user query's from the
+side of `register` they arrive on; every other variable in a cluster is the mapping's. Names still have to
+differ, since the solver keys variables by name and a mapping body shares a scope with the binds of its
+pattern.
 
-- `uq_` — every variable of the user query, renamed before anything runs. This is the **only** prefix the
-  rewriting classifies on: a variable in a cluster carries it exactly when it came from the user query, and
-  every other variable in that cluster belongs to the mapping.
-- `mi_` — every variable of a mapping, head and body alike, so a mapping cannot collide with the query it
-  is unfolded into.
-- `m_` — the three variables of the generic head several mappings are merged into.
+The context holds every variable name in use in the rewrite (`usedVariableNames`), seeded with the whole
+query, and every pass coining a name claims it there. The unfolding renames a mapping variable whose name is
+in use under `mi_`; the generic head of merged mappings is `?m_s ?m_p ?m_o` (`lib/consts.ts`).
 
 Nothing namespaces the *patterns* apart: each is unfolded into a sub-SELECT projecting only its own (user
-query) variables, so the mapping variables of two patterns are in two scopes already. Only the `uq_`
-variables are meant to be shared between patterns, being the natural join keys. The one exception is the
-existence variable a pattern binding nothing projects in place of an empty projection — that one leaves the
-sub-SELECT, so the context coins it (`mExists0`, `mExists1`, …), holding the count for the whole rewrite.
-It is never bound; coining it keeps it apart from the variables the pattern does bind.
+query) variables, so the mapping variables of two patterns are in two scopes already. The one variable
+leaving a sub-SELECT is the existence variable a pattern binding nothing projects in place of an empty
+projection (`mExists0`, `mExists1`, …), which is never bound.
 
 ## Blank nodes
 
 An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to
 *construct* a blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: same inputs,
-same identity. Two transformations materialise it — `internalBnodeAsSpecialLiteral` as a typed literal,
-`internalBnodeAsSpecialIri` as a prefixed IRI whose length SHA-1 keeps manageable.
+same identity. An argument can be any expression, and one that is unbound or errors counts as a value of its own,
+as a `BIND` would leave it, so a node is still built, one that differs from every node built from a value.
+
+Every string in an encoding is written with its length, so it needs no escaping. A triple term argument is encoded
+through its components, up to the context's `tripleTermArgumentDepth` (2) deep since an expression cannot recurse;
+a deeper one leaves the node unbound. Outside an `OPTIONAL` condition, which has no input to bind it in, an
+argument that is no term is bound to a fresh variable first, so it is evaluated once, and the encoding leaves out
+the branches the `vRanges` and `cVars` of the input rule out. Two transformations materialise it —
+`internalBnodeAsSpecialLiteralTransformation` as a typed literal, `internalBnodeAsSpecialIriTransformation` as a
+prefixed IRI whose length SHA-1 keeps manageable, each through its `InternalBnodeMaterialisation`.
+
+With `encodedByExtensionFunction`, an extension function of the engine, `<internal://blank/encoding>`, gives the
+encoding from the evaluated arguments instead, at any depth, and the same materialisation turns it into the node
+(`lib/transformations/bnodeExtensionFunction.ts`). An engine errors the call when an argument errors, so each argument
+`e` is wrapped as `COALESCE(TRIPLE(<internal://blank/argument>, <internal://blank/argument>, e), <internal://blank/unbound>)`.
 
 ## SPARQL quirks worth knowing
 
@@ -123,6 +142,24 @@ standard mappings between RDF 1.1 and RDF 1.2.
 - `SELECT * { FILTER(FALSE) }` → 0 bindings
 
 So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
+
+**An EXISTS sees the solution μ it is evaluated for.** SPARQL 1.2 starts every group of its pattern, also in a
+sub-SELECT, from μ ([ContextSolution](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution)); above a GROUP
+only its keys and aggregates remain. A pass reading ranges runs through `rewriteInExistenceScopes`, which rewrites each
+pattern with μ as `existenceScope` once the pass has placed the EXISTS. The unfolding moves no EXISTS, so it uses
+`rewriteInExistenceScopesBeforePass`, which leaves the mapping bodies alone.
+
+A BIND of a variable μ binds is undefined ([Extend](https://www.w3.org/TR/sparql12-query/#defn_extend)), so per
+variable `?o` of μ (`outerBinding`):
+
+| μ binds `?o` | unfolding (`BIND(?mi_s AS ?o)`)                             | `removeProjections`  |
+|--------------|-------------------------------------------------------------|----------------------|
+| certainly    | `FILTER(sameTerm(?mi_s, ?o))` instead                       | keeps the name       |
+| maybe        | UNION of that FILTER and `{ … FILTER(!BOUND(?o)) } BIND(…)` | keeps the projection |
+| not          | the BIND                                                    | renames              |
+
+Each variable μ may bind doubles the subquery. The pushdown writes no term for a variable of μ, and `pullUpExtends`
+moves no BIND of one.
 
 ## Still to settle
 

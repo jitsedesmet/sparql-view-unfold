@@ -9,7 +9,7 @@ import {
   isStableExpression,
   splitConjunction,
 } from '../utils/expressionHelpers.js';
-import { keep, mapOperationPreOrderKeepingMetadata } from '../utils/metadataKeepingTraversal.js';
+import { keep, mapPreOrderInExistenceScopes } from '../utils/metadataKeepingTraversal.js';
 import type { SingleInputOperation } from '../utils/operationhelpers.js';
 import { groupingKeysOf, rebuildMinus, rebuildOverInput } from '../utils/operationhelpers.js';
 import {
@@ -64,10 +64,10 @@ interface Conjunct {
  * // After:  SELECT * WHERE { { SELECT DISTINCT ?x { ?x :p ?y FILTER(?x > 5) } } ?x :q ?z FILTER(?x > 5) }
  */
 export function pushDownFilters<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  return mapOperationPreOrderKeepingMetadata(op, {
-    [Algebra.Types.FILTER]: (filter: Algebra.Filter) => keep(sinkFilter(c, filter)),
-    [Algebra.Types.LEFT_JOIN]: (leftJoin: Algebra.LeftJoin) => keep(sinkOptionalCondition(c, leftJoin)),
-  });
+  return mapPreOrderInExistenceScopes(c, op, context => ({
+    [Algebra.Types.FILTER]: (filter: Algebra.Filter) => keep(sinkFilter(context, filter)),
+    [Algebra.Types.LEFT_JOIN]: (leftJoin: Algebra.LeftJoin) => keep(sinkOptionalCondition(context, leftJoin)),
+  }));
 }
 
 /**
@@ -158,7 +158,7 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
     case Algebra.Types.REDUCED:
       // A sub-SELECT is printed from its DISTINCT down as one, so only what its projection lets in passes.
       return sinkIntoSingleInput(c, conjuncts, op, op.input.type === Algebra.Types.PROJECT ?
-        projectionLicence(op.input) :
+        projectionLicence(c, op.input) :
           () => true);
     case Algebra.Types.ORDER_BY:
     case Algebra.Types.FROM:
@@ -168,7 +168,7 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
     case Algebra.Types.MINUS:
       return rebuildMinus(c, op, filterOver(c, op.input[0], conjuncts), op.input[1]);
     case Algebra.Types.PROJECT:
-      return sinkIntoSingleInput(c, conjuncts, op, projectionLicence(op));
+      return sinkIntoSingleInput(c, conjuncts, op, projectionLicence(c, op));
     case Algebra.Types.GROUP: {
       // A conjunct on keys alone selects whole groups. That needs a key, since a keyless GROUP makes a group
       // of an empty input, and every moving conjunct reads at least one variable to be a key.
@@ -176,7 +176,7 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
       return sinkIntoSingleInput(c, conjuncts, op, conjunct => [ ...conjunct.reads ].every(name => keys.has(name)));
     }
     case Algebra.Types.GRAPH: {
-      const { cVars } = cpMetaOf(op.input);
+      const { cVars } = cpMetaOf(c, op.input);
       return sinkIntoSingleInput(c, conjuncts, op, conjunct => graphPatternDecides(conjunct.reads, op.name, cVars));
     }
     case Algebra.Types.EXTEND:
@@ -195,17 +195,18 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
  * What a sub-SELECT lets into its WHERE clause: a conjunct reading what it projects or never binds below,
  * since a variable it drops is unbound above it. An aggregating one only lets in a conjunct on projected
  * grouping keys, which sinks below the GROUP: `toAst` would print anything left above it into the WHERE clause.
+ * @param c - The transformation context
  * @param project - The projection of the sub-SELECT
  * @returns whether a conjunct may enter it
  */
-function projectionLicence(project: Algebra.Project): (conjunct: Conjunct) => boolean {
+function projectionLicence(c: TransformationContext, project: Algebra.Project): (conjunct: Conjunct) => boolean {
   const projected = new Set(project.variables.map(variable => variable.value));
   const group = groupBelowSelectClause(project.input);
   if (group !== undefined) {
     const keys = groupingKeysOf(group);
     return conjunct => [ ...conjunct.reads ].every(name => projected.has(name) && keys.has(name));
   }
-  const { vRanges } = cpMetaOf(project.input);
+  const { vRanges } = cpMetaOf(c, project.input);
   return conjunct => [ ...conjunct.reads ].every(name => projected.has(name) || vRanges.neverBinds(name));
 }
 
@@ -250,8 +251,8 @@ function sinkIntoSingleInput(
  * @returns the BIND with the conjuncts placed
  */
 function sinkIntoExtend(c: TransformationContext, conjuncts: Conjunct[], extend: Algebra.Extend): Algebra.Operation {
-  const bind = bindConstructionOf(extend);
-  const { cVars } = cpMetaOf(extend.input);
+  const bind = bindConstructionOf(c, extend);
+  const { cVars } = cpMetaOf(c, extend.input);
   const below: Conjunct[] = [];
   const kept: Conjunct[] = [];
   for (const conjunct of conjuncts) {
@@ -279,7 +280,7 @@ function sinkIntoExtend(c: TransformationContext, conjuncts: Conjunct[], extend:
  * @returns the JOIN with the conjuncts placed
  */
 function sinkIntoJoin(c: TransformationContext, conjuncts: Conjunct[], join: Algebra.Join): Algebra.Operation {
-  const operands = join.input.map(operand => cpMetaOf(operand));
+  const operands = join.input.map(operand => cpMetaOf(c, operand));
   const intoOperand: Conjunct[][] = operands.map(() => []);
   const kept: Conjunct[] = [];
   for (const conjunct of conjuncts) {
@@ -314,7 +315,7 @@ function sinkIntoOptional(
   leftJoin: Algebra.LeftJoin,
 ): Algebra.Operation {
   const [ left, right ] = leftJoin.input;
-  const operands = [ cpMetaOf(left), cpMetaOf(right) ];
+  const operands = [ cpMetaOf(c, left), cpMetaOf(c, right) ];
   const requiredBound = unionSets(conjuncts.map(conjunct => variablesRequiredBoundBy(conjunct.expression)));
   const innerJoin = innerJoinUnderRejectingFilter(c, leftJoin, requiredBound, operands[0]);
   if (innerJoin !== undefined) {
@@ -343,7 +344,7 @@ function sinkOptionalCondition(c: TransformationContext, leftJoin: Algebra.LeftJ
     return leftJoin;
   }
   const [ left, right ] = leftJoin.input;
-  const operands = [ cpMetaOf(left), cpMetaOf(right) ];
+  const operands = [ cpMetaOf(c, left), cpMetaOf(c, right) ];
   const { moving, staying } = splitCondition(c, leftJoin.expression, conjunct =>
     operandDecidesVariables(conjunct.reads, 1, operands));
   if (moving.length === 0) {

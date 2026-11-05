@@ -1,6 +1,8 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
-import { withoutCpVars } from './certainlyBoundVars.js';
+import { forEveryNodeType } from '@traqula/core';
+import type { RangeContext } from './certainlyBoundVars.js';
+import { leaveExistencePatternsPreOrder, rewriteInExistenceScopes } from './existenceScopes.js';
 
 /**
  * @fileoverview The top-down traversal the pushdowns share: a callback per operation type moves something one
@@ -10,8 +12,11 @@ import { withoutCpVars } from './certainlyBoundVars.js';
 /** Metadata is a cache to carry along, never a tree to iterate into: its sets do not survive that. */
 export const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
 
-/** What a pushdown hands the traversal for one operation type. */
-export type PreOrderCallbacks = Partial<Record<Algebra.Types, (copy: any) => PreOrderMappingReturn>>;
+/** A pre-order callback for one operation type. */
+export type PreOrderCallback = (copy: any) => PreOrderMappingReturn;
+
+/** What a pushdown hands the traversal per operation type. */
+export type PreOrderCallbacks = Partial<Record<Algebra.Types, PreOrderCallback>>;
 
 /**
  * Hands a value to the traversal, keeping the metadata of everything in it intact.
@@ -23,25 +28,24 @@ export function keep(newValue: Algebra.Operation): PreOrderMappingReturn {
 }
 
 /**
- * Rewrites a tree top-down, keeping every operation without a callback as it is.
- *
- * The tree is entered and left without metadata: entering gives a tree of its own to rewrite, on which what
- * {@link utils/certainlyBoundVars!withCpVars} caches describes the plan as it stands, and leaving clears what
- * the rewrites have since invalidated. The pattern of an EXISTS is never entered: the solution it is asked
- * about is substituted into it, so a variable it never binds itself may well be bound there.
- * @param rootOp - The tree to rewrite
- * @param callbacks - The rewrite per operation type
- * @returns the rewritten tree
+ * Rewrites a tree top-down, then each EXISTS pattern in it in the scope of its outer solution.
+ * @param c - The context to rewrite in
+ * @param op - The tree to rewrite, which is left untouched
+ * @param callbacksIn - The callbacks per operation type, given the context of the tree or pattern they rewrite
+ * @param fallbackIn - The callback for every other operation type, {@link keep} by default
+ * @returns the rewritten tree, without cached metadata
  */
-export function mapOperationPreOrderKeepingMetadata<T extends Algebra.Operation>(
-  rootOp: T,
-  callbacks: PreOrderCallbacks,
+export function mapPreOrderInExistenceScopes<C extends RangeContext, T extends Algebra.Operation>(
+  c: C,
+  op: T,
+  callbacksIn: (context: C) => PreOrderCallbacks,
+  fallbackIn: (context: C) => PreOrderCallback = () => keep,
 ): T {
-  const everyCallback: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = {
-    ...Object.fromEntries(Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ])),
-    ...callbacks,
-    [Algebra.Types.EXPRESSION]: (expression: Algebra.Expression) =>
-      ({ ...keepMetadata, newValue: expression, continue: false }),
-  };
-  return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(rootOp), everyCallback));
+  return rewriteInExistenceScopes(c, op, (context, operation) => {
+    const callbacks = forEveryNodeType(fallbackIn(context), {
+      ...callbacksIn(context),
+      [Algebra.Types.EXPRESSION]: leaveExistencePatternsPreOrder,
+    });
+    return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(operation, callbacks);
+  });
 }
