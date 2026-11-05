@@ -133,29 +133,23 @@ standard mappings between RDF 1.1 and RDF 1.2.
 
 So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
 
-**An EXISTS sees the solution it is evaluated for.** In SPARQL 1.2 every group starts with `ContextSolution`
-([translation](https://www.w3.org/TR/sparql12-query/#sparqlTranslateGraphPatterns)). At the top level it is the empty
-mapping, but inside an EXISTS it is the solution μ the EXISTS is evaluated for
-([ContextSolution](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution),
-[EXISTS](https://www.w3.org/TR/sparql12-query/#func-filter-exists)), also through a sub-SELECT. So what μ binds is
-bound from the start of every group in the pattern, though not above a GROUP, whose solutions hold only its keys and
-aggregates. A pass reading ranges therefore runs through
-`rewriteInExistenceScopes`: the pass first rewrites the plan around EXISTS patterns, and then each pattern with μ as
-`existenceScope`. The order matters, as the scope depends on where the pass leaves the EXISTS. The pushdown writes no
-term for a variable of μ, and `pullUpExtends` moves no BIND of one. `removeProjections` keeps the name of a variable
-μ certainly binds, and keeps a projection hiding one μ may bind.
+**An EXISTS sees the solution μ it is evaluated for.** SPARQL 1.2 starts every group of its pattern, also in a
+sub-SELECT, from μ ([ContextSolution](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution)); above a GROUP
+only its keys and aggregates remain. A pass reading ranges runs through `rewriteInExistenceScopes`, which rewrites each
+pattern with μ as `existenceScope` once the pass has placed the EXISTS. The unfolding moves no EXISTS, so it uses
+`rewriteInExistenceScopesBeforePass`, which leaves the mapping bodies alone.
 
-**A BIND of a variable μ binds is undefined** ([Extend](https://www.w3.org/TR/sparql12-query/#defn_extend)). The syntax
-only rules out a BIND of a variable the group itself bound before. The unfolding writes `BIND(?mi_s AS ?o)` for each
-pattern variable, so inside an EXISTS it picks the outcome itself, per variable:
+A BIND of a variable μ binds is undefined ([Extend](https://www.w3.org/TR/sparql12-query/#defn_extend)), so per
+variable `?o` of μ (`outerBinding`):
 
-- μ certainly binds `?o` (`existenceScope.cVars`): no BIND, only `FILTER(sameTerm(?mi_s, ?o))`.
-- μ may bind `?o` (an OPTIONAL, `VALUES` with `UNDEF`, a BIND that can fail): a UNION of that FILTER and
-  `{ … FILTER(!BOUND(?o)) } BIND(?mi_s AS ?o)`. Each such variable doubles the subquery.
-- Otherwise: the BIND alone.
+| μ binds `?o` | unfolding (`BIND(?mi_s AS ?o)`)                             | `removeProjections`  |
+|--------------|-------------------------------------------------------------|----------------------|
+| certainly    | `FILTER(sameTerm(?mi_s, ?o))` instead                       | keeps the name       |
+| maybe        | UNION of that FILTER and `{ … FILTER(!BOUND(?o)) } BIND(…)` | keeps the projection |
+| not          | the BIND                                                    | renames              |
 
-The unfolding moves no EXISTS, so `rewriteInExistenceScopesBeforePass` unfolds each pattern where it sits, before the
-mapping bodies come in.
+Each variable μ may bind doubles the subquery. The pushdown writes no term for a variable of μ, and `pullUpExtends`
+moves no BIND of one.
 
 ## Still to settle
 
