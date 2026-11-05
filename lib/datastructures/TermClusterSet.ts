@@ -96,7 +96,7 @@ export function meetShapes<Term>(left: TriplePin, right: TriplePin): PinMeet<Ter
 export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> extends ClusterSet<T> {
   /** Maps group ID to what the group is pinned to (if anything) - read through {@link pinOf}. */
   protected groupToPin: Record<number, Pin<Term> | undefined>;
-  /** Maps group ID to the term types its value may have - read through {@link rangeOf}. */
+  /** Maps group ID to the term types its value may have - read through {@link storedRangeOf}. */
   protected groupToRange: Record<number, RangeSet>;
   /**
    * A history of oldGroups (keys) that got merged into newGroups (values).
@@ -304,7 +304,12 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     const groupRange = this.rangeOf(resolved);
     const pin = this.groupToPin[resolved];
     if (pin === undefined) {
-      return [ ...range ].some(termType => groupRange.has(termType));
+      for (const termType of range) {
+        if (groupRange.has(termType)) {
+          return true;
+        }
+      }
+      return false;
     }
     const pinnedTermType = pin.kind === 'term' ? pin.term.termType : 'Quad';
     return groupRange.has(pinnedTermType) && range.has(pinnedTermType);
