@@ -63,9 +63,9 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
   }
 
   public override rangeOf(group: number): RangeSet {
-    const resolved = this.resolveGroup(group);
-    const asserted = this.groupToAssertedRange[resolved];
-    return asserted === undefined ? super.rangeOf(resolved) : super.rangeOf(resolved).meet(asserted);
+    const storedRange = this.storedRangeOf(group);
+    const assertedRange = this.groupToAssertedRange[this.resolveGroup(group)];
+    return assertedRange === undefined ? storedRange : storedRange.meet(assertedRange);
   }
 
   /**
@@ -104,11 +104,11 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
    */
   protected override migrateGroupData(oldGroup: number, newGroup: number): void {
     super.migrateGroupData(oldGroup, newGroup);
-    const inherited = this.groupToAssertedRange[oldGroup];
-    if (inherited !== undefined) {
-      this.groupToAssertedRange[newGroup] = this.assertedRangeOf(newGroup).meet(inherited);
-      delete this.groupToAssertedRange[oldGroup];
+    const inheritedRange = this.groupToAssertedRange[oldGroup];
+    if (inheritedRange !== undefined) {
+      this.groupToAssertedRange[newGroup] = this.assertedRangeOf(newGroup).meet(inheritedRange);
     }
+    delete this.groupToAssertedRange[oldGroup];
   }
 
   /**

@@ -526,23 +526,21 @@ export class AssertionConjunction {
   }
 
   /**
-   * Reads the groups against the term types the operation leaves their members - the same rule as (FBndII)
-   * one level down the lattice. Only checked, never narrowed into a group: a range holds of the operation's
-   * solutions rather than of what lies below it, so carrying it down would drop the very test that made it true.
+   * Checks the groups against the term types the operation leaves their members, as (FBndII) does one level down the
+   * lattice. Never narrows a group: those ranges hold of the operation's solutions, not of what lies below it.
    * @param meta - The variables the operation certainly binds, and the term types each variable it binds can take
    * @returns `false` when a group of strong members is left no value, which makes the operation empty
    */
   private normaliseRangesFor(meta: CPMeta): boolean {
     const { cVars, vRanges } = meta;
-    const names = this.names();
+    const names = [ ...this.order ];
     // A⟨?x ≡ v⟩ implies `bnd(?x)`, so every strong member holds the group's value at once.
     const strongRangePerGroup = new Map<number, RangeSet>();
     for (const name of names) {
       const group = this.clusters.groupOf(name);
       if (group !== undefined && this.strength.get(name) === 'strong') {
-        const resolved = this.clusters.resolveGroup(group);
-        const known = strongRangePerGroup.get(resolved) ?? objectRange;
-        strongRangePerGroup.set(resolved, known.meet(vRanges.rangeOf(name)));
+        const known = strongRangePerGroup.get(group) ?? objectRange;
+        strongRangePerGroup.set(group, known.meet(vRanges.rangeOf(name)));
       }
     }
     for (const [ group, range ] of strongRangePerGroup) {
@@ -556,9 +554,9 @@ export class AssertionConjunction {
       if (group === undefined) {
         continue;
       }
-      // Every strong member holds the group's value, so what they leave it is what `name` holds where it is bound.
-      const strongRange = strongRangePerGroup.get(this.clusters.resolveGroup(group)) ?? objectRange;
-      const range = vRanges.rangeOf(name).meet(strongRange);
+      const strongRange = strongRangePerGroup.get(group);
+      const memberRange = vRanges.rangeOf(name);
+      const range = strongRange === undefined ? memberRange : memberRange.meet(strongRange);
       if (this.strength.get(name) === 'weak' && !this.clusters.admitsRange(group, range)) {
         // W⟨?x ≡ v⟩ is `¬bnd(?x) ∨ ?x ≡ v`, whose right disjunct is false wherever `?x` is bound here, so it *is*
         // U⟨?x⟩ - a constraint the rest of the pass acts on. Cannot fail: `?x` is neither `bound` nor strong.

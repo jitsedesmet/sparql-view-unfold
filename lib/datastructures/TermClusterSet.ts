@@ -222,6 +222,16 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    * @returns its range, the top of the lattice when nothing narrowed it
    */
   public rangeOf(group: number): RangeSet {
+    return this.storedRangeOf(group);
+  }
+
+  /**
+   * The range this class stores for a group, which subclasses may meet with ranges they keep apart in {@link rangeOf}.
+   * Writes build on this rather than on {@link rangeOf}, so those ranges never leak into the stored one.
+   * @param group - The group to look up
+   * @returns its stored range, the top of the lattice when nothing narrowed it
+   */
+  protected storedRangeOf(group: number): RangeSet {
     return this.groupToRange[this.resolveGroup(group)] ?? objectRange;
   }
 
@@ -279,8 +289,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   public narrowRange(group: number, range: RangeSet): boolean {
     this.touch();
     const resolved = this.resolveGroup(group);
-    // The stored range rather than {@link rangeOf}, which a subclass may meet with ranges it keeps apart.
-    this.groupToRange[resolved] = (this.groupToRange[resolved] ?? objectRange).meet(range);
+    this.groupToRange[resolved] = this.storedRangeOf(resolved).meet(range);
     return this.admitsRange(resolved);
   }
 
@@ -292,9 +301,13 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    */
   public admitsRange(group: number, range: RangeSet = objectRange): boolean {
     const resolved = this.resolveGroup(group);
-    const admitted = this.rangeOf(resolved).meet(range);
+    const groupRange = this.rangeOf(resolved);
     const pin = this.groupToPin[resolved];
-    return admitted.size > 0 && (pin === undefined || admitted.has(pin.kind === 'term' ? pin.term.termType : 'Quad'));
+    if (pin === undefined) {
+      return [ ...range ].some(termType => groupRange.has(termType));
+    }
+    const pinnedTermType = pin.kind === 'term' ? pin.term.termType : 'Quad';
+    return groupRange.has(pinnedTermType) && range.has(pinnedTermType);
   }
 
   /**
