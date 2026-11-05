@@ -13,8 +13,8 @@ import type { AssertionConjunct } from './utils/assertions.js';
 import { access, assertBound, assertTermType, conjunctAsExpression } from './utils/assertions.js';
 import type { VRanges } from './utils/certainlyBoundVars.js';
 import { withCpVars } from './utils/certainlyBoundVars.js';
-import { conjunctionOf, unstableOperators } from './utils/expressionHelpers.js';
-import { projectSolutionExistence } from './utils/operationhelpers.js';
+import { unstableOperators } from './utils/expressionHelpers.js';
+import { filterByConjunction, projectSolutionExistence } from './utils/operationhelpers.js';
 import { isSubsetOf, unionSets } from './utils/setUtils.js';
 import { claimVariableName, collectVariableNames, deepCopy } from './utils.js';
 
@@ -145,11 +145,8 @@ function mappingOfSingleTemplateTriple(
       .map(name => ({ access: access(name), assertion: assertBound() })),
     ...typeTests,
   ];
-  let body: Algebra.Operation = constructBody;
-  if (conditions.length > 0) {
-    body = AF.createFilter(body, conjunctionOf(tools, conditions
-      .map(condition => conjunctAsExpression(tools, condition))));
-  }
+  const body = filterByConjunction(tools, constructBody, conditions
+    .map(condition => conjunctAsExpression(tools, condition)));
   return {
     head,
     body: AF.createProject(body, headVariableNames.map(name => DF.variable(name))),

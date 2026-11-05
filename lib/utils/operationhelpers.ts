@@ -1,5 +1,6 @@
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
+import { conjunctionOf } from './expressionHelpers.js';
 import { datatypeBoolean, DF } from './rdfDatatypes.js';
 
 /** The literal `false` with xsd:boolean datatype, used for FILTER(FALSE) patterns */
@@ -55,62 +56,44 @@ export function projectSolutionExistence(
 }
 
 /**
- * Rebuilds a MINUS over new operands, keeping the graph-scope marker that tells an engine which `?g`, bound
- * outside the MINUS, its disjointness test ignores.
- * @param c - The transformation context
- * @param minus - The MINUS to rebuild
- * @param left - Its new left operand
- * @param right - Its new right operand
- * @returns the rebuilt MINUS
+ * Copies an operation over new input, leaving out the metadata cached on the original.
+ * @param op - The operation to copy
+ * @param input - Its new input, or inputs
+ * @returns the copy, keeping every other field, such as the `graphScopeVar` of a MINUS
  */
-export function rebuildMinus(
-  c: TransformationContext,
-  minus: Algebra.Minus,
-  left: Algebra.Operation,
-  right: Algebra.Operation,
-): Algebra.Minus {
-  const rebuilt = c.AF.createMinus(left, right);
-  if (minus.graphScopeVar !== undefined) {
-    rebuilt.graphScopeVar = minus.graphScopeVar;
-  }
-  return rebuilt;
+export function withInput<T extends Algebra.Single | Algebra.Multi>(op: T, input: T['input']): T {
+  const copy = { ...op, input };
+  delete (<{ metadata?: unknown }> copy).metadata;
+  return copy;
 }
 
-/** The operations of one input a rewrite rebuilds over a new input, everything else about them unchanged. */
-export type SingleInputOperation = Algebra.Distinct | Algebra.Reduced | Algebra.OrderBy | Algebra.From |
-  Algebra.Slice | Algebra.Project | Algebra.Group | Algebra.Graph;
+/**
+ * Filters an operation by the conjunction of conditions.
+ * @param c - The transformation context
+ * @param op - The operation to filter
+ * @param conditions - The conditions to filter by
+ * @returns the filter, or `op` itself without conditions
+ */
+export function filterByConjunction(
+  c: Pick<TransformationContext, 'AF'>,
+  op: Algebra.Operation,
+  conditions: Algebra.Expression[],
+): Algebra.Operation {
+  return conditions.length === 0 ? op : c.AF.createFilter(op, conjunctionOf(c, conditions));
+}
 
 /**
- * Rebuilds a single-input operation over a new input, through the factory so that no cached metadata comes
- * along.
- * @param c - The transformation context
- * @param op - The operation to rebuild
- * @param input - Its new input
- * @returns the rebuilt operation
+ * The GROUP below the HAVING, select expressions and ORDER BY of an aggregating SELECT.
+ * @param op - The input of the SELECT's projection
+ * @returns the GROUP, or `undefined` when the SELECT does not aggregate
  */
-export function rebuildOverInput(
-  c: TransformationContext,
-  op: SingleInputOperation,
-  input: Algebra.Operation,
-): Algebra.Operation {
-  switch (op.type) {
-    case Algebra.Types.DISTINCT:
-      return c.AF.createDistinct(input);
-    case Algebra.Types.REDUCED:
-      return c.AF.createReduced(input);
-    case Algebra.Types.ORDER_BY:
-      return c.AF.createOrderBy(input, op.expressions);
-    case Algebra.Types.FROM:
-      return c.AF.createFrom(input, op.default, op.named);
-    case Algebra.Types.SLICE:
-      return c.AF.createSlice(input, op.start, op.length);
-    case Algebra.Types.PROJECT:
-      return c.AF.createProject(input, op.variables);
-    case Algebra.Types.GROUP:
-      return c.AF.createGroup(input, op.variables, op.aggregates);
-    case Algebra.Types.GRAPH:
-      return c.AF.createGraph(input, op.name);
+export function groupBelowSelectClause(op: Algebra.Operation): Algebra.Group | undefined {
+  let current = op;
+  while (current.type === Algebra.Types.EXTEND || current.type === Algebra.Types.FILTER ||
+    current.type === Algebra.Types.ORDER_BY) {
+    current = current.input;
   }
+  return current.type === Algebra.Types.GROUP ? current : undefined;
 }
 
 /**

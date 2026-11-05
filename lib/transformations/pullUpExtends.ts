@@ -9,10 +9,10 @@ import { leaveExistencePatterns, rewriteInExistenceScopes } from '../utils/exist
 import { expressionsEqual, isStableExpression } from '../utils/expressionHelpers.js';
 import type { ChainBind, PeeledChain } from '../utils/extendChain.js';
 import { peelExtends, replantExtends } from '../utils/extendChain.js';
-import { rebuildMinus, rebuildOverInput } from '../utils/operationhelpers.js';
+import { withInput } from '../utils/operationhelpers.js';
 import { graphPatternDecides, noOtherOperandBinds, operandDecidesVariables } from '../utils/pushdownLicences.js';
 import type { SSet } from '../utils/setUtils.js';
-import { differenceSets } from '../utils/setUtils.js';
+import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
 import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
 import { collectVariableNames } from '../utils.js';
 
@@ -506,7 +506,7 @@ function floatThroughCongruentOperation(
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     op :
-    assembleRewrittenNode(c, peeled, rewrittenInputs => rebuildOverInput(c, op, rewrittenInputs[0]));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => withInput(op, rewrittenInputs[0]));
 }
 
 /**
@@ -692,7 +692,7 @@ function floatThroughGroup(c: TransformationContext, group: Algebra.Group): Alge
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     group :
-    assembleRewrittenNode(c, peeled, rewrittenInputs => rebuildOverInput(c, group, rewrittenInputs[0]));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => withInput(group, rewrittenInputs[0]));
 }
 
 /**
@@ -715,7 +715,7 @@ function floatThroughGraph(c: TransformationContext, graph: Algebra.Graph): Alge
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     graph :
-    assembleRewrittenNode(c, peeled, rewrittenInputs => rebuildOverInput(c, graph, rewrittenInputs[0]));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => withInput(graph, rewrittenInputs[0]));
 }
 
 /**
@@ -834,7 +834,7 @@ function floatThroughMinus(c: TransformationContext, minus: Algebra.Minus): Alge
   for (const floatingBind of peeled.allBinds) {
     if (floatingBind.bindIsStable &&
         floatingBind.inputIndex === 0 &&
-        noOtherOperandBinds(floatingBind.bind.variable.value, [ floatingBind.inputIndex ], operands)) {
+        noOtherOperandBinds(floatingBind.bind.variable.value, floatingBind.inputIndex, operands)) {
       floatingBind.disposition = 'rise';
     } else {
       floatingBind.disposition = 'stay';
@@ -843,7 +843,7 @@ function floatThroughMinus(c: TransformationContext, minus: Algebra.Minus): Alge
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     minus :
-    assembleRewrittenNode(c, peeled, rewrittenInputs => rebuildMinus(c, minus, rewrittenInputs[0], rewrittenInputs[1]));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => withInput(minus, [ rewrittenInputs[0], rewrittenInputs[1] ]));
 }
 
 /**
@@ -944,7 +944,7 @@ function readsSameValuesAbove(floatingBind: FloatingBind, operands: readonly CPM
  * @returns whether `e` reads only certainly bound variables
  */
 function readsOnlyCertainlyBoundBelow(floatingBind: FloatingBind): boolean {
-  return [ ...floatingBind.bind.reads ].every(readVariable => floatingBind.scopeBelowBind.cVars.has(readVariable));
+  return isSubsetOf(floatingBind.bind.reads, floatingBind.scopeBelowBind.cVars);
 }
 
 /**

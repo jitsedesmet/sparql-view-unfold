@@ -29,14 +29,13 @@ import {
   asWeakenedConjunct,
 } from '../utils/assertions.js';
 import { cpMetaOf } from '../utils/certainlyBoundVars.js';
+import { keep, mapPreOrderInExistenceScopes } from '../utils/existenceScopes.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
-import { keep, keepMetadata, mapPreOrderInExistenceScopes } from '../utils/metadataKeepingTraversal.js';
 import {
   canMatchZeroLength,
   createFilterFalse,
   groupingKeysOf,
-  rebuildMinus,
-  rebuildOverInput,
+  withInput,
 } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import {
@@ -130,11 +129,11 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: Transformatio
   // wherever it is written, and a name coined against a part of the tree would collide with a variable
   // in the part that has not been met yet - which is also why this takes the root, see above.
   const namer = derivedVarNamer(markVariableNamesUsed(c, rootOp));
-  // Metadata is cleared around the pass, not inside it: `keepMetadata` is how a filter hands its conjunction to the
-  // next `pushFilter`.
-  return mapPreOrderInExistenceScopes(c, rootOp, context => ({
+  // Metadata is cleared around the pass, not inside it: `keep` is how a filter hands its conjunction to the next
+  // `pushFilter`.
+  return mapPreOrderInExistenceScopes(c, rootOp, { callbacks: context => ({
     [Algebra.Types.FILTER]: (filter: Algebra.Filter) => pushFilter(context, namer, filter),
-  }));
+  }) });
 }
 
 /**
@@ -266,7 +265,7 @@ function swapWith(
       const below = assertionFilter(c, op.input, collected.assertions);
       return collected.residual === undefined ?
       // Nothing stays here, so the (bigger) conjunction has to be handed back to keep sinking.
-          { ...keepMetadata, newValue: below, reTransform: true } :
+        keep(below, { reTransform: true }) :
         keep(AF.createFilter(below, collected.residual));
     }
     case Algebra.Types.EXTEND: {
@@ -285,14 +284,12 @@ function swapWith(
       // A mapping μ ∈ LHS is removed if:
       // ∃ μ' ∈ RHS . (μ and μ' are compatible) && (dom(μ) and dom(μ') are not disjoint)
       const [ left, right ] = op.input;
-      return keep(rebuildMinus(
-        c,
-        op,
+      return keep(withInput(op, [
         // FMPush: the output is a subset of the LHS, so filtering it here is filtering the output.
         assertionFilter(c, left, assertions),
         // The RHS takes only the weakened form of what the LHS holds strongly ({@link admissibleOnMinusRhs}).
         assertionFilter(c, right, admissibleOnMinusRhs(assertions)),
-      ));
+      ]));
     }
     case Algebra.Types.GROUP: {
       // An assertion on a grouping key selects whole groups, which is the same as selecting the solutions
@@ -306,7 +303,7 @@ function swapWith(
       }
       return keep(assertionFilter(
         c,
-        rebuildOverInput(c, op, assertionFilter(c, op.input, inside)),
+        withInput(op, assertionFilter(c, op.input, inside)),
         outside,
       ));
     }
@@ -320,7 +317,7 @@ function swapWith(
     case Algebra.Types.REDUCED:
     case Algebra.Types.ORDER_BY:
     case Algebra.Types.FROM: {
-      return keep(rebuildOverInput(c, op, assertionFilter(c, op.input, assertions)));
+      return keep(withInput(op, assertionFilter(c, op.input, assertions)));
     }
     default: {
       // A barrier. SLICE and a GROUP over a non-key are genuine ones - filtering before a slice changes
@@ -759,7 +756,7 @@ function pushIntoJoin(
   if (merged !== undefined) {
     // A different operation now, so the conjunction is handed back rather than placed against the one
     // the licences were about to be read off.
-    return { ...keepMetadata, newValue: assertionFilter(c, merged, assertions), reTransform: true };
+    return keep(assertionFilter(c, merged, assertions), { reTransform: true });
   }
 
   // Read before any rewriting: every rewrite preserves pVars and never shrinks cVars, so these licences
@@ -843,7 +840,7 @@ function pushIntoLeftJoin(
   // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
   const innerJoin = innerJoinUnderRejectingFilter(c, leftJoin, assertions.boundImpliedBy(), leftVars);
   if (innerJoin !== undefined) {
-    return { ...keepMetadata, newValue: assertionFilter(c, innerJoin, assertions), reTransform: true };
+    return keep(assertionFilter(c, innerJoin, assertions), { reTransform: true });
   }
 
   const rightVars = cpMetaOf(c, right);
@@ -1117,7 +1114,7 @@ function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjun
  * @returns the traversal's instruction
  */
 function empty(c: TransformationContext, replaced: Algebra.Operation): PreOrderMappingReturn {
-  return { ...keepMetadata, newValue: emptyOperation(c, replaced), continue: false };
+  return keep(emptyOperation(c, replaced), { continue: false });
 }
 
 /**

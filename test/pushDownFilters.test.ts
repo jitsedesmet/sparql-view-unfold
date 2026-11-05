@@ -7,6 +7,7 @@ import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
 import { pushDownFilters, pushDownFiltersTransformation } from '../lib/transformations/pushDownFilters.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import { holdsCachedMetadata } from './cachedMetadata.js';
 import { generateValidQuery } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
@@ -30,18 +31,6 @@ describe('pushDownFilters', () => {
     return pushDownFilters(c, parseQuery(c, prefixes + query));
   }
 
-  /** Whether any operation of a tree still carries a cached `CPMeta`. */
-  function holdsCachedMetadata(op: Algebra.Operation): boolean {
-    let found = false;
-    c.astTransformer.visitObject(op, (object) => {
-      if ('type' in object && 'metadata' in object) {
-        found = true;
-      }
-      return object;
-    });
-    return found;
-  }
-
   /**
    * Asserts the rewritten query, and with it the checks every case owes: the metadata hygiene the licences
    * depend on, and the idempotence of the pass - on its own output, and on that output printed and parsed
@@ -54,7 +43,7 @@ describe('pushDownFilters', () => {
     const output = transform(query);
     const generated = generate(output);
     expect(generated).toEqual(expected.trim());
-    expect(holdsCachedMetadata(output)).toBe(false);
+    expect(holdsCachedMetadata(c, output)).toBe(false);
     expect(generate(pushDownFilters(c, output))).toEqual(expected.trim());
     expect(generate(pushDownFilters(c, parseQuery(c, generated)))).toEqual(expected.trim());
   }
@@ -123,7 +112,7 @@ describe('pushDownFilters', () => {
       const output = pushDownFilters(c, input);
       expect(spine(output)).toEqual([ Algebra.Types.FROM, Algebra.Types.FILTER, Algebra.Types.BGP ]);
       expect((<Algebra.From> output).default).toEqual([ c.DF.namedNode('ex://g') ]);
-      expect(holdsCachedMetadata(output)).toBe(false);
+      expect(holdsCachedMetadata(c, output)).toBe(false);
       expect(spine(pushDownFilters(c, output))).toEqual(spine(output));
     });
 

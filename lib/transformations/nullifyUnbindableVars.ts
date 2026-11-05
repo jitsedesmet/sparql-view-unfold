@@ -3,7 +3,7 @@ import type { PreOrderMappingReturn } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import { withCpVars } from '../utils/certainlyBoundVars.js';
-import { keepMetadata, mapPreOrderInExistenceScopes } from '../utils/metadataKeepingTraversal.js';
+import { keep, mapPreOrderInExistenceScopes } from '../utils/existenceScopes.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 
 /**
@@ -39,7 +39,9 @@ import { createFilterFalse } from '../utils/operationhelpers.js';
  * // After:  the GRAPH replaced by FILTER(false), since no graph is named by a literal.
  */
 export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  return mapPreOrderInExistenceScopes(c, op, () => ({}), context => copy => nullifyIfProvenEmpty(context, copy));
+  return mapPreOrderInExistenceScopes(c, op, {
+    fallback: context => (copy: Algebra.Operation) => nullifyIfProvenEmpty(context, copy),
+  });
 }
 
 /**
@@ -54,10 +56,10 @@ function nullifyIfProvenEmpty(c: TransformationContext, op: Algebra.Operation): 
   const { cVars, vRanges } = withCpVars(c, op).metadata;
   for (const name of cVars) {
     if (vRanges.neverBinds(name)) {
-      return { ...keepMetadata, newValue: createFilterFalse(c, op), continue: false };
+      return keep(createFilterFalse(c, op), { continue: false });
     }
   }
-  return { ...keepMetadata, newValue: op };
+  return keep(op);
 }
 
 /**

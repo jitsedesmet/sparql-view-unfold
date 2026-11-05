@@ -47,14 +47,14 @@ export function bindConstructionOf(c: RangeContext, extend: Algebra.Extend): Bin
 }
 
 /**
- * Whether a reader of the bind's variable may read its construction instead. Only a construction is written
- * in, being free to evaluate again; nothing goes into an `EXISTS`, whose pattern takes no expression; and
- * `bound(?x)` only folds for a bind that cannot fail.
+ * Whether a reader of the bind's variable may read its construction instead.
  * @param reader - An expression reading the bind's variable
  * @param bind - The bind to write in
  * @returns whether {@link substituteConstruction} may rewrite the reader
  */
 export function readerAdmitsConstruction(reader: Algebra.Expression, bind: BindConstruction): boolean {
+  // Only a construction is free to evaluate again, an EXISTS pattern takes no expression, and `bound(?x)` only
+  // folds for a bind that cannot fail.
   return bind.constructedTerm !== undefined &&
     !containsExistenceExpression(reader) &&
     (bind.bindsCertainly || !asksBoundOfVariable(reader, bind.variable.value));
@@ -86,12 +86,7 @@ export function substituteConstruction(
 }
 
 /**
- * The term an access reads out of a construction: the term itself for a bare variable, a position of it for
- * an accessor chain such as `SUBJECT(?x)`.
- *
- * A position is only read off a construction that cannot fail. `SUBJECT(?x)` of an unbound `?x` is an
- * error where the component would be an ordinary value, so there the whole term is written in and the
- * accessor is left to raise on it.
+ * The term an access reads out of a construction: the term itself, or a position of it for `SUBJECT(?x)` and the like.
  * @param term - The construction
  * @param access - The reading of it the expression asks for
  * @param bind - The bind constructing it
@@ -101,6 +96,7 @@ function readThrough(term: RDF.Term, access: Access, bind: BindConstruction): RD
   if (access.positions.length === 0) {
     return term;
   }
+  // `SUBJECT(?x)` raises on an unbound `?x`, so a position is only read off a construction that cannot fail.
   if (!bind.bindsCertainly) {
     return undefined;
   }

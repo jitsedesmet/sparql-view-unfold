@@ -12,18 +12,14 @@ import type { CPMeta } from './certainlyBoundVars.js';
  */
 
 /**
- * Whether no operand but the given ones can bind a variable, so that a merged solution holds what those gave it.
+ * Whether no operand but the given one can bind a variable, so that a merged solution holds what that one gave it.
  * @param name - The variable to check
- * @param ownOperandIndices - The indices of the operands that may bind it
+ * @param operandIndex - The index of the operand that may bind it
  * @param operands - What each operand of the merge binds
  * @returns whether every other operand never binds it
  */
-export function noOtherOperandBinds(
-  name: string,
-  ownOperandIndices: readonly number[],
-  operands: readonly CPMeta[],
-): boolean {
-  return operands.every((operand, index) => ownOperandIndices.includes(index) || operand.vRanges.neverBinds(name));
+export function noOtherOperandBinds(name: string, operandIndex: number, operands: readonly CPMeta[]): boolean {
+  return operands.every((operand, index) => index === operandIndex || operand.vRanges.neverBinds(name));
 }
 
 /**
@@ -42,7 +38,7 @@ export function operandDecidesVariables(
   certainInOperand: ReadonlySet<string> = operands[operandIndex].cVars,
 ): boolean {
   return [ ...names ].every(name =>
-    certainInOperand.has(name) || noOtherOperandBinds(name, [ operandIndex ], operands));
+    certainInOperand.has(name) || noOtherOperandBinds(name, operandIndex, operands));
 }
 
 /**

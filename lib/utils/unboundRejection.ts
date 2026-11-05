@@ -11,9 +11,6 @@ import { intersectSets, unionSets } from './setUtils.js';
  * The converse is only read off `!bound(?x)`.
  */
 
-/** The operators that do not simply raise the error of an argument; every other operator is strict. */
-const nonStrictOperators = new Set([ 'bound', 'if', 'coalesce', '||', '&&', 'in', 'notin' ]);
-
 /**
  * The variables an expression raises an error for whenever they are unbound.
  * @param expression - The expression to read
@@ -27,10 +24,9 @@ function variablesRaisingWhenUnbound(expression: Algebra.Expression): SSet {
     return new Set();
   }
   const { operator, args } = expression;
-  if (!nonStrictOperators.has(operator)) {
-    return unionSets(args.map(argument => variablesRaisingWhenUnbound(argument)));
-  }
   switch (operator) {
+    case 'bound':
+      return new Set();
     // `error || true` is true and `error && false` is false, so only an error on every side survives.
     case '||':
     case '&&':
@@ -46,8 +42,9 @@ function variablesRaisingWhenUnbound(expression: Algebra.Expression): SSet {
     case 'in':
     case 'notin':
       return args.length > 1 ? variablesRaisingWhenUnbound(args[0]) : new Set();
+    // Every other operator raises the error of an argument.
     default:
-      return new Set();
+      return unionSets(args.map(argument => variablesRaisingWhenUnbound(argument)));
   }
 }
 

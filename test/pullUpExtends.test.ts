@@ -10,6 +10,7 @@ import { createTransformationContext, parseQuery } from '../lib/transformContext
 import { withCpVars, withoutCpVars } from '../lib/utils/certainlyBoundVars.js';
 import { expressionsEqual, isStableExpression } from '../lib/utils/expressionHelpers.js';
 import { peelExtends } from '../lib/utils/extendChain.js';
+import { holdsCachedMetadata } from './cachedMetadata.js';
 import { generateValidQuery } from './validQuery.js';
 
 const prefixes = `PREFIX : <ex://>
@@ -34,18 +35,6 @@ describe('pullUpExtends', () => {
   function scopeOf(op: Algebra.Operation): { cVars: string[]; pVars: string[] } {
     const { cVars, vRanges } = withCpVars(c, withoutCpVars(op)).metadata;
     return { cVars: [ ...cVars ].sort(), pVars: [ ...vRanges.keys() ].sort() };
-  }
-
-  /** Whether any operation of a tree still carries a cached `CPMeta`. */
-  function holdsCachedMetadata(op: Algebra.Operation): boolean {
-    let found = false;
-    c.astTransformer.visitObject(op, (object) => {
-      if ('type' in object && 'metadata' in object) {
-        found = true;
-      }
-      return object;
-    });
-    return found;
   }
 
   /**
@@ -74,7 +63,7 @@ describe('pullUpExtends', () => {
       ...inputScope,
       cVars: inputScope.cVars.filter(name => !certaintiesOnlyTheInputShows.includes(name)),
     });
-    expect(holdsCachedMetadata(output)).toBe(false);
+    expect(holdsCachedMetadata(c, output)).toBe(false);
     // Idempotence: what the pass produced is a fixpoint of it.
     expect(generateValidQuery(c, pullUpExtends(c, output)).trim()).toEqual(expected.trim());
   }
@@ -96,7 +85,7 @@ describe('pullUpExtends', () => {
     const generated = generateValidQuery(c, output).trim();
     expect(generated).toEqual(expected.trim());
     expect(scopeOf(output)).toEqual(scopeOf(parseWithGraphOperation(query)));
-    expect(holdsCachedMetadata(output)).toBe(false);
+    expect(holdsCachedMetadata(c, output)).toBe(false);
     expect(generateValidQuery(c, pullUpExtends(c, output)).trim()).toEqual(expected.trim());
   }
 

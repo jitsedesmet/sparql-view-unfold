@@ -21,7 +21,7 @@ import {
 } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import { constructedTermOf, splitConjunction, splitDisjunction } from './expressionHelpers.js';
-import { groupingKeysOf } from './operationhelpers.js';
+import { groupBelowSelectClause, groupingKeysOf } from './operationhelpers.js';
 import { xsd } from './rdfDatatypes.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
@@ -387,33 +387,11 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
     return <CPOp<T>> op;
   }
   const annotated = computeCpVarsOutsideExistenceScope(c, op);
-  if (c.existenceScope !== undefined && !aggregatesOver(op)) {
+  if (c.existenceScope !== undefined && groupBelowSelectClause(op) === undefined) {
     Object.assign(annotated.metadata, joinedMeta([ annotated.metadata, c.existenceScope ]));
   }
   (<ScopedCPMeta> annotated.metadata).existenceScope = c.existenceScope;
   return annotated;
-}
-
-/**
- * Whether an operation is a GROUP, or a HAVING, select expression or ORDER BY over one. Its solutions hold only the
- * group keys and aggregates, not the solution an EXISTS is evaluated for, which SPARQL 1.2 joins into groups only.
- * @param op - The operation to read
- * @returns whether it aggregates
- */
-function aggregatesOver(op: Algebra.Operation): boolean {
-  switch (op.type) {
-    case Types.GROUP: {
-      return true;
-    }
-    case Types.FILTER:
-    case Types.EXTEND:
-    case Types.ORDER_BY: {
-      return aggregatesOver(op.input);
-    }
-    default: {
-      return false;
-    }
-  }
 }
 
 /** Cached metadata, with the `existenceScope` it was computed in. */
@@ -568,11 +546,11 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
       const input = withCpVars(c, resOp.input);
       const unbound = variablesRequiredUnboundBy(resOp.expression);
       const implied = rangesImpliedBy(c, resOp.expression, input.metadata);
-      resOp.metadata.cVars = differenceSets(unionSets([
-        input.metadata.cVars,
-        new Set(implied.keys()),
-        variablesRequiredBoundBy(resOp.expression),
-      ]), unbound);
+      // Every variable the condition confines is one it requires bound.
+      resOp.metadata.cVars = differenceSets(
+        unionSets([ input.metadata.cVars, variablesRequiredBoundBy(resOp.expression) ]),
+        unbound,
+      );
       // A filter only drops solutions, so what survives holds what the input put there, narrowed by what the
       // condition confines it to. A variable out of scope stays out: the condition never holds for it.
       // A `!bound(?x)` leaves `?x` in scope but never bound.
