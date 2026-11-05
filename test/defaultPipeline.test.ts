@@ -1,7 +1,8 @@
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
 import type { QueryRewriter } from '../lib/queryRewriter.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 /**
  * `nullifyJoinOverIncompatibleBounds` reads each join operand's top-level `EXTEND` chain and its recursion
@@ -10,7 +11,7 @@ import type { QueryRewriter } from '../lib/queryRewriter.js';
  */
 describe('the default pipeline', () => {
   // The two mappings pin the subject to two different terms, each under its own predicate.
-  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+  const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
     'CONSTRUCT { <ex://a> <ex://p> ?o } WHERE { ?o <ex://src1> ?x }',
     'CONSTRUCT { <ex://b> <ex://q> ?o } WHERE { ?o <ex://src2> ?x }',
   ])));
@@ -32,7 +33,7 @@ describe('the default pipeline', () => {
 
 describe('the default pipeline over an OPTIONAL', () => {
   // The first mapping pins the object to "1", the second maps a predicate straight through.
-  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+  const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
     'CONSTRUCT { ?s <ex://p> "1" } WHERE { ?s <ex://q> ?y }',
     'CONSTRUCT { ?s <ex://r> ?x } WHERE { ?s <ex://t> ?x }',
   ])));
@@ -59,7 +60,9 @@ describe('the default pipeline over a mapping that types its head', () => {
   // The head writes the body's object into its subject position, where a literal or a triple term makes no
   // triple, so the mapping body tests it for an IRI or a blank node.
   const construct = 'CONSTRUCT { ?o <ex://p> ?s } WHERE { ?s <ex://q> ?o }';
-  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([ construct ])));
+  const rewriter = createValidatingQueryRewriter(
+    createDefaultTransformationPipeline(mappingFromConstructQueries([ construct ])),
+  );
 
   it('keeps the type test where nothing guarantees it', async({ expect }) => {
     // `?v_1` is read from an object position, which holds literals and triple terms as well.
@@ -113,7 +116,7 @@ describe('the default pipeline over a generalized RDF view', () => {
    * @returns the rewriter
    */
   function generalizedRdfViewRewriter(construct: string): QueryRewriter {
-    return createQueryRewriter(createDefaultTransformationPipeline(
+    return createValidatingQueryRewriter(createDefaultTransformationPipeline(
       mappingFromConstructQueries([ construct ], { generalizedRdfView: true }),
     ));
   }
@@ -184,7 +187,7 @@ describe('the default pipeline over a generalized RDF view', () => {
 });
 
 describe('the default pipeline over an empty group', () => {
-  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+  const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
     'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }',
   ])));
 
@@ -215,7 +218,7 @@ describe('the default pipeline over an empty group', () => {
 
 describe('the default pipeline over a head variable the pattern writes a triple term into', () => {
   // The body builds the triple term with a subject read from an object position, so it is type tested.
-  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+  const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
     'CONSTRUCT { <ex://all> <ex://p> ?o } WHERE { ?x <ex://r> ?s BIND(TRIPLE(?s, <ex://q>, ?x) AS ?o) }',
   ])));
 
@@ -237,7 +240,7 @@ describe('the default pipeline over a head variable the pattern writes a triple 
 
 describe('the default pipeline over an RDF view', () => {
   it('writes a non-RDF triple term it substitutes as the TRIPLE() raising for it', async({ expect }) => {
-    const rewriter = createQueryRewriter(createDefaultTransformationPipeline(
+    const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(
       mappingFromConstructQueries([ 'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }' ]),
     ));
     expect((await rewriter.rewriteQuery(

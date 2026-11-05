@@ -7,7 +7,8 @@ import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
 import type { MappingOptions } from '../lib/mapping.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import type { QueryRewriter } from '../lib/queryRewriter.js';
+import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
 import { rdfVariantKey } from './permissiveTriple.js';
 import {
   nonSingletonTripleConstruct,
@@ -17,6 +18,7 @@ import {
   tripleTermConstruct,
 } from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -39,8 +41,10 @@ describe('integration tests', () => {
    * @param options - What the mapping is configured with
    * @returns the rewriter
    */
-  function rewriterFor(mappers: string[], options: MappingOptions = {}): ReturnType<typeof createQueryRewriter> {
-    return createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries(mappers, options)));
+  function rewriterFor(mappers: string[], options: MappingOptions = {}): QueryRewriter {
+    return createValidatingQueryRewriter(
+      createDefaultTransformationPipeline(mappingFromConstructQueries(mappers, options)),
+    );
   }
 
   async function sourceToStore(

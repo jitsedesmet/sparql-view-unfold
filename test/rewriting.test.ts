@@ -1,7 +1,6 @@
 import { describe, it } from 'vitest';
 import type { expect as Expect } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createQueryRewriter } from '../lib/queryRewriter.js';
 import { extendsToValuesTransformation } from '../lib/transformations/extendsToValues.js';
 import { rewriteNonRecursivePathsTransformation } from '../lib/transformations/pathTransformation.js';
 import { removeProjectionsTransformation } from '../lib/transformations/removeProjections.js';
@@ -15,6 +14,7 @@ import {
   testQuery,
   tripleTermConstruct,
 } from './queryConsts.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 describe('dummy', () => {
   /** Rewrites a query with the unfolding of the given mappings, surrounded by the given pipelines. */
@@ -24,7 +24,7 @@ describe('dummy', () => {
     afterUnfolding: readonly QueryTransformation[] = [],
     beforeUnfolding: readonly QueryTransformation[] = [],
   ): Promise<string> {
-    const rewriter = createQueryRewriter([
+    const rewriter = createValidatingQueryRewriter([
       ...beforeUnfolding,
       unfoldingTransformation(mappingFromConstructQueries(mappers)),
       ...afterUnfolding,
