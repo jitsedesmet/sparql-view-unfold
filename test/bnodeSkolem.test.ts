@@ -4,7 +4,7 @@ import type * as RDF from '@rdfjs/types';
 import { describe, it } from 'vitest';
 import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE_ENCODING, IRI_PREFIX_BNODE } from '../lib/consts.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
 import type { ExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
 import {
   boundArgumentMarker,
@@ -17,6 +17,7 @@ import {
 import { simplifyStaticExpressionsTransformation } from '../lib/transformations/staticExpressionEvaluation.js';
 import { createTransformationContext } from '../lib/transformContext.js';
 import type { QueryTransformation } from '../lib/types.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 const engine = new QueryEngine();
 
@@ -61,7 +62,7 @@ async function solutions(
   query: string,
   { source = tripleTermData, pipeline = []}: QuerySetting = {},
 ): Promise<RDF.Bindings[]> {
-  const rewritten = await createQueryRewriter([ ...pipeline, evaluation.transformation ]).rewriteQuery(query);
+  const rewritten = await createValidatingQueryRewriter([ ...pipeline, evaluation.transformation ]).rewriteQuery(query);
   const bindings = await engine.queryBindings(rewritten, {
     sources: [ source ],
     ...evaluation.extensionFunctions && { extensionFunctions: evaluation.extensionFunctions },
@@ -182,7 +183,7 @@ describe('bnode skolem', () => {
   });
 
   describe('evaluated by an extension function', () => {
-    const rewriter = createQueryRewriter([ extensionFunctionLiteral.transformation ]);
+    const rewriter = createValidatingQueryRewriter([ extensionFunctionLiteral.transformation ]);
     const encode = internalBnodeExtensionFunctions()[EXTENSION_FUNCTION_BNODE_ENCODING];
 
     it('wraps every argument and rewrites ISBLANK', async({ expect }) => {
@@ -221,7 +222,7 @@ describe('bnode skolem', () => {
 
   it('refuses a triple term argument depth that is not a non-negative integer', ({ expect }) => {
     expect(() => createTransformationContext({ tripleTermArgumentDepth: -1 })).toThrow('non-negative integer');
-    expect(() => createQueryRewriter([], { tripleTermArgumentDepth: 1.5 })).toThrow('non-negative integer');
+    expect(() => createValidatingQueryRewriter([], { tripleTermArgumentDepth: 1.5 })).toThrow('non-negative integer');
   });
 
   // A node materialised as a typed literal has its encoding as value, the same whichever way it is encoded.
@@ -300,7 +301,7 @@ describe('bnode skolem', () => {
   });
 
   describe('as a special literal', () => {
-    const rewriter = createQueryRewriter([ sparqlLiteral.transformation ]);
+    const rewriter = createValidatingQueryRewriter([ sparqlLiteral.transformation ]);
 
     // Joins encodings, each the list of parts of its CONCAT, as the rewrite does: nested parts spliced in, adjacent
     // constants merged.
@@ -436,7 +437,7 @@ describe('bnode skolem', () => {
     });
 
     it('encodes a triple term only as deep as the context says', async({ expect }) => {
-      const shallowRewriter = createQueryRewriter(
+      const shallowRewriter = createValidatingQueryRewriter(
         [ internalBnodeAsSpecialLiteralTransformation() ],
         { tripleTermArgumentDepth: 1 },
       );
@@ -558,7 +559,7 @@ describe('bnode skolem', () => {
 }`,
         ].join(''));
       // Static evaluation folds the encoding of a constant into the node itself.
-      const evaluated = createQueryRewriter([
+      const evaluated = createValidatingQueryRewriter([
         internalBnodeAsSpecialLiteralTransformation(),
         simplifyStaticExpressionsTransformation(),
       ]);

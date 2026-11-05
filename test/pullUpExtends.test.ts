@@ -1,4 +1,4 @@
-import { toAlgebra, toAst } from '@traqula/algebra-sparql-1-2';
+import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { expect as Expect } from 'vitest';
@@ -10,6 +10,7 @@ import { createTransformationContext, parseQuery } from '../lib/transformContext
 import { withCpVars, withoutCpVars } from '../lib/utils/certainlyBoundVars.js';
 import { expressionsEqual, isStableExpression } from '../lib/utils/expressionHelpers.js';
 import { peelExtends } from '../lib/utils/extendChain.js';
+import { generateValidQuery } from './validQuery.js';
 
 const prefixes = `PREFIX : <ex://>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
@@ -21,7 +22,7 @@ describe('pullUpExtends', () => {
   const c = createTransformationContext();
 
   function transform(query: string): string {
-    return c.generator.generate(toAst(pullUpExtends(c, parseQuery(c, prefixes + query)))).trim();
+    return generateValidQuery(c, pullUpExtends(c, parseQuery(c, prefixes + query))).trim();
   }
 
   /** The variables bound by the EXTEND chain at the top of an operation, in evaluation order. */
@@ -60,14 +61,12 @@ describe('pullUpExtends', () => {
     // leaves something unbound.
     const input = parseQuery(c, prefixes + query);
     const output = pullUpExtends(c, input);
-    const generated = c.generator.generate(toAst(output)).trim();
+    const generated = generateValidQuery(c, output).trim();
     expect(generated).toEqual(expected.trim());
-    // Re-parsing checks the output is valid SPARQL, e.g. that no `BIND` lands where its variable is in scope.
-    expect(() => parseQuery(c, prefixes + generated)).not.toThrow();
     expect(scopeOf(output)).toEqual(scopeOf(parseQuery(c, prefixes + query)));
     expect(holdsCachedMetadata(output)).toBe(false);
     // Idempotence: what the pass produced is a fixpoint of it.
-    expect(c.generator.generate(toAst(pullUpExtends(c, output))).trim()).toEqual(expected.trim());
+    expect(generateValidQuery(c, pullUpExtends(c, output)).trim()).toEqual(expected.trim());
   }
 
   /** Parses a query *without* quads, so that a GRAPH survives as an operation of its own. */
@@ -84,13 +83,11 @@ describe('pullUpExtends', () => {
    */
   function expectTransformGraphOperation(expect: typeof Expect, query: string, expected: string): void {
     const output = pullUpExtends(c, parseWithGraphOperation(query));
-    const generated = c.generator.generate(toAst(output)).trim();
+    const generated = generateValidQuery(c, output).trim();
     expect(generated).toEqual(expected.trim());
-    // Re-parsing checks the output is valid SPARQL, e.g. that no `BIND` lands where its variable is in scope.
-    expect(() => parseQuery(c, prefixes + generated)).not.toThrow();
     expect(scopeOf(output)).toEqual(scopeOf(parseWithGraphOperation(query)));
     expect(holdsCachedMetadata(output)).toBe(false);
-    expect(c.generator.generate(toAst(pullUpExtends(c, output))).trim()).toEqual(expected.trim());
+    expect(generateValidQuery(c, pullUpExtends(c, output)).trim()).toEqual(expected.trim());
   }
 
   describe('congruent operations', () => {
@@ -468,8 +465,7 @@ ORDER BY ASC ( ?x )`,
     });
 
     it('stays when a sibling has the variable in scope only under a !bound filter (C1)', ({ expect }) => {
-      // Needs to say since parsers will throw on the soe,
-      // not on some complex computation on whether it will ever reach.
+      // It has to stay: parsers reject a `BIND` on scope alone, not on whether `?x` can ever be bound.
       expectTransform(
         expect,
         'SELECT * WHERE { { ?s :p ?o BIND(:a AS ?x) } { ?a :q ?b OPTIONAL { ?b :r ?x } FILTER(!bound(?x)) } }',
@@ -1113,7 +1109,7 @@ ORDER BY ASC ( ?x )`,
       const once = pullUpExtends(c, pushDownAssertions(c, parseQuery(c, query)));
       const twice = pullUpExtends(c, pushDownAssertions(c, once));
       const thrice = pullUpExtends(c, pushDownAssertions(c, twice));
-      const generated = (op: Algebra.Operation): string => c.generator.generate(toAst(op)).trim();
+      const generated = (op: Algebra.Operation): string => generateValidQuery(c, op).trim();
       expect(generated(twice)).toEqual(generated(once));
       expect(generated(thrice)).toEqual(generated(once));
     });

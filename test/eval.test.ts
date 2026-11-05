@@ -1,6 +1,5 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
-import { toAst } from '@traqula/algebra-sparql-1-2';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import { Parser, Store } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
@@ -8,7 +7,7 @@ import type { ExpectStatic } from 'vitest';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import type { QueryRewriter } from '../lib/queryRewriter.js';
-import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
 import { filterFalseTransformation } from '../lib/transformations/filterFalse.js';
 import {
   nullifyJoinOverIncompatibleBoundsTransformation,
@@ -19,6 +18,7 @@ import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import { nonTripleTermConstruct, tripleTermConstruct } from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
+import { createValidatingQueryRewriter, generateValidQuery } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -103,7 +103,7 @@ describe('evaluation tests', () => {
       // Querying a normal query over store 1.2 should give same result as altered query over store 1.1
       const userQuery = 'CONSTRUCT WHERE { ?s ?p ?o }';
       const resOnMappedData = await sourceToStore([ store12 ], userQuery);
-      const rewriter = createQueryRewriter([
+      const rewriter = createValidatingQueryRewriter([
         unfoldingTransformation(mappingFromConstructQueries([ tripleTermConstruct, nonTripleTermConstruct ])),
         filterFalseTransformation(),
         nullifyJoinOverIncompatibleBoundsTransformation(),
@@ -132,7 +132,7 @@ describe('evaluation tests', () => {
       expectedRows: number,
     ): Promise<void> {
       const evalQuery = prefixes + query;
-      const rewritten = c.generator.generate(toAst(pullUpExtends(c, parseQuery(c, evalQuery)))).trim();
+      const rewritten = generateValidQuery(c, pullUpExtends(c, parseQuery(c, evalQuery))).trim();
       const original = await bindings(evalQuery, pullUpData);
       // Result is equal
       expect(await bindings(rewritten, pullUpData)).toEqual(original);
@@ -152,7 +152,7 @@ describe('evaluation tests', () => {
       expected: string[],
     ): Promise<void> {
       const evalQuery = prefixes + query;
-      const rewritten = c.generator.generate(toAst(pullUpExtends(c, parseQuery(c, evalQuery)))).trim();
+      const rewritten = generateValidQuery(c, pullUpExtends(c, parseQuery(c, evalQuery))).trim();
       const original = await sequence(evalQuery, pullUpData);
       expect(await sequence(prefixes + rewritten, pullUpData)).toEqual(original);
       expect(original).toEqual(expected);
@@ -243,8 +243,8 @@ describe('evaluation tests', () => {
       if (rewriters === undefined) {
         const mapping = mappingFromConstructQueries([ prefixes + view ]);
         rewriters = {
-          unfoldOnly: createQueryRewriter([ unfoldingTransformation(mapping) ]),
-          pipeline: createQueryRewriter(createDefaultTransformationPipeline(mapping)),
+          unfoldOnly: createValidatingQueryRewriter([ unfoldingTransformation(mapping) ]),
+          pipeline: createValidatingQueryRewriter(createDefaultTransformationPipeline(mapping)),
         };
         rewritersByView.set(view, rewriters);
       }

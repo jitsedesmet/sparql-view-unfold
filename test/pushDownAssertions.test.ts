@@ -1,5 +1,4 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
-import { toAst } from '@traqula/algebra-sparql-1-2';
 import type { Algebra as AlgebraTypes } from '@traqula/algebra-transformations-1-2';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import { termToString } from 'rdf-string';
@@ -8,6 +7,7 @@ import { describe, it } from 'vitest';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { pushDownAssertions } from '../lib/transformations/pushDownAssertions.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import { generateValidQuery } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -29,13 +29,13 @@ describe('pushDownAssertions', () => {
 
   function transform(query: string): string {
     const transformed = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query));
-    return c.generator.generate(toAst(transformed)).trim();
+    return generateValidQuery(c, transformed).trim();
   }
 
   /** Runs the FILTER(FALSE) normalisation of the design's normalisation pass on top of the pushdown. */
   function transformAndNormalise(query: string): string {
     const pushed = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query));
-    return c.generator.generate(toAst(transformFilterFalse(c, pushed))).trim();
+    return generateValidQuery(c, transformFilterFalse(c, pushed)).trim();
   }
 
   function expectTransform(expect: typeof Expect, query: string, expected: string): void {
@@ -52,7 +52,7 @@ describe('pushDownAssertions', () => {
     const once = transform(query);
     const rewrite = newRewriteContext();
     const twice = pushDownAssertions(rewrite, pushDownAssertions(rewrite, parseQuery(c, prefixes + query)));
-    expect(c.generator.generate(toAst(twice)).trim()).toEqual(once);
+    expect(generateValidQuery(c, twice).trim()).toEqual(once);
     expect(transform(once)).toEqual(once);
   }
 
@@ -75,7 +75,7 @@ describe('pushDownAssertions', () => {
    */
   function transformOverQuads(query: string): string {
     const pushed = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query, { quads: true }));
-    return c.generator.generate(toAst(pushed)).trim();
+    return generateValidQuery(c, pushed).trim();
   }
 
   function expectTransformOverQuads(expect: typeof Expect, query: string, expected: string): void {
@@ -1528,7 +1528,7 @@ GROUP BY ?x ( ?x AS ?y )`,
         const once = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query));
         const rewrite = newRewriteContext();
         const twice = pushDownAssertions(rewrite, pushDownAssertions(rewrite, parseQuery(c, prefixes + query)));
-        expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
+        expect(generateValidQuery(c, twice)).toEqual(generateValidQuery(c, once));
       }
     });
   });
@@ -1928,7 +1928,7 @@ GROUP BY ?x ( ?x AS ?y )`,
       const rewrite = newRewriteContext();
       const once = pushDownAssertions(rewrite, parseQuery(c, query));
       const twice = pushDownAssertions(rewrite, once);
-      expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
+      expect(generateValidQuery(c, twice)).toEqual(generateValidQuery(c, once));
     });
 
     it('empties the plan where a passed assertion contradicts the conjunction', ({ expect }) => {
@@ -2169,7 +2169,7 @@ GROUP BY ?x ( ?x AS ?y )`,
       const once = pushDownAssertions(newRewriteContext(), parseQuery(c, query));
       const rewrite = newRewriteContext();
       const twice = pushDownAssertions(rewrite, pushDownAssertions(rewrite, parseQuery(c, query)));
-      expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
+      expect(generateValidQuery(c, twice)).toEqual(generateValidQuery(c, once));
     });
   });
 

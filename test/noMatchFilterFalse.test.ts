@@ -5,9 +5,9 @@ import { DataFactory, Store } from 'n3';
 import { describe, it, vi } from 'vitest';
 import { ClusterSolver } from '../lib/ClusterSolver.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createQueryRewriter } from '../lib/queryRewriter.js';
 import { filterFalseTransformation } from '../lib/transformations/filterFalse.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -25,7 +25,7 @@ describe('a pattern that cannot match the mapping', () => {
   const mapping = mappingFromConstructQueries([
     'CONSTRUCT { <ex://a> ?p ?o } WHERE { ?p <ex://src> ?o }',
   ]);
-  const rewriter = createQueryRewriter([
+  const rewriter = createValidatingQueryRewriter([
     unfoldingTransformation(mapping),
     filterFalseTransformation(),
   ]);
