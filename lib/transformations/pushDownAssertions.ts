@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
+import { forEveryNodeType } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import type { AssertionFilter, EquatedGroup } from '../utils/assertionConjunction.js';
@@ -28,9 +29,10 @@ import {
   variablesOfTransferSource,
   asWeakenedConjunct,
 } from '../utils/assertions.js';
-import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { cpMetaOf } from '../utils/certainlyBoundVars.js';
+import { leaveExistencePatternsPreOrder, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
-import { createFilterFalse } from '../utils/operationhelpers.js';
+import { canMatchZeroLength, createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import { unionSets } from '../utils/setUtils.js';
 import type { DerivedVarNamer } from '../utils.js';
@@ -116,20 +118,20 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // After:  SELECT * WHERE { ?o ?p ?o . BIND(?o AS ?s) }
  */
 export function pushDownAssertions<T extends Algebra.Operation>(c: TransformationContext, rootOp: T): T {
-  const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
-    Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]),
-  );
   // One namer for the whole pass, over every variable of the query as it stands *before* anything is
   // rewritten (D4). Both halves of that matter: a materialised position has to get the same name
   // wherever it is written, and a name coined against a part of the tree would collide with a variable
   // in the part that has not been met yet - which is also why this takes the root, see above.
   const namer = derivedVarNamer(markVariableNamesUsed(c, rootOp));
-  callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(c, namer, filter);
-  // Starting from a copy without metadata gives both a tree of our own to rewrite and the guarantee that
-  // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out
-  // for the same reason, the rewrites having since changed what the traversal cached. Not *inside*
-  // `mapOperationPreOrder`: `keepMetadata` is how a filter hands its conjunction to the next `pushFilter`.
-  return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(rootOp), callbacks));
+  // Metadata is cleared around the pass, not inside it: `keepMetadata` is how a filter hands its conjunction to the
+  // next `pushFilter`.
+  return rewriteInExistenceScopes(c, rootOp, (context, op) => {
+    const callbacks = forEveryNodeType(keep, {
+      [Algebra.Types.FILTER]: (filter: Algebra.Filter) => pushFilter(context, namer, filter),
+      [Algebra.Types.EXPRESSION]: leaveExistencePatternsPreOrder,
+    });
+    return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(op, callbacks);
+  });
 }
 
 /**
@@ -171,9 +173,18 @@ function pushAssertions(
   assertions: AssertionConjunction,
   op: Algebra.Operation,
 ): PreOrderMappingReturn {
-  const normalised = assertions.normalisedFor(cpMetaOf(op));
+  const normalised = assertions.normalisedFor(cpMetaOf(c, op));
   if (normalised === undefined) {
     return empty(c, op);
+  }
+  // A conjunct on a variable of the outer solution of an EXISTS stays here: below, a rule could write a term for it, or
+  // carry it past a sub-SELECT that does not project it.
+  const scope = c.existenceScope?.vRanges;
+  if (scope !== undefined) {
+    const { inside, outside } = normalised.split(name => !scope.has(name));
+    if (outside.size > 0) {
+      return keep(assertionFilter(c, assertionFilter(c, op, inside), outside));
+    }
   }
   if (normalised.size === 0) {
     return keep(op);
@@ -204,15 +215,29 @@ function swapWith(
   const { AF } = c;
   switch (op.type) {
     // A BGP and a path bind all of their variables, so normalisation has made every assertion reaching
-    // them strong, and a clique is substituted to its representative. Every leaf is handed the *same*
-    // conjunction; what differs is what each can pay off with the rewrite it makes, and so what has to
-    // be restated over it. A pattern settles what a pattern can state - a term, an equality, a shape -
+    // them strong, and a clique is substituted to its representative. A path that can match zero steps
+    // between two variables takes no term at its ends: from a fixed term, that match yields the term even
+    // where the graph lacks it, where from a variable it ranges over the nodes of the graph. Every leaf is
+    // handed the *same* conjunction; what differs is what each can pay off with the rewrite it makes, and
+    // so what has to be restated over it. A pattern settles what a pattern can state - a term, an equality, a shape -
     // and no more, `isIRI(?x)` staying; a VALUES row settles everything at once ({@link pruneValues}).
     case Algebra.Types.BGP: {
       return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPatterns(c, op, substitution)));
     }
     case Algebra.Types.PATH: {
-      return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPath(c, op, substitution)));
+      // Paths containing only vars are completely grounded in D and should remain so.
+      const { subject, object } = op;
+      const variableOnlyNames =
+        [ subject, object ].every(x => x.termType === 'Variable') && canMatchZeroLength(op.predicate) ?
+          new Set([ subject.value, object.value ]) :
+          undefined;
+      return keep(rewritePattern(
+        c,
+        assertions,
+        namer,
+        substitution => substituteIntoPath(c, op, substitution),
+        variableOnlyNames,
+      ));
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
@@ -231,7 +256,7 @@ function swapWith(
     }
     case Algebra.Types.FILTER: {
       // The conjunction we manage absorbs the assertions of the filter we pass (SDecompI),
-      const collected = collectAssertions(c, op.expression, assertions, cpMetaOf(op.input).cVars);
+      const collected = collectAssertions(c, op.expression, assertions, cpMetaOf(c, op.input).cVars);
       if (collected === undefined) {
         return empty(c, op);
       }
@@ -343,7 +368,8 @@ function substituteIntoPatterns(
  *
  * Unlike a BGP a path may legitimately have a literal in its subject slot (`?lit ^:p ?s`), so only the
  * graph position is checked. Paths are not duplicate-free, but substituting only restricts the set of
- * start nodes and leaves the witness count of every surviving pair untouched.
+ * start nodes and leaves the witness count of every surviving pair untouched - provided no term is written
+ * into the variable ends of a path that can match zero steps ({@link swapWith}).
  * @param c - The transformation context
  * @param path - The path to substitute into
  * @param assertions - The substitution to write in
@@ -364,15 +390,16 @@ function substituteIntoPath(c: TransformationContext, path: Algebra.Path, assert
  * took out of it, and a condition for what a pattern cannot state.
  *
  * The three come from one call ({@link AssertionConjunction.intoPattern}) because they are one decision;
- * `substituteInto` is the only thing a BGP and a property path differ in. The condition goes on the
- * pattern, below the re-binding, and is written against the values the pattern holds rather than against
- * the accesses Θ reads them by: `isIRI(OBJECT(?o))` becomes `isIRI(?o_o)`, a condition over a variable
- * the pattern binds and one an engine can push into the scan.
+ * `substituteInto` and `variableOnlyNames` are the only things a BGP and a property path differ in. The
+ * condition goes on the pattern, below the re-binding, and is written against the values the pattern holds
+ * rather than against the accesses Θ reads them by: `isIRI(OBJECT(?o))` becomes `isIRI(?o_o)`, a condition
+ * over a variable the pattern binds and one an engine can push into the scan.
  * @param c - The transformation context
  * @param assertions - The conjunction to write into the pattern
  * @param namer - Coins the variables a materialised shape needs
  * @param substituteInto - Writes the substitution into the pattern, checking the positions its own kind of
  * pattern can hold
+ * @param variableOnlyNames - The variables the pattern may only have a variable written in for
  * @returns the rewritten pattern, its condition and its re-bindings
  */
 function rewritePattern(
@@ -380,8 +407,9 @@ function rewritePattern(
   assertions: AssertionConjunction,
   namer: DerivedVarNamer,
   substituteInto: (substitution: Assertions) => Algebra.Operation,
+  variableOnlyNames?: ReadonlySet<string>,
 ): Algebra.Operation {
-  const { substitution, residual, asWritten } = assertions.intoPattern(namer);
+  const { substitution, residual, asWritten } = assertions.intoPattern(namer, variableOnlyNames);
   const pattern = substituteInto(substitution);
   // Read against what the pattern now binds, which is what decides `sameTerm(?x, ?x)` for it. Placing the
   // condition below the re-binding rather than above needs no check: a name the substitution re-binds
@@ -389,7 +417,7 @@ function rewritePattern(
   // for it. So it reads what the pattern itself binds, and belongs as deep as that goes.
   const condition = residual.size === 0 ?
     undefined :
-    substituteInExpression(c, residual.toExpression(c), asWritten, cpMetaOf(pattern).cVars);
+    substituteInExpression(c, residual.toExpression(c), asWritten, cpMetaOf(c, pattern).cVars);
   // A conjunct the values decide - `bound(?x)` of a variable the pattern writes, say - leaves nothing to
   // ask. `false` is not the mirror of this and keeps its filter: that is the empty operation, which
   // {@link transformFilterFalse} normalises away afterwards.
@@ -549,7 +577,7 @@ function pushIntoExtend(
   const expression = extend.expression;
   const assertionOfTarget = assertions.get(target);
   // The expression is evaluated over the input of the EXTEND, wherever this rewrite ends up putting it.
-  const { cVars } = cpMetaOf(extend.input);
+  const { cVars } = cpMetaOf(c, extend.input);
   // A BIND of something Θ can name carries below the EXTEND whatever the target carries above it, so Θ
   // transfers onto it. A source *reading the target* is not one of them: `BIND(?x AS ?x)` binds nothing,
   // the target being unbound below itself, and a construction mentioning it reads a variable that is
@@ -653,7 +681,7 @@ function pushIntoGraph(
     // the second falls through to the general path below rather than being treated as an emptiness.
     assertedGraphName.term.termType === 'NamedNode') {
     // Read before the rewrite, which preserves the scope exactly and never shrinks `cVars`.
-    const { cVars, vRanges } = cpMetaOf(graph.input);
+    const { cVars, vRanges } = cpMetaOf(c, graph.input);
     // `?g` travels on into the pattern, in the *weak* form: `P` need not bind it at all, and the join
     // with `{?g ↦ c}` is what would have dropped the solutions binding it to anything else.
     const graphIndependentAssertions = assertions.split(name => name !== graphVar).inside;
@@ -711,8 +739,8 @@ function pushIntoGraph(
   }]);
   return keep(assertionFilter(
     c,
-    AF.createGraph(assertionFilter(c, graph.input, AssertionConjunction.of(placed.intoTarget[0])), graphName),
-    AssertionConjunction.of(placed.kept),
+    AF.createGraph(assertionFilter(c, graph.input, AssertionConjunction.of(c, placed.intoTarget[0])), graphName),
+    AssertionConjunction.of(c, placed.kept),
   ));
 }
 
@@ -739,7 +767,7 @@ function pushIntoJoin(
 
   // Read before any rewriting: every rewrite preserves pVars and never shrinks cVars, so these licences
   // stay valid while the operands are rewritten.
-  const operands = join.input.map(operand => cpMetaOf(operand));
+  const operands = join.input.map(operand => cpMetaOf(c, operand));
   // Memoization for binderCountOf
   const binderCounts = new Map<string, number>();
   const binderCountOf = (name: string): number => {
@@ -763,8 +791,8 @@ function pushIntoJoin(
   return keep(assertionFilter(
     c,
     c.AF.createJoin(join.input.map((operand, index) =>
-      assertionFilter(c, operand, AssertionConjunction.of(placed.intoTarget[index]))), false),
-    AssertionConjunction.of(placed.kept),
+      assertionFilter(c, operand, AssertionConjunction.of(c, placed.intoTarget[index]))), false),
+    AssertionConjunction.of(c, placed.kept),
   ));
 }
 
@@ -823,7 +851,7 @@ function pushIntoLeftJoin(
 ): PreOrderMappingReturn {
   const { AF } = c;
   const [ left, right ] = leftJoin.input;
-  const leftVars = cpMetaOf(left);
+  const leftVars = cpMetaOf(c, left);
 
   if ([ ...assertions.boundImpliedBy() ].some(name => leftVars.vRanges.neverBinds(name))) {
     // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
@@ -832,7 +860,7 @@ function pushIntoLeftJoin(
     return { ...keepMetadata, newValue: assertionFilter(c, rebuilt, assertions), reTransform: true };
   }
 
-  const rightVars = cpMetaOf(right);
+  const rightVars = cpMetaOf(c, right);
   // (FLPush) on the left, and `?x ∈ cVars(A₁) ∩ cVars(A₂)` on the right - which implies the left's
   // licence, so the replication only ever happens beside a push the LHS already took.
   //
@@ -857,7 +885,7 @@ function pushIntoLeftJoin(
   const [ intoLeft, intoRight ] = placed.intoTarget;
   const kept = placed.kept;
 
-  const leftAssertions = AssertionConjunction.of(intoLeft);
+  const leftAssertions = AssertionConjunction.of(c, intoLeft);
   // Every candidate μ₁ binds the variables strongly asserted in intoLeft to their term once those are
   // pushed into A₁, so substituting them into the left join condition is sound.
   // The condition is only ever evaluated on a merged `μ₁ ∪ μ₂` - the anti-join half keeps a `μ₁` exactly
@@ -875,10 +903,10 @@ function pushIntoLeftJoin(
     c,
     AF.createLeftJoin(
       assertionFilter(c, left, leftAssertions),
-      assertionFilter(c, right, AssertionConjunction.of(intoRight)),
+      assertionFilter(c, right, AssertionConjunction.of(c, intoRight)),
       expression,
     ),
-    AssertionConjunction.of(kept),
+    AssertionConjunction.of(c, kept),
   ));
 }
 
@@ -1085,7 +1113,7 @@ function unification(reading: Access, representative: Access): AssertionConjunct
  */
 function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjunction {
   const { unaryConjuncts, equatedGroups } = assertions.unaryConjunctsAndEquatedGroups();
-  return AssertionConjunction.of([
+  return AssertionConjunction.of(assertions, [
     ...unaryConjuncts,
     ...equatedGroups.flatMap(group => termTypesOfReadings(group)),
   ]

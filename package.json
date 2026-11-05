@@ -68,12 +68,12 @@
     "@comunica/core": "^5.4.0",
     "@comunica/query-sparql-file": "^5.4.0",
     "@comunica/utils-bindings-factory": "^5.4.0",
-    "@traqula/algebra-sparql-1-2": "^1.5.0-alpha.3",
-    "@traqula/algebra-transformations-1-2": "^1.5.0-alpha.3",
-    "@traqula/core": "^1.5.0-alpha.3",
-    "@traqula/generator-sparql-1-2": "^1.5.0-alpha.3",
-    "@traqula/parser-sparql-1-2": "^1.5.0-alpha.3",
-    "@traqula/rules-sparql-1-2": "^1.5.0-alpha.3",
+    "@traqula/algebra-sparql-1-2": "^1.5.0-alpha.5",
+    "@traqula/algebra-transformations-1-2": "^1.5.0-alpha.5",
+    "@traqula/core": "^1.5.0-alpha.5",
+    "@traqula/generator-sparql-1-2": "^1.5.0-alpha.5",
+    "@traqula/parser-sparql-1-2": "^1.5.0-alpha.5",
+    "@traqula/rules-sparql-1-2": "^1.5.0-alpha.5",
     "componentsjs": "^6.4.0",
     "rdf-data-factory": "^2.0.2"
   },
@@ -94,16 +94,16 @@
     "vitest": "^4.1.1"
   },
   "resolutions": {
-    "@traqula/algebra-sparql-1-1": "1.5.0-alpha.3",
-    "@traqula/algebra-sparql-1-2": "1.5.0-alpha.3",
-    "@traqula/algebra-transformations-1-1": "1.5.0-alpha.3",
-    "@traqula/algebra-transformations-1-2": "1.5.0-alpha.3",
-    "@traqula/core": "1.5.0-alpha.3",
-    "@traqula/generator-sparql-1-1": "1.5.0-alpha.3",
-    "@traqula/generator-sparql-1-2": "1.5.0-alpha.3",
-    "@traqula/parser-sparql-1-1": "1.5.0-alpha.3",
-    "@traqula/parser-sparql-1-2": "1.5.0-alpha.3",
-    "@traqula/rules-sparql-1-1": "1.5.0-alpha.3",
-    "@traqula/rules-sparql-1-2": "1.5.0-alpha.3"
+    "@traqula/algebra-sparql-1-1": "1.5.0-alpha.5",
+    "@traqula/algebra-sparql-1-2": "1.5.0-alpha.5",
+    "@traqula/algebra-transformations-1-1": "1.5.0-alpha.5",
+    "@traqula/algebra-transformations-1-2": "1.5.0-alpha.5",
+    "@traqula/core": "1.5.0-alpha.5",
+    "@traqula/generator-sparql-1-1": "1.5.0-alpha.5",
+    "@traqula/generator-sparql-1-2": "1.5.0-alpha.5",
+    "@traqula/parser-sparql-1-1": "1.5.0-alpha.5",
+    "@traqula/parser-sparql-1-2": "1.5.0-alpha.5",
+    "@traqula/rules-sparql-1-1": "1.5.0-alpha.5",
+    "@traqula/rules-sparql-1-2": "1.5.0-alpha.5"
   }
 }

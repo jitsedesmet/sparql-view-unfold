@@ -94,7 +94,7 @@ export function isInternalBnode(expression: Algebra.NamedExpression): boolean {
 }
 
 /** The expression callbacks of {@link internalBnodeExpressionCallbacks}. */
-interface InternalBnodeExpressionCallbacks {
+export interface InternalBnodeExpressionCallbacks {
   named: { transform: (named: Algebra.NamedExpression) => Algebra.Expression };
   operator: { transform: (operator: Algebra.OperatorExpression) => Algebra.Expression };
 }

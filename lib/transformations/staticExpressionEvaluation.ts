@@ -75,6 +75,7 @@ async function prepareStaticEvaluator(
     [KeysInitQuery.queryTimestamp.name]: new Date(),
     [KeysInitQuery.dataFactory.name]: c.DF,
     [KeysInitQuery.functionArgumentsCache.name]: {},
+    ...c.generalizedRdf ? { [KeysInitQuery.rdfVariant.name]: 'generalizedRdf' } : {},
   });
   return async(expression) => {
     try {

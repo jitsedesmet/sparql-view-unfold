@@ -4,6 +4,7 @@ import { VAR_PREFIX_MAPPING } from '../consts.js';
 import { withDeduplicatedBody } from '../mapping.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, QueryTransformation } from '../types.js';
+import { leaveExistencePatterns, rewriteInExistenceScopesBeforePass } from '../utils/existenceScopes.js';
 import { claimVariableName, collectVariableNames, markVariableNamesUsed, renameVariables } from '../utils.js';
 import { rewriteSinglePattern } from './rewriteSinglePattern.js';
 
@@ -42,9 +43,9 @@ export interface UnfoldingOptions {
 }
 
 /**
- * Rewrites every non-empty BGP of an operation outside a `SERVICE` into a join of its patterns unfolded against
- * the mapping.
- * @param c - The transformation context
+ * Rewrites every non-empty BGP of an operation outside a `SERVICE` and EXISTS patterns into a join of its patterns
+ * unfolded against the mapping.
+ * @param c - The transformation context, whose `existenceScope` is the outer solution inside an EXISTS
  * @param mapping - The mapping to unfold, its variables named apart from the operation's
  * @param input - The operation to rewrite
  * @returns the rewritten operation
@@ -66,6 +67,7 @@ function unfoldTriplePatternsAgainstMapping(
         ),
       },
       [Algebra.Types.SERVICE]: { preVisitor: () => ({ continue: false }) },
+      [Algebra.Types.EXPRESSION]: leaveExistencePatterns,
     },
   );
 }
@@ -81,12 +83,17 @@ export function unfoldingTransformation(mapping: Mapping, options: UnfoldingOpti
   // Sorted, so that which name gets which suffix does not depend on where the mapping writes it.
   const mappingVariableNames = [ ...collectVariableNames(new AstTransformer(), mapping) ].sort();
   return (context, operation) => {
+    // Set before any EXISTS pattern gets a context of its own, so that every copy and the solver read it.
+    context.generalizedRdf = mapping.generalizedRdfView;
     const usedNames = markVariableNamesUsed(context, operation);
     const mappingApart = renameMappingApart(context, mapping, mappingVariableNames, usedNames);
-    return unfoldTriplePatternsAgainstMapping(
+    const unfoldedMapping = options.preserveCardinality === true ?
+      withDeduplicatedBody(context, mappingApart) :
+      mappingApart;
+    return rewriteInExistenceScopesBeforePass(
       context,
-      options.preserveCardinality === true ? withDeduplicatedBody(context, mappingApart) : mappingApart,
       operation,
+      (scopedContext, input) => unfoldTriplePatternsAgainstMapping(scopedContext, unfoldedMapping, input),
     );
   };
 }

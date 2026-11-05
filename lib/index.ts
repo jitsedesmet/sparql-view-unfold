@@ -55,6 +55,9 @@ export type { ProvenanceAnnotatedAnswer, ProvenancePolynomial, SpmSemiring } fro
 export type { MappingOptions } from './mapping.js';
 export { createDefaultTransformationPipeline, createQueryRewriter } from './queryRewriter.js';
 export type { QueryRewriter } from './queryRewriter.js';
+export * from './RangeSet.js';
 export type { TransformationContext, TransformationContextOptions } from './transformContext.js';
 export type { Mapping, MappingHead, QueryTransformation } from './types.js';
+export { standardExpressionRange } from './utils/certainlyBoundVars.js';
+export type { CPMeta } from './utils/certainlyBoundVars.js';
 export * from './transformations/index.js';

@@ -57,7 +57,7 @@ function conjunctionOf(...conjuncts: [ string, Assertion ][]): AssertionConjunct
 
 /** {@link conjunctionOf} over accesses, which is what a conjunct about a shape is written against. */
 function structuralConjunctionOf(...conjuncts: [ Access, Assertion ][]): AssertionConjunction | undefined {
-  const result = new AssertionConjunction();
+  const result = new AssertionConjunction({ generalizedRdf: false });
   for (const [ access, assertion ] of conjuncts) {
     if (!result.assert(access, assertion)) {
       return undefined;
@@ -144,7 +144,7 @@ function termString(term: RDF.Term): string {
  * demote a conjunction do to it, one conjunct at a time ({@link asWeakenedConjunct}).
  */
 function weakenedForm(assertions: AssertionConjunction): AssertionConjunction {
-  return AssertionConjunction.of(assertions.conjuncts()
+  return AssertionConjunction.of(assertions, assertions.conjuncts()
     .map(conjunct => asWeakenedConjunct(conjunct))
     .filter(conjunct => conjunct !== undefined));
 }
@@ -216,7 +216,7 @@ function splitOf(
  */
 function rejoined(assertions: AssertionConjunction, predicate: (name: string) => boolean): AssertionConjunction {
   const { inside, outside } = assertions.split(predicate);
-  return AssertionConjunction.of([ ...inside.conjuncts(), ...outside.conjuncts() ]);
+  return AssertionConjunction.of(assertions, [ ...inside.conjuncts(), ...outside.conjuncts() ]);
 }
 
 /**

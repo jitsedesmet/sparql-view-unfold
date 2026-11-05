@@ -15,6 +15,15 @@ export class RangeSet extends Set<RDF.Term['termType']> {
   public meet(other: RangeSet): RangeSet {
     return new RangeSet([ ...other.values() ].filter(x => this.has(x)));
   }
+
+  /**
+   * The term types any of some ranges admits.
+   * @param ranges - The ranges to join
+   * @returns a new range holding their union
+   */
+  public static join(ranges: Iterable<RangeSet>): RangeSet {
+    return new RangeSet([ ...ranges ].flatMap(range => [ ...range ]));
+  }
 }
 
 /** The term types the subject position of a triple admits: BlankNodes and NamedNodes. */
@@ -41,14 +50,17 @@ export const objectRange = new RangeSet([ 'Quad', 'NamedNode', 'BlankNode', 'Lit
  */
 export const graphRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
 
-/** Valid term types for a triple term, which only ever occupies an object position. */
+/** Valid term types for a triple term. */
 export const tripleTermRange = new RangeSet([ 'Quad' ]);
-
-/** The term types of a blank node, including an internal one `<internal://blank>(…)` constructs. */
-export const blankNodeRange = new RangeSet([ 'BlankNode' ]);
 
 /** The term types of a literal: Literals only. */
 export const literalRange = new RangeSet([ 'Literal' ]);
+
+/** The term types of an IRI: NamedNodes only. */
+export const iriRange = new RangeSet([ 'NamedNode' ]);
+
+/** The term types of a blank node: BlankNodes only. */
+export const blankNodeRange = new RangeSet([ 'BlankNode' ]);
 
 /**
  * The term types the name of a `SERVICE` admits, where it is a variable.
@@ -68,11 +80,15 @@ export const serviceNameRange = new RangeSet([ 'NamedNode' ]);
 export const emptyRange = new RangeSet([]);
 
 /**
- * The range of the position a triple term holds its component in.
+ * The term types a position of a triple admits: any term in generalized RDF, what RDF admits otherwise.
  * @param position - The position to read
+ * @param generalizedRdf - Whether the triple may be a generalized one
  * @returns the term types it admits
  */
-export function rangeOfPosition(position: 'object' | 'predicate' | 'subject'): RangeSet {
+export function rangeOfPosition(position: 'object' | 'predicate' | 'subject', generalizedRdf = false): RangeSet {
+  if (generalizedRdf) {
+    return objectRange;
+  }
   switch (position) {
     case 'subject': {
       return subjectRange;
@@ -84,4 +100,48 @@ export function rangeOfPosition(position: 'object' | 'predicate' | 'subject'): R
       return objectRange;
     }
   }
+}
+
+/**
+ * {@link rangeOfPosition} for RDF or for generalized RDF, as one function of the position.
+ * @param generalizedRdf - Whether triples may be generalized ones
+ * @returns the term types each position admits
+ */
+export function positionRangeOf(generalizedRdf: boolean): (position: 'object' | 'predicate' | 'subject') => RangeSet {
+  return generalizedRdf ? generalizedPositionRange : rdfPositionRange;
+}
+
+function rdfPositionRange(position: 'object' | 'predicate' | 'subject'): RangeSet {
+  return rangeOfPosition(position);
+}
+
+function generalizedPositionRange(): RangeSet {
+  return objectRange;
+}
+
+/**
+ * The term types a SPARQL condition names with a predicate of its own, and so the ones an assertion can be
+ * about. `isNUMERIC` is not one: it asks after the datatype of a literal rather than after a kind of term.
+ */
+export type AssertableTermType = 'BlankNode' | 'Literal' | 'NamedNode' | 'Quad';
+
+/** The predicate a condition states a term type with, which is also how one is written back. */
+export const termTypePredicates: Readonly<Record<AssertableTermType, string>> = {
+  NamedNode: 'isiri',
+  BlankNode: 'isblank',
+  Literal: 'isliteral',
+  Quad: 'istriple',
+};
+
+/** The term types, in the order a term type test writes them, so that one range is always written one way. */
+export const assertableTermTypes = <AssertableTermType[]> Object.keys(termTypePredicates);
+
+/**
+ * The term type a predicate states, `isURI` reading as the `isIRI` it is a synonym of.
+ * @param operator - The operator of a unary condition
+ * @returns the term type it states, or `undefined` for anything that is not one of them
+ */
+export function asAssertableTermType(operator: string): AssertableTermType | undefined {
+  const termAssertion = operator === 'isuri' ? 'isiri' : operator;
+  return assertableTermTypes.find(termType => termTypePredicates[termType] === termAssertion);
 }

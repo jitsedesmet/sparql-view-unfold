@@ -21,6 +21,7 @@ import { createTransformationContext, parseQuery } from './transformContext.js';
 import type { Mapping } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
 import { boundAssertionAsExpression, unboundAssertionAsExpression } from './utils/assertions.js';
+import type { RangeContext } from './utils/certainlyBoundVars.js';
 import { cpMetaOf, withoutCpVars } from './utils/certainlyBoundVars.js';
 import { conjunctionOf, disjunctionOf, sameTermExpression, splitConjunction } from './utils/expressionHelpers.js';
 import { groupProjectedBy, projectOntoVariablesOrExistence } from './utils/operationhelpers.js';
@@ -69,13 +70,14 @@ const certainlyBoundVariablesByOperation = new WeakMap<Algebra.Operation, Set<st
 
 /**
  * Reads the variables every solution of an operation binds, without caching that on the operation itself.
+ * @param c - The context the range analysis reads
  * @param operation - The operation to read
  * @returns the names of those variables
  */
-function certainlyBoundVariablesOf(operation: Algebra.Operation): Set<string> {
+function certainlyBoundVariablesOf(c: RangeContext, operation: Algebra.Operation): Set<string> {
   let certainlyBound = certainlyBoundVariablesByOperation.get(operation);
   if (certainlyBound === undefined) {
-    certainlyBound = cpMetaOf(withoutCpVars(operation)).cVars;
+    certainlyBound = cpMetaOf(c, withoutCpVars(operation)).cVars;
     certainlyBoundVariablesByOperation.set(operation, certainlyBound);
   }
   return certainlyBound;
@@ -149,7 +151,7 @@ export function provenanceMappingFromConstructQueries(
   constructQueries: readonly string[],
   options: MappingOptions = {},
 ): Mapping {
-  const tools = createTransformationContext();
+  const tools = createTransformationContext({ expressionRange: options.expressionRange });
   return mappingFromConstructs(
     tools,
     constructQueries.map((constructQuery, index) =>
@@ -340,7 +342,7 @@ function differenceOf(
 ): ProvenancePattern {
   const { AF } = c;
   const minuendDomain = algebraUtils.inScopeVariables(minuend.original);
-  const certainlyBound = certainlyBoundVariablesOf(minuend.original);
+  const certainlyBound = certainlyBoundVariablesOf(c, minuend.original);
   // A MINUS needs to tell which side bound a shared variable, so it renames them all.
   const renamedApart = sharedVariables(minuend.original, subtrahend.original)
     .filter(variable => options.sharingABoundVariable === true || !certainlyBound.has(variable.value));
@@ -458,13 +460,13 @@ function minusPatternOf(c: ProvenanceCaptureContext, minus: Algebra.Minus): Prov
   if (shared.length === 0) {
     return patternOf(c, left);
   }
-  const leftBound = certainlyBoundVariablesOf(left);
+  const leftBound = certainlyBoundVariablesOf(c, left);
   if (!shared.every(variable => leftBound.has(variable.value))) {
     return differenceOf(c, patternOf(c, left), patternOf(c, right), { sharingABoundVariable: true });
   }
   // The left side binds every shared variable, so a right solution shares one exactly when it binds one too: a filter
   // on the right side, which keeps the OPTIONAL plain, with nothing to rename apart.
-  const rightBound = certainlyBoundVariablesOf(right);
+  const rightBound = certainlyBoundVariablesOf(c, right);
   const rightSharingABoundVariable = shared.some(variable => rightBound.has(variable.value)) ?
     right :
     c.AF.createFilter(right, disjunctionOf(c, shared.map(variable => boundAssertionAsExpression(c, variable.value))));
@@ -548,7 +550,7 @@ function attachProvenanceToAnswers(
   const solutionsRewritten = solutions.rewrite(solutionsPrefix);
   const solutionsProvenance = provenanceVariablesOf(c, solutionsRewritten);
   // The answers are computed from the solutions, so a variable every solution binds every answer binds too.
-  const certainlyBound = certainlyBoundVariablesOf(solutions.original);
+  const certainlyBound = certainlyBoundVariablesOf(c, solutions.original);
   // A join lets an unbound variable match any value, so a variable that may be unbound is joined on the extension
   // function's wrapped key, this repo's choice.
   const keyOfVariable = joinVariables
