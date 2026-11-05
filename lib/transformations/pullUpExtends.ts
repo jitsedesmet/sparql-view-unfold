@@ -47,10 +47,9 @@ import { collectVariableNames } from '../utils.js';
  *
  * For a bind `?x := e` on input `A` of `op`, with `V = vars(e)` and the other inputs `B`:
  *
- * - **(C1) no capture** - every other `B` satisfies `B.vRanges.neverBinds(?x)`, unless it carries an
- *   identical bind (merge), and `op` does not introduce `?x` itself (`GRAPH ?x`). Read the **ranges**,
- *   never the key set: `?x` merely being in scope in `B` is fine, what the spec leaves undefined is
- *   extending a μ that already *binds* `?x`.
+ * - **(C1) no capture** - `?x` is out of scope in every other `B`, unless it carries an identical bind
+ *   (merge), and `op` does not introduce `?x` itself (`GRAPH ?x`). Scope, not ranges: `BIND` requires
+ *   `?x` out of scope, so even a `B` that never binds `?x` blocks the hoist.
  * - **(C2) same inputs** - every `?y ∈ V` satisfies `A.cVars.has(?y)` or every other `B` never binds `?y`.
  *   Vacuous for a ground `e`, and vacuous for `UNION`/`MINUS`, which merge nothing.
  * - **(C3) readers** - what the node reads must not see `?x`, or must have `e` substituted into it.
@@ -816,7 +815,7 @@ function floatThroughJoin(c: TransformationContext, join: Algebra.Join): Algebra
           // `|A|` evaluations, better than `|A| + |B|` whatever the join does. So a construction, free to
           // re-evaluate, rises; anything else collapses in place.
           const mayRise = floatingBind.constructedTerm !== undefined &&
-            nothingElseBindsTheVariable(floatingBind, carriers, operands);
+            variableOutOfScopeInOtherOperands(floatingBind, carriers, operands);
           collapseGroup(carriers, mayRise ? 'rise' : 'stay');
         }
       } else {
@@ -831,13 +830,13 @@ function floatThroughJoin(c: TransformationContext, join: Algebra.Join): Algebra
         // TODO(future) think about cardinality estimates. Joins can restrict but also grow.
         //  Here we say that we do not take the risk of pullUp in case the expression is complex.
         // The two operand checks are about two different variables and neither implies the other:
-        // `nothingElseBindsTheVariable` is (C1), over the bind's *target* `?x`, and asks whether the
-        // re-planted EXTEND would land on a solution that already binds it; `noOtherOperandBinds` above is
+        // `variableOutOfScopeInOtherOperands` is (C1), over the bind's *target* `?x`, and asks whether the
+        // re-planted EXTEND would land where `?x` is already in scope; `noOtherOperandBinds` above is
         // one disjunct of (C2), over each `?y ∈ V` that `e` *reads*, and has an escape hatch (C1) has no
         // analogue for - a `?y` the carrier binds certainly needs nothing of the siblings. For a ground
         // `e`, `V` is empty and (C2) is vacuous, so (C1) is doing all of the work on its own.
         if (floatingBind.constructedTerm !== undefined &&
-            nothingElseBindsTheVariable(floatingBind, carriers, operands) && readsSameValuesAbove) {
+            variableOutOfScopeInOtherOperands(floatingBind, carriers, operands) && readsSameValuesAbove) {
           floatingBind.disposition = 'rise';
         }
       }
@@ -869,7 +868,7 @@ function floatThroughLeftJoin(c: TransformationContext, leftJoin: Algebra.LeftJo
     if (floatingBind.bindIsStable &&
         floatingBind.inputIndex === 0 &&
         floatingBind.constructedTerm !== undefined &&
-        nothingElseBindsTheVariable(floatingBind, floatingBind.mustLeaveWith, operands) &&
+        variableOutOfScopeInOtherOperands(floatingBind, floatingBind.mustLeaveWith, operands) &&
         [ ...floatingBind.bind.reads ].every(readVariable =>
           floatingBind.scopeBelowBind.cVars.has(readVariable) ||
             noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands))) {
@@ -911,7 +910,7 @@ function floatThroughMinus(c: TransformationContext, minus: Algebra.Minus): Alge
   for (const floatingBind of peeled.allBinds) {
     if (floatingBind.bindIsStable &&
         floatingBind.inputIndex === 0 &&
-        nothingElseBindsTheVariable(floatingBind, floatingBind.mustLeaveWith, operands)) {
+        variableOutOfScopeInOtherOperands(floatingBind, floatingBind.mustLeaveWith, operands)) {
       floatingBind.disposition = 'rise';
     } else {
       floatingBind.disposition = 'stay';
@@ -996,24 +995,20 @@ function collapseGroup(group: FloatingBind[], representative: 'rise' | 'stay'): 
 }
 
 /**
- * (C1), read on the ranges: whether no solution reaching the re-planted `EXTEND` already binds `?x`.
+ * (C1): whether `?x` is out of scope in every operand but the carriers, whose copies the same rewrite deletes.
  * @param floatingBind - The bind that wants to rise
- * @param carriers - The binds leaving with it, which are the operands that do not have to answer
+ * @param carriers - The binds leaving with it
  * @param operands - What each operand of the operation binds
- * @returns whether nothing else can bind the variable
+ * @returns whether no other operand has the variable in scope
  */
-function nothingElseBindsTheVariable(
+function variableOutOfScopeInOtherOperands(
   floatingBind: FloatingBind,
   carriers: readonly FloatingBind[],
   operands: readonly CPMeta[],
 ): boolean {
-  // Read as `neverBinds` rather than as scope on purpose. Nothing forbids `?x` being *in scope* in another
-  // operand; what the spec leaves undefined is extending a μ that already **binds** `?x`. So an all-UNDEF
-  // VALUES column is a legitimate hoist target. A carrier is not a binder here either, its copy of the
-  // bind being deleted by the same rewrite.
   const variableName = floatingBind.bind.variable.value;
   const carrying = new Set(carriers.map(carrier => carrier.inputIndex));
-  return operands.every((operand, index) => carrying.has(index) || operand.vRanges.neverBinds(variableName));
+  return operands.every((operand, index) => carrying.has(index) || !operand.vRanges.has(variableName));
 }
 
 /**

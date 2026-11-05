@@ -443,13 +443,16 @@ ORDER BY ASC ( ?x )`,
       );
     });
 
-    it('rises past a sibling that has the variable in scope but never binds it', ({ expect }) => {
-      // (C1) is read on the ranges, so an all-UNDEF VALUES column is a legitimate hoist target.
+    it('stays when a sibling has the variable in scope but never binds it (C1)', ({ expect }) => {
+      // `BIND` requires `?x` out of scope, so an all-UNDEF VALUES column blocks the hoist.
       expectTransform(
         expect,
         'SELECT * WHERE { { ?s :p ?o BIND(:a AS ?x) } { VALUES ?x { UNDEF } ?a :q ?b } }',
-        `SELECT ?a ?b ?o ?s ( <ex://a> AS ?x ) WHERE {
-  ?s <ex://p> ?o .
+        `SELECT ?a ?b ?o ?s ?x WHERE {
+  {
+    ?s <ex://p> ?o .
+    BIND( <ex://a> AS ?x )
+  }
   VALUES ?x {
     UNDEF
   }
