@@ -4,6 +4,7 @@ import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createQueryRewriter } from '../lib/queryRewriter.js';
 import { extendsToValuesTransformation } from '../lib/transformations/extendsToValues.js';
 import { rewriteNonRecursivePathsTransformation } from '../lib/transformations/pathTransformation.js';
+import { removeProjectionsTransformation } from '../lib/transformations/removeProjections.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import type { QueryTransformation } from '../lib/types.js';
 import {
@@ -372,6 +373,147 @@ LIMIT 10`,
   }
 }`,
     ));
+  });
+
+  // SPARQL 1.2 starts every group of an EXISTS pattern from the solution the EXISTS is evaluated for, and leaves a BIND
+  // of a variable it binds undefined: ARCHITECTURE.md, "An EXISTS sees the solution μ it is evaluated for".
+  describe('an EXISTS in the user query', () => {
+    const renamingView = 'CONSTRUCT { ?s <ex://q> ?o } WHERE { ?s <ex://p> ?o }';
+
+    it('compares a variable the solution certainly binds instead of binding it', ({ expect }) => testConstructMappers(
+      expect,
+      'SELECT * { ?s <ex://q> ?o FILTER EXISTS { ?o <ex://q> ?x } }',
+      `SELECT ?o ?s WHERE {
+  {
+    SELECT ( ?mi_o AS ?o ) ( ?mi_s AS ?s ) WHERE {
+      ?mi_s <ex://p> ?mi_o .
+    }
+  }
+  FILTER ( EXISTS {
+    {
+      SELECT ?o ?x WHERE {
+        {
+          ?mi_s <ex://p> ?mi_o .
+          BIND( ?mi_o AS ?x )
+        }
+        FILTER ( SAMETERM( ?mi_s , ?o ) )
+      }
+    }
+  }
+  )
+}`,
+      [ renamingView ],
+    ));
+
+    it('compares a variable the solution may bind where it does, and binds it where not', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        'SELECT * { ?s <ex://q> ?o OPTIONAL { ?o <ex://q> ?z } FILTER EXISTS { ?z <ex://q> ?x } }',
+        `SELECT ?o ?s ?z WHERE {
+  {
+    SELECT ( ?mi_o AS ?o ) ( ?mi_s AS ?s ) WHERE {
+      ?mi_s <ex://p> ?mi_o .
+    }
+  }
+  OPTIONAL {
+    {
+      SELECT ( ?mi_s AS ?o ) ( ?mi_o AS ?z ) WHERE {
+        ?mi_s <ex://p> ?mi_o .
+      }
+    }
+  }
+  FILTER ( EXISTS {
+    {
+      SELECT ( ?mi_o AS ?x ) ?z WHERE {
+        {
+          ?mi_s <ex://p> ?mi_o .
+          FILTER ( SAMETERM( ?mi_s , ?z ) )
+        }
+        UNION {
+          {
+            ?mi_s <ex://p> ?mi_o .
+            FILTER ( ! BOUND( ?z ) )
+          }
+          BIND( ?mi_s AS ?z )
+        }
+      }
+    }
+  }
+  )
+}`,
+        [ renamingView ],
+      ));
+
+    it('binds the variables the solution does not bind, as outside an EXISTS', ({ expect }) => testConstructMappers(
+      expect,
+      'SELECT * { ?s <ex://q> ?o FILTER EXISTS { ?a <ex://q> ?b } }',
+      `SELECT ?o ?s WHERE {
+  {
+    SELECT ( ?mi_o AS ?o ) ( ?mi_s AS ?s ) WHERE {
+      ?mi_s <ex://p> ?mi_o .
+    }
+  }
+  FILTER ( EXISTS {
+    {
+      SELECT ( ?mi_s AS ?a ) ( ?mi_o AS ?b ) WHERE {
+        ?mi_s <ex://p> ?mi_o .
+      }
+    }
+  }
+  )
+}`,
+      [ renamingView ],
+    ));
+
+    it('compares a triple term the head writes to the value of the solution', ({ expect }) => testConstructMappers(
+      expect,
+      'SELECT * { ?s <ex://q> ?t FILTER EXISTS { ?x <ex://q> ?t } }',
+      `SELECT ?s ?t WHERE {
+  {
+    SELECT ( ?mi_s AS ?s ) ( <<( ?mi_s <ex://p> ?o )>> AS ?t ) WHERE {
+      ?mi_s <ex://p> ?o .
+    }
+  }
+  FILTER ( EXISTS {
+    {
+      SELECT ?t ?x WHERE {
+        {
+          ?mi_s <ex://p> ?o .
+          BIND( ?mi_s AS ?x )
+        }
+        FILTER ( SAMETERM( <<( ?mi_s <ex://p> ?o )>> , ?t ) )
+      }
+    }
+  }
+  )
+}`,
+      [ 'CONSTRUCT { ?s <ex://q> <<( ?s <ex://p> ?o )>> } WHERE { ?s <ex://p> ?o }' ],
+    ));
+
+    it('keeps the name of a variable the solution binds when removing a sub-SELECT', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        'SELECT * { ?s <ex://q> ?o FILTER EXISTS { SELECT ?x { ?o <ex://q> ?x } } }',
+        `SELECT ?o ?s WHERE {
+  {
+    ?v_0 <ex://p> ?v_1 .
+    BIND( ?v_1 AS ?o )
+    BIND( ?v_0 AS ?s )
+  }
+  FILTER ( EXISTS {
+    {
+      {
+        ?v_4 <ex://p> ?v_5 .
+        BIND( ?v_5 AS ?x )
+      }
+      FILTER ( SAMETERM( ?v_4 , ?o ) )
+    }
+  }
+  )
+}`,
+        [ renamingView ],
+        [ removeProjectionsTransformation() ],
+      ));
   });
 
   // It('spo with blank in mapping head', ({ expect }) => {

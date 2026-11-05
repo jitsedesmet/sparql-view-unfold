@@ -2,7 +2,13 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
 import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
-import { RangeSet, tripleTermRange } from '../RangeSet.js';
+import {
+  asAssertableTermType,
+  assertableTermTypes,
+  RangeSet,
+  termTypePredicates,
+  tripleTermRange,
+} from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import { termVars } from './certainlyBoundVars.js';
 import { disjunctionOf, splitDisjunction } from './expressionHelpers.js';
@@ -85,33 +91,6 @@ export function isBareAccess(access: Access): boolean {
  */
 function readThrough(read: Access): Access {
   return { name: read.name, positions: read.positions.slice(0, -1) };
-}
-
-/**
- * The term types a SPARQL condition names with a predicate of its own, and so the ones an assertion can be
- * about. `isNUMERIC` is not one: it asks after the datatype of a literal rather than after a kind of term.
- */
-export type AssertableTermType = 'BlankNode' | 'Literal' | 'NamedNode' | 'Quad';
-
-/** The predicate a condition states a term type with, which is also how one is written back. */
-const termTypePredicates: Readonly<Record<AssertableTermType, string>> = {
-  NamedNode: 'isiri',
-  BlankNode: 'isblank',
-  Literal: 'isliteral',
-  Quad: 'istriple',
-};
-
-/** The term types, in the order a term type test writes them, so that one range is always written one way. */
-const assertableTermTypes = <AssertableTermType[]> Object.keys(termTypePredicates);
-
-/**
- * The term type a predicate states, `isURI` reading as the `isIRI` it is a synonym of.
- * @param operator - The operator of a unary condition
- * @returns the term type it states, or `undefined` for anything that is not one of them
- */
-export function asAssertableTermType(operator: string): AssertableTermType | undefined {
-  const termAssertion = operator === 'isuri' ? 'isiri' : operator;
-  return assertableTermTypes.find(termType => termTypePredicates[termType] === termAssertion);
 }
 
 /** What an assertion fixes an access to: another access, or a ground term. */
@@ -799,15 +778,17 @@ export function asWeakenedConjunct(conjunct: AssertionConjunct): AssertionConjun
 type TermPosition = 'graph' | 'object' | 'predicate' | 'subject';
 
 /**
- * Whether a triple with this term in this position can exist at all: no triple has a literal or a triple
- * term as its subject, predicate or graph name, and none has anything but an IRI as its predicate.
+ * Whether a triple of the RDF source can hold this term in this position, recursing into a triple term.
  * @param term - The term to place
  * @param position - The position it lands in
  * @returns whether some triple holds it there, `true` for a variable, which may occupy any position
  */
 function canOccupy(term: RDF.Term, position: TermPosition): boolean {
-  if (position === 'object' || term.termType === 'Variable') {
+  if (term.termType === 'Variable') {
     return true;
+  }
+  if (position === 'object') {
+    return term.termType !== 'Quad' || triplePositions.every(inner => canOccupy(term[inner], inner));
   }
   if (position === 'predicate') {
     return term.termType === 'NamedNode';

@@ -4,7 +4,7 @@ import { AssertionClusterSet } from '../datastructures/AssertionClusterSet.js';
 import type { PinChildren, TriplePosition } from '../datastructures/TermClusterSet.js';
 import { childGroupsOf, triplePositions } from '../datastructures/TermClusterSet.js';
 import type { RangeSet } from '../RangeSet.js';
-import { objectRange, rangeOfPosition, tripleTermRange } from '../RangeSet.js';
+import { objectRange, positionRangeOf, rangeOfPosition, tripleTermRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { DerivedVarNamer } from '../utils.js';
 import type {
@@ -144,8 +144,16 @@ export class AssertionConjunction {
    */
   private members: { revision: number; value: Map<number, readonly string[]> } | undefined;
 
-  public constructor() {
-    this.clusters = new AssertionClusterSet();
+  /** Whether a triple term the query builds may be generalized, see {@link TransformationContext.generalizedRdf}. */
+  public readonly generalizedRdf: boolean;
+
+  /**
+   * @param variant - Whether triple terms may be generalized ones
+   */
+  public constructor(variant: Pick<TransformationContext, 'generalizedRdf'>) {
+    const { generalizedRdf } = variant;
+    this.generalizedRdf = generalizedRdf;
+    this.clusters = new AssertionClusterSet(positionRangeOf(generalizedRdf));
     this.strength = new Map();
     this.unbound = new Set();
     this.bound = new Set();
@@ -157,13 +165,17 @@ export class AssertionConjunction {
    * entailed by one satisfiable Θ - a subset of its {@link AssertionConjunction.conjuncts | conjuncts}, or
    * the weakened and entailed forms the pushdown derives from them, which are implied by what they came
    * from and so satisfiable with it.
+   * @param variant - Whether triple terms may be generalized ones
    * @param conjuncts - The conjuncts to conjoin
    * @returns the conjunction they make
    * @throws when the conjuncts do contradict, since a caller handing over conjuncts of two different Θ has
    * no meaningful conjunction to be given back
    */
-  public static of(conjuncts: Iterable<AssertionConjunct>): AssertionConjunction {
-    const result = new AssertionConjunction();
+  public static of(
+    variant: Pick<TransformationContext, 'generalizedRdf'>,
+    conjuncts: Iterable<AssertionConjunct>,
+  ): AssertionConjunction {
+    const result = new AssertionConjunction(variant);
     for (const { access, assertion } of conjuncts) {
       if (!result.assert(access, assertion)) {
         throw new Error(
@@ -179,7 +191,7 @@ export class AssertionConjunction {
    * @returns the copy
    */
   public clone(): AssertionConjunction {
-    const copy = new AssertionConjunction();
+    const copy = new AssertionConjunction(this);
     copy.clusters = this.clusters.clone();
     copy.strength = new Map(this.strength);
     copy.unbound = new Set(this.unbound);
@@ -250,10 +262,9 @@ export class AssertionConjunction {
    * @returns the term types, or `undefined` where Θ says nothing about them
    */
   private assertedTermTypesOf(group: number): RangeSet | undefined {
-    // Deliberately not {@link TermClusterSet.rangeOf}: that is narrowed by the position the group sits in
-    // and by what the operation leaves its variables, which are facts of the plan Θ is written into
-    // rather than facts of Θ. Reporting them would put {@link get} at odds with {@link conjuncts},
-    // which states only what was asserted.
+    // Deliberately not {@link TermClusterSet.rangeOf}: that is narrowed by the position the group sits in,
+    // which is a fact of the plan Θ is written into rather than of Θ. Reporting it would put {@link get} at
+    // odds with {@link conjuncts}, which states only what was asserted.
     if (this.clusters.childrenOf(group) !== undefined) {
       return tripleTermRange;
     }
@@ -363,7 +374,7 @@ export class AssertionConjunction {
         }
       }
     }
-    return { inside: AssertionConjunction.of(inside), outside: AssertionConjunction.of(outside) };
+    return { inside: AssertionConjunction.of(this, inside), outside: AssertionConjunction.of(this, outside) };
   }
 
   /**
@@ -412,18 +423,20 @@ export class AssertionConjunction {
    * the pattern holds those values: Θ keeps saying `OBJECT(?o)` where the plan says `?o_o`, so
    * `isIRI(OBJECT(?o))` is written as `isIRI(?o_o)`, a condition over a variable the pattern binds.
    * @param namer - Coins the variable for a position, once per position and query ({@link utils!derivedVarNamer})
+   * @param variableOnlyNames - The variables whose group the pattern may only hold a variable for, as a term
+   * there would not restrict what the pattern matches
    * @returns the substitution to write into the pattern, the residual to state over it, and the view that
    * residual has to be written through
    */
-  public intoPattern(namer: DerivedVarNamer): {
+  public intoPattern(namer: DerivedVarNamer, variableOnlyNames?: ReadonlySet<string>): {
     substitution: Assertions;
     residual: AssertionConjunction;
     asWritten: AssertionView;
   } {
-    const values = this.patternValues(namer);
+    const values = this.patternValues(namer, variableOnlyNames);
     return {
       substitution: this.strongMembersReplacedBy(group => values.get(group)),
-      residual: AssertionConjunction.of(this.conjuncts()
+      residual: AssertionConjunction.of(this, this.conjuncts()
         .filter(conjunct => !this.enforcedByPattern(conjunct, values))),
       // TODO: why do we need this? I thought we concluded that coining the variables indeed break cVars/ pVars
       //  and thus we need not wory about what we coined exactly?
@@ -504,35 +517,55 @@ export class AssertionConjunction {
         }
         // Never bound and weak -> the `!bound(?x)` disjunct carries it, so nothing to assert.
         result.removeMember(name);
-      } else {
-        if (cVars.has(name)) {
-          // B⟨?x⟩ holds of every solution here, and completes a weak member into a strong one.
-          result.strength.set(name, 'strong');
-        }
-        const group = result.clusters.groupOf(name);
-        if (group !== undefined) {
-          // A member of a group the variable can never be, which both forms have something to say about -
-          // the same rule as (FBndII) one level down the lattice, the variable being in scope here and no
-          // solution binding it to *this* value. Read off `result`, so a promotion just above counts.
-          if (result.strength.get(name) === 'strong') {
-            // A⟨?x ≡ v⟩ implies `bnd(?x)`, so what the plan leaves for `?x` is what it leaves for the group.
-            // We need to do this e.g. in case the var just became strong,
-            //   and we do it here since we need a 'isValid' check regardless.
-            if (!result.clusters.narrowRange(group, vRanges.rangeOf(name))) {
-              return undefined;
-            }
-          } else if (!admitsRange(result.clusters, group, vRanges.rangeOf(name))) {
-            // W⟨?x ≡ v⟩ is `¬bnd(?x) ∨ ?x ≡ v`, and the right disjunct is false wherever `?x` is bound. So
-            // the weak form *is* U⟨?x⟩ here - which is worth doing rather than leaving it: a weak member
-            // says almost nothing, where `!bound(?x)` is a constraint the rest of the pass acts on.
-            // Cannot fail: `?x` is neither `bound` nor a strong member, the two states it rejects.
-            result.assertUnbound(name);
-          }
-          result.forgetTermTypesEntailedBy(name, vRanges.rangeOf(name), cVars);
-        }
+      } else if (cVars.has(name)) {
+        // B⟨?x⟩ holds of every solution here, and completes a weak member into a strong one.
+        result.strength.set(name, 'strong');
       }
     }
-    return result;
+    return result.normaliseRangesFor(meta) ? result : undefined;
+  }
+
+  /**
+   * Checks the groups against the term types the operation leaves their members, as (FBndII) does one level down the
+   * lattice. Never narrows a group: those ranges hold of the operation's solutions, not of what lies below it.
+   * @param meta - The variables the operation certainly binds, and the term types each variable it binds can take
+   * @returns `false` when a group of strong members is left no value, which makes the operation empty
+   */
+  private normaliseRangesFor(meta: CPMeta): boolean {
+    const { cVars, vRanges } = meta;
+    const names = [ ...this.order ];
+    // A⟨?x ≡ v⟩ implies `bnd(?x)`, so every strong member holds the group's value at once.
+    const strongRangePerGroup = new Map<number, RangeSet>();
+    for (const name of names) {
+      const group = this.clusters.groupOf(name);
+      if (group !== undefined && this.strength.get(name) === 'strong') {
+        const known = strongRangePerGroup.get(group) ?? objectRange;
+        strongRangePerGroup.set(group, known.meet(vRanges.rangeOf(name)));
+      }
+    }
+    for (const [ group, range ] of strongRangePerGroup) {
+      if (!this.clusters.admitsRange(group, range)) {
+        return false;
+      }
+    }
+    // Looked up again per member: forgetting a term type may release the members read before.
+    for (const name of names) {
+      const group = this.clusters.groupOf(name);
+      if (group === undefined) {
+        continue;
+      }
+      const strongRange = strongRangePerGroup.get(group);
+      const memberRange = vRanges.rangeOf(name);
+      const range = strongRange === undefined ? memberRange : memberRange.meet(strongRange);
+      if (this.strength.get(name) === 'weak' && !this.clusters.admitsRange(group, range)) {
+        // W⟨?x ≡ v⟩ is `¬bnd(?x) ∨ ?x ≡ v`, whose right disjunct is false wherever `?x` is bound here, so it *is*
+        // U⟨?x⟩ - a constraint the rest of the pass acts on. Cannot fail: `?x` is neither `bound` nor strong.
+        this.assertUnbound(name);
+      } else {
+        this.forgetTermTypesEntailedBy(name, range, cVars);
+      }
+    }
+    return true;
   }
 
   /**
@@ -608,7 +641,7 @@ export class AssertionConjunction {
   private assertSourceYields(source: TransferSource, range: RangeSet): boolean {
     if (isTripleConstruction(source)) {
       return range.has('Quad') && triplePositions.every(position =>
-        this.assertSourceYields(source[position], rangeOfPosition(position)));
+        this.assertSourceYields(source[position], rangeOfPosition(position, this.generalizedRdf)));
     }
     const target = normalisedTarget(source);
     return targetIsAccess(target) ? this.assertTermType(target, range, true) : range.has(target.termType);
@@ -684,7 +717,7 @@ export class AssertionConjunction {
    * @returns `false` on a contradiction
    */
   private assertTermType(access: Access, range: RangeSet, strong: boolean): boolean {
-    if (!isSubsetOf(rangeOfAccess(access), range)) {
+    if (!isSubsetOf(rangeOfAccess(access, this.generalizedRdf), range)) {
       return this.narrowing(access, strong, (clusters, group) => clusters.assertTermTypeRange(group, range));
     }
     // A test every value of the access passes asks only that it is read, which of a variable its weak form
@@ -841,7 +874,7 @@ export class AssertionConjunction {
     if (this.clusters.groupOf(root) === undefined) {
       // A root Θ holds nothing about yet only opens groups of its own, which an empty conjunction tries as
       // well as a clone would, at the cost of `φ` rather than of a copy of Θ.
-      if (!apply(new AssertionConjunction())) {
+      if (!apply(new AssertionConjunction(this))) {
         return this.assertUnbound(root);
       }
       this.strength.set(root, 'weak');
@@ -1002,7 +1035,7 @@ export class AssertionConjunction {
     let confined = objectRange;
     for (const reading of walk.accessesPerGroup.get(group)!) {
       if (!isBareAccess(reading)) {
-        confined = confined.meet(rangeOfAccess(reading));
+        confined = confined.meet(rangeOfAccess(reading, this.generalizedRdf));
       }
     }
     return isSubsetOf(confined, asserted) ? undefined : asserted.meet(confined);
@@ -1219,10 +1252,11 @@ export class AssertionConjunction {
    * The value a pattern holds for every group a variable of Θ names: the term it is pinned to, the triple
    * term its shape is written out as, or the variable that reads it.
    * @param namer - Coins the variable for a position nothing names
+   * @param variableOnlyNames - The variables whose group the pattern holds its representative for
    * @returns the value per group; two readings of one group become the same term or the same variable in the
    * same pattern, and matching that pattern is what states the equality Θ carried as a condition
    */
-  private patternValues(namer: DerivedVarNamer): Map<number, RDF.Term> {
+  private patternValues(namer: DerivedVarNamer, variableOnlyNames?: ReadonlySet<string>): Map<number, RDF.Term> {
     const accessesPerGroup = this.readingsPerGroup();
 
     const nameOfGroup = (group: number): string => {
@@ -1241,6 +1275,10 @@ export class AssertionConjunction {
       // A group no variable names is only ever read through the shape holding it, and the representative of one
       // that has them is the variable it is read by: its representative.
       if (isBareAccess(representative)) {
+        if (variableOnlyNames !== undefined && this.namedMembers(group).some(name => variableOnlyNames.has(name))) {
+          result.set(group, DF.variable(representative.name));
+          continue;
+        }
         // Without its shape, a group is what {@link rebuildingSubstitution} makes of it: the term it is
         // pinned to, or the representative every member of a clique substitutes to.
         result.set(group, this.shapeIsWorthWriting(group) ?
@@ -1387,29 +1425,14 @@ export function termTypesOfReadings(group: EquatedGroup): AssertionConjunct[] {
 }
 
 /**
- * Whether a group can still hold a value of one of these types, its pin included.
- * @param clusters - The clusters holding the group
- * @param group - The group to check
- * @param range - The term types to admit
- * @returns whether something is left for the group to be
- */
-function admitsRange(clusters: AssertionClusterSet, group: number, range: RangeSet): boolean {
-  const pin = clusters.pinOf(group);
-  if (pin === undefined) {
-    return clusters.rangeOf(group).meet(range).size > 0;
-  }
-  const type = pin.kind === 'term' ? pin.term.termType : 'Quad';
-  return clusters.rangeOf(group).meet(range).size > 0 && range.has(type);
-}
-
-/**
  * The term types any value an access reads can have.
  * @param read - The access to read
+ * @param generalizedRdf - Whether triple terms may be generalized ones
  * @returns those of the position it reads last, every term type for a variable
  */
-function rangeOfAccess(read: Access): RangeSet {
+function rangeOfAccess(read: Access, generalizedRdf: boolean): RangeSet {
   const position = read.positions.at(-1);
-  return position === undefined ? objectRange : rangeOfPosition(position);
+  return position === undefined ? objectRange : rangeOfPosition(position, generalizedRdf);
 }
 
 /**
@@ -1494,10 +1517,10 @@ function withAssertionConjunction(c: TransformationContext, filter: Algebra.Filt
   const known = casted.metadata?.assertions;
   if (known === undefined) {
     // The condition is evaluated over the solutions of the input, so those are the variables bound in it.
-    const collected = collectAssertions(c, filter.expression, undefined, withCpVars(filter.input).metadata.cVars);
+    const collected = collectAssertions(c, filter.expression, undefined, withCpVars(c, filter.input).metadata.cVars);
     casted.metadata ??= {};
     casted.metadata.assertions = collected ?? {
-      assertions: new AssertionConjunction(),
+      assertions: new AssertionConjunction(c),
       residual: undefined,
       // If the collection returns `undefined`, it is a sign of a contradiction.
       contradictory: true,
@@ -1542,7 +1565,7 @@ export function isAssertionFilter(c: TransformationContext, op: Algebra.Operatio
 export function collectAssertions(
   c: TransformationContext,
   expression: Algebra.Expression,
-  known: AssertionConjunction = new AssertionConjunction(),
+  known: AssertionConjunction = new AssertionConjunction(c),
   cVars: ReadonlySet<string> = new Set(),
 ): AssertionConjunctionMeta | undefined {
   // Make copy and perform substitution

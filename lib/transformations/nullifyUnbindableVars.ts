@@ -1,8 +1,10 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
+import { forEveryNodeType } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { withCpVars } from '../utils/certainlyBoundVars.js';
+import { leaveExistencePatternsPreOrder, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 
 /**
@@ -41,13 +43,13 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // After:  the GRAPH replaced by FILTER(false), since no graph is named by a literal.
  */
 export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
-    Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => nullifyIfProvenEmpty(c, copy) ]),
-  );
-  // Starting from a copy without metadata gives us both a tree of our own to rewrite and the guarantee
-  // that what `withCpVars` hands us describes the plan as it is now - and clearing it again on the way
-  // out, since what the traversal cached describes the plan as this pass found it.
-  return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(op), callbacks));
+  return rewriteInExistenceScopes(c, op, (context, operation) => {
+    const callbacks = forEveryNodeType(
+      (copy: Algebra.Operation) => nullifyIfProvenEmpty(context, copy),
+      { [Algebra.Types.EXPRESSION]: leaveExistencePatternsPreOrder },
+    );
+    return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(operation, callbacks);
+  });
 }
 
 /**
@@ -59,7 +61,7 @@ export function nullifyUnbindableVars<T extends Algebra.Operation>(c: Transforma
  * an operation without solutions being able to contribute any
  */
 function nullifyIfProvenEmpty(c: TransformationContext, op: Algebra.Operation): PreOrderMappingReturn {
-  const { cVars, vRanges } = withCpVars(op).metadata;
+  const { cVars, vRanges } = withCpVars(c, op).metadata;
   for (const name of cVars) {
     if (vRanges.neverBinds(name)) {
       return { ...keepMetadata, newValue: createFilterFalse(c, op), continue: false };

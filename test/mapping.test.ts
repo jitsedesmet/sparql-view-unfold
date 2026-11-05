@@ -87,6 +87,12 @@ describe('mappingFromConstructQueries', () => {
         'PREFIX : <ex://>\nCONSTRUCT { "literalSubject" :p ?o } WHERE { ?s :p ?o }',
       ])).toThrow('cannot use Literal in this position');
     });
+
+    it('rejects a blank node, which the template mints afresh per solution', ({ expect }) => {
+      expect(() => mappingFromConstructQueries([
+        'PREFIX : <ex://>\nCONSTRUCT { ?s :p _:fresh } WHERE { ?s :p ?o }',
+      ])).toThrow('cannot use BlankNode in this position');
+    });
   });
 
   /**
@@ -113,18 +119,59 @@ describe('mappingFromConstructQueries', () => {
       ])).body).not.toContain('FILTER');
     });
 
+    it('is only asked to be bound where a BIND gives it an IRI', ({ expect }) => {
+      expect(mappingAsStrings(mappingFromConstructQueries([
+        'PREFIX : <ex://>\nCONSTRUCT { ?s :p ?o } WHERE { ?x :src ?o BIND(IRI(CONCAT("ex://", STR(?o))) AS ?s) }',
+      ])).body.trim()).toEqual(`SELECT ?o ?s WHERE {
+  {
+    ?x <ex://src> ?o .
+    BIND( IRI( CONCAT( "ex://" , STR( ?o ) ) ) AS ?s )
+  }
+  FILTER ( BOUND( ?s ) )
+}`);
+    });
+
     it('is left alone for a view that means to present generalized RDF', ({ expect }) => {
       expect(mappingAsStrings(mappingFromConstructQueries(
         [ 'CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?o }' ],
         { generalizedRdfView: true },
       )).body).not.toContain('FILTER');
     });
+  });
 
-    it('is still filtered inside a triple term of a generalized view, SPARQL building no other', ({ expect }) => {
-      expect(mappingAsStrings(mappingFromConstructQueries(
-        [ 'PREFIX : <ex://>\nCONSTRUCT { ?o :reifies <<( ?o :p ?s )>> } WHERE { ?s :p ?o }' ],
+  describe('a generalized RDF view', () => {
+    it('is what the mapping says it denotes, merged or not', ({ expect }) => {
+      const construct = 'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }';
+      expect(mappingFromConstructQueries([ construct ]).generalizedRdfView).toBe(false);
+      expect(mappingFromConstructQueries([ construct ], { generalizedRdfView: true }).generalizedRdfView).toBe(true);
+      expect(mappingFromConstructQueries([ construct, construct ], { generalizedRdfView: true }).generalizedRdfView)
+        .toBe(true);
+    });
+
+    it('admits a literal or a triple term as subject, inside a triple term too', ({ expect }) => {
+      const literalSubject = mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { "literalSubject" :p ?o } WHERE { ?s :p ?o }' ],
         { generalizedRdfView: true },
-      )).body).toContain('FILTER ( ( ISIRI( ?o ) || ISBLANK( ?o ) ) )');
+      );
+      expect(literalSubject.head.subject).toEqual(expect.objectContaining({ termType: 'Literal' }));
+      const tripleTermSubject = mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { <<( ?s :p ?o )>> :q ?o } WHERE { ?s :p ?o }' ],
+        { generalizedRdfView: true },
+      );
+      expect(tripleTermSubject.head.subject).toEqual(expect.objectContaining({ termType: 'Quad' }));
+      const nestedLiteralSubject = mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { ?s :p <<( "literalSubject" :q ?o )>> } WHERE { ?s :p ?o }' ],
+        { generalizedRdfView: true },
+      );
+      expect(nestedLiteralSubject.head.object).toEqual(expect.objectContaining({ termType: 'Quad' }));
+    });
+
+    it('does not filter a head variable inside a triple term', ({ expect }) => {
+      // `?o` is read in object position and written in the subject position of the triple term.
+      expect(mappingAsStrings(mappingFromConstructQueries(
+        [ 'PREFIX : <ex://>\nCONSTRUCT { ?t :reifies <<( ?o :p ?s )>> } WHERE { ?t :src ?s . ?s :p ?o }' ],
+        { generalizedRdfView: true },
+      )).body).not.toContain('ISIRI');
     });
   });
 
