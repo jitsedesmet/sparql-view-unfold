@@ -83,6 +83,8 @@ export function unfoldingTransformation(mapping: Mapping, options: UnfoldingOpti
   // Sorted, so that which name gets which suffix does not depend on where the mapping writes it.
   const mappingVariableNames = [ ...collectVariableNames(new AstTransformer(), mapping) ].sort();
   return (context, operation) => {
+    // Set before any EXISTS pattern gets a context of its own, so that every copy and the solver read it.
+    context.generalizedRdf = mapping.generalizedRdfView;
     const usedNames = markVariableNamesUsed(context, operation);
     const mappingApart = renameMappingApart(context, mapping, mappingVariableNames, usedNames);
     const unfoldedMapping = options.preserveCardinality === true ?

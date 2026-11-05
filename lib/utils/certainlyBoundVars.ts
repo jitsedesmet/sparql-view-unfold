@@ -3,7 +3,7 @@ import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
 import { forEveryNodeType } from '@traqula/core';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
-import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
+import { isTriplePosition } from '../datastructures/TermClusterSet.js';
 import {
   asAssertableTermType,
   blankNodeRange,
@@ -226,12 +226,11 @@ const operatorRanges = new Map(([
   [ iriRange, 'datatype iri uri uuid' ],
   [ blankNodeRange, 'bnode' ],
   [ tripleTermRange, 'triple' ],
-  ...triplePositions.map((position): [RangeSet, string] => [ rangeOfPosition(position), position ]),
 ] satisfies [RangeSet, string][]).flatMap(([ range, operators ]) =>
   operators.trim().split(/\s+/u).map(operator => <const> [ operator, range ])));
 
 /** What the range analysis reads of a {@link TransformationContext}. */
-export type RangeContext = Pick<TransformationContext, 'existenceScope' | 'expressionRange'>;
+export type RangeContext = Pick<TransformationContext, 'existenceScope' | 'expressionRange' | 'generalizedRdf'>;
 
 /**
  * The term types an expression can evaluate to for an engine that replaces no error with a value, reading its
@@ -256,6 +255,10 @@ export function standardExpressionRange(c: RangeContext, expression: Algebra.Exp
       if (expression.operator === 'coalesce' || expression.operator === 'if') {
         const choices = expression.operator === 'if' ? expression.args.slice(1) : expression.args;
         return RangeSet.join(choices.map(choice => c.expressionRange(c, choice, input)));
+      }
+      // An accessor gives what its position of a triple term holds, which any term may in generalized RDF.
+      if (isTriplePosition(expression.operator)) {
+        return rangeOfPosition(expression.operator, c.generalizedRdf);
       }
       return operatorRanges.get(expression.operator) ?? objectRange;
     }

@@ -103,6 +103,15 @@ describe('the range of what an expression gives', () => {
     expect(rangeOfX(parseQuery(c, `SELECT (${aggregate} AS ?x) WHERE { ?s ?p ?o }`))).toEqual(range);
   });
 
+  it.for([ 'SUBJECT', 'PREDICATE' ])(
+    'is any term for %s of a triple term where triple terms are generalized',
+    (accessor, { expect }) => {
+      const generalized = { ...createTransformationContext(), generalizedRdf: true };
+      const op = parseQuery(generalized, `SELECT * WHERE { ?s ?p ?o BIND(${accessor}(?o) AS ?x) }`);
+      expect([ ...withCpVars(generalized, op).metadata.vRanges.rangeOf('x') ].sort()).toEqual(top);
+    },
+  );
+
   it('is read through the expressionRange of the context, down to a subexpression', ({ expect }) => {
     const extended = createTransformationContext({ expressionRange: (context, expression, input) =>
       expression.subType === 'named' && expression.name.value === 'ex://f' ?

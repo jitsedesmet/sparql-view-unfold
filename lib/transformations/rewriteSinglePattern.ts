@@ -50,7 +50,7 @@ function registerPatternQuadAgainstExpression(
     } else {
       if (isRdfVar(patternTerm)) {
         tPVars.set(patternTerm.value, patternTerm);
-        patternTerm.range = rangeOfPosition(position);
+        patternTerm.range = rangeOfPosition(position, c.generalizedRdf);
       }
       c.clusterSolver.register(positionExpression, patternTerm);
     }
@@ -76,8 +76,8 @@ function iterateMappingHead(
   for (const position of triplePositions) {
     const headTerm = head[position];
     const patternTerm = pattern[position];
-    // The position a term sits in is the range a variable written there can take.
-    const variablePosRange = rangeOfPosition(position);
+    // What the head can write in a position is the range a variable written there can take.
+    const variablePosRange = rangeOfPosition(position, c.generalizedRdf);
     if (isRdfQuad(headTerm) && isRdfQuad(patternTerm)) {
       // Recursion in triple term
       iterateMappingHead(c, mHVars, tPVars, headTerm, patternTerm);
@@ -399,6 +399,7 @@ export function rewriteSinglePattern(
   pattern: Alg.Pattern,
   mapping: Mapping,
 ): Alg.Operation {
+  c.generalizedRdf = mapping.generalizedRdfView;
   try {
     return unfoldMappingWithinPattern(c, pattern, mapping);
   } catch (error: unknown) {

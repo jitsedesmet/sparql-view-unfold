@@ -10,6 +10,7 @@ import { DataFactory } from 'rdf-data-factory';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
 import type { RangeSet } from './RangeSet.js';
+import { rangeOfPosition } from './RangeSet.js';
 import type { CPMeta } from './utils/certainlyBoundVars.js';
 import { standardExpressionRange } from './utils/certainlyBoundVars.js';
 import { freshVarGenerator } from './utils.js';
@@ -28,6 +29,11 @@ export interface TransformationContext {
   generator: Generator;
   /** Factory for creating AST nodes */
   astFactory: AstFactory;
+  /**
+   * Whether the rewritten query runs on an engine whose `TRIPLE()` builds generalized triple terms. The unfolding
+   * sets it from the mapping, so a pass before it reads RDF.
+   */
+  generalizedRdf: boolean;
   /** Factory for creating algebra operations and expressions */
   AF: AlgebraFactory;
   /** RDF data factory for creating terms */
@@ -53,7 +59,7 @@ export interface TransformationContext {
    * an engine that turns an error into a value, falling back to {@link standardExpressionRange} for the rest.
    */
   expressionRange: (
-    c: Pick<TransformationContext, 'expressionRange'>,
+    c: Pick<TransformationContext, 'expressionRange' | 'generalizedRdf'>,
     expression: Algebra.Expression,
     input?: CPMeta,
   ) => RangeSet;
@@ -115,17 +121,19 @@ export function createTransformationContext(options: TransformationContextOption
   const { tripleTermArgumentDepth, expressionRange } = resolveTransformationContextOptions(options);
   const DF = new DataFactory();
   const usedVariableNames = new Set<string>();
-  return {
+  const context: TransformationContext = {
     parser: new Parser(),
     generator: new MyGenerator(),
     astFactory: new AstFactory(),
+    generalizedRdf: false,
     AF: new AlgebraFactory(),
     DF,
     astTransformer: new AstTransformer(),
-    clusterSolver: new ClusterSolver(),
+    clusterSolver: new ClusterSolver(position => rangeOfPosition(position, context.generalizedRdf)),
     usedVariableNames,
     coinExistenceVariable: freshVarGenerator(usedVariableNames, 'mExists'),
     tripleTermArgumentDepth,
     expressionRange,
   };
+  return context;
 }
