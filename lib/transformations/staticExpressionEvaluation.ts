@@ -75,7 +75,8 @@ async function prepareStaticEvaluator(
     [KeysInitQuery.queryTimestamp.name]: new Date(),
     [KeysInitQuery.dataFactory.name]: c.DF,
     [KeysInitQuery.functionArgumentsCache.name]: {},
-    ...c.generalizedRdf ? { [KeysInitQuery.rdfVariant.name]: 'generalizedRdf' } : {},
+    // `KeysInitQuery.rdfVariant` of comunica/comunica#1886, spelled out until a Comunica release includes it.
+    ...c.generalizedRdf ? { '@comunica/actor-init-query:rdfVariant': 'generalizedRdf' } : {},
   });
   return async(expression) => {
     try {

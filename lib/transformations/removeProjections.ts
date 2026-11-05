@@ -83,13 +83,8 @@ function removeProjectionsAroundExistence(
     [Algebra.Types.DISTINCT]: { preVisitor: keepProjectedInput },
     [Algebra.Types.REDUCED]: { preVisitor: keepProjectedInput },
     [Algebra.Types.SLICE]: { preVisitor: keepProjectedInput },
-    [Algebra.Types.PROJECT]: { preVisitor: (project) => {
-      if (groupProjectedBy(project)) {
-        keptProjections.add(project);
-      }
-      return {};
-    }, transform: (project, original) => {
-      if (keptProjections.has(original)) {
+    [Algebra.Types.PROJECT]: { transform: (project, original) => {
+      if (keptProjections.has(original) || groupProjectedBy(original)) {
         return project;
       }
       const projected = new Set(project.variables.map(variable => variable.value));

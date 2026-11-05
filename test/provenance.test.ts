@@ -268,7 +268,7 @@ describe('provenanceCapturingQuery', () => {
 
   it('coins a provenance variable prefix no variable of the query starts with', ({ expect }) => {
     expect(provenanceCapturingQuery(`${prefixes} SELECT ?prov_x WHERE { ?prov_x :knows ?y }`).provenanceVariablePrefix)
-      .toBe('prov1');
+      .toBe('prov0');
   });
 
   it('rewrites a query in algebra form as it rewrites one written out', ({ expect }) => {

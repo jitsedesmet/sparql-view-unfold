@@ -110,7 +110,6 @@ export function provenanceChildPrefix(prefix: string, kind: ProvenanceNodeKind, 
 }
 
 const zero: ProvenancePolynomial = { type: 'constant', value: 0 };
-const one: ProvenancePolynomial = { type: 'constant', value: 1 };
 
 /** A row of a provenance table: the bound variables of one solution of a rewritten query, by name. */
 type ProvenanceRow = ReadonlyMap<string, RDF.Term>;
@@ -122,7 +121,30 @@ type ProvenanceRow = ReadonlyMap<string, RDF.Term>;
  * @returns The kind, or `undefined` when no row binds a root.
  */
 function rootKindOf(rows: readonly ProvenanceRow[], prefix: string): ProvenanceNodeKind | undefined {
-  return nodeKinds.find(kind => rows.some(row => row.has(provenanceNodeVariableName(prefix, kind))));
+  return nodeKinds.find((kind) => {
+    const root = provenanceNodeVariableName(prefix, kind);
+    return rows.some(row => row.has(root));
+  });
+}
+
+/**
+ * Groups items by a key.
+ * @param items - The items to group.
+ * @param keyOf - Gives the key of an item.
+ * @returns The groups, in the order their first item came.
+ */
+function groupBy<T>(items: Iterable<T>, keyOf: (item: T) => string): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = keyOf(item);
+    const group = groups.get(key);
+    if (group === undefined) {
+      groups.set(key, [ item ]);
+    } else {
+      group.push(item);
+    }
+  }
+  return groups;
 }
 
 /**
@@ -137,16 +159,7 @@ function childSum(rows: readonly ProvenanceRow[], childPrefix: string): Provenan
     return { type: 'sum', operands: []};
   }
   const root = provenanceNodeVariableName(childPrefix, kind);
-  const subtables = new Map<string, ProvenanceRow[]>();
-  for (const row of rows) {
-    const value = row.get(root);
-    if (value !== undefined) {
-      const key = termToString(value);
-      const subtable = subtables.get(key) ?? [];
-      subtable.push(row);
-      subtables.set(key, subtable);
-    }
-  }
+  const subtables = groupBy(rows.filter(row => row.has(root)), row => termToString(row.get(root)!));
   return { type: 'sum', operands: [ ...subtables.values() ].map(subtable => decodeTable(subtable, childPrefix, kind)) };
 }
 
@@ -225,23 +238,25 @@ export function decodeProvenance(
   bindings: Iterable<RDF.Bindings>,
   provenanceVariablePrefix: string,
 ): ProvenanceAnnotatedAnswer[] {
-  const rowsByAnswer = new Map<string, { answer: Map<string, RDF.Term>; rows: ProvenanceRow[] }>();
-  for (const binding of bindings) {
+  const splitRows = [ ...bindings ].map((binding) => {
     const answer = new Map<string, RDF.Term>();
     const row = new Map<string, RDF.Term>();
     for (const [ variable, term ] of binding) {
       (isProvenanceVariableName(provenanceVariablePrefix, variable.value) ? row : answer).set(variable.value, term);
     }
-    // JSON keeps a term's quotes and spaces from running into the next variable's.
-    const key = JSON.stringify([ ...answer ].map(([ name, term ]) => [ name, termToString(term) ])
-      .sort(([ left ], [ right ]) => left.localeCompare(right)));
-    const group = rowsByAnswer.get(key) ?? { answer, rows: []};
-    group.rows.push(row);
-    rowsByAnswer.set(key, group);
-  }
-  return [ ...rowsByAnswer.values() ].map(({ answer, rows }) => {
-    const polynomial = simplifyPolynomial(decodeTable(rows, provenanceVariablePrefix));
-    return { answer, polynomial, isAnswer: evaluatePolynomial(polynomial, booleanSpmSemiring, () => true) };
+    return { answer, row };
+  });
+  // JSON keeps a term's quotes and spaces from running into the next variable's.
+  const rowsByAnswer = groupBy(splitRows, ({ answer }) => JSON.stringify([ ...answer ]
+    .map(([ name, term ]) => [ name, termToString(term) ])
+    .sort(([ left ], [ right ]) => left < right ? -1 : 1)));
+  return [ ...rowsByAnswer.values() ].map((group) => {
+    const polynomial = simplifyPolynomial(decodeTable(group.map(({ row }) => row), provenanceVariablePrefix));
+    return {
+      answer: group[0].answer,
+      polynomial,
+      isAnswer: evaluatePolynomial(polynomial, booleanSpmSemiring, () => true),
+    };
   });
 }
 
@@ -304,7 +319,7 @@ export function simplifyPolynomial(polynomial: ProvenancePolynomial): Provenance
         return zero;
       }
       if (operands.length <= 1) {
-        return operands[0] ?? (polynomial.type === 'sum' ? zero : one);
+        return operands[0] ?? { type: 'constant', value: identity };
       }
       return { type: polynomial.type, operands };
     }
@@ -328,9 +343,8 @@ export function polynomialToString(
     case 'source':
       return labelOf(polynomial.term);
     case 'sum':
-      return `(${polynomial.operands.map(write).sort().join(' ⊕ ')})`;
     case 'product':
-      return `(${polynomial.operands.map(write).sort().join(' ⊗ ')})`;
+      return `(${polynomial.operands.map(write).sort().join(polynomial.type === 'sum' ? ' ⊕ ' : ' ⊗ ')})`;
     case 'difference':
       return `(${write(polynomial.minuend)} ⊖ ${write(polynomial.subtrahend)})`;
     case 'aggregate':
@@ -338,26 +352,34 @@ export function polynomialToString(
   }
 }
 
-/** The sources of a polynomial, keyed by their string form: every operation is their union. */
-function sourceUnion(left: ReadonlyMap<string, RDF.Term>, right: ReadonlyMap<string, RDF.Term>):
-ReadonlyMap<string, RDF.Term> {
-  return new Map([ ...left, ...right ]);
-}
-const lineageSpmSemiring: SpmSemiring<ReadonlyMap<string, RDF.Term>> = {
-  zero: new Map(),
-  one: new Map(),
-  plus: sourceUnion,
-  times: sourceUnion,
-  monus: sourceUnion,
-  aggregate: operand => operand,
-};
-
 /**
  * The lineage of a polynomial: every source it mentions (SPARQLprov's lineage decoding).
  * @param polynomial - The polynomial to read.
  * @returns The sources, each once.
  */
 export function lineageOf(polynomial: ProvenancePolynomial): RDF.Term[] {
-  return [ ...evaluatePolynomial(polynomial, lineageSpmSemiring, source =>
-    new Map([[ termToString(source), source ]])).values() ];
+  const sources = new Map<string, RDF.Term>();
+  const visit = (operand: ProvenancePolynomial): void => {
+    switch (operand.type) {
+      case 'constant':
+        return;
+      case 'source':
+        sources.set(termToString(operand.term), operand.term);
+        return;
+      case 'sum':
+      case 'product':
+        for (const child of operand.operands) {
+          visit(child);
+        }
+        return;
+      case 'difference':
+        visit(operand.minuend);
+        visit(operand.subtrahend);
+        return;
+      case 'aggregate':
+        visit(operand.operand);
+    }
+  };
+  visit(polynomial);
+  return [ ...sources.values() ];
 }
