@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
+import { forEveryNodeType } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import type { AssertionFilter, EquatedGroup } from '../utils/assertionConjunction.js';
@@ -28,7 +29,8 @@ import {
   variablesOfTransferSource,
   asWeakenedConjunct,
 } from '../utils/assertions.js';
-import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { cpMetaOf } from '../utils/certainlyBoundVars.js';
+import { leaveExistencePatternsPreOrder, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { canMatchZeroLength, createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
@@ -116,20 +118,20 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // After:  SELECT * WHERE { ?o ?p ?o . BIND(?o AS ?s) }
  */
 export function pushDownAssertions<T extends Algebra.Operation>(c: TransformationContext, rootOp: T): T {
-  const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
-    Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]),
-  );
   // One namer for the whole pass, over every variable of the query as it stands *before* anything is
   // rewritten (D4). Both halves of that matter: a materialised position has to get the same name
   // wherever it is written, and a name coined against a part of the tree would collide with a variable
   // in the part that has not been met yet - which is also why this takes the root, see above.
   const namer = derivedVarNamer(markVariableNamesUsed(c, rootOp));
-  callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(c, namer, filter);
-  // Starting from a copy without metadata gives both a tree of our own to rewrite and the guarantee that
-  // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out
-  // for the same reason, the rewrites having since changed what the traversal cached. Not *inside*
-  // `mapOperationPreOrder`: `keepMetadata` is how a filter hands its conjunction to the next `pushFilter`.
-  return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(rootOp), callbacks));
+  // Metadata is cleared around the pass, not inside it: `keepMetadata` is how a filter hands its conjunction to the
+  // next `pushFilter`.
+  return rewriteInExistenceScopes(c, rootOp, (context, op) => {
+    const callbacks = forEveryNodeType(keep, {
+      [Algebra.Types.FILTER]: (filter: Algebra.Filter) => pushFilter(context, namer, filter),
+      [Algebra.Types.EXPRESSION]: leaveExistencePatternsPreOrder,
+    });
+    return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(op, callbacks);
+  });
 }
 
 /**
@@ -174,6 +176,15 @@ function pushAssertions(
   const normalised = assertions.normalisedFor(cpMetaOf(c, op));
   if (normalised === undefined) {
     return empty(c, op);
+  }
+  // A conjunct on a variable of the outer solution of an EXISTS stays here: below, a rule could write a term for it, or
+  // carry it past a sub-SELECT that does not project it.
+  const scope = c.existenceScope?.vRanges;
+  if (scope !== undefined) {
+    const { inside, outside } = normalised.split(name => !scope.has(name));
+    if (outside.size > 0) {
+      return keep(assertionFilter(c, assertionFilter(c, op, inside), outside));
+    }
   }
   if (normalised.size === 0) {
     return keep(op);
@@ -727,8 +738,8 @@ function pushIntoGraph(
   }]);
   return keep(assertionFilter(
     c,
-    AF.createGraph(assertionFilter(c, graph.input, AssertionConjunction.of(placed.intoTarget[0])), graphName),
-    AssertionConjunction.of(placed.kept),
+    AF.createGraph(assertionFilter(c, graph.input, AssertionConjunction.of(c, placed.intoTarget[0])), graphName),
+    AssertionConjunction.of(c, placed.kept),
   ));
 }
 
@@ -779,8 +790,8 @@ function pushIntoJoin(
   return keep(assertionFilter(
     c,
     c.AF.createJoin(join.input.map((operand, index) =>
-      assertionFilter(c, operand, AssertionConjunction.of(placed.intoTarget[index]))), false),
-    AssertionConjunction.of(placed.kept),
+      assertionFilter(c, operand, AssertionConjunction.of(c, placed.intoTarget[index]))), false),
+    AssertionConjunction.of(c, placed.kept),
   ));
 }
 
@@ -873,7 +884,7 @@ function pushIntoLeftJoin(
   const [ intoLeft, intoRight ] = placed.intoTarget;
   const kept = placed.kept;
 
-  const leftAssertions = AssertionConjunction.of(intoLeft);
+  const leftAssertions = AssertionConjunction.of(c, intoLeft);
   // Every candidate μ₁ binds the variables strongly asserted in intoLeft to their term once those are
   // pushed into A₁, so substituting them into the left join condition is sound.
   // The condition is only ever evaluated on a merged `μ₁ ∪ μ₂` - the anti-join half keeps a `μ₁` exactly
@@ -891,10 +902,10 @@ function pushIntoLeftJoin(
     c,
     AF.createLeftJoin(
       assertionFilter(c, left, leftAssertions),
-      assertionFilter(c, right, AssertionConjunction.of(intoRight)),
+      assertionFilter(c, right, AssertionConjunction.of(c, intoRight)),
       expression,
     ),
-    AssertionConjunction.of(kept),
+    AssertionConjunction.of(c, kept),
   ));
 }
 
@@ -1101,7 +1112,7 @@ function unification(reading: Access, representative: Access): AssertionConjunct
  */
 function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjunction {
   const { unaryConjuncts, equatedGroups } = assertions.unaryConjunctsAndEquatedGroups();
-  return AssertionConjunction.of([
+  return AssertionConjunction.of(assertions, [
     ...unaryConjuncts,
     ...equatedGroups.flatMap(group => termTypesOfReadings(group)),
   ]

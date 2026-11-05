@@ -22,10 +22,12 @@ RDF 1.2 pattern and its RDF 1.1 representation. `mappingFromConstructQueries`
 
 The body also gets what SPARQL 1.1 §16.2 asks of a CONSTRUCT: a `FILTER(bound(?x))` per head variable the
 body does not certainly bind, and a type test per head variable whose `vRanges` range exceeds what its head
-position admits (`generalizedRdfView` turns those off); a BIND's range is what its expression's operators give, so
-`BIND(IRI(…) AS ?s)` needs none. Both read one template triple, so both happen
-*before* the merge — after it the head is three plain variables and a triple term is a BIND whose interior
-nothing re-reads, which is exactly the case the type tests are for.
+position admits (`rangeOfPosition`: any term in a `generalizedRdfView`); a BIND's range is what its expression's
+operators give, so `BIND(IRI(…) AS ?s)` needs none. Both read one template triple, so both happen *before* the
+merge — after it the head is three plain variables and a triple term is a BIND whose interior nothing re-reads,
+which is exactly the case the type tests are for. The unfolding of a generalized RDF view also sets
+`TransformationContext.generalizedRdf`, so the later passes read a triple term the query builds as a generalized
+one (`rangeOfPosition(position, c.generalizedRdf)`).
 
 ## The rewriting, step by step
 
@@ -34,7 +36,7 @@ Given a query Q without recursive paths and a mapping with head H and body B:
 1. **Rewrite the paths** to triple patterns without any paths — `lib/transformations/pathTransformation.ts`.
 2. **For each triple pattern of Q, unfold B into it** — `lib/transformations/rewriteSinglePattern.ts`:
    1. unify H with the pattern, giving groups of equality between expressions, head variables and triple
-      term variables (`lib/ClusterSolver.ts`);
+      term variables (`lib/ClusterSolver.ts`), each held to what its position of H admits;
    2. `B' = FILTER(B)` with the equality between head variables that have to be equal;
    3. `B' = FILTER(B')` with the other constraints found on those variables (equality with a static term);
    4. `B' = EXTEND(B')` with how the pattern's variables are constructed from the head variables;
@@ -132,6 +134,24 @@ standard mappings between RDF 1.1 and RDF 1.2.
 - `SELECT * { FILTER(FALSE) }` → 0 bindings
 
 So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
+
+**An EXISTS sees the solution μ it is evaluated for.** SPARQL 1.2 starts every group of its pattern, also in a
+sub-SELECT, from μ ([ContextSolution](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution)); above a GROUP
+only its keys and aggregates remain. A pass reading ranges runs through `rewriteInExistenceScopes`, which rewrites each
+pattern with μ as `existenceScope` once the pass has placed the EXISTS. The unfolding moves no EXISTS, so it uses
+`rewriteInExistenceScopesBeforePass`, which leaves the mapping bodies alone.
+
+A BIND of a variable μ binds is undefined ([Extend](https://www.w3.org/TR/sparql12-query/#defn_extend)), so per
+variable `?o` of μ (`outerBinding`):
+
+| μ binds `?o` | unfolding (`BIND(?mi_s AS ?o)`)                             | `removeProjections`  |
+|--------------|-------------------------------------------------------------|----------------------|
+| certainly    | `FILTER(sameTerm(?mi_s, ?o))` instead                       | keeps the name       |
+| maybe        | UNION of that FILTER and `{ … FILTER(!BOUND(?o)) } BIND(…)` | keeps the projection |
+| not          | the BIND                                                    | renames              |
+
+Each variable μ may bind doubles the subquery. The pushdown writes no term for a variable of μ, and `pullUpExtends`
+moves no BIND of one.
 
 ## Still to settle
 

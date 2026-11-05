@@ -50,7 +50,7 @@ export const objectRange = new RangeSet([ 'Quad', 'NamedNode', 'BlankNode', 'Lit
  */
 export const graphRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
 
-/** Valid term types for a triple term, which only ever occupies an object position. */
+/** Valid term types for a triple term. */
 export const tripleTermRange = new RangeSet([ 'Quad' ]);
 
 /** The term types of a literal: Literals only. */
@@ -80,11 +80,15 @@ export const serviceNameRange = new RangeSet([ 'NamedNode' ]);
 export const emptyRange = new RangeSet([]);
 
 /**
- * The range of the position a triple term holds its component in.
+ * The term types a position of a triple admits: any term in generalized RDF, what RDF admits otherwise.
  * @param position - The position to read
+ * @param generalizedRdf - Whether the triple may be a generalized one
  * @returns the term types it admits
  */
-export function rangeOfPosition(position: 'object' | 'predicate' | 'subject'): RangeSet {
+export function rangeOfPosition(position: 'object' | 'predicate' | 'subject', generalizedRdf = false): RangeSet {
+  if (generalizedRdf) {
+    return objectRange;
+  }
   switch (position) {
     case 'subject': {
       return subjectRange;
@@ -96,6 +100,23 @@ export function rangeOfPosition(position: 'object' | 'predicate' | 'subject'): R
       return objectRange;
     }
   }
+}
+
+/**
+ * {@link rangeOfPosition} for RDF or for generalized RDF, as one function of the position.
+ * @param generalizedRdf - Whether triples may be generalized ones
+ * @returns the term types each position admits
+ */
+export function positionRangeOf(generalizedRdf: boolean): (position: 'object' | 'predicate' | 'subject') => RangeSet {
+  return generalizedRdf ? generalizedPositionRange : rdfPositionRange;
+}
+
+function rdfPositionRange(position: 'object' | 'predicate' | 'subject'): RangeSet {
+  return rangeOfPosition(position);
+}
+
+function generalizedPositionRange(): RangeSet {
+  return objectRange;
 }
 
 /**

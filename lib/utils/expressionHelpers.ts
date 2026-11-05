@@ -171,9 +171,7 @@ export function holdsExpression(
     found = accepts(expression);
     return { shortcut: found };
   } };
-  algebraUtils.visitOperationSub(node, {}, {
-    expression: Object.fromEntries(Object.values(Algebra.ExpressionTypes).map(subType => [ subType, test ])),
-  });
+  algebraUtils.visitOperation(node, { [Algebra.Types.EXPRESSION]: test });
   return found;
 }
 
