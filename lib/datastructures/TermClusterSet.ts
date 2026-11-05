@@ -96,7 +96,7 @@ export function meetShapes<Term>(left: TriplePin, right: TriplePin): PinMeet<Ter
 export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> extends ClusterSet<T> {
   /** Maps group ID to what the group is pinned to (if anything) - read through {@link pinOf}. */
   protected groupToPin: Record<number, Pin<Term> | undefined>;
-  /** Maps group ID to the term types its value may have - read through {@link rangeOf}. */
+  /** Maps group ID to the term types its value may have - read through {@link storedRangeOf}. */
   protected groupToRange: Record<number, RangeSet>;
   /**
    * A history of oldGroups (keys) that got merged into newGroups (values).
@@ -222,6 +222,16 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    * @returns its range, the top of the lattice when nothing narrowed it
    */
   public rangeOf(group: number): RangeSet {
+    return this.storedRangeOf(group);
+  }
+
+  /**
+   * The range this class stores for a group, which subclasses may meet with ranges they keep apart in {@link rangeOf}.
+   * Writes build on this rather than on {@link rangeOf}, so those ranges never leak into the stored one.
+   * @param group - The group to look up
+   * @returns its stored range, the top of the lattice when nothing narrowed it
+   */
+  protected storedRangeOf(group: number): RangeSet {
     return this.groupToRange[this.resolveGroup(group)] ?? objectRange;
   }
 
@@ -279,9 +289,30 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   public narrowRange(group: number, range: RangeSet): boolean {
     this.touch();
     const resolved = this.resolveGroup(group);
-    const narrowed = this.rangeOf(resolved).meet(range);
-    this.groupToRange[resolved] = narrowed;
-    return narrowed.size > 0 && this.rangeAdmits(resolved, this.groupToPin[resolved]);
+    this.groupToRange[resolved] = this.storedRangeOf(resolved).meet(range);
+    return this.admitsRange(resolved);
+  }
+
+  /**
+   * Whether a group can still hold a value of one of these term types, its pin included.
+   * @param group - The group to check
+   * @param range - The term types to admit
+   * @returns whether something is left for it to be
+   */
+  public admitsRange(group: number, range: RangeSet = objectRange): boolean {
+    const resolved = this.resolveGroup(group);
+    const groupRange = this.rangeOf(resolved);
+    const pin = this.groupToPin[resolved];
+    if (pin === undefined) {
+      for (const termType of range) {
+        if (groupRange.has(termType)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    const pinnedTermType = pin.kind === 'term' ? pin.term.termType : 'Quad';
+    return groupRange.has(pinnedTermType) && range.has(pinnedTermType);
   }
 
   /**
@@ -403,19 +434,6 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
       group,
       keptPin.kind === 'triple' ? tripleTermRange : new RangeSet([ keptPin.term.termType ]),
     );
-  }
-
-  /**
-   * Whether the pin - if there is one - is a term the group's range still admits.
-   * @param group - The group whose range to read
-   * @param pin - The pin to check
-   * @returns whether the two agree
-   */
-  private rangeAdmits(group: number, pin: Pin<Term> | undefined): boolean {
-    if (pin === undefined) {
-      return true;
-    }
-    return this.rangeOf(group).has(pin.kind === 'term' ? pin.term.termType : 'Quad');
   }
 
   /**

@@ -2765,6 +2765,61 @@ GROUP BY ?x ( ?x AS ?y )`,
   });
 
   describe('term type tests', () => {
+    describe('below a clique they make a range of', () => {
+      // The filter confines `?o` to an IRI or a blank node, so its operation does too, which an equality met above
+      // it must not carry down as known: it would fold the very test that made it true to `true`.
+      it('keeps a test on the representative', ({ expect }) => {
+        expectStableTransform(
+          expect,
+          'SELECT * { { ?t :x ?o . ?t :y ?o2 FILTER(isIRI(?o) || isBLANK(?o)) } FILTER(sameTerm(?o, ?o2)) }',
+          `SELECT ?o ( ?o AS ?o2 ) ?t WHERE {
+  ?t <ex://x> ?o .
+  ?t <ex://y> ?o .
+  FILTER ( ( ISIRI( ?o ) || ISBLANK( ?o ) ) )
+}`,
+        );
+      });
+
+      it('keeps a test on the other member', ({ expect }) => {
+        expectStableTransform(
+          expect,
+          'SELECT * { { ?t :x ?o . ?t :y ?o2 FILTER(isIRI(?o2)) } FILTER(sameTerm(?o, ?o2)) }',
+          `SELECT ?o ( ?o AS ?o2 ) ?t WHERE {
+  ?t <ex://x> ?o .
+  ?t <ex://y> ?o .
+  FILTER ( ISIRI( ?o ) )
+}`,
+        );
+      });
+
+      it('keeps a test the operation made redundant above it', ({ expect }) => {
+        // The outer `isIRI(?o)` is forgotten at the filter that guarantees it, which has to forget it as known too.
+        expectStableTransform(
+          expect,
+          'SELECT * { { ?t :x ?o . ?t :y ?o2 FILTER(isIRI(?o)) } FILTER(isIRI(?o) && sameTerm(?o, ?o2)) }',
+          `SELECT ?o ( ?o AS ?o2 ) ?t WHERE {
+  ?t <ex://x> ?o .
+  ?t <ex://y> ?o .
+  FILTER ( ISIRI( ?o ) )
+}`,
+        );
+      });
+
+      it('keeps a test below a subquery', ({ expect }) => {
+        expectStableTransform(
+          expect,
+          'SELECT * { { SELECT * { ?t :x ?o . ?t :y ?o2 FILTER(isIRI(?o)) } } FILTER(sameTerm(?o, ?o2)) }',
+          `SELECT ?o ?o2 ?t WHERE {
+  SELECT ?o ( ?o AS ?o2 ) ?t WHERE {
+    ?t <ex://x> ?o .
+    ?t <ex://y> ?o .
+    FILTER ( ISIRI( ?o ) )
+  }
+}`,
+        );
+      });
+    });
+
     it('reads a disjunction of tests over one variable as one assertion, in a fixed order', ({ expect }) => {
       // `isBLANK(?o) || isIRI(?o)` holds of a row exactly when ?o is one of two kinds of term, which is a
       // statement about ?o alone: T⟨?o : {IRI, BlankNode}⟩. It is written back one test per term type, in the

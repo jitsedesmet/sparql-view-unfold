@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import { AssertionClusterSet } from '../lib/datastructures/AssertionClusterSet.js';
-import { objectRange, rangeOfPosition, tripleTermRange } from '../lib/RangeSet.js';
+import { objectRange, rangeOfPosition, subjectRange, tripleTermRange } from '../lib/RangeSet.js';
 
 describe('assertionClusterSet', () => {
   describe('liveness', () => {
@@ -32,6 +32,20 @@ describe('assertionClusterSet', () => {
       set.remove('x');
 
       expect(set.groupOf('y')).toBe(undefined);
+    });
+  });
+
+  describe('forgetting an asserted range', () => {
+    // What the operation already guarantees is forgotten, and must not stay known below it either.
+    it('widens the range back to what the set works out', ({ expect }) => {
+      const set = new AssertionClusterSet(rangeOfPosition);
+      set.mergeGroups('x', 'y');
+      const group = set.getGroup('x');
+      set.assertTermTypeRange(group, subjectRange);
+
+      set.forgetAssertedRange(group);
+
+      expect(set.rangeOf(group)).toEqual(objectRange);
     });
   });
 });

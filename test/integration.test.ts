@@ -161,11 +161,35 @@ describe('integration tests', () => {
     };
   }
 
+  /**
+   * Checks that a SELECT over the mapped data and its rewriting over the RDF 1.1 data give the same rows, and that
+   * those are the rows expected.
+   * @param expect - The `expect` of the test
+   * @param dataFile - The RDF 1.1 data to load
+   * @param mappers - The CONSTRUCT queries of the mappings
+   * @param userQuery - The SELECT query
+   * @param rows - The rows it has to give
+   * @param options - What the mapping is configured with
+   */
+  async function expectSelectRowsOver(
+    expect: typeof Expect,
+    dataFile: string,
+    mappers: string[],
+    userQuery: string,
+    rows: string[],
+    options: MappingOptions = {},
+  ): Promise<void> {
+    const store11 = await sourceToStore([ dataFile ]);
+    const { resOnMappedData, resUsingRewriter } =
+      await compareSelectRewrittenToMapped(store11, mappers, userQuery, options);
+    expect(resOnMappedData).toEqual(resUsingRewriter);
+    expect(resOnMappedData).toEqual(rows);
+  }
+
   const prefix = 'PREFIX : <ex://>\n';
 
   /**
-   * Checks that a SELECT over the view of permutedPositions.ttl and its rewriting give the same rows, and that those
-   * are the rows expected.
+   * {@link expectSelectRowsOver} permutedPositions.ttl, with the prefix `:` prepended to the query.
    * @param expect - The `expect` of the test
    * @param mappers - The CONSTRUCT queries of the view
    * @param userQuery - The SELECT query, without its prefix
@@ -179,11 +203,14 @@ describe('integration tests', () => {
     rows: string[],
     options: MappingOptions = {},
   ): Promise<void> {
-    const store11 = await sourceToStore([ './test/statics/permutedPositions.ttl' ]);
-    const { resOnMappedData, resUsingRewriter } =
-      await compareSelectRewrittenToMapped(store11, mappers, `${prefix}${userQuery}`, options);
-    expect(resOnMappedData).toEqual(resUsingRewriter);
-    expect(resOnMappedData).toEqual(rows);
+    await expectSelectRowsOver(
+      expect,
+      './test/statics/permutedPositions.ttl',
+      mappers,
+      `${prefix}${userQuery}`,
+      rows,
+      options,
+    );
   }
 
   describe('rdf interop reification - single reified triple', () => {
@@ -559,6 +586,55 @@ describe('integration tests', () => {
          }`,
       );
       expect(resOnMappedData).toEqual(resUsingRewriter);
+    });
+  });
+
+  describe('a repeated variable over mappings that type their head', () => {
+    // A query repeating a variable equates two objects a mapping writes into a subject position, whose type test
+    // has to survive the equality being pushed past it. repeatedVariable.ttl holds a literal pair beside an IRI one.
+    const prefixWithRdf = `${prefix}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n`;
+    const pairConstruct = `${prefixWithRdf}CONSTRUCT { ?o :p ?o2 } WHERE { ?t :x ?o ; :y ?o2 }`;
+    // Not the shared `rdfReificationConstruct`: its `rdf:type` pattern makes a plan that never lost the test.
+    const reificationConstruct =
+      `${prefixWithRdf}CONSTRUCT { ?r rdf:reifies <<( ?s ?p ?o )>> } WHERE { ?r rdf:subject ?s ; rdf:predicate ?p ; rdf:object ?o }`;
+
+    /**
+     * {@link expectSelectRowsOver} repeatedVariable.ttl.
+     * @param expect - The `expect` of the test
+     * @param mappers - The CONSTRUCT queries of the mappings
+     * @param userQuery - The SELECT query, without its prefix
+     * @param rows - The rows it has to give
+     */
+    async function expectRowsOverRepeatedVariable(
+      expect: typeof Expect,
+      mappers: string[],
+      userQuery: string,
+      rows: string[],
+    ): Promise<void> {
+      const query = `${prefixWithRdf}${userQuery}`;
+      await expectSelectRowsOver(expect, './test/statics/repeatedVariable.ttl', mappers, query, rows);
+    }
+
+    it('keeps the type test of a subject equated with its object', async({ expect }) => {
+      await expectRowsOverRepeatedVariable(expect, [ pairConstruct ], 'SELECT * { ?a :p ?a }', [ '{a=ex://c}' ]);
+    });
+
+    it('keeps the type test of a triple term subject equated with its object', async({ expect }) => {
+      await expectRowsOverRepeatedVariable(
+        expect,
+        [ reificationConstruct ],
+        'SELECT * { ?x rdf:reifies <<( ?a :q ?a )>> }',
+        [ '{a=ex://c,x=ex://r2}' ],
+      );
+    });
+
+    it('keeps the triple term test of a merged mapping', async({ expect }) => {
+      await expectRowsOverRepeatedVariable(
+        expect,
+        [ reificationConstruct, pairConstruct ],
+        'SELECT * { ?x rdf:reifies <<( ?a :q ?a )>> }',
+        [ '{a=ex://c,x=ex://r2}' ],
+      );
     });
   });
 
