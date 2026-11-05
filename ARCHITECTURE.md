@@ -39,10 +39,10 @@ Given a query Q without recursive paths and a mapping with head H and body B:
       term variables (`lib/ClusterSolver.ts`), each held to what its position of H admits;
    2. `B' = FILTER(B)` with the equality between head variables that have to be equal;
    3. `B' = FILTER(B')` with the other constraints found on those variables (equality with a static term);
-   4. `B' = EXTEND(B')` with how the pattern's variables are constructed from the head variables;
-   5. `B' = FILTER(B')` asserting those variables really are assigned — reading `SUBJECT`/`PREDICATE`/
-      `OBJECT` of a non-triple-term raises, which would leave the BIND target unbound rather than reject
-      the solution;
+   4. `B' = FILTER(B')` with `isTRIPLE(x)` per `SUBJECT(x)`/`PREDICATE(x)`/`OBJECT(x)` the binds of step 5 read:
+      on a non-triple-term these raise, and a raising BIND leaves its target unbound rather than rejecting the
+      solution (`bindEvaluationGuards`);
+   5. `B' = EXTEND(B')` with how the pattern's variables are constructed from the head variables;
    6. `B' = PROJECT(B')` onto the pattern's own variables.
 
    A pattern that cannot be unified with H at all raises `RewriteNoMatchError` and unfolds to
