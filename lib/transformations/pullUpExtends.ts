@@ -806,8 +806,7 @@ function floatThroughJoin(c: TransformationContext, join: Algebra.Join): Algebra
         // across the merge, and `e` is stable. So that component of the compatibility test is a tautology
         // and all but one of the copies are redundant. A carrier short of `V` keeps its own copy, the
         // values `e` is asked about not being the ones the merged row holds.
-        if (carriers.every(carrier =>
-          [ ...carrier.bind.reads ].every(readVariable => carrier.scopeBelowBind.cVars.has(readVariable)))) {
+        if (carriers.every(readsOnlyCertainlyBoundBelow)) {
           // Where it lands is the cost question, and the two answers differ in *risk* rather than in
           // saving. Hoisting is `Extend(Join(A, B), ?x, e)`: `|A ⋈ B|` evaluations against the `|A| + |B|`
           // the two copies cost, which is a win on a selective join and a rout on one that fans out - two
@@ -1009,6 +1008,15 @@ function readsSameValuesAbove(floatingBind: FloatingBind, operands: readonly CPM
   return [ ...floatingBind.bind.reads ].every(readVariable =>
     floatingBind.scopeBelowBind.cVars.has(readVariable) ||
     noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
+}
+
+/**
+ * Whether every variable `e` reads is certainly bound where the bind is evaluated.
+ * @param floatingBind - The bind to check
+ * @returns whether `e` reads only certainly bound variables
+ */
+function readsOnlyCertainlyBoundBelow(floatingBind: FloatingBind): boolean {
+  return [ ...floatingBind.bind.reads ].every(readVariable => floatingBind.scopeBelowBind.cVars.has(readVariable));
 }
 
 /**

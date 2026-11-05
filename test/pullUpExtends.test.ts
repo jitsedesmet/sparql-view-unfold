@@ -467,6 +467,26 @@ ORDER BY ASC ( ?x )`,
       );
     });
 
+    it('stays when a sibling has the variable in scope only under a !bound filter (C1)', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o BIND(:a AS ?x) } { ?a :q ?b OPTIONAL { ?b :r ?x } FILTER(!bound(?x)) } }',
+        `SELECT ?a ?b ?o ?s ?x WHERE {
+  {
+    ?s <ex://p> ?o .
+    BIND( <ex://a> AS ?x )
+  }
+  {
+    ?a <ex://q> ?b .
+    OPTIONAL {
+      ?b <ex://r> ?x .
+    }
+    FILTER ( ! BOUND( ?x ) )
+  }
+}`,
+      );
+    });
+
     it('stays when a sibling can bind the variable (C1)', ({ expect }) => {
       expectTransform(
         expect,
@@ -720,6 +740,30 @@ ORDER BY ASC ( ?x )`,
     {
       ?a <ex://q> ?b .
       BIND( <ex://a> AS ?x )
+    }
+  }
+}`,
+      );
+    });
+
+    it('stays on the left of an OPTIONAL whose right has the variable under a !bound filter', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o BIND(:a AS ?x) } ' +
+        'OPTIONAL { ?a :q ?b { ?b :r ?c OPTIONAL { ?c :r ?x } FILTER(!bound(?x)) } } }',
+        `SELECT ?a ?b ?c ?o ?s ?x WHERE {
+  {
+    ?s <ex://p> ?o .
+    BIND( <ex://a> AS ?x )
+  }
+  OPTIONAL {
+    ?a <ex://q> ?b .
+    {
+      ?b <ex://r> ?c .
+      OPTIONAL {
+        ?c <ex://r> ?x .
+      }
+      FILTER ( ! BOUND( ?x ) )
     }
   }
 }`,
