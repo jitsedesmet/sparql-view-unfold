@@ -1,5 +1,4 @@
-import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import type { VisitContext } from '@traqula/core';
+import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import { datatypeBoolean, DF } from './rdfDatatypes.js';
 
@@ -61,19 +60,19 @@ export function projectSolutionExistence(
  * @returns whether the path can match zero steps
  */
 export function canMatchZeroLength(path: Algebra.PropertyPathSymbol): boolean {
-  let canMatch = true;
-  const decide = (decision: boolean): VisitContext => {
-    canMatch = decision;
-    return { shortcut: true };
-  };
-  // An inverse and a `+` have no callback: the visitor goes on into their operand, which decides for them.
-  algebraUtils.visitOperation(path, {
-    [Algebra.Types.LINK]: { preVisitor: () => decide(false) },
-    [Algebra.Types.NPS]: { preVisitor: () => decide(false) },
-    [Algebra.Types.ZERO_OR_ONE_PATH]: { preVisitor: () => decide(true) },
-    [Algebra.Types.ZERO_OR_MORE_PATH]: { preVisitor: () => decide(true) },
-    [Algebra.Types.SEQ]: { preVisitor: seq => decide(seq.input.every(canMatchZeroLength)) },
-    [Algebra.Types.ALT]: { preVisitor: alt => decide(alt.input.some(canMatchZeroLength)) },
-  });
-  return canMatch;
+  switch (path.type) {
+    case Algebra.Types.LINK:
+    case Algebra.Types.NPS:
+      return false;
+    case Algebra.Types.INV:
+    case Algebra.Types.ONE_OR_MORE_PATH:
+      return canMatchZeroLength(path.path);
+    case Algebra.Types.SEQ:
+      return path.input.every(canMatchZeroLength);
+    case Algebra.Types.ALT:
+      return path.input.some(canMatchZeroLength);
+    // `?` and `*`, and, to stay safe, any path this does not know.
+    default:
+      return true;
+  }
 }
