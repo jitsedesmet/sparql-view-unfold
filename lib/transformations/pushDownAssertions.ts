@@ -225,9 +225,10 @@ function swapWith(
       return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPatterns(c, op, substitution)));
     }
     case Algebra.Types.PATH: {
+      // Paths containing only vars are completely grounded in D and should remain so.
       const { subject, object } = op;
       const variableOnlyNames =
-        subject.termType === 'Variable' && object.termType === 'Variable' && canMatchZeroLength(op.predicate) ?
+        [ subject, object ].every(x => x.termType === 'Variable') && canMatchZeroLength(op.predicate) ?
           new Set([ subject.value, object.value ]) :
           undefined;
       return keep(rewritePattern(
