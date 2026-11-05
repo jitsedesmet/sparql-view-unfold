@@ -308,7 +308,7 @@ function bindOrCompare(
 
 /**
  * Builds the conditions under which a pattern bind yields a term instead of raising an evaluation error -
- * ARCHITECTURE.md step 2.4.
+ * the `isTRIPLE` filter of the rewriting steps in ARCHITECTURE.md.
  *
  * A BIND whose expression errors leaves its target *unbound* while keeping the solution, but a triple
  * pattern only matches when every one of its variables is assigned a term. A pattern variable inside a
