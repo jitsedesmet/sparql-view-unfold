@@ -1,4 +1,4 @@
-import { Algebra } from '@traqula/algebra-transformations-1-2';
+import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import { datatypeBoolean, DF } from './rdfDatatypes.js';
 
@@ -57,22 +57,20 @@ export function projectSolutionExistence(
 /**
  * Whether a property path can match zero steps, and so relate a term to itself.
  * @param path - The property path to check
- * @returns whether the path can match zero steps
+ * @returns whether the path can match zero steps; `true` for a path type this does not know, to stay safe
  */
 export function canMatchZeroLength(path: Algebra.PropertyPathSymbol): boolean {
-  switch (path.type) {
-    case Algebra.Types.LINK:
-    case Algebra.Types.NPS:
-      return false;
-    case Algebra.Types.INV:
-    case Algebra.Types.ONE_OR_MORE_PATH:
-      return canMatchZeroLength(path.path);
-    case Algebra.Types.SEQ:
-      return path.input.every(canMatchZeroLength);
-    case Algebra.Types.ALT:
-      return path.input.some(canMatchZeroLength);
-    // `?` and `*`, and, to stay safe, any path this does not know.
-    default:
-      return true;
-  }
+  const canMatch = (operand: unknown): boolean => operand !== false;
+  // Bottom-up, so every operand has already been replaced by whether it can match zero steps, and a path
+  // type without a callback is left an object, which `canMatch` takes as able to.
+  return canMatch(algebraUtils.mapOperation(path, {
+    [Algebra.Types.LINK]: { transform: () => false },
+    [Algebra.Types.NPS]: { transform: () => false },
+    [Algebra.Types.ZERO_OR_ONE_PATH]: { transform: () => true, preVisitor: () => ({ continue: false }) },
+    [Algebra.Types.ZERO_OR_MORE_PATH]: { transform: () => true, preVisitor: () => ({ continue: false }) },
+    [Algebra.Types.INV]: { transform: copy => canMatch(copy.path) },
+    [Algebra.Types.ONE_OR_MORE_PATH]: { transform: copy => canMatch(copy.path) },
+    [Algebra.Types.SEQ]: { transform: copy => (<unknown[]> copy.input).every(canMatch) },
+    [Algebra.Types.ALT]: { transform: copy => (<unknown[]> copy.input).some(canMatch) },
+  }));
 }
