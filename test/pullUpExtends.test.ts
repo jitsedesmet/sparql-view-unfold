@@ -48,8 +48,8 @@ describe('pullUpExtends', () => {
   }
 
   /**
-   * Asserts the rewritten query, and with it the three checks every case owes: the scope invariant, the
-   * idempotence of the pass, and the metadata hygiene the licences depend on.
+   * Asserts the rewritten query, and with it the checks every case owes: valid SPARQL, the scope invariant,
+   * the idempotence of the pass, and the metadata hygiene the licences depend on.
    * @param expect - The assertion API of the running test
    * @param query - The query to rewrite, without its prefixes
    * @param expected - The query the rewrite has to generate
@@ -60,7 +60,10 @@ describe('pullUpExtends', () => {
     // leaves something unbound.
     const input = parseQuery(c, prefixes + query);
     const output = pullUpExtends(c, input);
-    expect(c.generator.generate(toAst(output)).trim()).toEqual(expected.trim());
+    const generated = c.generator.generate(toAst(output)).trim();
+    expect(generated).toEqual(expected.trim());
+    // Re-parsing checks the output is valid SPARQL, e.g. that no `BIND` lands where its variable is in scope.
+    expect(() => parseQuery(c, prefixes + generated)).not.toThrow();
     expect(scopeOf(output)).toEqual(scopeOf(parseQuery(c, prefixes + query)));
     expect(holdsCachedMetadata(output)).toBe(false);
     // Idempotence: what the pass produced is a fixpoint of it.
@@ -81,7 +84,10 @@ describe('pullUpExtends', () => {
    */
   function expectTransformGraphOperation(expect: typeof Expect, query: string, expected: string): void {
     const output = pullUpExtends(c, parseWithGraphOperation(query));
-    expect(c.generator.generate(toAst(output)).trim()).toEqual(expected.trim());
+    const generated = c.generator.generate(toAst(output)).trim();
+    expect(generated).toEqual(expected.trim());
+    // Re-parsing checks the output is valid SPARQL, e.g. that no `BIND` lands where its variable is in scope.
+    expect(() => parseQuery(c, prefixes + generated)).not.toThrow();
     expect(scopeOf(output)).toEqual(scopeOf(parseWithGraphOperation(query)));
     expect(holdsCachedMetadata(output)).toBe(false);
     expect(c.generator.generate(toAst(pullUpExtends(c, output))).trim()).toEqual(expected.trim());
@@ -746,6 +752,23 @@ ORDER BY ASC ( ?x )`,
   }
   MINUS {
     ?a <ex://q> ?x .
+  }
+}`,
+      );
+    });
+
+    it('rises out of the left of a MINUS whose right has the variable in scope but never binds it', ({ expect }) => {
+      // The right's scope does not reach above the MINUS, so only binding `?x` there blocks the hoist.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o BIND(:a AS ?x) } MINUS { VALUES ?x { UNDEF } ?a :q ?b } }',
+        `SELECT ?o ?s ( <ex://a> AS ?x ) WHERE {
+  ?s <ex://p> ?o .
+  MINUS {
+    VALUES ?x {
+      UNDEF
+    }
+    ?a <ex://q> ?b .
   }
 }`,
       );

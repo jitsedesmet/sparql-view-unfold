@@ -47,9 +47,10 @@ import { collectVariableNames } from '../utils.js';
  *
  * For a bind `?x := e` on input `A` of `op`, with `V = vars(e)` and the other inputs `B`:
  *
- * - **(C1) no capture** - `?x` is out of scope in every other `B`, unless it carries an identical bind
- *   (merge), and `op` does not introduce `?x` itself (`GRAPH ?x`). Scope, not ranges: `BIND` requires
- *   `?x` out of scope, so even a `B` that never binds `?x` blocks the hoist.
+ * - **(C1) no capture** - `?x` is out of scope in every other `B` whose scope reaches above `op`, unless it
+ *   carries an identical bind (merge), and `op` does not introduce `?x` itself (`GRAPH ?x`): `BIND`
+ *   requires `?x` out of scope. The right of a `MINUS` does not reach above it, so there it only has to
+ *   never bind `?x`.
  * - **(C2) same inputs** - every `?y ∈ V` satisfies `A.cVars.has(?y)` or every other `B` never binds `?y`.
  *   Vacuous for a ground `e`, and vacuous for `UNION`/`MINUS`, which merge nothing.
  * - **(C3) readers** - what the node reads must not see `?x`, or must have `e` substituted into it.
@@ -279,7 +280,7 @@ function peelInputs(c: TransformationContext, inputs: readonly Algebra.Operation
  * @param stillLicensed - Re-checks what the operation itself asks of one bind. Only an operation owning a
  * *reader expression* needs one: {@link readerAdmitsSubstitution} reads which binds below are leaving, and
  * pinning shrinks that, so a reader can go from refusing a bind to admitting it. Every other licence here
- * is about the operation and the bind alone - a projection's variable list, a join's operand ranges -
+ * is about the operation and the bind alone - a projection's variable list, a join's operands -
  * which no pinning can change, so those pass `() => true` and mean it exactly
  */
 function settlePartition(
@@ -815,30 +816,23 @@ function floatThroughJoin(c: TransformationContext, join: Algebra.Join): Algebra
           // `|A|` evaluations, better than `|A| + |B|` whatever the join does. So a construction, free to
           // re-evaluate, rises; anything else collapses in place.
           const mayRise = floatingBind.constructedTerm !== undefined &&
-            variableOutOfScopeInOtherOperands(floatingBind, carriers, operands);
+            variableOutOfScopeInOtherOperands(floatingBind, operands);
           collapseGroup(carriers, mayRise ? 'rise' : 'stay');
         }
-      } else {
+      } else if (floatingBind.constructedTerm !== undefined &&
+        variableOutOfScopeInOtherOperands(floatingBind, operands) &&
+        readsSameValuesAbove(floatingBind, operands)) {
         // A single carrier: (C1) over the siblings, (C2) per variable of `e`, and the cost gate. The gate
         // is the same one the merge above answers: a construction is free to re-evaluate, so its pull-up
         // is a pure win, but a join may *increase* cardinality, so anything else can end up evaluated more
         // often than it was. Nothing rises past a join that is not free to re-evaluate - there is no
         // second copy to delete here, so not even the merge's consolation applies.
-        const readsSameValuesAbove = [ ...floatingBind.bind.reads ].every(readVariable =>
-          floatingBind.scopeBelowBind.cVars.has(readVariable) ||
-            noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
         // TODO(future) think about cardinality estimates. Joins can restrict but also grow.
         //  Here we say that we do not take the risk of pullUp in case the expression is complex.
-        // The two operand checks are about two different variables and neither implies the other:
-        // `variableOutOfScopeInOtherOperands` is (C1), over the bind's *target* `?x`, and asks whether the
-        // re-planted EXTEND would land where `?x` is already in scope; `noOtherOperandBinds` above is
-        // one disjunct of (C2), over each `?y ∈ V` that `e` *reads*, and has an escape hatch (C1) has no
-        // analogue for - a `?y` the carrier binds certainly needs nothing of the siblings. For a ground
-        // `e`, `V` is empty and (C2) is vacuous, so (C1) is doing all of the work on its own.
-        if (floatingBind.constructedTerm !== undefined &&
-            variableOutOfScopeInOtherOperands(floatingBind, carriers, operands) && readsSameValuesAbove) {
-          floatingBind.disposition = 'rise';
-        }
+        // The two operand checks are about two different variables and neither implies the other: (C1) is
+        // over the bind's *target* `?x`, (C2) over each `?y ∈ V` that `e` *reads*, with an escape hatch
+        // (C1) has no analogue for - a `?y` the carrier binds certainly needs nothing of the siblings.
+        floatingBind.disposition = 'rise';
       }
     }
   }
@@ -868,10 +862,8 @@ function floatThroughLeftJoin(c: TransformationContext, leftJoin: Algebra.LeftJo
     if (floatingBind.bindIsStable &&
         floatingBind.inputIndex === 0 &&
         floatingBind.constructedTerm !== undefined &&
-        variableOutOfScopeInOtherOperands(floatingBind, floatingBind.mustLeaveWith, operands) &&
-        [ ...floatingBind.bind.reads ].every(readVariable =>
-          floatingBind.scopeBelowBind.cVars.has(readVariable) ||
-            noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands))) {
+        variableOutOfScopeInOtherOperands(floatingBind, operands) &&
+        readsSameValuesAbove(floatingBind, operands)) {
       floatingBind.disposition = 'rise';
     } else {
       floatingBind.disposition = 'stay';
@@ -904,13 +896,14 @@ function floatThroughMinus(c: TransformationContext, minus: Algebra.Minus): Alge
   const operands = minus.input.map(input => cpMetaOf(c, input));
   // `pVars(Minus) = pVars(L)`, so the output mapping *is* `μ_L` and (C2) is vacuous, as it is for a UNION.
   // What the licence has to rule out is the right-hand side binding `?x`: it would change both the
-  // compatibility test and the domain-disjointness test, neither of which the hoisted bind is above.
+  // compatibility test and the domain-disjointness test, neither of which the hoisted bind is above. Its
+  // scope does not reach above the MINUS, so a right-hand side that never binds `?x` is no obstacle.
   // Hoisting out of the right is meaningless - its bindings are out of scope above it - and dropping one
   // there waits for phase 2, licensed by `L.vRanges.neverBinds(?x)` rather than by the `needed` analysis.
   for (const floatingBind of peeled.allBinds) {
     if (floatingBind.bindIsStable &&
         floatingBind.inputIndex === 0 &&
-        variableOutOfScopeInOtherOperands(floatingBind, floatingBind.mustLeaveWith, operands)) {
+        noOtherOperandBinds(floatingBind.bind.variable.value, floatingBind.inputIndex, operands)) {
       floatingBind.disposition = 'rise';
     } else {
       floatingBind.disposition = 'stay';
@@ -997,35 +990,36 @@ function collapseGroup(group: FloatingBind[], representative: 'rise' | 'stay'): 
 /**
  * (C1): whether `?x` is out of scope in every operand but the carriers, whose copies the same rewrite deletes.
  * @param floatingBind - The bind that wants to rise
- * @param carriers - The binds leaving with it
  * @param operands - What each operand of the operation binds
  * @returns whether no other operand has the variable in scope
  */
-function variableOutOfScopeInOtherOperands(
-  floatingBind: FloatingBind,
-  carriers: readonly FloatingBind[],
-  operands: readonly CPMeta[],
-): boolean {
+function variableOutOfScopeInOtherOperands(floatingBind: FloatingBind, operands: readonly CPMeta[]): boolean {
   const variableName = floatingBind.bind.variable.value;
-  const carrying = new Set(carriers.map(carrier => carrier.inputIndex));
+  const carrying = new Set(floatingBind.mustLeaveWith.map(carrier => carrier.inputIndex));
   return operands.every((operand, index) => carrying.has(index) || !operand.vRanges.has(variableName));
 }
 
 /**
- * The second disjunct of (C2): no operand other than the one the bind rises out of can bind `?y`, so the
- * merged solution holds whatever that operand gave it.
- * @param variableName - The variable `e` reads
+ * (C2): whether every variable `e` reads is certainly bound below the bind or bound by no other operand.
+ * @param floatingBind - The bind that wants to rise
+ * @param operands - What each operand of the operation binds
+ * @returns whether `e` reads the same values above the operation as below it
+ */
+function readsSameValuesAbove(floatingBind: FloatingBind, operands: readonly CPMeta[]): boolean {
+  return [ ...floatingBind.bind.reads ].every(readVariable =>
+    floatingBind.scopeBelowBind.cVars.has(readVariable) ||
+    noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
+}
+
+/**
+ * Whether no operand but the one the bind rises out of can bind a variable.
+ * @param variableName - The variable to check
  * @param carrierIndex - The index of the operand the bind rises out of
  * @param operands - What each operand of the operation binds
- * @returns whether nothing else can bind it
+ * @returns whether no other operand can bind it
  */
-function noOtherOperandBinds(
-  variableName: string,
-  carrierIndex: number,
-  operands: readonly CPMeta[],
-): boolean {
-  return operands.every((operand, index) =>
-    index === carrierIndex || operand.vRanges.neverBinds(variableName));
+function noOtherOperandBinds(variableName: string, carrierIndex: number, operands: readonly CPMeta[]): boolean {
+  return operands.every((operand, index) => index === carrierIndex || operand.vRanges.neverBinds(variableName));
 }
 
 /**
