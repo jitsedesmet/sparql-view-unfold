@@ -74,9 +74,6 @@ export function variablesRequiredBoundBy(expression: Algebra.Expression): SSet {
         variablesRaisingWhenUnbound(args[0]),
         intersectSets(args.slice(1).map(argument => variablesRequiredBoundBy(argument))),
       ]);
-    // An empty list makes `IN` false whatever its left operand is.
-    case 'in':
-      return variablesRaisingWhenUnbound(args[0]);
     default:
       return variablesRaisingWhenUnbound(expression);
   }

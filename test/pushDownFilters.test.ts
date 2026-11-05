@@ -1207,6 +1207,14 @@ HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
       expect(original).toHaveLength(expectedRows);
     }
 
+    it('keeps a filter out of an aggregating sub-SELECT with a trailing VALUES', async({ expect }) => {
+      await assertEquivalent(
+        expect,
+        'SELECT * { { SELECT ?k (COUNT(*) AS ?n) { ?k :p ?v } GROUP BY ?k VALUES ?k { :a :a :b } } FILTER(?k != :b) }',
+        2,
+      );
+    });
+
     it('passes DISTINCT, keeping one row per value', async({ expect }) => {
       await assertEquivalent(expect, 'SELECT * WHERE { { SELECT DISTINCT ?o WHERE { ?s :p ?o } } FILTER(?o > 1) }', 3);
     });

@@ -62,7 +62,7 @@ export interface PreOrderPass<C> {
 export function mapPreOrderInExistenceScopes<C extends RangeContext, T extends Algebra.Operation>(
   c: C,
   op: T,
-  { callbacks = () => ({}), fallback = () => keep }: PreOrderPass<C>,
+  { callbacks = () => ({}), fallback = () => copy => keep(copy) }: PreOrderPass<C>,
 ): T {
   return rewriteInExistenceScopes(c, op, (context, operation) => {
     const everyCallback = forEveryNodeType(fallback(context), {

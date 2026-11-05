@@ -83,17 +83,27 @@ export function filterByConjunction(
 }
 
 /**
- * The GROUP below the HAVING, select expressions and ORDER BY of an aggregating SELECT.
+ * What stands below the HAVING, select expressions and ORDER BY of a SELECT.
  * @param op - The input of the SELECT's projection
- * @returns the GROUP, or `undefined` when the SELECT does not aggregate
+ * @returns the first operation below them
  */
-export function groupBelowSelectClause(op: Algebra.Operation): Algebra.Group | undefined {
+export function belowSelectClause(op: Algebra.Operation): Algebra.Operation {
   let current = op;
   while (current.type === Algebra.Types.EXTEND || current.type === Algebra.Types.FILTER ||
     current.type === Algebra.Types.ORDER_BY) {
     current = current.input;
   }
-  return current.type === Algebra.Types.GROUP ? current : undefined;
+  return current;
+}
+
+/**
+ * The GROUP below the HAVING, select expressions and ORDER BY of an aggregating SELECT.
+ * @param op - The input of the SELECT's projection
+ * @returns the GROUP, or `undefined` when the SELECT does not aggregate
+ */
+export function groupBelowSelectClause(op: Algebra.Operation): Algebra.Group | undefined {
+  const below = belowSelectClause(op);
+  return below.type === Algebra.Types.GROUP ? below : undefined;
 }
 
 /**

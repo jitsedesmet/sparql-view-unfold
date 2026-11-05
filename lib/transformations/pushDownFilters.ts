@@ -11,6 +11,7 @@ import {
   splitConjunction,
 } from '../utils/expressionHelpers.js';
 import {
+  belowSelectClause,
   filterByConjunction,
   groupBelowSelectClause,
   groupingKeysOf,
@@ -138,7 +139,7 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
     case Algebra.Types.FROM:
       return sinkIntoSingleInput(c, conjuncts, op, () => true);
     case Algebra.Types.UNION:
-      return c.AF.createUnion(op.input.map(branch => filterOver(c, branch, conjuncts)), false);
+      return withInput(op, op.input.map(branch => filterOver(c, branch, conjuncts)));
     case Algebra.Types.MINUS:
       return withInput(op, [ filterOver(c, op.input[0], conjuncts), op.input[1] ]);
     case Algebra.Types.PROJECT:
@@ -172,6 +173,12 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
  */
 function projectionLicence(c: TransformationContext, project: Algebra.Project): (conjunct: Conjunct) => boolean {
   const projected = new Set(project.variables.map(variable => variable.value));
+  const below = belowSelectClause(project.input);
+  if (below.type === Algebra.Types.JOIN && below.input.some(operand => operand.type === Algebra.Types.VALUES) &&
+    below.input.some(operand => groupBelowSelectClause(operand) !== undefined)) {
+    // A VALUES after GROUP BY joins in after the grouping, where `toAst` prints no filter.
+    return () => false;
+  }
   const group = groupBelowSelectClause(project.input);
   if (group !== undefined) {
     // Only projected keys, which sink below the GROUP: `toAst` prints what stays above it into the WHERE clause.
@@ -225,7 +232,7 @@ function sinkIntoExtend(c: TransformationContext, conjuncts: Conjunct[], extend:
       kept.push(conjunct);
     }
   }
-  return filterOver(c, c.AF.createExtend(filterOver(c, extend.input, below), extend.variable, extend.expression), kept);
+  return filterOver(c, withInput(extend, filterOver(c, extend.input, below)), kept);
 }
 
 /**
