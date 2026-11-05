@@ -424,15 +424,17 @@ export class AssertionConjunction {
    * the pattern holds those values: Θ keeps saying `OBJECT(?o)` where the plan says `?o_o`, so
    * `isIRI(OBJECT(?o))` is written as `isIRI(?o_o)`, a condition over a variable the pattern binds.
    * @param namer - Coins the variable for a position, once per position and query ({@link utils!derivedVarNamer})
+   * @param variableOnlyNames - The variables whose group the pattern may only hold a variable for, as a term
+   * there would not restrict what the pattern matches
    * @returns the substitution to write into the pattern, the residual to state over it, and the view that
    * residual has to be written through
    */
-  public intoPattern(namer: DerivedVarNamer): {
+  public intoPattern(namer: DerivedVarNamer, variableOnlyNames?: ReadonlySet<string>): {
     substitution: Assertions;
     residual: AssertionConjunction;
     asWritten: AssertionView;
   } {
-    const values = this.patternValues(namer);
+    const values = this.patternValues(namer, variableOnlyNames);
     return {
       substitution: this.strongMembersReplacedBy(group => values.get(group)),
       residual: AssertionConjunction.of(this, this.conjuncts()
@@ -1231,10 +1233,11 @@ export class AssertionConjunction {
    * The value a pattern holds for every group a variable of Θ names: the term it is pinned to, the triple
    * term its shape is written out as, or the variable that reads it.
    * @param namer - Coins the variable for a position nothing names
+   * @param variableOnlyNames - The variables whose group the pattern holds its representative for
    * @returns the value per group; two readings of one group become the same term or the same variable in the
    * same pattern, and matching that pattern is what states the equality Θ carried as a condition
    */
-  private patternValues(namer: DerivedVarNamer): Map<number, RDF.Term> {
+  private patternValues(namer: DerivedVarNamer, variableOnlyNames?: ReadonlySet<string>): Map<number, RDF.Term> {
     const accessesPerGroup = this.readingsPerGroup();
 
     const nameOfGroup = (group: number): string => {
@@ -1253,6 +1256,10 @@ export class AssertionConjunction {
       // A group no variable names is only ever read through the shape holding it, and the representative of one
       // that has them is the variable it is read by: its representative.
       if (isBareAccess(representative)) {
+        if (variableOnlyNames !== undefined && this.namedMembers(group).some(name => variableOnlyNames.has(name))) {
+          result.set(group, DF.variable(representative.name));
+          continue;
+        }
         // Without its shape, a group is what {@link rebuildingSubstitution} makes of it: the term it is
         // pinned to, or the representative every member of a clique substitutes to.
         result.set(group, this.shapeIsWorthWriting(group) ?
