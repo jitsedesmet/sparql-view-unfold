@@ -349,7 +349,6 @@ describe('provenance captured over the colleagues data', () => {
     }).sort();
   }
 
-  // FILTER (NOT) EXISTS is left out: the rewrite without provenance currently gets a correlated one wrong.
   it.for(<const> [
     'SELECT DISTINCT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }',
     'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :worksAt ?o FILTER(?o != :ugent) } }',
@@ -367,6 +366,12 @@ describe('provenance captured over the colleagues data', () => {
     'SELECT ?x (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x VALUES ?x { :bob }',
     'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?o } ' +
     'OPTIONAL { ?x :worksAt ?o FILTER(!BOUND(?o)) } }',
+    'SELECT ?x WHERE { ?x :worksAt :ugent FILTER NOT EXISTS { ?x :worksAt :imec } }',
+    'SELECT ?x WHERE { ?x :worksAt :ugent FILTER EXISTS { ?x :worksAt :imec } }',
+    'SELECT ?x ?o WHERE { ?x :worksAt ?o FILTER NOT EXISTS { ?y :worksAt ?o FILTER(?y != ?x && ?y != :carol) } }',
+    'SELECT ?x ?o WHERE { ?x :worksAt ?o FILTER EXISTS { ?y :worksAt ?o FILTER(?y != ?x && ?y != :carol) } }',
+    'SELECT ?x WHERE { ?x :worksAt ?o FILTER NOT EXISTS { { SELECT ?y WHERE { ?y :worksAt ?o } } FILTER(?y != ?x) } }',
+    'SELECT ?x ?e WHERE { ?x :worksAt :imec BIND(EXISTS { :alice :knows ?x } AS ?e) }',
   ])('answers %s as the query without provenance does', async(query, { expect }) => {
     const [ decodedAnswers, rows ] = await Promise.all([
       decodedAnswersOf(query),
@@ -471,11 +476,10 @@ describe('provenance captured over the colleagues data', () => {
   });
 
   it('evaluates an EXISTS nested in an expression over the view, contributing no provenance', async({ expect }) => {
-    // Uncorrelated: the rewrite without provenance currently loses a correlated EXISTS in an expression.
-    expect(await explain('SELECT ?x ?e WHERE { ?x :worksAt :imec BIND(EXISTS { :dave :worksAt :ugent } AS ?e) }'))
+    expect(await explain('SELECT ?x ?e WHERE { ?x :worksAt :imec BIND(EXISTS { :alice :knows ?x } AS ?e) }'))
       .toEqual([
+        '+ e="false"^^http://www.w3.org/2001/XMLSchema#boolean x=carol: carol worksAt imec',
         '+ e="true"^^http://www.w3.org/2001/XMLSchema#boolean x=bob: bob worksAt imec',
-        '+ e="true"^^http://www.w3.org/2001/XMLSchema#boolean x=carol: carol worksAt imec',
       ]);
   });
 

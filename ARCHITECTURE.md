@@ -143,8 +143,9 @@ OPTIONAL is normalised to `(P1 ⊗ P2) ⊕ (P1 ⊖ P2)` (Def. 3.1), MINUS and NO
 `P1 ⊖ (P1 ⊖ P2)`; each repeats P1, so a chain of OPTIONALs or EXISTS grows the query exponentially. A difference keeps
 every solution of its minuend, each with the provenance of the subtrahend's compatible solutions: as SPARQLprov
 writes it, an OPTIONAL over the subtrahend with the shared variables the minuend may leave unbound renamed apart
-and compared in its condition, which needs Comunica master (comunica/comunica#1835) to evaluate. An expression's EXISTS
-outside a top-level conjunct of a FILTER is evaluated over the view, contributing no provenance.
+and compared in its condition, which needs Comunica master (comunica/comunica#1835) to evaluate. An EXISTS outside a
+top-level conjunct of a FILTER, or correlated (its pattern reads an outer variable it does not bind, which a
+difference cannot compare), is evaluated over the view, contributing no provenance.
 
 Every other operator is rewritten in place. A GROUP or SLICE counts solutions rather than derivations, so it
 duplicates its subtree: once without provenance to compute the answers, once with it for the solutions whose

@@ -215,7 +215,8 @@ source triples. A difference keeps the solutions it removes, so that their polyn
 answers: `isAnswer` tells them apart. Beyond SPARQLprov:
 
 - `EXISTS` is `P ⊖ (P ⊖ P2)`, which keeps a solution exactly when a compatible one exists. An `EXISTS` or
-  `NOT EXISTS` other than a top-level conjunct of a `FILTER` stays a filter, contributing no provenance.
+  `NOT EXISTS` other than a top-level conjunct of a `FILTER`, or whose pattern reads an outer variable it does not
+  bind, stays a filter, contributing no provenance.
 - `LIMIT` and `OFFSET` are rewritten as an aggregate is (Def. 4.17): the answers computed without provenance, then
   joined with the provenance of every solution with the same values, including those left out. The order of an
   `ORDER BY` is lost. `DISTINCT` is dropped, as the decoding sums the rows of an answer anyway.

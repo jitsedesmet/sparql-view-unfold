@@ -348,11 +348,13 @@ function differenceOf(
     rewrite: (prefix) => {
       const renameOf = new Map(renamedApart.map(variable => [ variable.value, c.coinInternalVariable() ]));
       const subtrahendSum = provenanceChildPrefix(provenanceChildPrefix(prefix, 'difference', 2), 'sum');
-      const subtrahendRewritten = renameVariables(
-        c,
-        subtrahend.rewrite(subtrahendSum),
-        new Map([ ...renameOf ].map(([ name, rename ]) => [ name, rename.value ])),
-      );
+      const subtrahendRewritten = renameOf.size === 0 ?
+        subtrahend.rewrite(subtrahendSum) :
+        renameVariables(
+          c,
+          subtrahend.rewrite(subtrahendSum),
+          new Map([ ...renameOf ].map(([ name, rename ]) => [ name, rename.value ])),
+        );
       const conditions = [ ...renameOf ].map(([ name, rename ]) => disjunctionOf(c, [
         unboundAssertionAsExpression(c, name),
         unboundAssertionAsExpression(c, rename.value),
@@ -465,15 +467,25 @@ function minusPatternOf(c: ProvenanceCaptureContext, minus: Algebra.Minus): Prov
 
 /**
  * The rewrite of a filter, its top-level `NOT EXISTS` a difference and its top-level `EXISTS` the difference with
- * that difference, `P ⊖ (P ⊖ P2)`, which keeps a solution exactly when a compatible one exists.
+ * that difference, `P ⊖ (P ⊖ P2)`, which keeps a solution exactly when a compatible one exists. A correlated one, whose
+ * pattern reads an outer variable it does not bind, stays a filter: a difference only compares the variables it binds.
  * @param c - The provenance capture context
  * @param filter - The filter
  * @returns the pattern
  */
 function filterPatternOf(c: ProvenanceCaptureContext, filter: Algebra.Filter): ProvenancePattern {
+  const outerNames = new Set(algebraUtils.inScopeVariables(filter.input).map(variable => variable.value));
+  const isUncorrelatedExistence = (conjunct: Algebra.Expression): conjunct is Algebra.ExistenceExpression => {
+    if (conjunct.subType !== Algebra.ExpressionTypes.EXISTENCE) {
+      return false;
+    }
+    const boundNames = new Set(algebraUtils.inScopeVariables(conjunct.input).map(variable => variable.value));
+    return ![ ...collectVariableNames(c.astTransformer, conjunct.input) ]
+      .some(name => outerNames.has(name) && !boundNames.has(name));
+  };
   const conjuncts = splitConjunction(filter.expression);
-  const remaining = conjuncts.filter(conjunct => conjunct.subType !== Algebra.ExpressionTypes.EXISTENCE);
-  const filtered = conjuncts.filter(conjunct => conjunct.subType === Algebra.ExpressionTypes.EXISTENCE)
+  const remaining = conjuncts.filter(conjunct => !isUncorrelatedExistence(conjunct));
+  const filtered = conjuncts.filter(isUncorrelatedExistence)
     .reduce((pattern, existence) => {
       const solutionsWithout = differenceOf(c, pattern, patternOf(c, existence.input));
       return existence.not ? solutionsWithout : differenceOf(c, pattern, solutionsWithout);
@@ -565,68 +577,68 @@ function attachProvenanceToAnswers(
 }
 
 /**
- * Rewrites a projection, SPARQLprov's `select` (Def. 4.12 (6)), or, over a GROUP, its aggregate query (Def. 4.17):
- * the groups computed without provenance, and the provenance of their solutions attached under the lineage δ.
+ * The pattern of a projection, SPARQLprov's `select` (Def. 4.12 (6)), or, over a GROUP, of its aggregate query
+ * (Def. 4.17): the groups computed without provenance, the provenance of their solutions attached under the lineage δ.
  * @param c - The provenance capture context
  * @param project - The projection
- * @param prefix - The provenance variable prefix
- * @returns the rewritten projection
+ * @returns the pattern
  */
-function rewriteProjection(c: ProvenanceCaptureContext, project: Algebra.Project, prefix: string): Algebra.Operation {
+function projectionPatternOf(c: ProvenanceCaptureContext, project: Algebra.Project): ProvenancePattern {
   const { AF } = c;
   const group = groupProjectedBy(project);
   if (group === undefined) {
-    const sum = provenanceNodeVariableName(prefix, 'sum');
-    const input = patternOf(c, project.input).rewrite(provenanceChildPrefix(prefix, 'sum'));
-    return AF.createProject(withIdentity(c, input, project.variables, sum), [
-      ...project.variables,
-      ...provenanceVariablesOf(c, input),
-      DF.variable(sum),
-    ]);
+    const input = patternOf(c, project.input);
+    return {
+      original: project,
+      rewrite: (prefix) => {
+        const sum = provenanceNodeVariableName(prefix, 'sum');
+        const inputRewritten = input.rewrite(provenanceChildPrefix(prefix, 'sum'));
+        return AF.createProject(withIdentity(c, inputRewritten, project.variables, sum), [
+          ...project.variables,
+          ...provenanceVariablesOf(c, inputRewritten),
+          DF.variable(sum),
+        ]);
+      },
+    };
   }
   // An aggregate counts solutions rather than their provenance, so the subtree is duplicated: the groups are computed
   // without provenance and that of their solutions attached afterwards (SPARQLprov, Def. 4.17).
-  const groupsWithTheirKeys = AF.createProject(project.input, [
+  const groupsWithTheirKeys = withoutProvenance(c, AF.createProject(project.input, [
     ...project.variables,
     ...group.variables.filter(variable => !project.variables.some(selected => selected.equals(variable))),
-  ]);
-  return attachProvenanceToAnswers(
-    c,
-    withIdentity(
+  ]));
+  const solutions = patternOf(c, AF.createProject(group.input, group.variables));
+  return {
+    original: project,
+    rewrite: prefix => attachProvenanceToAnswers(
       c,
-      withoutProvenance(c, groupsWithTheirKeys),
+      withIdentity(c, groupsWithTheirKeys, group.variables, provenanceNodeVariableName(prefix, 'aggregate')),
+      solutions,
+      provenanceChildPrefix(prefix, 'aggregate'),
       group.variables,
-      provenanceNodeVariableName(prefix, 'aggregate'),
+      project.variables,
     ),
-    patternOf(c, AF.createProject(group.input, group.variables)),
-    provenanceChildPrefix(prefix, 'aggregate'),
-    group.variables,
-    project.variables,
-  );
+  };
 }
 
 /**
- * Rewrites a SLICE as an aggregate is, this repo's choice: its answers computed without provenance, and the provenance
- * of every solution agreeing with one attached, the solutions unordered.
+ * The pattern of a SLICE, rewritten as an aggregate is, this repo's choice: its answers computed without provenance,
+ * and the provenance of every solution agreeing with one attached, the solutions unordered.
  * @param c - The provenance capture context
  * @param slice - The SLICE
- * @param prefix - The provenance variable prefix
- * @returns the rewritten SLICE
+ * @returns the pattern
  */
-function rewriteSlice(c: ProvenanceCaptureContext, slice: Algebra.Slice, prefix: string): Algebra.Operation {
+function slicePatternOf(c: ProvenanceCaptureContext, slice: Algebra.Slice): ProvenancePattern {
   const answerVariables = algebraUtils.inScopeVariables(slice);
-  const unorderedSolutions = algebraUtils.mapOperation<'unsafe', Algebra.Operation>(slice.input, {
+  const answers = c.AF.createDistinct(c.AF.createProject(withoutProvenance(c, slice), answerVariables));
+  const solutions = patternOf(c, algebraUtils.mapOperation<'unsafe', Algebra.Operation>(slice.input, {
     [Algebra.Types.ORDER_BY]: { transform: orderBy => orderBy.input },
     [Algebra.Types.SLICE]: { preVisitor: () => ({ continue: false }) },
-  });
-  return attachProvenanceToAnswers(
-    c,
-    c.AF.createDistinct(c.AF.createProject(withoutProvenance(c, slice), answerVariables)),
-    patternOf(c, unorderedSolutions),
-    prefix,
-    answerVariables,
-    answerVariables,
-  );
+  }));
+  return {
+    original: slice,
+    rewrite: prefix => attachProvenanceToAnswers(c, answers, solutions, prefix, answerVariables, answerVariables),
+  };
 }
 
 /**
@@ -663,9 +675,9 @@ function uncachedPatternOf(c: ProvenanceCaptureContext, operation: Algebra.Opera
       return withRewrite(prefix => AF.createExtend(input.rewrite(prefix), operation.variable, lowered));
     }
     case Algebra.Types.PROJECT:
-      return withRewrite(prefix => rewriteProjection(c, operation, prefix));
+      return projectionPatternOf(c, operation);
     case Algebra.Types.SLICE:
-      return withRewrite(prefix => rewriteSlice(c, operation, prefix));
+      return slicePatternOf(c, operation);
     case Algebra.Types.ORDER_BY: {
       const input = patternOf(c, operation.input);
       const lowered = operation.expressions.map(expression => withoutProvenance(c, expression));
