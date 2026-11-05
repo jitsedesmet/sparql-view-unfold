@@ -10,8 +10,8 @@ import type { Mapping, MappingHead } from '../types.js';
 import { access, assertUnbound, conjunctAsExpression } from '../utils/assertions.js';
 import type { OuterBinding } from '../utils/existenceScopes.js';
 import { outerBinding } from '../utils/existenceScopes.js';
-import { conjunctionOf, sameTermExpression } from '../utils/expressionHelpers.js';
-import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
+import { sameTermExpression } from '../utils/expressionHelpers.js';
+import { createFilterFalse, filterByConjunction, projectSolutionExistence } from '../utils/operationhelpers.js';
 import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
 import { deepCopy } from '../utils.js';
 
@@ -279,7 +279,7 @@ function compared(
 ): Alg.Operation {
   const conditions = comparisons
     .map(([ variable, expression ]) => sameTermExpression(c, deepCopy(c, expression), c.DF.variable(variable)));
-  return conditions.length === 0 ? operation : c.AF.createFilter(operation, conjunctionOf(c, conditions));
+  return filterByConjunction(c, operation, conditions);
 }
 
 /**

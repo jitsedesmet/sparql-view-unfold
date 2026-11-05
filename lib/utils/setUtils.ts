@@ -64,3 +64,18 @@ export function differenceSets<T>(set: ReadonlySet<T>, remove: ReadonlySet<T>): 
   }
   return agg;
 }
+
+/**
+ * Splits items by a predicate, keeping their order.
+ * @param items - The items to split
+ * @param predicate - Which side an item goes to
+ * @returns the items it holds for, and the others
+ */
+export function partition<T>(items: readonly T[], predicate: (item: T) => boolean): [T[], T[]] {
+  const holding: T[] = [];
+  const others: T[] = [];
+  for (const item of items) {
+    (predicate(item) ? holding : others).push(item);
+  }
+  return [ holding, others ];
+}

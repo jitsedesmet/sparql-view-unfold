@@ -21,9 +21,11 @@ import {
 } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import { constructedTermOf, splitConjunction, splitDisjunction } from './expressionHelpers.js';
+import { groupBelowSelectClause, groupingKeysOf } from './operationhelpers.js';
 import { xsd } from './rdfDatatypes.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
+import { variablesRequiredBoundBy, variablesRequiredUnboundBy } from './unboundRejection.js';
 
 /**
  * What an operation binds, as one structure: its **key set is exactly the variables in scope** - what
@@ -385,33 +387,11 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
     return <CPOp<T>> op;
   }
   const annotated = computeCpVarsOutsideExistenceScope(c, op);
-  if (c.existenceScope !== undefined && !aggregatesOver(op)) {
+  if (c.existenceScope !== undefined && groupBelowSelectClause(op) === undefined) {
     Object.assign(annotated.metadata, joinedMeta([ annotated.metadata, c.existenceScope ]));
   }
   (<ScopedCPMeta> annotated.metadata).existenceScope = c.existenceScope;
   return annotated;
-}
-
-/**
- * Whether an operation is a GROUP, or a HAVING, select expression or ORDER BY over one. Its solutions hold only the
- * group keys and aggregates, not the solution an EXISTS is evaluated for, which SPARQL 1.2 joins into groups only.
- * @param op - The operation to read
- * @returns whether it aggregates
- */
-function aggregatesOver(op: Algebra.Operation): boolean {
-  switch (op.type) {
-    case Types.GROUP: {
-      return true;
-    }
-    case Types.FILTER:
-    case Types.EXTEND:
-    case Types.ORDER_BY: {
-      return aggregatesOver(op.input);
-    }
-    default: {
-      return false;
-    }
-  }
 }
 
 /** Cached metadata, with the `existenceScope` it was computed in. */
@@ -508,7 +488,7 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
       // Only the grouping keys and the aggregate targets survive the grouping. A key is certain only
       // when the input binds it certainly: grouping on an unbound variable yields a group in which it
       // stays unbound. An aggregate may raise an evaluation error, so its target is never certain.
-      const keys = new Set(resOp.variables.map(variable => variable.value));
+      const keys = groupingKeysOf(resOp);
       const input = withCpVars(c, resOp.input);
       // COUNT is the one aggregate that cannot fail: it counts the bound, non-error values of its
       // argument, so it yields an integer.
@@ -520,7 +500,7 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
           .map(aggregate => aggregate.variable.value)),
       ]);
       // A grouping key keeps holding the value of the input, an aggregate target what the aggregate computes.
-      // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins.
+      // Only the keys and the aggregate targets stay in scope.
       const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
       for (const aggregate of resOp.aggregates) {
         const target = aggregate.variable.value;
@@ -564,9 +544,13 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
       // Also filters cVars for `!bound(?x)`
       // Keep in mind: Filter False is a special case.
       const input = withCpVars(c, resOp.input);
-      const unbound = variablesImpliedUnboundBy(resOp.expression);
+      const unbound = variablesRequiredUnboundBy(resOp.expression);
       const implied = rangesImpliedBy(c, resOp.expression, input.metadata);
-      resOp.metadata.cVars = differenceSets(unionSets([ input.metadata.cVars, new Set(implied.keys()) ]), unbound);
+      // Every variable the condition confines is one it requires bound.
+      resOp.metadata.cVars = differenceSets(
+        unionSets([ input.metadata.cVars, variablesRequiredBoundBy(resOp.expression) ]),
+        unbound,
+      );
       // A filter only drops solutions, so what survives holds what the input put there, narrowed by what the
       // condition confines it to. A variable out of scope stays out: the condition never holds for it.
       // A `!bound(?x)` leaves `?x` in scope but never bound.
@@ -730,36 +714,6 @@ function rangesImpliedBy(c: RangeContext, expression: A.Expression, input: CPMet
     }
   }
   return implied;
-}
-
-/**
- * Collects the variables a filter condition can only hold for when they are *unbound*.
- * @param expression - The condition to read
- * @param agg - The variables collected so far, filled in by the recursion
- * @returns those variables
- */
-function variablesImpliedUnboundBy(expression: A.Expression, agg = new Set<string>()): SSet {
-  if (expression.subType !== ExpressionTypes.OPERATOR) {
-    return agg;
-  }
-  if (expression.operator === '&&') {
-    for (const arg of expression.args) {
-      variablesImpliedUnboundBy(arg, agg);
-    }
-    return agg;
-  }
-  if (expression.operator === '!') {
-    for (const arg of expression.args) {
-      if (arg.subType === ExpressionTypes.OPERATOR && arg.operator === 'bound') {
-        for (const nested of arg.args) {
-          if (nested.subType === ExpressionTypes.TERM && nested.term.termType === 'Variable') {
-            agg.add(nested.term.value);
-          }
-        }
-      }
-    }
-  }
-  return agg;
 }
 
 /**

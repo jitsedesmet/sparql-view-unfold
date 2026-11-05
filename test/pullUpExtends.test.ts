@@ -10,6 +10,7 @@ import { createTransformationContext, parseQuery } from '../lib/transformContext
 import { withCpVars, withoutCpVars } from '../lib/utils/certainlyBoundVars.js';
 import { expressionsEqual, isStableExpression } from '../lib/utils/expressionHelpers.js';
 import { peelExtends } from '../lib/utils/extendChain.js';
+import { holdsCachedMetadata } from './cachedMetadata.js';
 import { generateValidQuery } from './validQuery.js';
 
 const prefixes = `PREFIX : <ex://>
@@ -36,35 +37,33 @@ describe('pullUpExtends', () => {
     return { cVars: [ ...cVars ].sort(), pVars: [ ...vRanges.keys() ].sort() };
   }
 
-  /** Whether any operation of a tree still carries a cached `CPMeta`. */
-  function holdsCachedMetadata(op: Algebra.Operation): boolean {
-    let found = false;
-    c.astTransformer.visitObject(op, (object) => {
-      if ('type' in object && 'metadata' in object) {
-        found = true;
-      }
-      return object;
-    });
-    return found;
-  }
-
   /**
    * Asserts the rewritten query, and with it the checks every case owes: valid SPARQL, the scope invariant,
    * the idempotence of the pass, and the metadata hygiene the licences depend on.
    * @param expect - The assertion API of the running test
    * @param query - The query to rewrite, without its prefixes
    * @param expected - The query the rewrite has to generate
+   * @param certaintiesOnlyTheInputShows - Variables still certainly bound after the rewrite, but no longer
+   * provably so for {@link withCpVars}
    */
-  function expectTransform(expect: typeof Expect, query: string, expected: string): void {
+  function expectTransform(
+    expect: typeof Expect,
+    query: string,
+    expected: string,
+    certaintiesOnlyTheInputShows: string[] = [],
+  ): void {
     // The scope invariant is what the string comparison cannot see: a hoist that lost a variable out of
     // `cVars` still prints as a plausible query, and only changes what `SELECT *` returns on data that
     // leaves something unbound.
     const input = parseQuery(c, prefixes + query);
     const output = pullUpExtends(c, input);
-    const generated = generateValidQuery(c, output).trim();
-    expect(generated).toEqual(expected.trim());
-    expect(scopeOf(output)).toEqual(scopeOf(parseQuery(c, prefixes + query)));
-    expect(holdsCachedMetadata(output)).toBe(false);
+    expect(generateValidQuery(c, output).trim()).toEqual(expected.trim());
+    const inputScope = scopeOf(parseQuery(c, prefixes + query));
+    expect(scopeOf(output)).toEqual({
+      ...inputScope,
+      cVars: inputScope.cVars.filter(name => !certaintiesOnlyTheInputShows.includes(name)),
+    });
+    expect(holdsCachedMetadata(c, output)).toBe(false);
     // Idempotence: what the pass produced is a fixpoint of it.
     expect(generateValidQuery(c, pullUpExtends(c, output)).trim()).toEqual(expected.trim());
   }
@@ -86,7 +85,7 @@ describe('pullUpExtends', () => {
     const generated = generateValidQuery(c, output).trim();
     expect(generated).toEqual(expected.trim());
     expect(scopeOf(output)).toEqual(scopeOf(parseWithGraphOperation(query)));
-    expect(holdsCachedMetadata(output)).toBe(false);
+    expect(holdsCachedMetadata(c, output)).toBe(false);
     expect(generateValidQuery(c, pullUpExtends(c, output)).trim()).toEqual(expected.trim());
   }
 
@@ -658,6 +657,8 @@ ORDER BY ASC ( ?x )`,
     it('writes the whole term in when the construction can fail', ({ expect }) => {
       // `?o` occupies the subject position, and an object may be a literal, so the construction may raise
       // and leave `?x` unbound - where `SUBJECT(?x)` is an error and the component would not be.
+      // The filter still rejects every solution the construction fails on, but it no longer names `?x`, so
+      // only the input shows `?x` certain.
       expectTransform(
         expect,
         'SELECT * WHERE { ?s :p ?o BIND(<<( ?o :q ?s )>> AS ?x) FILTER(SUBJECT(?x) = :a) }',
@@ -665,6 +666,7 @@ ORDER BY ASC ( ?x )`,
   ?s <ex://p> ?o .
   FILTER ( SAMETERM( SUBJECT( <<( ?o <ex://q> ?s )>> ) , <ex://a> ) )
 }`,
+        [ 'x' ],
       );
     });
 

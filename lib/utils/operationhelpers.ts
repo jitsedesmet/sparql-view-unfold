@@ -1,5 +1,6 @@
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
+import { conjunctionOf } from './expressionHelpers.js';
 import { datatypeBoolean, DF } from './rdfDatatypes.js';
 
 /** The literal `false` with xsd:boolean datatype, used for FILTER(FALSE) patterns */
@@ -52,6 +53,70 @@ export function projectSolutionExistence(
   operation: Algebra.Operation,
 ): Algebra.Project {
   return c.AF.createProject(operation, [ c.coinExistenceVariable() ]);
+}
+
+/**
+ * Copies an operation over new input, leaving out the metadata cached on the original.
+ * @param op - The operation to copy
+ * @param input - Its new input, or inputs
+ * @returns the copy, keeping every other field, such as the `graphScopeVar` of a MINUS
+ */
+export function withInput<T extends Algebra.Single | Algebra.Multi>(op: T, input: T['input']): T {
+  const copy = { ...op, input };
+  delete (<{ metadata?: unknown }> copy).metadata;
+  return copy;
+}
+
+/**
+ * Filters an operation by the conjunction of conditions.
+ * @param c - The transformation context
+ * @param op - The operation to filter
+ * @param conditions - The conditions to filter by
+ * @returns the filter, or `op` itself without conditions
+ */
+export function filterByConjunction(
+  c: Pick<TransformationContext, 'AF'>,
+  op: Algebra.Operation,
+  conditions: Algebra.Expression[],
+): Algebra.Operation {
+  return conditions.length === 0 ? op : c.AF.createFilter(op, conjunctionOf(c, conditions));
+}
+
+/**
+ * What stands below the HAVING, select expressions and ORDER BY of a SELECT.
+ * @param op - The input of the SELECT's projection
+ * @returns the first operation below them
+ */
+export function belowSelectClause(op: Algebra.Operation): Algebra.Operation {
+  let current = op;
+  while (current.type === Algebra.Types.EXTEND || current.type === Algebra.Types.FILTER ||
+    current.type === Algebra.Types.ORDER_BY) {
+    current = current.input;
+  }
+  return current;
+}
+
+/**
+ * The GROUP below the HAVING, select expressions and ORDER BY of an aggregating SELECT.
+ * @param op - The input of the SELECT's projection
+ * @returns the GROUP, or `undefined` when the SELECT does not aggregate
+ */
+export function groupBelowSelectClause(op: Algebra.Operation): Algebra.Group | undefined {
+  const below = belowSelectClause(op);
+  return below.type === Algebra.Types.GROUP ? below : undefined;
+}
+
+/**
+ * The variables a GROUP groups on and passes through: its keys, except one an aggregate writes over.
+ * @param group - The grouping
+ * @returns the names of those keys
+ */
+export function groupingKeysOf(group: Algebra.Group): Set<string> {
+  const keys = new Set(group.variables.map(variable => variable.value));
+  for (const aggregate of group.aggregates) {
+    keys.delete(aggregate.variable.value);
+  }
+  return keys;
 }
 
 /**

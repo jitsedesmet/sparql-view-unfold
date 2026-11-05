@@ -1,7 +1,6 @@
 import type * as RDF from '@rdfjs/types';
-import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
-import { forEveryNodeType } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import type { AssertionFilter, EquatedGroup } from '../utils/assertionConjunction.js';
@@ -30,10 +29,20 @@ import {
   asWeakenedConjunct,
 } from '../utils/assertions.js';
 import { cpMetaOf } from '../utils/certainlyBoundVars.js';
-import { leaveExistencePatternsPreOrder, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
+import { keep, mapPreOrderInExistenceScopes } from '../utils/existenceScopes.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
-import { canMatchZeroLength, createFilterFalse } from '../utils/operationhelpers.js';
+import {
+  canMatchZeroLength,
+  createFilterFalse,
+  groupingKeysOf,
+  withInput,
+} from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
+import {
+  everyOperandBindsCertainly,
+  innerJoinUnderRejectingFilter,
+  operandDecidesVariables,
+} from '../utils/pushdownLicences.js';
 import { unionSets } from '../utils/setUtils.js';
 import type { DerivedVarNamer } from '../utils.js';
 import { derivedVarNamer, markVariableNamesUsed } from '../utils.js';
@@ -92,9 +101,6 @@ import { derivedVarNamer, markVariableNamesUsed } from '../utils.js';
  * below without recomputing anything as they are rewritten.
  */
 
-/** Metadata is a cache to carry along, never a tree to iterate into: its sets do not survive that. */
-const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
-
 /**
  * Pushes every assertion filter in `rootOp` as deep as possible, and into every branch that permits it -
  * for a join, that may be both sides at once.
@@ -123,15 +129,11 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: Transformatio
   // wherever it is written, and a name coined against a part of the tree would collide with a variable
   // in the part that has not been met yet - which is also why this takes the root, see above.
   const namer = derivedVarNamer(markVariableNamesUsed(c, rootOp));
-  // Metadata is cleared around the pass, not inside it: `keepMetadata` is how a filter hands its conjunction to the
-  // next `pushFilter`.
-  return rewriteInExistenceScopes(c, rootOp, (context, op) => {
-    const callbacks = forEveryNodeType(keep, {
-      [Algebra.Types.FILTER]: (filter: Algebra.Filter) => pushFilter(context, namer, filter),
-      [Algebra.Types.EXPRESSION]: leaveExistencePatternsPreOrder,
-    });
-    return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(op, callbacks);
-  });
+  // Metadata is cleared around the pass, not inside it: `keep` is how a filter hands its conjunction to the next
+  // `pushFilter`.
+  return mapPreOrderInExistenceScopes(c, rootOp, { callbacks: context => ({
+    [Algebra.Types.FILTER]: (filter: Algebra.Filter) => pushFilter(context, namer, filter),
+  }) });
 }
 
 /**
@@ -263,7 +265,7 @@ function swapWith(
       const below = assertionFilter(c, op.input, collected.assertions);
       return collected.residual === undefined ?
       // Nothing stays here, so the (bigger) conjunction has to be handed back to keep sinking.
-          { ...keepMetadata, newValue: below, reTransform: true } :
+        keep(below, { reTransform: true }) :
         keep(AF.createFilter(below, collected.residual));
     }
     case Algebra.Types.EXTEND: {
@@ -282,26 +284,26 @@ function swapWith(
       // A mapping μ ∈ LHS is removed if:
       // ∃ μ' ∈ RHS . (μ and μ' are compatible) && (dom(μ) and dom(μ') are not disjoint)
       const [ left, right ] = op.input;
-      return keep(AF.createMinus(
+      return keep(withInput(op, [
         // FMPush: the output is a subset of the LHS, so filtering it here is filtering the output.
         assertionFilter(c, left, assertions),
         // The RHS takes only the weakened form of what the LHS holds strongly ({@link admissibleOnMinusRhs}).
         assertionFilter(c, right, admissibleOnMinusRhs(assertions)),
-      ));
+      ]));
     }
     case Algebra.Types.GROUP: {
       // An assertion on a grouping key selects whole groups, which is the same as selecting the solutions
       // those groups are formed from. Anything else stays above: filtering before the aggregation would
       // change the aggregate. An edge with one endpoint outside the keys is one of those, and kept on top
       // normalisation correctly empties the plan, that endpoint being out of scope above the GROUP.
-      const groupsOn = new Set(op.variables.map(variable => variable.value));
+      const groupsOn = groupingKeysOf(op);
       const { inside, outside } = assertions.split(name => groupsOn.has(name));
       if (inside.size === 0) {
         return keep(assertionFilter(c, op, assertions));
       }
       return keep(assertionFilter(
         c,
-        AF.createGroup(assertionFilter(c, op.input, inside), op.variables, op.aggregates),
+        withInput(op, assertionFilter(c, op.input, inside)),
         outside,
       ));
     }
@@ -310,20 +312,12 @@ function swapWith(
     // `normalisedFor` has already met Θ with the `vRanges` of this operation, and a variable it does not
     // project never binds here: the strong forms empty the plan there and the rest are dropped, so nothing
     // naming one is left to push.
-    case Algebra.Types.PROJECT: {
-      return keep(AF.createProject(assertionFilter(c, op.input, assertions), op.variables));
-    }
-    case Algebra.Types.DISTINCT: {
-      return keep(AF.createDistinct(assertionFilter(c, op.input, assertions)));
-    }
-    case Algebra.Types.REDUCED: {
-      return keep(AF.createReduced(assertionFilter(c, op.input, assertions)));
-    }
-    case Algebra.Types.ORDER_BY: {
-      return keep(AF.createOrderBy(assertionFilter(c, op.input, assertions), op.expressions));
-    }
+    case Algebra.Types.PROJECT:
+    case Algebra.Types.DISTINCT:
+    case Algebra.Types.REDUCED:
+    case Algebra.Types.ORDER_BY:
     case Algebra.Types.FROM: {
-      return keep(AF.createFrom(assertionFilter(c, op.input, assertions), op.default, op.named));
+      return keep(withInput(op, assertionFilter(c, op.input, assertions)));
     }
     default: {
       // A barrier. SLICE and a GROUP over a non-key are genuine ones - filtering before a slice changes
@@ -762,27 +756,17 @@ function pushIntoJoin(
   if (merged !== undefined) {
     // A different operation now, so the conjunction is handed back rather than placed against the one
     // the licences were about to be read off.
-    return { ...keepMetadata, newValue: assertionFilter(c, merged, assertions), reTransform: true };
+    return keep(assertionFilter(c, merged, assertions), { reTransform: true });
   }
 
   // Read before any rewriting: every rewrite preserves pVars and never shrinks cVars, so these licences
   // stay valid while the operands are rewritten.
   const operands = join.input.map(operand => cpMetaOf(c, operand));
-  // Memoization for binderCountOf
-  const binderCounts = new Map<string, number>();
-  const binderCountOf = (name: string): number => {
-    let count = binderCounts.get(name);
-    if (count === undefined) {
-      count = operands.filter(operand => operand.vRanges.canBind(name)).length;
-      binderCounts.set(name, count);
-    }
-    return count;
-  };
   // An operand takes what it certainly binds, or what nothing else can bind; it takes the weakened form
   // of anything else it can bind, which the join consumes; and it *connects* what it takes, join
   // compatibility being what enforces an equality between two accesses it binds on the output.
-  const placed = placeOverTargets(assertions, operands.map(operand => ({
-    licensed: name => operand.cVars.has(name) || binderCountOf(name) === (operand.vRanges.canBind(name) ? 1 : 0),
+  const placed = placeOverTargets(assertions, operands.map((operand, index) => ({
+    licensed: name => operandDecidesVariables([ name ], index, operands),
     admitsWeakened: name => operand.vRanges.canBind(name),
     mayBind: name => operand.vRanges.canBind(name),
     connects: true,
@@ -853,14 +837,14 @@ function pushIntoLeftJoin(
   const [ left, right ] = leftJoin.input;
   const leftVars = cpMetaOf(c, left);
 
-  if ([ ...assertions.boundImpliedBy() ].some(name => leftVars.vRanges.neverBinds(name))) {
-    // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
-    const joined = AF.createJoin([ left, right ], true);
-    const rebuilt = leftJoin.expression === undefined ? joined : AF.createFilter(joined, leftJoin.expression);
-    return { ...keepMetadata, newValue: assertionFilter(c, rebuilt, assertions), reTransform: true };
+  // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
+  const innerJoin = innerJoinUnderRejectingFilter(c, leftJoin, assertions.boundImpliedBy(), leftVars);
+  if (innerJoin !== undefined) {
+    return keep(assertionFilter(c, innerJoin, assertions), { reTransform: true });
   }
 
   const rightVars = cpMetaOf(c, right);
+  const operands = [ leftVars, rightVars ];
   // (FLPush) on the left, and `?x ∈ cVars(A₁) ∩ cVars(A₂)` on the right - which implies the left's
   // licence, so the replication only ever happens beside a push the LHS already took.
   //
@@ -870,13 +854,13 @@ function pushIntoLeftJoin(
   // join where a join consumes it.
   const placed = placeOverTargets(assertions, [
     {
-      licensed: name => leftVars.cVars.has(name) || rightVars.vRanges.neverBinds(name),
+      licensed: name => operandDecidesVariables([ name ], 0, operands),
       admitsWeakened: name => leftVars.vRanges.canBind(name),
       mayBind: name => leftVars.vRanges.canBind(name),
       connects: true,
     },
     {
-      licensed: name => leftVars.cVars.has(name) && rightVars.cVars.has(name),
+      licensed: name => everyOperandBindsCertainly([ name ], operands),
       admitsWeakened: () => false,
       mayBind: name => rightVars.vRanges.canBind(name),
       connects: false,
@@ -1123,15 +1107,6 @@ function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjun
 }
 
 /**
- * Hands a value to the traversal, keeping the metadata of everything in it intact.
- * @param newValue - What to put in place of the operation
- * @returns the traversal's instruction
- */
-function keep(newValue: Algebra.Operation): PreOrderMappingReturn {
-  return { ...keepMetadata, newValue };
-}
-
-/**
  * Replaces an operation the assertions rule out by the empty solution multiset, and stops the traversal
  * from descending into what it replaced - nothing under it can contribute anything.
  * @param c - The transformation context
@@ -1139,7 +1114,7 @@ function keep(newValue: Algebra.Operation): PreOrderMappingReturn {
  * @returns the traversal's instruction
  */
 function empty(c: TransformationContext, replaced: Algebra.Operation): PreOrderMappingReturn {
-  return { ...keepMetadata, newValue: emptyOperation(c, replaced), continue: false };
+  return keep(emptyOperation(c, replaced), { continue: false });
 }
 
 /**
