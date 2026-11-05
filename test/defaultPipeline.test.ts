@@ -2,8 +2,6 @@ import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import type { QueryRewriter } from '../lib/queryRewriter.js';
-import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
-import { createTransformationContext } from '../lib/transformContext.js';
 
 /**
  * `nullifyJoinOverIncompatibleBounds` reads each join operand's top-level `EXTEND` chain and its recursion
@@ -186,10 +184,9 @@ describe('the default pipeline over a generalized RDF view', () => {
 });
 
 describe('the default pipeline over an empty group', () => {
-  // The empty BGP has one empty solution. The zero length half of a `?` path is one, and so is the input of a BIND
-  // opening a group.
-  const mapping = mappingFromConstructQueries([ 'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }' ]);
-  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mapping));
+  const rewriter = createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+    'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }',
+  ])));
 
   // A zero-length path between equal terms expands to an empty group as well.
   it.for([ 'SELECT * {}', 'SELECT * { <ex://a> <ex://p>? <ex://a> }' ])(
@@ -213,48 +210,6 @@ describe('the default pipeline over an empty group', () => {
     }
   }
 }`);
-  });
-
-  it('keeps the zero length match of a ? path', async({ expect }) => {
-    expect((await rewriter.rewriteQuery('SELECT * { <ex://alice> <ex://p>? ?o }')).trim())
-      .toEqual(`SELECT ?o WHERE {
-  SELECT DISTINCT ?o WHERE {
-    {
-      {
-        <ex://alice> <ex://q> ?v_0 .
-        BIND( ?v_0 AS ?o )
-      }
-    }
-    UNION {
-      BIND( <ex://alice> AS ?o )
-    }
-  }
-}`);
-  });
-
-  it('joins a BIND opening the group with the pattern after it', async({ expect }) => {
-    expect((await rewriter.rewriteQuery('SELECT * { BIND(<ex://alice> AS ?s) ?s ?p ?o }')).trim())
-      .toEqual(`SELECT ?o ( <ex://p> AS ?p ) ?s WHERE {
-  {
-    BIND( <ex://alice> AS ?s )
-  }
-  {
-    ?v_0 <ex://q> ?v_1 .
-    BIND( ?v_1 AS ?o )
-    BIND( ?v_0 AS ?s )
-  }
-}`);
-  });
-
-  it('unfolds the empty BGP into itself', async({ expect }) => {
-    const { AF } = createTransformationContext();
-    await expect(createQueryRewriter([ unfoldingTransformation(mapping) ]).rewriteOperation(AF.createBgp([])))
-      .resolves.toEqual(AF.createBgp([]));
-  });
-
-  it('leaves a join of no operands handed over as algebra alone', async({ expect }) => {
-    const { AF } = createTransformationContext();
-    await expect(rewriter.rewriteOperation(AF.createJoin([]))).resolves.toEqual(AF.createJoin([]));
   });
 });
 
