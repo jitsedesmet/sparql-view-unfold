@@ -118,9 +118,80 @@ describe('pushDownAssertions', () => {
     it('substitutes into a property path', ({ expect }) => {
       expectTransform(
         expect,
-        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(?x, :a)) }',
+        'SELECT * WHERE { ?x :step+ ?y FILTER(sameTerm(?x, :a)) }',
         `SELECT ( <ex://a> AS ?x ) ?y WHERE {
-  <ex://a> (<ex://step>*) ?y .
+  <ex://a> (<ex://step>+) ?y .
+}`,
+      );
+    });
+
+    // From a fixed term, a zero-length match yields that term even where the graph lacks it, while from a
+    // variable it ranges over the nodes of the graph only.
+    it.for([
+      ':step?',
+      ':step*',
+      '^(:step?)',
+      '(:step?)+',
+      '(:step?/:onwards*)+',
+      ':step|(:onwards?)',
+    ])('keeps a term asserted on an end of %s, which can match zero steps, a filter', (path, { expect }) => {
+      const query = `SELECT * WHERE { ?x ${path} ?y FILTER(sameTerm(?x, :a)) }`;
+      const transformed = transform(query);
+      expect(transformed).toContain('FILTER ( SAMETERM( ?x , <ex://a> ) )');
+      expect(transformed).not.toContain('<ex://a> (');
+      expectIdempotent(expect, query);
+    });
+
+    it.for([ '!:step', '^(:step+)', '(:step?/:onwards)+', ':step|:onwards' ])(
+      'substitutes a term into an end of %s, which cannot match zero steps',
+      (path, { expect }) => {
+        expect(transform(`SELECT * WHERE { ?x ${path} ?y FILTER(sameTerm(?x, :a)) }`)).not.toContain('FILTER');
+      },
+    );
+
+    it('unifies the ends of a zero-length-capable path, keeping their asserted term a filter', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(?x, ?y) && sameTerm(?x, :a)) }',
+        `SELECT ?x ( ?x AS ?y ) WHERE {
+  ?x (<ex://step>*) ?x .
+  FILTER ( SAMETERM( ?x , <ex://a> ) )
+}`,
+      );
+    });
+
+    it('substitutes a term into the end of a path that can match zero steps from a term', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        'SELECT * WHERE { :a :step* ?y FILTER(sameTerm(?y, :b)) }',
+        `SELECT ( <ex://b> AS ?y ) WHERE {
+  <ex://a> (<ex://step>*) <ex://b> .
+}`,
+      );
+    });
+
+    it('keeps a shape asserted on an end of a path that can match zero steps a filter', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(subject(?x), :a)) }',
+        `SELECT ?x ?y WHERE {
+  ?x (<ex://step>*) ?y .
+  FILTER ( SAMETERM( SUBJECT( ?x ) , <ex://a> ) )
+}`,
+      );
+    });
+
+    it('substitutes the graph of a path that can match zero steps', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?x :step* ?y } FILTER(sameTerm(?g, :g) && sameTerm(?x, :a)) }',
+        `SELECT ( <ex://g> AS ?g ) ?x ?y WHERE {
+  GRAPH <ex://g> {
+    {
+      ?x (<ex://step>*) ?y .
+      FILTER ( SAMETERM( ?x , <ex://a> ) )
+    }
+  }
 }`,
       );
     });
@@ -1608,6 +1679,79 @@ GROUP BY ?x ( ?x AS ?y )`,
       );
     });
 
+    it('keeps a condition on a variable the solution of an EXISTS binds inside its pattern', ({ expect }) => {
+      // SPARQL 1.2 joins that solution into the pattern, so ?y is bound there, and a BIND of it is undefined.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) } }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> ?w .
+      FILTER ( SAMETERM( ?y , ?w ) )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('still pushes a condition on a variable only the pattern of an EXISTS binds', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, :c)) } }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> <ex://c> .
+      BIND( <ex://c> AS ?w )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('pushes into an EXISTS whose filter the pushdown rebuilt', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, :d)) } } FILTER(sameTerm(?x, :c)) }',
+        `SELECT ?x ?y WHERE {
+  {
+    <ex://c> <ex://p> ?y .
+    BIND( <ex://c> AS ?x )
+  }
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> <ex://d> .
+      BIND( <ex://d> AS ?w )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('decides a condition on a variable of the solution of an EXISTS by its range', ({ expect }) => {
+      // ?y is a subject outside, so no solution the EXISTS is evaluated for makes it a literal.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?o FILTER EXISTS { ?z :q ?w FILTER(isLiteral(?y)) } }',
+        `SELECT ?o ?y WHERE {
+  ?y <ex://p> ?o .
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> ?w .
+      FILTER ( FALSE )
+    }
+  }
+  )
+}`,
+      );
+    });
+
     it('re-serialises to valid SPARQL, never emitting BOUND of a term', ({ expect }) => {
       // What may not happen is substituting the term into the `BOUND` - `BOUND(<ex://c>)` does not parse -
       // so it folds to `true` instead, and that is what takes the whole `BOUND(?z) || BOUND(?x)` conjunct
@@ -2087,9 +2231,9 @@ GROUP BY ?x ( ?x AS ?y )`,
     it('materialises a shape into a property path', ({ expect }) => {
       expectTransform(
         expect,
-        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(subject(?x), :a)) }',
+        'SELECT * WHERE { ?x :step+ ?y FILTER(sameTerm(subject(?x), :a)) }',
         `SELECT ( <<( <ex://a> ?x_p ?x_o )>> AS ?x ) ?y WHERE {
-  <<( <ex://a> ?x_p ?x_o )>> (<ex://step>*) ?y .
+  <<( <ex://a> ?x_p ?x_o )>> (<ex://step>+) ?y .
 }`,
       );
     });
@@ -3629,6 +3773,79 @@ HAVING SAMETERM( ?y , SAMPLE( ?x ) )`,
       }`, 1);
     });
 
+    it('matches a condition in an EXISTS against the solution it is evaluated for', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) }
+      }`, 1);
+    });
+
+    it('rejects a solution that matches no row of the pattern of an EXISTS', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :r ?y
+        FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) }
+      }`, 0);
+    });
+
+    it('writes no term for a variable of the pattern of an EXISTS the solution binds too', async({ expect }) => {
+      // The engine leaves out a BIND of ?w, so `BIND(:shared AS ?w)` would stop comparing it to the ?w of the solution.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :r ?w
+        FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, :shared)) }
+      }`, 0);
+    });
+
+    it('reads a BIND in an EXISTS over a variable of the solution with its range', async({ expect }) => {
+      // `COALESCE(?y, "x")` gives the IRI ?y holds, which a literal range would rule out as a subject.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :step ?y
+        FILTER EXISTS { ?z :onwards ?w BIND(COALESCE(?y, "x") AS ?t) FILTER(sameTerm(?t, ?z)) }
+      }`, 4);
+    });
+
+    it('keeps a condition on a variable a sub-SELECT in an EXISTS does not project above it', async({ expect }) => {
+      // The ?y of the sub-SELECT is its own, and the condition reads the one of the solution, which the OPTIONAL leaves
+      // unbound for :a.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?o OPTIONAL { ?x :q ?y }
+        FILTER EXISTS { { SELECT ?a WHERE { ?a :r ?y } } FILTER(!bound(?y)) }
+      }`, 1);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?o OPTIONAL { ?x :q ?y }
+        FILTER EXISTS { { SELECT ?a WHERE { ?a :r ?y } } FILTER(sameTerm(?y, :rd)) }
+      }`, 0);
+    });
+
+    it('keeps a condition on a BIND in an EXISTS of a variable the solution binds above it', async({ expect }) => {
+      // SPARQL 1.2 leaves that BIND undefined, and the engine leaves it out, so ?y keeps the value of the solution.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w BIND(?z AS ?y) FILTER(sameTerm(?y, :b)) }
+      }`, 0);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w BIND(?z AS ?y) FILTER(sameTerm(?y, :shared)) }
+      }`, 1);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?y :p ?o
+        FILTER EXISTS { ?z :q ?w BIND("l" AS ?y) FILTER(isIRI(?y)) }
+      }`, 1);
+    });
+
+    it('matches a condition in a nested EXISTS against the outermost solution', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w FILTER EXISTS { ?a :q ?b FILTER(sameTerm(?b, ?y)) } }
+      }`, 1);
+    });
+
+    it('matches a condition in an EXISTS of an OPTIONAL against both of its sides', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        OPTIONAL { ?x :r ?v FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) } }
+      }`, 1);
+    });
+
     it('keeps one solution per row of a VALUES the assertion strips every column from', async({ expect }) => {
       // The empty BGP is one empty solution mapping, so it may only replace a *single* remaining row.
       await assertEquivalent(expect, `SELECT * WHERE {
@@ -3642,6 +3859,13 @@ HAVING SAMETERM( ?y , SAMPLE( ?x ) )`,
         { { ?x :p ?y } UNION { ?x :p ?y } }
         FILTER(sameTerm(?x, :a))
       }`, 2);
+    });
+
+    it('does not match a zero-length path from a term the graph lacks', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :step? ?y
+        FILTER(sameTerm(?x, :absent))
+      }`, 0);
     });
 
     it('keeps the per-pair witness count of a property path', async({ expect }) => {

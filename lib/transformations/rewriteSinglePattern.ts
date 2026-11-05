@@ -7,6 +7,10 @@ import { rangeOfPosition } from '../RangeSet.js';
 import { RewriteNoMatchError } from '../RewriteNoMatchError.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
+import { access, assertUnbound, conjunctAsExpression } from '../utils/assertions.js';
+import type { OuterBinding } from '../utils/existenceScopes.js';
+import { outerBinding } from '../utils/existenceScopes.js';
+import { conjunctionOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
 import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
 import { deepCopy } from '../utils.js';
@@ -46,7 +50,7 @@ function registerPatternQuadAgainstExpression(
     } else {
       if (isRdfVar(patternTerm)) {
         tPVars.set(patternTerm.value, patternTerm);
-        patternTerm.range = rangeOfPosition(position);
+        patternTerm.range = rangeOfPosition(position, c.generalizedRdf);
       }
       c.clusterSolver.register(positionExpression, patternTerm);
     }
@@ -72,8 +76,8 @@ function iterateMappingHead(
   for (const position of triplePositions) {
     const headTerm = head[position];
     const patternTerm = pattern[position];
-    // The position a term sits in is the range a variable written there can take.
-    const variablePosRange = rangeOfPosition(position);
+    // What the head can write in a position is the range a variable written there can take.
+    const variablePosRange = rangeOfPosition(position, c.generalizedRdf);
     if (isRdfQuad(headTerm) && isRdfQuad(patternTerm)) {
       // Recursion in triple term
       iterateMappingHead(c, mHVars, tPVars, headTerm, patternTerm);
@@ -232,23 +236,74 @@ function wrapOperationInProject({ triplePatternBinds, operation, coinExistenceVa
 }
 
 /**
- * Adds the EXTEND operations that bind the user query's variables to what the subquery found.
- * @returns the subquery with one EXTEND per pattern variable
+ * Binds the user query's variables to what the subquery found. Inside an EXISTS, SPARQL 1.2 leaves a BIND of a variable
+ * the outer solution binds undefined, so such a variable is compared instead, or both where the solution may bind it.
+ * @param c - The transformation context, whose `existenceScope` is the outer solution
+ * @param operation - The subquery
+ * @param triplePatternBinds - What each pattern variable is bound to
+ * @returns the subquery with its variables bound or compared
  */
-function bindPatternTerms({ operation, AF, DF, triplePatternBinds }: {
-  operation: Alg.Operation;
-  triplePatternBinds: ReadonlyMap<string, Alg.Expression>;
-} & Pick<TransformationContext, 'DF' | 'AF'>): Alg.Operation {
-  let buildOperation: Alg.Operation = operation;
-  // Finally add the binds after the subselect - Sort to create stable tests
-  for (const [ variable, expression ] of [ ...triplePatternBinds ].sort((a, b) => a[0].localeCompare(b[0]))) {
-    buildOperation = AF.createExtend(
-      buildOperation,
-      DF.variable(variable),
-      expression,
-    );
+function bindPatternTerms(
+  c: TransformationContext,
+  operation: Alg.Operation,
+  triplePatternBinds: ReadonlyMap<string, Alg.Expression>,
+): Alg.Operation {
+  const { AF, DF } = c;
+  const binds: Record<OuterBinding, [string, Alg.Expression][]> = { certain: [], maybe: [], none: []};
+  // Sorted, for stable tests.
+  for (const bind of [ ...triplePatternBinds ].sort((a, b) => a[0].localeCompare(b[0]))) {
+    binds[outerBinding(c.existenceScope, bind[0])].push(bind);
   }
-  return buildOperation;
+  const boundOrCompared = binds.maybe.reduce<Alg.Operation>(
+    (input, [ variable, expression ]) => bindOrCompare(c, input, variable, expression),
+    operation,
+  );
+  const bound = binds.none.reduce<Alg.Operation>(
+    (input, [ variable, expression ]) => AF.createExtend(input, DF.variable(variable), expression),
+    boundOrCompared,
+  );
+  return compared(c, bound, binds.certain);
+}
+
+/**
+ * Filters an operation on each variable having the term an expression gives.
+ * @param c - The transformation context
+ * @param operation - The operation to filter
+ * @param comparisons - Each variable with its expression
+ * @returns the filtered operation, or the operation itself without comparisons
+ */
+function compared(
+  c: TransformationContext,
+  operation: Alg.Operation,
+  comparisons: [string, Alg.Expression][],
+): Alg.Operation {
+  const conditions = comparisons
+    .map(([ variable, expression ]) => sameTermExpression(c, deepCopy(c, expression), c.DF.variable(variable)));
+  return conditions.length === 0 ? operation : c.AF.createFilter(operation, conjunctionOf(c, conditions));
+}
+
+/**
+ * A UNION comparing a variable to an expression where the outer solution of an EXISTS binds it, and binding it where
+ * not. Each such variable doubles the operation.
+ * @param c - The transformation context
+ * @param operation - The operation to bind or compare on
+ * @param variable - The name of the variable the outer solution may bind
+ * @param expression - The term the variable stands for
+ * @returns the UNION of both cases
+ */
+function bindOrCompare(
+  c: TransformationContext,
+  operation: Alg.Operation,
+  variable: string,
+  expression: Alg.Expression,
+): Alg.Operation {
+  const { AF, DF } = c;
+  const isUnbound = conjunctAsExpression(c, { access: access(variable), assertion: assertUnbound() });
+  const whereUnbound = AF.createFilter(deepCopy(c, operation), isUnbound);
+  return AF.createUnion([
+    compared(c, operation, [[ variable, expression ]]),
+    AF.createExtend(whereUnbound, DF.variable(variable), deepCopy(c, expression)),
+  ], false);
 }
 
 /**
@@ -327,7 +382,7 @@ function unfoldMappingWithinPattern(
   ]) {
     inProject = AF.createFilter(inProject, expression);
   }
-  inProject = bindPatternTerms({ operation: inProject, triplePatternBinds, DF, AF });
+  inProject = bindPatternTerms(c, inProject, triplePatternBinds);
   return wrapOperationInProject({ operation: inProject, triplePatternBinds, coinExistenceVariable, AF, DF });
 }
 
@@ -344,6 +399,7 @@ export function rewriteSinglePattern(
   pattern: Alg.Pattern,
   mapping: Mapping,
 ): Alg.Operation {
+  c.generalizedRdf = mapping.generalizedRdfView;
   try {
     return unfoldMappingWithinPattern(c, pattern, mapping);
   } catch (error: unknown) {
