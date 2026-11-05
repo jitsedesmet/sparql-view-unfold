@@ -171,11 +171,10 @@ moves no BIND of one.
 - **`nullifyJoinOverIncompatibleBounds` seeing through a `PROJECT`**, which would free it from having to
   run after `removeProjections`.
 - **Conditions over a computed BIND.** `pushDownFilters` sinks a condition below a BIND only by writing in
-  a construction; writing in `STR(?o)` would evaluate it twice, which wants a cost model to pay off. Nothing
-  sinks into an EXISTS either, a sub-SELECT scoping out the variables substituted into it.
-- **Printing.** `lib/generator/toAst.ts` patches traqula's `toAst`, which lists an OPTIONAL or a MINUS that
-  is not the first operand of a JOIN without the group scoping it; the fix belongs upstream. `toAst` also
-  prints a FILTER over a GROUP that names no aggregate into the WHERE clause, which is why
-  `pushDownFilters` lets only a conjunct on grouping keys into an aggregating sub-SELECT.
+  a construction; writing in `STR(?o)` would evaluate it twice, which wants a cost model to pay off.
+- **Printing.** `toAst` prints a FILTER over a GROUP that names no aggregate into the WHERE clause, which is
+  why `pushDownFilters` lets only a conjunct on grouping keys into an aggregating sub-SELECT.
+- **One rule table for both pushdowns.** `pushDownAssertions` and `pushDownFilters` each switch over the
+  operations they cross; their licences are shared (`lib/utils/pushdownLicences.ts`), their rule tables not yet.
 - **Merging SERVICE calls.** A service can absorb a variable amount of computation, so there is a
   composition to choose; `transformServiceCallPushUp` makes one choice.
