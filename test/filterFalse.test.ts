@@ -345,6 +345,11 @@ OFFSET 5`,
       expect(isPrunedToEmpty(c.AF.createJoin([ literal, union ], false))).toBe(true);
     });
 
+    it('drops only the branch of a union that is empty', ({ expect }) => {
+      const union = c.AF.createUnion([ c.AF.createJoin([ iri, literal ], false), literal ], false);
+      expect(transformFilterFalse(c, union)).toEqual(literal);
+    });
+
     it('empties a GRAPH named by something no graph can be named by', ({ expect }) => {
       expect(isPrunedToEmpty(c.AF.createGraph(c.AF.createValues([ g ], [{ g: c.DF.literal('l') }]), g))).toBe(true);
     });

@@ -524,8 +524,9 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
           .map(aggregate => aggregate.variable.value)),
       ]);
       // A grouping key keeps holding the value of the input, an aggregate target what the aggregate computes.
-      // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins.
-      const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
+      // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins. A key is in
+      // scope also where the input never binds it, as over FILTER(FALSE).
+      const ranges = new VRanges([ ...keys ].map(name => [ name, input.metadata.vRanges.rangeOf(name) ]));
       for (const aggregate of resOp.aggregates) {
         const target = aggregate.variable.value;
         ranges.set(target, rangeAfterWrite(target, c.expressionRange(c, aggregate, input.metadata), input.metadata));

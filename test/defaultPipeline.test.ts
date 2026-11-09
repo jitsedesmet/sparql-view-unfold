@@ -280,6 +280,13 @@ describe('the default pipeline over provably empty ranges', () => {
       .not.toContain('FALSE');
   });
 
+  it('keeps a GROUP key in scope over an emptied input, so a BIND beside it stays put', async({ expect }) => {
+    // Hoisting `BIND(1 AS ?x)` next to the sub-SELECT that projects `?x` is invalid SPARQL, which the rewriter rejects.
+    expect(await identityRewriter.rewriteQuery(
+      'SELECT * { { SELECT ?x (COUNT(*) AS ?n) WHERE { ?x <ex://p> ?y VALUES ?x { "a" } } GROUP BY ?x } { BIND(1 AS ?x) } }',
+    )).toContain('GROUP BY ?x');
+  });
+
   it('empties a reified triple whose subject is a literal', async({ expect }) => {
     const reificationRewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(
       mappingFromConstructQueries([ rdfReificationConstruct ]),
