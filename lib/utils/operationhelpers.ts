@@ -62,9 +62,17 @@ export function projectSolutionExistence(
  * @returns the copy, keeping every other field, such as the `graphScopeVar` of a MINUS
  */
 export function withInput<T extends Algebra.Single | Algebra.Multi>(op: T, input: T['input']): T {
-  const copy = { ...op, input };
-  delete (<{ metadata?: unknown }> copy).metadata;
-  return copy;
+  return { ...withoutMetadata(op), input };
+}
+
+/**
+ * Copies an object without its `metadata` key. Unlike `delete`, this keeps the copy in V8's fast mode.
+ * @param object - The object to copy
+ * @returns the shallow copy, without `metadata`
+ */
+export function withoutMetadata<T extends object>(object: T): T {
+  const { metadata: _metadata, ...rest } = <T & { metadata?: unknown }> object;
+  return <T> rest;
 }
 
 /**

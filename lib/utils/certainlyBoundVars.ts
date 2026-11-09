@@ -21,7 +21,7 @@ import {
 } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import { constructedTermOf, splitConjunction, splitDisjunction } from './expressionHelpers.js';
-import { aggregatesOver, groupingKeysOf } from './operationhelpers.js';
+import { aggregatesOver, groupingKeysOf, withoutMetadata } from './operationhelpers.js';
 import { xsd } from './rdfDatatypes.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
@@ -283,10 +283,7 @@ export function standardExpressionRange(c: RangeContext, expression: Algebra.Exp
 }
 
 /** Drops the `metadata` of the operation it is applied to, whatever that metadata holds. */
-const dropMetadata = { transform: (copy: { metadata?: unknown }): unknown => {
-  delete copy.metadata;
-  return copy;
-} };
+const dropMetadata = { transform: withoutMetadata };
 
 /** Drops the metadata of every operation, no matter its type. */
 const dropAllMetadata = forEveryNodeType(dropMetadata);

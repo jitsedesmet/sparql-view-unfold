@@ -5,6 +5,7 @@ import { forEveryNodeType } from '@traqula/core';
 import type { CPMeta, RangeContext } from './certainlyBoundVars.js';
 import { cpMetaOf, joinedMeta, operationTransformer, withoutCpVars } from './certainlyBoundVars.js';
 import { containsExistenceExpression, holdsExpression } from './expressionHelpers.js';
+import { withoutMetadata } from './operationhelpers.js';
 
 /**
  * @fileoverview Rewriting EXISTS patterns in the scope of the solution they are evaluated for.
@@ -170,16 +171,16 @@ function rewriteExistencePatternsOf<C extends RangeContext>(
  * Rewrites the pattern of every EXISTS an operation evaluates, with the solution it is evaluated for as
  * `existenceScope`. Each EXISTS gets a pattern of its own, as a pass may share one EXISTS between operations.
  * @param c - The context the operation is in
- * @param copy - A copy of the operation, whose cached metadata may be stale
+ * @param operation - A copy of the operation, whose cached metadata may be stale
  * @param rewritePattern - The rewrite of one pattern, in its scope
  * @returns the copy, without metadata and with its expressions replaced
  */
 function withExistencePatternsRewritten<C extends RangeContext>(
   c: C,
-  copy: Algebra.Operation,
+  operation: Algebra.Operation,
   rewritePattern: ExistenceScopedPass<C>,
 ): Algebra.Operation {
-  delete (<{ metadata?: unknown }> copy).metadata;
+  const copy = withoutMetadata(operation);
   if (!expressionsEvaluatedBy(copy).some(containsExistenceExpression)) {
     return copy;
   }
