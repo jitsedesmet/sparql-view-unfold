@@ -213,20 +213,19 @@ function absorbJoinOnEmptyBindings(c: TransformationContext, join: Algebra.Join)
  * `FILTER(FALSE)` is the identity element for UNION, so its branches are dropped.
  * @param c - The transformation context
  * @param union - The UNION operation
- * @returns FILTER(FALSE) when every branch was empty, the single remaining branch when one is left, and the
- * UNION without its empty branches otherwise
+ * @returns FILTER(FALSE) when every branch was empty, the single remaining branch when one is left, and a
+ * UNION of the other branches otherwise
  */
 function pruneUnionOfEmptyBindings(c: TransformationContext, union: Algebra.Union): Algebra.Operation {
-  union.input = union.input.filter(branch => !isFilterFalse(c, branch));
-  if (union.input.length > 1) {
-    // Its metadata counts the dropped branches: computed again, it reads that of its operands.
-    return dropCachedMetadata(union);
+  const branches = union.input.filter(branch => !isFilterFalse(c, branch));
+  if (branches.length === 0) {
+    return createFilterFalse(c);
   }
-  if (union.input.length === 1) {
-    return union.input[0];
+  if (branches.length === 1) {
+    return branches[0];
   }
-  // If emptyUnion, return filterFalse
-  return createFilterFalse(c);
+  // A new UNION, as the metadata cached on this one counts the dropped branches.
+  return branches.length === union.input.length ? union : c.AF.createUnion(branches, false);
 }
 
 /**
