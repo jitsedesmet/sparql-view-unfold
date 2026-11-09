@@ -1,8 +1,8 @@
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import { operationTransformer, withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
-import { leaveExistencePatterns, rewriteInExistenceScopesBeforePass } from '../utils/existenceScopes.js';
+import { cpMetaOf, dropCachedMetadata, operationTransformer, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { leaveExistencePatterns, rewriteExistenceExpressionsOf } from '../utils/existenceScopes.js';
 import {
   createFilterFalse,
   isExpressionFalse,
@@ -10,17 +10,14 @@ import {
   termFalse,
   termTrue,
 } from '../utils/operationhelpers.js';
-import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
+import { querySolutionModifiersOf } from '../utils/solutionModifierChain.js';
 
 /**
  * @fileoverview Pruning of empty results, bottom-up.
  *
  * In SPARQL algebra `FILTER(FALSE)` represents the empty solution multiset. Each operation is checked once its
- * operands are pruned. It has no solutions when it certainly binds a variable whose range is empty, as nothing can
- * be bound to that variable: a join over incompatible term types, a `GRAPH ?g` over a pattern binding `?g` to a
- * literal, a `VALUES` without rows, or `FILTER(bound(?x))` over an operation that cannot bind `?x`. Otherwise the
- * identities of the empty multiset apply: absorbing for JOIN, identity for UNION. Either way, the replacement is a
- * `FILTER(FALSE)` over the empty BGP, so that no engine evaluates what it discards.
+ * operands, and the EXISTS patterns it evaluates, are pruned. It has no solutions when it certainly binds a variable
+ * whose range is empty, such as a join over incompatible term types; otherwise the rules below apply.
  *
  * Dropping an empty operation drops its scope too, which is sound: nothing in it is bound, and SPARQL's
  * scope rules only forbid a variable already in scope (`BIND(… AS ?v)`), so removing variables breaks none.
@@ -30,73 +27,78 @@ import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
  * Scope is only observable in the query's own answer, so its solution modifiers are sealed
  * ({@link utils/solutionModifierChain!solutionModifierChainOf}): an empty `SELECT DISTINCT ?a LIMIT 10`
  * handed to this pass stays one.
- *
- * An EXISTS pattern is pruned first, with the solution it is evaluated for as `existenceScope`: a pattern may
- * read a variable that only that solution binds.
  */
 
-/** The node types to prune: every operation but a pattern, which is no operand of its BGP. */
+/**
+ * The node types to prune: every operation but a pattern, which is no operand of its BGP. A closed list, as the
+ * traversal also meets typed nodes outside the algebra, like the wildcard of `COUNT(*)`.
+ */
 const prunedOperationTypes = Object.values(Algebra.Types)
   .filter(type => type !== Algebra.Types.PATTERN && type !== Algebra.Types.EXPRESSION);
 
 /**
- * Replaces every operation that provably has no solutions by `FILTER(FALSE)`:
+ * Replaces every operation that provably has no solutions by `FILTER(FALSE)` over the empty BGP, so that no engine
+ * evaluates what it discards:
  *
  * - an operation that certainly binds a variable whose range is empty becomes FILTER(FALSE)
  * - JOIN over FILTER(FALSE) becomes FILTER(FALSE) (absorbing element)
  * - UNION over FILTER(FALSE) drops that branch (identity element)
- * - FILTER(FALSE) over anything becomes FILTER(FALSE) over the empty BGP, so no engine evaluates its input
+ * - FILTER(FALSE) over anything becomes FILTER(FALSE)
  * - PROJECT/EXTEND/DISTINCT/SERVICE/etc. over FILTER(FALSE) becomes FILTER(FALSE), sub-SELECTs included
- * - a SILENT SERVICE stays, as a failing endpoint yields one empty solution
  * - MINUS/LEFT JOIN whose right operand is FILTER(FALSE) becomes its left operand
  * - LEFT JOIN whose condition is `FALSE` becomes its left operand: no right solution can satisfy it
  * - `EXISTS { FILTER(FALSE) }` becomes `FALSE`, and `NOT EXISTS { FILTER(FALSE) }` becomes `TRUE`
- * - GROUP and the query's own solution modifiers are left in place
+ * - GROUP, a SILENT SERVICE, and the query's own solution modifiers are left in place
  * @param c - The transformation context
  * @param op - The operation to transform, which is left untouched
  * @returns the pruned operation, without cached metadata
  */
 export function transformFilterFalse(c: TransformationContext, op: Algebra.Operation): Algebra.Operation {
-  // Only the query itself is pruned in `c`: every EXISTS pattern gets a context with its own scope.
-  return withoutCpVars(rewriteInExistenceScopesBeforePass(
-    c,
-    op,
-    (context, tree) => pruneOutsideExistencePatterns(context, tree, context === c),
-    true,
-  ));
+  return withoutCpVars(pruneEmptyResults(c, op));
 }
 
 /**
- * Prunes an operation bottom-up, leaving its EXISTS patterns as they are.
+ * Prunes an operation bottom-up, each EXISTS pattern where the operation evaluating it is met.
  * @param c - The transformation context, whose `existenceScope` is the solution of the EXISTS the operation is in
  * @param op - The operation to prune
- * @param isQuery - Whether the operation is the query itself, whose solution modifiers stay
  * @returns the pruned operation, with metadata cached on its nodes
  */
-function pruneOutsideExistencePatterns(
-  c: TransformationContext,
-  op: Algebra.Operation,
-  isQuery: boolean,
-): Algebra.Operation {
-  const sealed = isQuery ? solutionModifierChainOf(op) : new Set<Algebra.Operation>();
+function pruneEmptyResults(c: TransformationContext, op: Algebra.Operation): Algebra.Operation {
+  const sealed = querySolutionModifiersOf(c, op);
   const pruneOperation = { transform: (copy: Algebra.Operation, original: Algebra.Operation): Algebra.Operation => {
-    // The copy carries the metadata of the original, whose operands may since have been pruned.
-    delete (<{ metadata?: unknown }> copy).metadata;
+    // Earlier passes leave metadata, which the copy carries too, stale once the operands are pruned.
+    const operation = rewriteExistenceExpressionsOf(c, dropCachedMetadata(copy), pruneExistencePattern);
     if (sealed.has(original)) {
-      return copy;
+      return operation;
     }
-    return certainlyBindsUnbindableVariable(c, copy) ? createFilterFalse(c) : pruneOverEmptyOperands(c, copy);
+    return certainlyBindsUnbindableVariable(c, operation) ?
+      createFilterFalse(c) :
+      pruneOverEmptyOperands(c, operation);
   } };
   return operationTransformer.transformNodeSpecific<'unsafe', Algebra.Operation>(
     op,
-    Object.fromEntries(prunedOperationTypes.map(type => [ type, pruneOperation ])),
-    { [Algebra.Types.EXPRESSION]: { [Algebra.ExpressionTypes.EXISTENCE]: {
-      ...leaveExistencePatterns,
-      transform: (existence: Algebra.ExistenceExpression) => isFilterFalse(c, existence.input) ?
-        c.AF.createTermExpression(existence.not ? termTrue : termFalse) :
-        existence,
-    }}},
+    {
+      ...Object.fromEntries(prunedOperationTypes.map(type => [ type, pruneOperation ])),
+      [Algebra.Types.PATTERN]: { transform: dropCachedMetadata },
+    },
+    { [Algebra.Types.EXPRESSION]: { [Algebra.ExpressionTypes.EXISTENCE]: leaveExistencePatterns }},
   );
+}
+
+/**
+ * Prunes the pattern of an EXISTS, which is `FALSE` once its pattern is empty, or `TRUE` for a NOT EXISTS.
+ * @param c - The transformation context, whose `existenceScope` is the solution the EXISTS is evaluated for
+ * @param existence - The EXISTS
+ * @returns the EXISTS with its pattern pruned, or the term it evaluates to
+ */
+function pruneExistencePattern(
+  c: TransformationContext,
+  existence: Algebra.ExistenceExpression,
+): Algebra.Expression {
+  const pattern = pruneEmptyResults(c, existence.input);
+  return isFilterFalse(c, pattern) ?
+    c.AF.createTermExpression(existence.not ? termTrue : termFalse) :
+      { ...existence, input: pattern };
 }
 
 /**
@@ -106,7 +108,7 @@ function pruneOutsideExistencePatterns(
  * @returns whether it has no solutions
  */
 function certainlyBindsUnbindableVariable(c: TransformationContext, op: Algebra.Operation): boolean {
-  const { cVars, vRanges } = withCpVars(c, op).metadata;
+  const { cVars, vRanges } = cpMetaOf(c, op);
   return [ ...cVars ].some(name => vRanges.neverBinds(name));
 }
 
@@ -153,6 +155,7 @@ function pruneOverEmptyOperands(c: TransformationContext, op: Algebra.Operation)
       return isFilterFalse(c, left) || isFilterFalse(c, right) || conditionIsFalse ? left : op;
     }
     case Algebra.Types.VALUES: {
+      // Only `VALUES () {}`: one with columns and no rows certainly binds them, with empty ranges.
       return op.bindings.length === 0 ? createFilterFalse(c) : op;
     }
     default: {

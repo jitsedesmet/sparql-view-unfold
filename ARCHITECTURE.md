@@ -139,7 +139,8 @@ So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
 sub-SELECT, from μ ([ContextSolution](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution)); above a GROUP
 only its keys and aggregates remain. A pass reading ranges runs through `rewriteInExistenceScopes`, which rewrites each
 pattern with μ as `existenceScope` once the pass has placed the EXISTS. The unfolding moves no EXISTS, so it uses
-`rewriteInExistenceScopesBeforePass`, which leaves the mapping bodies alone.
+`rewriteInExistenceScopesBeforePass`, which leaves the mapping bodies alone. `filterFalse` prunes each pattern where its
+bottom-up walk meets the operation evaluating it (`rewriteExistenceExpressionsOf`), whose operands it has pruned.
 
 A BIND of a variable μ binds is undefined ([Extend](https://www.w3.org/TR/sparql12-query/#defn_extend)), so per
 variable `?o` of μ (`outerBinding`):

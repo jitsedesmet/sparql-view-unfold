@@ -3,7 +3,7 @@ import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transform
 import type { PreOrderMappingReturn } from '@traqula/core';
 import { forEveryNodeType } from '@traqula/core';
 import type { CPMeta, RangeContext } from './certainlyBoundVars.js';
-import { cpMetaOf, joinedMeta, operationTransformer, withoutCpVars } from './certainlyBoundVars.js';
+import { cpMetaOf, dropCachedMetadata, joinedMeta, operationTransformer, withoutCpVars } from './certainlyBoundVars.js';
 import { containsExistenceExpression, holdsExpression } from './expressionHelpers.js';
 
 /**
@@ -55,18 +55,16 @@ export function rewriteInExistenceScopes<C extends RangeContext, T extends Algeb
 /**
  * Rewrites the pattern of each EXISTS in an operation where it sits, with the solution it is evaluated for as
  * `existenceScope`, then the operation with a pass. For a pass that moves no EXISTS and adds operations not to rewrite,
- * such as mapping bodies, or that needs its EXISTS patterns rewritten first.
+ * such as mapping bodies. A `SERVICE` is left as it stands.
  * @param c - The context to rewrite in
  * @param op - The operation to rewrite, which is left untouched
  * @param pass - The pass, which leaves EXISTS patterns alone
- * @param enterServices - Whether to rewrite the patterns inside a `SERVICE` too
  * @returns the rewritten operation
  */
 export function rewriteInExistenceScopesBeforePass<C extends RangeContext, T extends Algebra.Operation>(
   c: C,
   op: T,
   pass: ExistenceScopedPass<C>,
-  enterServices = false,
 ): T {
   const entered = withoutCpVars(op);
   if (!holdsExistence(entered)) {
@@ -74,7 +72,7 @@ export function rewriteInExistenceScopesBeforePass<C extends RangeContext, T ext
     return <T> pass(c, entered);
   }
   const rewriteTree: ExistenceScopedPass<C> = (context, tree) =>
-    pass(context, rewriteExistencePatternsOf(context, tree, rewriteTree, enterServices));
+    pass(context, rewriteExistencePatternsOf(context, tree, rewriteTree, false));
   return <T> withoutCpVars(rewriteTree(c, entered));
 }
 
@@ -140,22 +138,34 @@ function withExistencePatternsRewritten<C extends RangeContext>(
   copy: Algebra.Operation,
   rewritePattern: ExistenceScopedPass<C>,
 ): Algebra.Operation {
-  delete (<{ metadata?: unknown }> copy).metadata;
-  if (!expressionsEvaluatedBy(copy).some(containsExistenceExpression)) {
-    return copy;
+  return rewriteExistenceExpressionsOf(c, dropCachedMetadata(copy), (context, existence) =>
+    ({ ...existence, input: rewritePattern(context, withoutCpVars(existence.input)) }));
+}
+
+/**
+ * Replaces every EXISTS an operation evaluates, with the solution it is evaluated for as `existenceScope`.
+ * @param c - The context the operation is in
+ * @param op - The operation, changed in place, whose operands give that solution
+ * @param rewriteExistence - The replacement of one EXISTS, in its scope
+ * @returns the operation
+ */
+export function rewriteExistenceExpressionsOf<C extends RangeContext>(
+  c: C,
+  op: Algebra.Operation,
+  rewriteExistence: (context: C, existence: Algebra.ExistenceExpression) => Algebra.Expression,
+): Algebra.Operation {
+  if (!expressionsEvaluatedBy(op).some(containsExistenceExpression)) {
+    return op;
   }
-  const inputs = [ (<A.Single | A.Multi> copy).input ].flat();
+  const inputs = [ (<A.Single | A.Multi> op).input ].flat();
   const patternContext = { ...c, existenceScope: joinedMeta(inputs.map(input => cpMetaOf(c, input))) };
-  replaceExpressionsEvaluatedBy(copy, expression =>
+  replaceExpressionsEvaluatedBy(op, expression =>
     algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: { existence: {
       // A nested EXISTS is rewritten with the pattern holding it.
       ...leaveExistencePatterns,
-      transform: (existence: Algebra.ExistenceExpression) => ({
-        ...existence,
-        input: rewritePattern(patternContext, withoutCpVars(existence.input)),
-      }),
+      transform: (existence: Algebra.ExistenceExpression) => rewriteExistence(patternContext, existence),
     }}}));
-  return copy;
+  return op;
 }
 
 /**

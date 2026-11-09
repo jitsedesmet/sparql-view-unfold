@@ -280,14 +280,18 @@ export function standardExpressionRange(c: RangeContext, expression: Algebra.Exp
   }
 }
 
-/** Drops the `metadata` of the operation it is applied to, whatever that metadata holds. */
-const dropMetadata = { transform: (copy: { metadata?: unknown }): unknown => {
-  delete copy.metadata;
-  return copy;
-} };
+/**
+ * Drops the metadata cached on a node, whatever that metadata holds.
+ * @param node - The node, changed in place
+ * @returns the node
+ */
+export function dropCachedMetadata<T extends object>(node: T): T {
+  delete (<{ metadata?: unknown }> node).metadata;
+  return node;
+}
 
 /** Drops the metadata of every operation, no matter its type. */
-const dropAllMetadata = forEveryNodeType(dropMetadata);
+const dropAllMetadata = forEveryNodeType({ transform: dropCachedMetadata });
 
 /** A transformer over the algebra that only visits the keys holding operations, so no RDF term and no metadata. */
 export const operationTransformer = algebraUtils.algebraTransformer({}).clone({}, algebraUtils.knownKeysAllowlist);
