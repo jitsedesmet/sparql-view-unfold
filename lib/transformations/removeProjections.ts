@@ -28,13 +28,9 @@ import { collectVariableNames, freshVarGenerator, markVariableNamesUsed, renameV
  * exactly the variables their input exposes, so anonymizing the hidden variables instead of
  * dropping them would make the deduplication consider them too, changing the result.
  *
- * A projection directly below a SLICE is kept for a different reason: dropping it is sound - a projection
- * without a DISTINCT preserves multiplicity, so the same rows fall in the window either way - but SPARQL
- * has no way to *write* a LIMIT or OFFSET that is not on a SELECT, and `toAst` rejects the `Slice` it
- * would be left holding.
- *
- * A projection over a GROUP is kept for that same reason: a GROUP BY is only written on a SELECT, and without
- * one the grouping would be printed on the enclosing query.
+ * A projection directly below a SLICE or over a GROUP is kept because dropping it gains nothing: SPARQL only writes
+ * a LIMIT, OFFSET or GROUP BY on a SELECT, so `toAst` prints a sub-SELECT there anyway, one exposing the renamed
+ * variables.
  *
  * Inside an EXISTS, SPARQL 1.2 joins the outer solution into the sub-SELECT too. A hidden variable it certainly binds
  * keeps its name, and a projection hiding a variable it may bind is kept.

@@ -307,54 +307,46 @@ HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
       );
     });
 
-    it('keeps a conjunct on no key outside a keyless grouped sub-SELECT', ({ expect }) => {
+    it('keeps a conjunct on no key above a keyless GROUP', ({ expect }) => {
       // A keyless GROUP makes one group of an empty input, so this must not reach the pattern.
       expectTransform(
         expect,
         'SELECT * WHERE { { SELECT (COUNT(*) AS ?n) WHERE { ?s :p ?k } } FILTER(?k > 1) }',
         `SELECT ?n WHERE {
-  {
-    SELECT ( COUNT( * ) AS ?n ) WHERE {
-      ?s <ex://p> ?k .
-    }
+  SELECT ( COUNT( * ) AS ?n ) WHERE {
+    ?s <ex://p> ?k .
   }
-  FILTER ( ( ?k > "1"^^<http://www.w3.org/2001/XMLSchema#integer> ) )
+  HAVING ( ?k > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )
 }`,
       );
     });
 
-    it('lets a conjunct on a key into a grouped sub-SELECT, below its GROUP', ({ expect }) => {
-      // Between the projection and the GROUP, `toAst` would print what stays there into the WHERE clause,
-      // so the conjunct on the aggregate's alias stays outside.
+    it('lets a conjunct on a key below the GROUP of a sub-SELECT, and one on an aggregate onto it', ({ expect }) => {
       expectTransform(
         expect,
         'SELECT * WHERE { { SELECT ?k (COUNT(*) AS ?n) WHERE { ?s :p ?k } GROUP BY ?k } FILTER(?k > 1 && ?n > 1) }',
         `SELECT ?k ?n WHERE {
-  {
-    SELECT ?k ( COUNT( * ) AS ?n ) WHERE {
-      ?s <ex://p> ?k .
-      FILTER ( ( ?k > "1"^^<http://www.w3.org/2001/XMLSchema#integer> ) )
-    }
-    GROUP BY ?k
+  SELECT ?k ( COUNT( * ) AS ?n ) WHERE {
+    ?s <ex://p> ?k .
+    FILTER ( ( ?k > "1"^^<http://www.w3.org/2001/XMLSchema#integer> ) )
   }
-  FILTER ( ( ?n > "1"^^<http://www.w3.org/2001/XMLSchema#integer> ) )
+  GROUP BY ?k
+  HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )
 }`,
       );
     });
 
-    it('keeps bound() of an aggregate alias outside the grouped sub-SELECT', ({ expect }) => {
+    it('folds bound() of a COUNT alias to true', ({ expect }) => {
+      // COUNT cannot fail, so its alias is always bound.
       expectTransform(
         expect,
         'SELECT * WHERE { { SELECT ?g (COUNT(?k) AS ?n) WHERE { ?s :p ?g ; :q ?k } GROUP BY ?g } FILTER(bound(?n)) }',
         `SELECT ?g ?n WHERE {
-  {
-    SELECT ?g ( COUNT( ?k ) AS ?n ) WHERE {
-      ?s <ex://p> ?g .
-      ?s <ex://q> ?k .
-    }
-    GROUP BY ?g
+  SELECT ?g ( COUNT( ?k ) AS ?n ) WHERE {
+    ?s <ex://p> ?g .
+    ?s <ex://q> ?k .
   }
-  FILTER ( BOUND( ?n ) )
+  GROUP BY ?g
 }`,
       );
     });
@@ -1207,7 +1199,16 @@ HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
       expect(original).toHaveLength(expectedRows);
     }
 
-    it('keeps a filter out of an aggregating sub-SELECT with a trailing VALUES', async({ expect }) => {
+    it('answers a filter on an aggregate and on no key of a grouped sub-SELECT alike', async({ expect }) => {
+      await assertEquivalent(
+        expect,
+        'SELECT * { { SELECT ?s (COUNT(*) AS ?n) { ?s :p ?o } GROUP BY ?s } FILTER(?n > 1 && ?s != :a) }',
+        3,
+      );
+      await assertEquivalent(expect, 'SELECT * { { SELECT (COUNT(*) AS ?n) { ?s :p ?k } } FILTER(!bound(?k)) }', 1);
+    });
+
+    it('answers a filter on an aggregating sub-SELECT with a trailing VALUES', async({ expect }) => {
       await assertEquivalent(
         expect,
         'SELECT * { { SELECT ?k (COUNT(*) AS ?n) { ?k :p ?v } GROUP BY ?k VALUES ?k { :a :a :b } } FILTER(?k != :b) }',

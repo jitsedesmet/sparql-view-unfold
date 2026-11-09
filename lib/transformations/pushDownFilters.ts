@@ -11,9 +11,7 @@ import {
   splitConjunction,
 } from '../utils/expressionHelpers.js';
 import {
-  belowSelectClause,
   filterByConjunction,
-  groupBelowSelectClause,
   groupingKeysOf,
   withInput,
 } from '../utils/operationhelpers.js';
@@ -130,11 +128,6 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
     }
     case Algebra.Types.DISTINCT:
     case Algebra.Types.REDUCED:
-      // A sub-SELECT is printed from its DISTINCT down as one, so only what its projection lets in passes.
-      if (op.input.type === Algebra.Types.PROJECT) {
-        return sinkIntoSingleInput(c, conjuncts, op, projectionLicence(c, op.input));
-      }
-      return sinkIntoSingleInput(c, conjuncts, op, () => true);
     case Algebra.Types.ORDER_BY:
     case Algebra.Types.FROM:
       return sinkIntoSingleInput(c, conjuncts, op, () => true);
@@ -173,18 +166,6 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
  */
 function projectionLicence(c: TransformationContext, project: Algebra.Project): (conjunct: Conjunct) => boolean {
   const projected = new Set(project.variables.map(variable => variable.value));
-  const below = belowSelectClause(project.input);
-  if (below.type === Algebra.Types.JOIN && below.input.some(operand => operand.type === Algebra.Types.VALUES) &&
-    below.input.some(operand => groupBelowSelectClause(operand) !== undefined)) {
-    // A VALUES after GROUP BY joins in after the grouping, where `toAst` prints no filter.
-    return () => false;
-  }
-  const group = groupBelowSelectClause(project.input);
-  if (group !== undefined) {
-    // Only projected keys, which sink below the GROUP: `toAst` prints what stays above it into the WHERE clause.
-    const projectedKeys = new Set([ ...groupingKeysOf(group) ].filter(name => projected.has(name)));
-    return conjunct => isSubsetOf(conjunct.reads, projectedKeys);
-  }
   const { vRanges } = cpMetaOf(c, project.input);
   return conjunct => [ ...conjunct.reads ].every(name => projected.has(name) || vRanges.neverBinds(name));
 }

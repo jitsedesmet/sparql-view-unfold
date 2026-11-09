@@ -80,8 +80,7 @@ describe('removeProjections', () => {
   });
 
   describe('a SLICE (LIMIT / OFFSET) below a projection', () => {
-    // Dropping the projection is sound - it preserves multiplicity - but SPARQL cannot write a LIMIT
-    // that is not on a SELECT, and `toAst` throws on the bare Slice it would be left holding.
+    // SPARQL only writes a LIMIT on a SELECT, so dropping the projection would gain no flatter query.
     it('keeps the projection of a sub-SELECT with LIMIT', async({ expect }) => {
       expect(await transform('SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } LIMIT 1 } }'))
         .toContain('LIMIT 1');
@@ -93,8 +92,7 @@ describe('removeProjections', () => {
   });
 
   describe('a GROUP below a projection', () => {
-    // SPARQL cannot write a GROUP BY that is not on a SELECT, so dropping the projection would group the
-    // enclosing query instead.
+    // SPARQL only writes a GROUP BY on a SELECT, so dropping the projection would gain no flatter query.
     it('keeps the projection of a grouped sub-SELECT', async({ expect }) => {
       expect(await transform('SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s } OPTIONAL { ?s ?q ?r } }'))
         .toMatch(/\{\s*SELECT \?s WHERE/u);

@@ -172,8 +172,6 @@ moves no BIND of one.
   run after `removeProjections`.
 - **Conditions over a computed BIND.** `pushDownFilters` sinks a condition below a BIND only by writing in
   a construction; writing in `STR(?o)` would evaluate it twice, which wants a cost model to pay off.
-- **Printing.** `toAst` prints a FILTER over a GROUP that names no aggregate into the WHERE clause, which is
-  why `pushDownFilters` lets only a conjunct on grouping keys into an aggregating sub-SELECT.
 - **One rule table for both pushdowns.** `pushDownAssertions` and `pushDownFilters` each switch over the
   operations they cross; their licences are shared (`lib/utils/pushdownLicences.ts`), their rule tables not yet.
 - **Merging SERVICE calls.** A service can absorb a variable amount of computation, so there is a
