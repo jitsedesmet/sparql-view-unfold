@@ -55,16 +55,18 @@ export function rewriteInExistenceScopes<C extends RangeContext, T extends Algeb
 /**
  * Rewrites the pattern of each EXISTS in an operation where it sits, with the solution it is evaluated for as
  * `existenceScope`, then the operation with a pass. For a pass that moves no EXISTS and adds operations not to rewrite,
- * such as mapping bodies. A `SERVICE` is left as it stands.
+ * such as mapping bodies, or that needs its EXISTS patterns rewritten first.
  * @param c - The context to rewrite in
  * @param op - The operation to rewrite, which is left untouched
  * @param pass - The pass, which leaves EXISTS patterns alone
+ * @param enterServices - Whether to rewrite the patterns inside a `SERVICE` too
  * @returns the rewritten operation
  */
 export function rewriteInExistenceScopesBeforePass<C extends RangeContext, T extends Algebra.Operation>(
   c: C,
   op: T,
   pass: ExistenceScopedPass<C>,
+  enterServices = false,
 ): T {
   const entered = withoutCpVars(op);
   if (!holdsExistence(entered)) {
@@ -72,7 +74,7 @@ export function rewriteInExistenceScopesBeforePass<C extends RangeContext, T ext
     return <T> pass(c, entered);
   }
   const rewriteTree: ExistenceScopedPass<C> = (context, tree) =>
-    pass(context, rewriteExistencePatternsOf(context, tree, rewriteTree, false));
+    pass(context, rewriteExistencePatternsOf(context, tree, rewriteTree, enterServices));
   return <T> withoutCpVars(rewriteTree(c, entered));
 }
 

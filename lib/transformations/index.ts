@@ -10,7 +10,8 @@
  *   cardinality.
  * - **rewriteNonRecursivePathsTransformation**: expands non-recursive property paths into equivalent BGPs
  *   and UNIONs, so the unfolding sees individual triple patterns. Belongs *before* the unfolding.
- * - **filterFalseTransformation**: removes FILTER(FALSE) patterns, what they stand over, and the structures
+ * - **filterFalseTransformation**: replaces every operation that certainly binds a variable whose range is
+ *   empty by FILTER(FALSE), and removes FILTER(FALSE) patterns, what they stand over, and the structures
  *   containing them (UNION identity, JOIN absorbing element), sub-SELECTs included; a GROUP and the query's
  *   own solution modifiers are left in place.
  * - **pushDownAssertionsTransformation**: pushes assertion filters (`FILTER(sameTerm(?x, c))`) as deep into
@@ -21,8 +22,6 @@
  *   carries the same bind included.
  * - **nullifyJoinOverIncompatibleBoundsTransformation**: detects joins whose branches bind a variable to
  *   incompatible terms and replaces them with FILTER(FALSE).
- * - **nullifyUnbindableVarsTransformation**: the same one level up, for incompatible term *types* rather
- *   than terms.
  * - **removeProjectionsTransformation**: removes all inner PROJECT operations, anonymizing every
  *   non-projected variable to a fresh one to preserve scoping.
  * - **joinValuesToFilterTransformation**: rewrites a JOIN with a VALUES clause into an equality FILTER over
@@ -56,7 +55,6 @@ export { extendsToValuesTransformation } from './extendsToValues.js';
 export { filterFalseTransformation } from './filterFalse.js';
 export { joinValuesToFilterTransformation } from './joinValuesToFilter.js';
 export { nullifyJoinOverIncompatibleBoundsTransformation } from './nullifyJoinOverIncompatibleBounds.js';
-export { nullifyUnbindableVarsTransformation } from './nullifyUnbindableVars.js';
 export { rewriteNonRecursivePathsTransformation } from './pathTransformation.js';
 export { pullUpExtendsTransformation } from './pullUpExtends.js';
 export { pushDownAssertionsTransformation } from './pushDownAssertions.js';

@@ -203,12 +203,11 @@ The tables below are the short version; the generated
 |---|---|
 | `unfoldingTransformation(mapping, options?)` | The rewriting proper: every triple pattern outside a `SERVICE` replaced by the mapping body producing the triples it could match. |
 | `rewriteNonRecursivePathsTransformation()` | Expands non-recursive property paths outside a `SERVICE` into BGPs and UNIONs. Belongs before the unfolding. |
-| `filterFalseTransformation()` | Lets every `FILTER(FALSE)` absorb what stands over it, sub-SELECTs included. |
+| `filterFalseTransformation()` | Replaces every operation that certainly binds a variable no term fits by `FILTER(FALSE)`, and lets every `FILTER(FALSE)` absorb what stands over it, sub-SELECTs included. |
 | `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))`, `FILTER(sameTerm(?x, ?y))` and term type tests like `FILTER(isIRI(?x) \|\| isBLANK(?x))` as deep as they go: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
 | `pullUpExtendsTransformation()` | Floats every `BIND` as high as the plan allows and drops the ones nothing reads. |
 | `removeProjectionsTransformation()` | Removes inner projections, renaming what they hid to keep the scoping. |
 | `nullifyJoinOverIncompatibleBoundsTransformation()` | Replaces a join whose branches bind one variable to incompatible terms by `FILTER(FALSE)`. |
-| `nullifyUnbindableVarsTransformation()` | The same one level up, for incompatible term *types* rather than terms. Not in the default pipeline. |
 | `extendsToValuesTransformation()` | Rewrites a `BIND` of a ground term over the empty BGP, or over a VALUES, into a VALUES. |
 | `joinValuesToFilterTransformation()` | Rewrites a JOIN with a VALUES into an equality FILTER, enabling further push-down. |
 | `serviceCallPushUpTransformation()` | Merges and hoists SERVICE calls so the endpoint evaluates as much as it can. |
