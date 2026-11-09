@@ -249,6 +249,18 @@ describe('the default pipeline over an RDF view', () => {
   });
 });
 
+describe('the default pipeline over a grouped sub-SELECT with a trailing VALUES', () => {
+  it('keeps its projection once a filter is pushed onto the VALUES', async({ expect }) => {
+    const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+      'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }',
+    ])));
+    const rewritten = await rewriter.rewriteQuery(
+      'SELECT * { { SELECT ?k (COUNT(*) AS ?n) { ?k <ex://p> ?v } GROUP BY ?k VALUES ?k { <ex://a> } } FILTER(?k != <ex://b>) }',
+    );
+    expect(rewritten.trim()).toMatch(/^SELECT \?k \?n WHERE \{\n {2}SELECT \?k /u);
+  });
+});
+
 describe('the default pipeline over a generic FILTER', () => {
   const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
     'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }',

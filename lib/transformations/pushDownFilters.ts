@@ -116,9 +116,7 @@ interface Placement {
  * @returns what takes its place
  */
 function sinkFilter(c: TransformationContext, filter: Algebra.Filter): Algebra.Operation {
-  const input = filter.input.type === Algebra.Types.LEFT_JOIN ?
-    joinUnderRejectingCondition(c, filter.input, filter.expression) :
-    filter.input;
+  const input = joinedUnderRejection(c, filter.input, variablesRequiredBoundBy(filter.expression));
   const [ moving, staying ] = splitCondition(c, filter.expression);
   if (moving.length === 0) {
     return input === filter.input ? filter : filterOver(c, input, staying);
@@ -129,19 +127,18 @@ function sinkFilter(c: TransformationContext, filter: Algebra.Filter): Algebra.O
 }
 
 /**
- * The JOIN half of an OPTIONAL when a whole condition, also what of it cannot move, rejects its unmatched side.
+ * An operation under a condition, with an OPTIONAL turned into its JOIN half when the condition rejects its unmatched
+ * side. The whole condition counts, also what of it cannot move.
  * @param c - The transformation context
- * @param leftJoin - The OPTIONAL the condition stands on
- * @param condition - The condition
- * @returns the JOIN half, or the OPTIONAL itself
+ * @param op - The operation the condition stands on
+ * @param requiredBound - The variables the condition needs bound
+ * @returns the JOIN half of an OPTIONAL it rejects the unmatched side of, or the operation itself
  */
-function joinUnderRejectingCondition(
-  c: TransformationContext,
-  leftJoin: Algebra.LeftJoin,
-  condition: Algebra.Expression,
-): Algebra.Operation {
-  const requiredBound = variablesRequiredBoundBy(condition);
-  return innerJoinUnderRejectingFilter(c, leftJoin, requiredBound, cpMetaOf(c, leftJoin.input[0])) ?? leftJoin;
+function joinedUnderRejection(c: TransformationContext, op: Algebra.Operation, requiredBound: SSet): Algebra.Operation {
+  if (op.type !== Algebra.Types.LEFT_JOIN) {
+    return op;
+  }
+  return innerJoinUnderRejectingFilter(c, op, requiredBound, cpMetaOf(c, op.input[0])) ?? op;
 }
 
 /**
@@ -156,7 +153,11 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
     case Algebra.Types.FILTER: {
       // Two filters are one conjunction, so what may move of the lower one travels on with ours.
       const [ moving, staying ] = splitCondition(c, op.expression);
-      const placement = sinkInto(c, [ ...conjuncts, ...moving ], op.input);
+      const requiredBound = unionSets([
+        variablesRequiredBoundBy(op.expression),
+        ...conjuncts.map(conjunct => variablesRequiredBoundBy(conjunct.expression)),
+      ]);
+      const placement = sinkInto(c, [ ...conjuncts, ...moving ], joinedUnderRejection(c, op.input, requiredBound));
       return { ...placement, kept: [ ...placement.kept, ...staying ]};
     }
     case Algebra.Types.DISTINCT:
@@ -271,22 +272,16 @@ function sinkIntoJoin(c: TransformationContext, conjuncts: Conjunct[], join: Alg
 }
 
 /**
- * Sinks conjuncts into an OPTIONAL, which becomes a JOIN under one rejecting what only its right side binds.
- * Otherwise each enters the left side where it decides it (FLPush), and the right side too where both bind it
- * certainly.
+ * Sinks conjuncts into an OPTIONAL their condition does not turn into a JOIN: each enters the left side where it
+ * decides it (FLPush), and the right side too where both bind it certainly.
  * @param c - The transformation context
  * @param conjuncts - The conjuncts to place
  * @param leftJoin - The OPTIONAL they stand on
- * @returns the OPTIONAL, or the JOIN it became, with the conjuncts placed, and those that stay above it
+ * @returns the OPTIONAL with the conjuncts placed, and those that stay above it
  */
 function sinkIntoOptional(c: TransformationContext, conjuncts: Conjunct[], leftJoin: Algebra.LeftJoin): Placement {
   const [ left, right ] = leftJoin.input;
   const operands = [ cpMetaOf(c, left), cpMetaOf(c, right) ];
-  const requiredBound = unionSets(conjuncts.map(conjunct => variablesRequiredBoundBy(conjunct.expression)));
-  const innerJoin = innerJoinUnderRejectingFilter(c, leftJoin, requiredBound, operands[0]);
-  if (innerJoin !== undefined) {
-    return sinkInto(c, conjuncts, innerJoin);
-  }
   const [ intoLeft, kept ] = partition(conjuncts, conjunct => operandDecidesVariables(conjunct.reads, 0, operands));
   if (intoLeft.length === 0) {
     return { operation: leftJoin, kept };

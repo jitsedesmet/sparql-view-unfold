@@ -4578,7 +4578,7 @@
     "@traqula/algebra-transformations-1-2" "^1.5.0-alpha.7"
     "@traqula/core" "^1.5.0-alpha.5"
 
-"@traqula/algebra-transformations-1-1@1.5.0-alpha.7", "@traqula/algebra-transformations-1-1@^1.5.0-alpha.6", "@traqula/algebra-transformations-1-1@^1.5.0-alpha.7":
+"@traqula/algebra-transformations-1-1@1.5.0-alpha.7", "@traqula/algebra-transformations-1-1@^1.5.0-alpha.7":
   version "1.5.0-alpha.7"
   resolved "https://registry.yarnpkg.com/@traqula/algebra-transformations-1-1/-/algebra-transformations-1-1-1.5.0-alpha.7.tgz#bd68151448c1826e072abc6679813bd96e3b4ae8"
   integrity sha512-gy4+cjketzdpNaLu6CaqZhiNlkHEMMA+j81I2nmAdmUUuIiJ+lF5B9rVajgpbPljLA7u7ucnj+0+kSYCRcffQQ==
@@ -4590,12 +4590,12 @@
     rdf-isomorphic "^2.0.0"
     rdf-string "^2.0.0"
 
-"@traqula/algebra-transformations-1-2@1.5.0-alpha.6", "@traqula/algebra-transformations-1-2@^1.0.0", "@traqula/algebra-transformations-1-2@^1.3.0", "@traqula/algebra-transformations-1-2@^1.5.0-alpha.6", "@traqula/algebra-transformations-1-2@^1.5.0-alpha.7":
-  version "1.5.0-alpha.6"
-  resolved "https://registry.yarnpkg.com/@traqula/algebra-transformations-1-2/-/algebra-transformations-1-2-1.5.0-alpha.6.tgz#14b607a59cd84ebbc88d5004d9224f2b2a6acc80"
-  integrity sha512-AjoSaO7lXyWfA3edZgGGxZiIcfpbVhopS6L41r5LamIUrMdUXfYfc/OdVhjXIFaEgXVTgR8GaJwxEZ2b6JQ79Q==
+"@traqula/algebra-transformations-1-2@1.5.0-alpha.7", "@traqula/algebra-transformations-1-2@^1.0.0", "@traqula/algebra-transformations-1-2@^1.3.0", "@traqula/algebra-transformations-1-2@^1.5.0-alpha.7":
+  version "1.5.0-alpha.7"
+  resolved "https://registry.yarnpkg.com/@traqula/algebra-transformations-1-2/-/algebra-transformations-1-2-1.5.0-alpha.7.tgz#e8df327a2618308591a2b04839b74fdebc015400"
+  integrity sha512-OzBG7WPksNB8cT9Vdck+3itwvWbpcPFVY/M3ZveJGlGN96odCC2I83rAVCmCVQ1bZVGmSsXRVoyg2FsKWnXExg==
   dependencies:
-    "@traqula/algebra-transformations-1-1" "^1.5.0-alpha.6"
+    "@traqula/algebra-transformations-1-1" "^1.5.0-alpha.7"
     "@traqula/rules-sparql-1-2" "^1.5.0-alpha.6"
     rdf-string "^2.0.0"
 

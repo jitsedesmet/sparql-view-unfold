@@ -99,17 +99,29 @@ export function aggregatesOver(op: Algebra.Operation): boolean {
     case Algebra.Types.ORDER_BY: {
       return aggregatesOver(op.input);
     }
-    // A trailing VALUES joins in after the grouping.
+    // A trailing VALUES joins in after the grouping, also once a filter is pushed onto it.
     case Algebra.Types.JOIN: {
       const [ first, second ] = op.input;
-      return op.input.length === 2 && (first.type === Algebra.Types.VALUES ?
-        aggregatesOver(second) :
-        second.type === Algebra.Types.VALUES && aggregatesOver(first));
+      return op.input.length === 2 &&
+        (isValuesBelowFilters(first) ? aggregatesOver(second) : isValuesBelowFilters(second) && aggregatesOver(first));
     }
     default: {
       return false;
     }
   }
+}
+
+/**
+ * Whether an operation is a VALUES, possibly under filters.
+ * @param op - The operation to read
+ * @returns whether it is
+ */
+function isValuesBelowFilters(op: Algebra.Operation): boolean {
+  let current = op;
+  while (current.type === Algebra.Types.FILTER) {
+    current = current.input;
+  }
+  return current.type === Algebra.Types.VALUES;
 }
 
 /**
