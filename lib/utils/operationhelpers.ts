@@ -2,6 +2,7 @@ import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import { conjunctionOf } from './expressionHelpers.js';
 import { datatypeBoolean, DF } from './rdfDatatypes.js';
+import { differenceSets } from './setUtils.js';
 
 /** The literal `false` with xsd:boolean datatype, used for FILTER(FALSE) patterns */
 export const termFalse = DF.literal('false', datatypeBoolean);
@@ -138,11 +139,10 @@ function isValuesBelowFilters(op: Algebra.Operation): boolean {
  * @returns the names of those keys
  */
 export function groupingKeysOf(group: Algebra.Group): Set<string> {
-  const keys = new Set(group.variables.map(variable => variable.value));
-  for (const aggregate of group.aggregates) {
-    keys.delete(aggregate.variable.value);
-  }
-  return keys;
+  return differenceSets(
+    new Set(group.variables.map(variable => variable.value)),
+    new Set(group.aggregates.map(agg => agg.variable.value)),
+  );
 }
 
 /**
