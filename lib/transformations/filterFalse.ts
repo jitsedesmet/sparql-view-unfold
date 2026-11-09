@@ -30,16 +30,6 @@ import { querySolutionModifiersOf } from '../utils/solutionModifierChain.js';
  */
 
 /**
- * The node types to prune: every operation but a pattern, which is no operand of its BGP. A closed list, as the
- * traversal also meets typed nodes outside the algebra, like the wildcard of `COUNT(*)`.
- */
-const prunedOperationTypes = Object.values(Algebra.Types)
-  .filter(type => type !== Algebra.Types.PATTERN && type !== Algebra.Types.EXPRESSION);
-
-/** Prunes an operation of some type, given the original it was copied from. */
-type PruneRule<T extends Algebra.Operation> = (operation: T, original: Algebra.Operation) => Algebra.Operation;
-
-/**
  * Replaces every operation that provably has no solutions by `FILTER(FALSE)` over the empty BGP, so that no engine
  * evaluates what it discards:
  *
@@ -73,22 +63,27 @@ function pruneEmptyResults(c: TransformationContext, op: Algebra.Operation): Alg
    * @param rule - The rule, given the operation with its operands and EXISTS patterns pruned
    * @returns the callback
    */
-  const pruneBy = <T extends Algebra.Operation>(rule: PruneRule<T>): { transform: PruneRule<T> } => ({
-    transform: (copy, original) => {
+  function pruneBy<T extends Algebra.Operation>(
+    rule: (operation: T, original: Algebra.Operation) => Algebra.Operation,
+  ): { transform: typeof rule } {
+    return { transform: (copy, original) => {
       // Earlier passes leave metadata, which the copy carries too, stale once the operands are pruned.
       const operation = rewriteExistenceExpressionsOf(c, dropCachedMetadata(copy), pruneExistencePattern);
       return !sealed.has(original) && certainlyBindsUnbindableVariable(c, operation) ?
         createFilterFalse(c) :
         rule(operation, original);
-    },
-  });
+    } };
+  }
   const absorbSingle = pruneBy((single: Algebra.Operation & Algebra.Single, original) =>
     absorbingSingle(c, single, sealed.has(original)));
   return operationTransformer.transformNodeSpecific<'unsafe', Algebra.Operation>(
     op,
     {
-      ...Object.fromEntries(prunedOperationTypes.map(type => [ type, pruneBy(operation => operation) ])),
-      // A pattern is no operand of its BGP, which is checked instead.
+      // A closed list of the operation types, as the traversal also meets typed nodes outside the algebra, like the
+      // wildcard of `COUNT(*)`. A pattern is no operand of its BGP, which is checked instead.
+      ...Object.fromEntries(Object.values(Algebra.Types)
+        .filter(type => type !== Algebra.Types.PATTERN && type !== Algebra.Types.EXPRESSION)
+        .map(type => [ type, pruneBy(operation => operation) ])),
       [Algebra.Types.PATTERN]: { transform: dropCachedMetadata },
 
       [Algebra.Types.JOIN]: pruneBy((join: Algebra.Join) => absorbJoinOnEmptyBindings(c, join)),
@@ -218,19 +213,20 @@ function absorbJoinOnEmptyBindings(c: TransformationContext, join: Algebra.Join)
  * `FILTER(FALSE)` is the identity element for UNION, so its branches are dropped.
  * @param c - The transformation context
  * @param union - The UNION operation
- * @returns FILTER(FALSE) when every branch was empty, the single remaining branch when one is left, and a
- * UNION of the other branches otherwise
+ * @returns FILTER(FALSE) when every branch was empty, the single remaining branch when one is left, and the
+ * UNION without its empty branches otherwise
  */
 function pruneUnionOfEmptyBindings(c: TransformationContext, union: Algebra.Union): Algebra.Operation {
-  const branches = union.input.filter(branch => !isFilterFalse(c, branch));
-  if (branches.length === 0) {
-    return createFilterFalse(c);
+  union.input = union.input.filter(branch => !isFilterFalse(c, branch));
+  if (union.input.length > 1) {
+    // Its metadata counts the dropped branches: computed again, it reads that of its operands.
+    return dropCachedMetadata(union);
   }
-  if (branches.length === 1) {
-    return branches[0];
+  if (union.input.length === 1) {
+    return union.input[0];
   }
-  // A new UNION, as the metadata cached on this one counts the dropped branches.
-  return branches.length === union.input.length ? union : c.AF.createUnion(branches, false);
+  // If emptyUnion, return filterFalse
+  return createFilterFalse(c);
 }
 
 /**
