@@ -36,6 +36,9 @@ import { querySolutionModifiersOf } from '../utils/solutionModifierChain.js';
 const prunedOperationTypes = Object.values(Algebra.Types)
   .filter(type => type !== Algebra.Types.PATTERN && type !== Algebra.Types.EXPRESSION);
 
+/** Prunes an operation of some type, given the original it was copied from. */
+type PruneRule<T extends Algebra.Operation> = (operation: T, original: Algebra.Operation) => Algebra.Operation;
+
 /**
  * Replaces every operation that provably has no solutions by `FILTER(FALSE)` over the empty BGP, so that no engine
  * evaluates what it discards:
@@ -65,21 +68,71 @@ export function transformFilterFalse(c: TransformationContext, op: Algebra.Opera
  */
 function pruneEmptyResults(c: TransformationContext, op: Algebra.Operation): Algebra.Operation {
   const sealed = querySolutionModifiersOf(c, op);
-  const pruneOperation = { transform: (copy: Algebra.Operation, original: Algebra.Operation): Algebra.Operation => {
-    // Earlier passes leave metadata, which the copy carries too, stale once the operands are pruned.
-    const operation = rewriteExistenceExpressionsOf(c, dropCachedMetadata(copy), pruneExistencePattern);
-    if (sealed.has(original)) {
-      return operation;
-    }
-    return certainlyBindsUnbindableVariable(c, operation) ?
-      createFilterFalse(c) :
-      pruneOverEmptyOperands(c, operation);
-  } };
+  /**
+   * The callback pruning an operation of some type: by its ranges, or else by the rule of that type.
+   * @param rule - The rule, given the operation with its operands and EXISTS patterns pruned
+   * @returns the callback
+   */
+  const pruneBy = <T extends Algebra.Operation>(rule: PruneRule<T>): { transform: PruneRule<T> } => ({
+    transform: (copy, original) => {
+      // Earlier passes leave metadata, which the copy carries too, stale once the operands are pruned.
+      const operation = rewriteExistenceExpressionsOf(c, dropCachedMetadata(copy), pruneExistencePattern);
+      return !sealed.has(original) && certainlyBindsUnbindableVariable(c, operation) ?
+        createFilterFalse(c) :
+        rule(operation, original);
+    },
+  });
+  const absorbSingle = pruneBy((single: Algebra.Operation & Algebra.Single, original) =>
+    absorbingSingle(c, single, sealed.has(original)));
   return operationTransformer.transformNodeSpecific<'unsafe', Algebra.Operation>(
     op,
     {
-      ...Object.fromEntries(prunedOperationTypes.map(type => [ type, pruneOperation ])),
+      ...Object.fromEntries(prunedOperationTypes.map(type => [ type, pruneBy(operation => operation) ])),
+      // A pattern is no operand of its BGP, which is checked instead.
       [Algebra.Types.PATTERN]: { transform: dropCachedMetadata },
+
+      [Algebra.Types.JOIN]: pruneBy((join: Algebra.Join) => absorbJoinOnEmptyBindings(c, join)),
+      [Algebra.Types.UNION]: pruneBy((union: Algebra.Union) => pruneUnionOfEmptyBindings(c, union)),
+
+      [Algebra.Types.PROJECT]: absorbSingle,
+      [Algebra.Types.EXTEND]: absorbSingle,
+      [Algebra.Types.FROM]: absorbSingle,
+      [Algebra.Types.DISTINCT]: absorbSingle,
+      [Algebra.Types.FILTER]: pruneBy((filter: Algebra.Filter, original) =>
+        absorbFilter(c, filter, sealed.has(original))),
+      // A SILENT service whose endpoint fails yields one empty solution, whatever its pattern.
+      [Algebra.Types.SERVICE]: pruneBy((service: Algebra.Service, original) =>
+        service.silent ? service : absorbingSingle(c, service, sealed.has(original))),
+      [Algebra.Types.REDUCED]: absorbSingle,
+      [Algebra.Types.SLICE]: absorbSingle,
+      [Algebra.Types.GRAPH]: absorbSingle,
+      [Algebra.Types.ORDER_BY]: absorbSingle,
+      // No GROUP: an aggregate over an empty input still returns one row (`COUNT(*)` is `0`).
+      [Algebra.Types.MINUS]: pruneBy((minus: Algebra.Minus) => {
+        const [ left, right ] = minus.input;
+        // If left FF → FF, if right FF → just left
+        if (isFilterFalse(c, left) || isFilterFalse(c, right)) {
+          return left;
+        }
+        return minus;
+      }),
+      [Algebra.Types.LEFT_JOIN]: pruneBy((leftJoin: Algebra.LeftJoin) => {
+        // https://www.w3.org/TR/sparql12-query/#defn_algLeftJoin
+        const [ left, right ] = leftJoin.input;
+        // If left FF → FF, if right FF → just left
+        if (isFilterFalse(c, left) || isFilterFalse(c, right) ||
+          (leftJoin.expression && isExpressionFalse(c, leftJoin.expression))) {
+          return left;
+        }
+        return leftJoin;
+      }),
+      // Only `VALUES () {}`: one with columns and no rows certainly binds them, with empty ranges.
+      [Algebra.Types.VALUES]: pruneBy((values: Algebra.Values) => {
+        if (values.bindings.length === 0) {
+          return createFilterFalse(c);
+        }
+        return values;
+      }),
     },
     { [Algebra.Types.EXPRESSION]: { [Algebra.ExpressionTypes.EXISTENCE]: leaveExistencePatterns }},
   );
@@ -113,56 +166,52 @@ function certainlyBindsUnbindableVariable(c: TransformationContext, op: Algebra.
 }
 
 /**
- * Applies the identity of the empty solution multiset that an operation over pruned operands matches.
+ * Handles single-input operations over `FILTER(FALSE)`: any operation over an empty input is empty.
  * @param c - The transformation context
- * @param op - The operation, outside the query's solution modifiers
- * @returns FILTER(FALSE), an operand, or the operation itself
+ * @param single - A single-input operation
+ * @param isSealed - Whether it is part of the query's own solution-modifier chain
+ * @returns FILTER(FALSE) if the input is empty and the operation is unsealed, otherwise the operation
  */
-function pruneOverEmptyOperands(c: TransformationContext, op: Algebra.Operation): Algebra.Operation {
-  switch (op.type) {
-    case Algebra.Types.JOIN: {
-      return op.input.some(input => isFilterFalse(c, input)) ? createFilterFalse(c) : op;
-    }
-    case Algebra.Types.UNION: {
-      return pruneUnionOfEmptyBindings(c, op);
-    }
-    case Algebra.Types.FILTER: {
-      // Its input can go even where nothing above absorbs the filter: an engine may still evaluate it.
-      return isFilterFalse(c, op) || isFilterFalse(c, op.input) ? createFilterFalse(c) : op;
-    }
-    case Algebra.Types.SERVICE: {
-      // A SILENT service whose endpoint fails yields one empty solution, whatever its pattern.
-      return !op.silent && isFilterFalse(c, op.input) ? createFilterFalse(c) : op;
-    }
-    case Algebra.Types.PROJECT:
-    case Algebra.Types.EXTEND:
-    case Algebra.Types.FROM:
-    case Algebra.Types.DISTINCT:
-    case Algebra.Types.REDUCED:
-    case Algebra.Types.SLICE:
-    case Algebra.Types.GRAPH:
-    case Algebra.Types.ORDER_BY: {
-      return isFilterFalse(c, op.input) ? createFilterFalse(c) : op;
-    }
-    case Algebra.Types.MINUS: {
-      const [ left, right ] = op.input;
-      return isFilterFalse(c, left) || isFilterFalse(c, right) ? left : op;
-    }
-    case Algebra.Types.LEFT_JOIN: {
-      // https://www.w3.org/TR/sparql12-query/#defn_algLeftJoin
-      const [ left, right ] = op.input;
-      const conditionIsFalse = op.expression !== undefined && isExpressionFalse(c, op.expression);
-      return isFilterFalse(c, left) || isFilterFalse(c, right) || conditionIsFalse ? left : op;
-    }
-    case Algebra.Types.VALUES: {
-      // Only `VALUES () {}`: one with columns and no rows certainly binds them, with empty ranges.
-      return op.bindings.length === 0 ? createFilterFalse(c) : op;
-    }
-    default: {
-      // No GROUP: an aggregate over an empty input still returns one row (`COUNT(*)` is `0`).
-      return op;
+function absorbingSingle<T extends Algebra.Operation & Algebra.Single>(
+  c: TransformationContext,
+  single: T,
+  isSealed: boolean,
+): T | Algebra.Filter {
+  // The caller reads the query's answer off a sealed operation; everything above one is sealed too.
+  if (!isSealed && isFilterFalse(c, single.input)) {
+    return createFilterFalse(c);
+  }
+  return single;
+}
+
+/**
+ * Handles a FILTER: one over `FILTER(FALSE)` is empty, and so is a `FILTER(FALSE)` over anything.
+ * @param c - The transformation context
+ * @param filter - The FILTER operation
+ * @param isSealed - Whether it is part of the query's own solution-modifier chain
+ * @returns FILTER(FALSE) over the empty BGP if the filter is empty, otherwise the original filter
+ */
+function absorbFilter(c: TransformationContext, filter: Algebra.Filter, isSealed: boolean): Algebra.Filter {
+  // Its input can go even where nothing above absorbs the filter: an engine may still evaluate it.
+  if (isFilterFalse(c, filter)) {
+    return createFilterFalse(c);
+  }
+  return absorbingSingle(c, filter, isSealed);
+}
+
+/**
+ * JOIN is absorbing for `FILTER(FALSE)`: one empty operand makes the whole join empty.
+ * @param c - The transformation context
+ * @param join - The JOIN operation
+ * @returns FILTER(FALSE) if any input is empty, otherwise the original JOIN
+ */
+function absorbJoinOnEmptyBindings(c: TransformationContext, join: Algebra.Join): Algebra.Join | Algebra.Filter {
+  for (const op of join.input) {
+    if (isFilterFalse(c, op)) {
+      return createFilterFalse(c);
     }
   }
+  return join;
 }
 
 /**

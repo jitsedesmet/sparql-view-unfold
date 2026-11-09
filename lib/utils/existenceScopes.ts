@@ -149,11 +149,11 @@ function withExistencePatternsRewritten<C extends RangeContext>(
  * @param rewriteExistence - The replacement of one EXISTS, in its scope
  * @returns the operation
  */
-export function rewriteExistenceExpressionsOf<C extends RangeContext>(
+export function rewriteExistenceExpressionsOf<C extends RangeContext, T extends Algebra.Operation>(
   c: C,
-  op: Algebra.Operation,
+  op: T,
   rewriteExistence: (context: C, existence: Algebra.ExistenceExpression) => Algebra.Expression,
-): Algebra.Operation {
+): T {
   if (!expressionsEvaluatedBy(op).some(containsExistenceExpression)) {
     return op;
   }
