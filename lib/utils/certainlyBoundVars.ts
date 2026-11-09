@@ -21,7 +21,7 @@ import {
 } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import { constructedTermOf, splitConjunction, splitDisjunction } from './expressionHelpers.js';
-import { groupBelowSelectClause, groupingKeysOf } from './operationhelpers.js';
+import { aggregatesOver, groupingKeysOf } from './operationhelpers.js';
 import { xsd } from './rdfDatatypes.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
@@ -387,7 +387,7 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
     return <CPOp<T>> op;
   }
   const annotated = computeCpVarsOutsideExistenceScope(c, op);
-  if (c.existenceScope !== undefined && groupBelowSelectClause(op) === undefined) {
+  if (c.existenceScope !== undefined && !aggregatesOver(op)) {
     Object.assign(annotated.metadata, joinedMeta([ annotated.metadata, c.existenceScope ]));
   }
   (<ScopedCPMeta> annotated.metadata).existenceScope = c.existenceScope;

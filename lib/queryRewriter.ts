@@ -18,6 +18,7 @@ import { createTransformationContext, parseQuery, resolveTransformationContextOp
 import type { TransformationContext, TransformationContextOptions } from './transformContext.js';
 import type { Mapping, QueryTransformation } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
+import { withInput } from './utils/operationhelpers.js';
 import { queryFormTypes, solutionModifierTypes } from './utils/solutionModifierChain.js';
 import { deepCopy, markVariableNamesUsed } from './utils.js';
 
@@ -111,38 +112,6 @@ type SolutionModifier =
   Algebra.Distinct | Algebra.Reduced | Algebra.Slice | Algebra.From;
 
 /**
- * Rebuilds one solution modifier over the rewritten operation below it.
- * @param c - The transformation context of this rewrite
- * @param solutionModifier - The modifier that was peeled off
- * @param rewritten - What now stands where its input stood
- * @returns the rebuilt modifier
- */
-function rebuildSolutionModifier(
-  c: TransformationContext,
-  solutionModifier: SolutionModifier,
-  rewritten: Algebra.Operation,
-): Algebra.Operation {
-  switch (solutionModifier.type) {
-    case Algebra.Types.PROJECT:
-      return c.AF.createProject(rewritten, solutionModifier.variables);
-    case Algebra.Types.CONSTRUCT:
-      return c.AF.createConstruct(rewritten, solutionModifier.template);
-    case Algebra.Types.DESCRIBE:
-      return c.AF.createDescribe(rewritten, solutionModifier.terms);
-    case Algebra.Types.ASK:
-      return c.AF.createAsk(rewritten);
-    case Algebra.Types.DISTINCT:
-      return c.AF.createDistinct(rewritten);
-    case Algebra.Types.REDUCED:
-      return c.AF.createReduced(rewritten);
-    case Algebra.Types.SLICE:
-      return c.AF.createSlice(rewritten, solutionModifier.start, solutionModifier.length);
-    case Algebra.Types.FROM:
-      return c.AF.createFrom(rewritten, solutionModifier.default, solutionModifier.named);
-  }
-}
-
-/**
  * Runs the pipeline over one query part, the restrictions checked first.
  * @param c - The transformation context of this rewrite
  * @param transformations - The pipeline to run
@@ -211,15 +180,10 @@ async function rewriteParsedQuery(
   // The query form ends the chain, so its input is the pattern itself rather than another modifier.
   if (queryFormTypes.has(operation.type)) {
     const pattern = (<Algebra.Single> operation).input;
-    return rebuildSolutionModifier(
-      c,
-      <SolutionModifier> operation,
-      await rewriteQueryPart(c, transformations, pattern),
-    );
+    return withInput(<SolutionModifier> operation, await rewriteQueryPart(c, transformations, pattern));
   }
   if (solutionModifierTypes.has(operation.type)) {
-    return rebuildSolutionModifier(
-      c,
+    return withInput(
       <SolutionModifier> operation,
       await rewriteParsedQuery(c, transformations, (<Algebra.Single> operation).input),
     );
@@ -271,14 +235,13 @@ export function createQueryRewriter(
 /**
  * The pipeline to reach for when you have no reason to build your own.
  *
- * The order is not a preference, it is what each step needs to see. Paths are expanded *before* the
- * unfolding, which only knows triple patterns. `FILTER(FALSE)` is collapsed after every step that can
- * produce one, so the next step has less to walk. The pushdowns drive terms and then the remaining
- * conditions into the leaves, and the pull-up floats the binds they leave behind back out, in that order,
- * because the pushdown is what creates them. `nullifyJoinOverIncompatibleBounds` comes last, after
- * `removeProjections` and `pullUpExtends`: it reads each join operand's top-level `EXTEND` chain and halts at
- * a `PROJECT`, so anywhere earlier it sees nothing at all. Under a projection `removeProjections` keeps,
- * such as one in an EXISTS, it sees nothing either.
+ * The order is not a preference, it is what each step needs to see. Paths are expanded *before* the unfolding, which
+ * only knows triple patterns. `FILTER(FALSE)` is collapsed after every step that can produce one, so the next step has
+ * less to walk. The assertion pushdown drives terms into the leaves, leaving binds behind, the filter pushdown then
+ * sinks the remaining conditions, and the pull-up floats those binds back out. `nullifyJoinOverIncompatibleBounds`
+ * comes last, after `removeProjections` and `pullUpExtends`: it reads each join operand's top-level `EXTEND` chain and
+ * halts at a `PROJECT`, so anywhere earlier it sees nothing at all. Under a projection `removeProjections` keeps, such
+ * as one in an EXISTS, it sees nothing either.
  *
  * {@link transformations/nullifyUnbindableVars!nullifyUnbindableVars} is deliberately absent - nothing the
  * unfolding generates gives it anything to decide - and so are the blank node materialisations, which are

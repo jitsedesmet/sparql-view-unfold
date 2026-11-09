@@ -32,6 +32,9 @@ export interface BindConstruction {
   bindsCertainly: boolean;
 }
 
+/** A bind whose expression constructs a term. */
+export type ConstructingBind = BindConstruction & { constructedTerm: RDF.Term };
+
 /**
  * Reads what a reader of an EXTEND's variable needs to know of it.
  * @param c - The context whose `expressionRange` decides whether the construction can fail
@@ -47,15 +50,24 @@ export function bindConstructionOf(c: RangeContext, extend: Algebra.Extend): Bin
 }
 
 /**
+ * Whether a bind's expression constructs a term.
+ * @param bind - The bind to check
+ * @returns whether it does
+ */
+export function constructs(bind: BindConstruction): bind is ConstructingBind {
+  return bind.constructedTerm !== undefined;
+}
+
+/**
  * Whether a reader of the bind's variable may read its construction instead.
  * @param reader - An expression reading the bind's variable
  * @param bind - The bind to write in
  * @returns whether {@link substituteConstruction} may rewrite the reader
  */
-export function readerAdmitsConstruction(reader: Algebra.Expression, bind: BindConstruction): boolean {
+export function readerAdmitsConstruction(reader: Algebra.Expression, bind: BindConstruction): bind is ConstructingBind {
   // Only a construction is free to evaluate again, an EXISTS pattern takes no expression, and `bound(?x)` only
   // folds for a bind that cannot fail.
-  return bind.constructedTerm !== undefined &&
+  return constructs(bind) &&
     !containsExistenceExpression(reader) &&
     (bind.bindsCertainly || !asksBoundOfVariable(reader, bind.variable.value));
 }
@@ -71,13 +83,10 @@ export function readerAdmitsConstruction(reader: Algebra.Expression, bind: BindC
 export function substituteConstruction(
   c: TransformationContext,
   reader: Algebra.Expression,
-  bind: BindConstruction,
+  bind: ConstructingBind,
   cVars: ReadonlySet<string>,
 ): Algebra.Expression {
   const term = bind.constructedTerm;
-  if (term === undefined) {
-    return reader;
-  }
   const name = bind.variable.value;
   return substituteInExpression(c, reader, {
     resolve: access => access.name === name ? readThrough(term, access, bind) : undefined,

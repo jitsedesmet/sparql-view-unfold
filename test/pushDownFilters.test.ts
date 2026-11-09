@@ -713,6 +713,18 @@ HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
       );
     });
 
+    it('turns an OPTIONAL into a JOIN under an unstable conjunct rejecting its unmatched side', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s :p ?o OPTIONAL { ?s :q ?y } FILTER(?y > RAND()) }',
+        `SELECT ?o ?s ?y WHERE {
+  ?s <ex://p> ?o .
+  ?s <ex://q> ?y .
+  FILTER ( ( ?y > RAND( ) ) )
+}`,
+      );
+    });
+
     it('does not turn an OPTIONAL into a JOIN under !bound()', ({ expect }) => {
       expectTransform(
         expect,
@@ -1017,7 +1029,9 @@ HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
 }`,
       );
     });
+  });
 
+  describe('eXISTS patterns', () => {
     it('pushes a filter down inside an EXISTS pattern', ({ expect }) => {
       expectTransform(
         expect,
@@ -1492,6 +1506,41 @@ HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
       );
     });
 
+    it.for<[string, string, number]>([
+      [
+        'a filter over a DISTINCT sub-SELECT it partly enters',
+        'SELECT * WHERE { { SELECT DISTINCT ?s WHERE { ?s :p ?o } } FILTER(?s != :a || bound(?o)) }',
+        7,
+      ],
+      [
+        'a filter on no key over a keyless GROUP',
+        'SELECT * WHERE { { SELECT (COUNT(*) AS ?n) WHERE { ?s :p ?k } } FILTER(?k > 1 || bound(?n)) }',
+        1,
+      ],
+      [
+        'a filter on no key over a GROUP',
+        'SELECT * WHERE { { SELECT ?g (COUNT(*) AS ?n) WHERE {?g :p ?o} GROUP BY ?g } FILTER(?g != :a || bound(?o)) }',
+        7,
+      ],
+      [
+        'a filter on the alias of an aggregate',
+        'SELECT * WHERE { { SELECT ?s (SUM(?o) AS ?n) WHERE { ?s :p ?o } GROUP BY ?s } FILTER(bound(?n)) }',
+        4,
+      ],
+      [
+        'an OPTIONAL turned into a JOIN over an OPTIONAL',
+        'SELECT * WHERE { ?s :p ?o OPTIONAL { ?s :r ?m OPTIONAL { ?m :q ?o } } FILTER(bound(?m)) }',
+        2,
+      ],
+      [
+        'a filter sunk into a MINUS that is not the first operand of a JOIN',
+        'SELECT * WHERE { ?s :p ?o { ?s :r ?m MINUS { ?m :q ?o } FILTER(?m != :zz) } }',
+        2,
+      ],
+    ])('answers %s alike', async([ , query, rows ], { expect }) => {
+      await assertEquivalent(expect, query, rows);
+    });
+
     it('reads a component of a TRIPLE() construction', async({ expect }) => {
       await assertEquivalent(
         expect,
@@ -1499,47 +1548,5 @@ HAVING ( COUNT( * ) > "1"^^<http://www.w3.org/2001/XMLSchema#integer> )`,
         3,
       );
     });
-  });
-
-  describe('round trips through the generator', () => {
-    // Shapes whose printed query once answered differently from the plan: a filter stranded inside a
-    // sub-SELECT, which `toAst` prints into its WHERE clause or prints without its DISTINCT, and an OPTIONAL
-    // or MINUS that is not the first operand of a JOIN, which `toAst` printed without the braces scoping it.
-    const cases: [string, string][] = [
-      [
-        'a filter stranded between a DISTINCT and its projection',
-        'SELECT * WHERE { { SELECT DISTINCT ?s WHERE { ?s :p ?o } } FILTER(?s != :a || bound(?o)) }',
-      ],
-      [
-        'a filter on no key over a keyless GROUP',
-        'SELECT * WHERE { { SELECT (COUNT(*) AS ?n) WHERE { ?s :p ?k } } FILTER(?k > 1) }',
-      ],
-      [
-        'a filter on no key over a GROUP',
-        'SELECT * WHERE { { SELECT ?g (COUNT(*) AS ?n) WHERE {?g :p ?o} GROUP BY ?g } FILTER(?g != :a || bound(?o)) }',
-      ],
-      [
-        'a filter between a projection and the alias of an aggregate',
-        'SELECT * WHERE { { SELECT ?s (SUM(?o) AS ?n) WHERE { ?s :p ?o } GROUP BY ?s } FILTER(bound(?n)) }',
-      ],
-      [
-        'an OPTIONAL turned into a JOIN over an OPTIONAL',
-        'SELECT * WHERE { ?s :p ?o OPTIONAL { ?s :r ?m OPTIONAL { ?m :q ?o } } FILTER(bound(?m)) }',
-      ],
-      [
-        'a filter sunk into a MINUS that is not the first operand of a JOIN',
-        'SELECT * WHERE { ?s :p ?o { ?s :r ?m MINUS { ?m :q ?o } FILTER(?m != :zz) } }',
-      ],
-    ];
-
-    for (const [ name, query ] of cases) {
-      it(`answers the same as a plan: ${name}`, async({ expect }) => {
-        expect(await bindings(transform(query), false)).toEqual(await bindings(prefixes + query, false));
-      });
-
-      it(`answers the same as a query: ${name}`, async({ expect }) => {
-        expect(await bindings(generate(transform(query)), false)).toEqual(await bindings(prefixes + query, false));
-      });
-    }
   });
 });

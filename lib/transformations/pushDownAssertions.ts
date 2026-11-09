@@ -254,7 +254,7 @@ function swapWith(
     // (FUPush) holds unconditionally for every form - a solution of a union comes from exactly one
     // branch - so every branch gets the conjunction and keeps sinking on its own.
     case Algebra.Types.UNION: {
-      return keep(AF.createUnion(op.input.map(branch => assertionFilter(c, branch, assertions)), false));
+      return keep(withInput(op, op.input.map(branch => assertionFilter(c, branch, assertions))));
     }
     case Algebra.Types.FILTER: {
       // The conjunction we manage absorbs the assertions of the filter we pass (SDecompI),
@@ -663,7 +663,7 @@ function pushIntoGraph(
 
   // The name is already a single graph, so every assertion simply travels into the pattern.
   if (graphVar === undefined) {
-    return keep(AF.createGraph(assertionFilter(c, graph.input, assertions), graphName));
+    return keep(withInput(graph, assertionFilter(c, graph.input, assertions)));
   }
   const assertedGraphName = assertions.get(graphVar);
 
@@ -733,7 +733,7 @@ function pushIntoGraph(
   }]);
   return keep(assertionFilter(
     c,
-    AF.createGraph(assertionFilter(c, graph.input, AssertionConjunction.of(c, placed.intoTarget[0])), graphName),
+    withInput(graph, assertionFilter(c, graph.input, AssertionConjunction.of(c, placed.intoTarget[0]))),
     AssertionConjunction.of(c, placed.kept),
   ));
 }
@@ -774,8 +774,8 @@ function pushIntoJoin(
 
   return keep(assertionFilter(
     c,
-    c.AF.createJoin(join.input.map((operand, index) =>
-      assertionFilter(c, operand, AssertionConjunction.of(c, placed.intoTarget[index]))), false),
+    withInput(join, join.input.map((operand, index) =>
+      assertionFilter(c, operand, AssertionConjunction.of(c, placed.intoTarget[index])))),
     AssertionConjunction.of(c, placed.kept),
   ));
 }

@@ -98,6 +98,11 @@ describe('removeProjections', () => {
         .toMatch(/\{\s*SELECT \?s WHERE/u);
     });
 
+    it('keeps the projection of a grouped sub-SELECT with a trailing VALUES', async({ expect }) => {
+      expect(await transform('SELECT * WHERE { { SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s VALUES ?s { <ex:a> } } }'))
+        .not.toMatch(/\?v_\d/u);
+    });
+
     it('a grouped sub-SELECT returns the same results', async({ expect }) => {
       await assertEquivalent(
         expect,

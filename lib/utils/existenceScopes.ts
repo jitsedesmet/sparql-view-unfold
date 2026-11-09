@@ -43,7 +43,7 @@ export function keep(
 type PreOrderCallback = (copy: any) => PreOrderMappingReturn;
 
 /** What a top-down pass does per operation type, given the context it rewrites in. */
-export interface PreOrderPass<C> {
+interface PreOrderPass<C> {
   /** The callbacks per operation type. */
   callbacks?: (context: C) => Partial<Record<Algebra.Types, PreOrderCallback>>;
   /** The callback for every other operation type, {@link keep} by default. */

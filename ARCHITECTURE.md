@@ -88,7 +88,7 @@ A `SERVICE` is evaluated by its endpoint over that endpoint's own data, so its a
 data the mapping is defined over: steps 1 and 2 leave it as it stands. The later
 steps are equivalences over any data and may still rewrite inside it.
 
-`pullUpExtends` is the mirror of steps 5 and 8: it floats the BINDs the pushdowns left at the leaves back
+`pullUpExtends` is the mirror of step 5: it floats the BINDs the assertion pushdown left at the leaves back
 up the plan and deletes the ones nothing above reads. A bind and a condition reading it swap by the same
 substitution either way (`lib/utils/bindSubstitution.ts`), and the three passes read one set of licences
 for what an operand of a JOIN decides (`lib/utils/pushdownLicences.ts`).

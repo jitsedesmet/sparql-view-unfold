@@ -28,17 +28,15 @@ export function noOtherOperandBinds(name: string, operandIndex: number, operands
  * @param names - The variables to check
  * @param operandIndex - The index of the operand to read them on
  * @param operands - What each operand of the merge binds
- * @param certainInOperand - What the operand binds certainly, where that is read below the operand's top
  * @returns whether that operand decides every one of them
  */
 export function operandDecidesVariables(
   names: Iterable<string>,
   operandIndex: number,
   operands: readonly CPMeta[],
-  certainInOperand: ReadonlySet<string> = operands[operandIndex].cVars,
 ): boolean {
   return [ ...names ].every(name =>
-    certainInOperand.has(name) || noOtherOperandBinds(name, operandIndex, operands));
+    operands[operandIndex].cVars.has(name) || noOtherOperandBinds(name, operandIndex, operands));
 }
 
 /**

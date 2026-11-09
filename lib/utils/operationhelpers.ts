@@ -83,17 +83,33 @@ export function filterByConjunction(
 }
 
 /**
- * The GROUP below the HAVING, select expressions and ORDER BY of an aggregating SELECT.
- * @param op - The input of the SELECT's projection
- * @returns the GROUP, or `undefined` when the SELECT does not aggregate
+ * Whether an operation is a GROUP, or a HAVING, select expression, ORDER BY or trailing VALUES over one. Its solutions
+ * hold only the group keys and aggregates, not the solution an EXISTS is evaluated for, which SPARQL 1.2 joins into
+ * groups only.
+ * @param op - The operation to read
+ * @returns whether it aggregates
  */
-export function groupBelowSelectClause(op: Algebra.Operation): Algebra.Group | undefined {
-  let current = op;
-  while (current.type === Algebra.Types.EXTEND || current.type === Algebra.Types.FILTER ||
-    current.type === Algebra.Types.ORDER_BY) {
-    current = current.input;
+export function aggregatesOver(op: Algebra.Operation): boolean {
+  switch (op.type) {
+    case Algebra.Types.GROUP: {
+      return true;
+    }
+    case Algebra.Types.FILTER:
+    case Algebra.Types.EXTEND:
+    case Algebra.Types.ORDER_BY: {
+      return aggregatesOver(op.input);
+    }
+    // A trailing VALUES joins in after the grouping.
+    case Algebra.Types.JOIN: {
+      const [ first, second ] = op.input;
+      return op.input.length === 2 && (first.type === Algebra.Types.VALUES ?
+        aggregatesOver(second) :
+        second.type === Algebra.Types.VALUES && aggregatesOver(first));
+    }
+    default: {
+      return false;
+    }
   }
-  return current.type === Algebra.Types.GROUP ? current : undefined;
 }
 
 /**

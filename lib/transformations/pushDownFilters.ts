@@ -101,6 +101,14 @@ function filterOver(
   return filterByConjunction(c, op, conjuncts.map(conjunct => conjunct.expression));
 }
 
+/** An operation with conjuncts placed in it, and the conjuncts that stay above it. */
+interface Placement {
+  /** The operation with the conjuncts that moved placed in its inputs. */
+  operation: Algebra.Operation;
+  /** The conjuncts that stay above it. */
+  kept: Conjunct[];
+}
+
 /**
  * Moves what may move of a filter's condition one operation down, the rest staying where the filter is.
  * @param c - The transformation context
@@ -108,8 +116,32 @@ function filterOver(
  * @returns what takes its place
  */
 function sinkFilter(c: TransformationContext, filter: Algebra.Filter): Algebra.Operation {
+  const input = filter.input.type === Algebra.Types.LEFT_JOIN ?
+    joinUnderRejectingCondition(c, filter.input, filter.expression) :
+    filter.input;
   const [ moving, staying ] = splitCondition(c, filter.expression);
-  return moving.length === 0 ? filter : filterOver(c, sinkInto(c, moving, filter.input), staying);
+  if (moving.length === 0) {
+    return input === filter.input ? filter : filterOver(c, input, staying);
+  }
+  // One filter over what stays, so the traversal does not meet the conjuncts that could not move again.
+  const { operation, kept } = sinkInto(c, moving, input);
+  return filterOver(c, operation, [ ...kept, ...staying ]);
+}
+
+/**
+ * The JOIN half of an OPTIONAL when a whole condition, also what of it cannot move, rejects its unmatched side.
+ * @param c - The transformation context
+ * @param leftJoin - The OPTIONAL the condition stands on
+ * @param condition - The condition
+ * @returns the JOIN half, or the OPTIONAL itself
+ */
+function joinUnderRejectingCondition(
+  c: TransformationContext,
+  leftJoin: Algebra.LeftJoin,
+  condition: Algebra.Expression,
+): Algebra.Operation {
+  const requiredBound = variablesRequiredBoundBy(condition);
+  return innerJoinUnderRejectingFilter(c, leftJoin, requiredBound, cpMetaOf(c, leftJoin.input[0])) ?? leftJoin;
 }
 
 /**
@@ -117,24 +149,25 @@ function sinkFilter(c: TransformationContext, filter: Algebra.Filter): Algebra.O
  * @param c - The transformation context
  * @param conjuncts - The conjuncts to place, each one that may move
  * @param op - The operation they stand on
- * @returns the operation with the conjuncts placed
+ * @returns the operation with the conjuncts placed, and those that stay above it
  */
-function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.Operation): Algebra.Operation {
+function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.Operation): Placement {
   switch (op.type) {
     case Algebra.Types.FILTER: {
       // Two filters are one conjunction, so what may move of the lower one travels on with ours.
       const [ moving, staying ] = splitCondition(c, op.expression);
-      return filterOver(c, sinkInto(c, [ ...conjuncts, ...moving ], op.input), staying);
+      const placement = sinkInto(c, [ ...conjuncts, ...moving ], op.input);
+      return { ...placement, kept: [ ...placement.kept, ...staying ]};
     }
     case Algebra.Types.DISTINCT:
     case Algebra.Types.REDUCED:
     case Algebra.Types.ORDER_BY:
     case Algebra.Types.FROM:
-      return sinkIntoSingleInput(c, conjuncts, op, () => true);
+      return { operation: withInput(op, filterOver(c, op.input, conjuncts)), kept: []};
     case Algebra.Types.UNION:
-      return withInput(op, op.input.map(branch => filterOver(c, branch, conjuncts)));
+      return { operation: withInput(op, op.input.map(branch => filterOver(c, branch, conjuncts))), kept: []};
     case Algebra.Types.MINUS:
-      return withInput(op, [ filterOver(c, op.input[0], conjuncts), op.input[1] ]);
+      return { operation: withInput(op, [ filterOver(c, op.input[0], conjuncts), op.input[1] ]), kept: []};
     case Algebra.Types.PROJECT:
       return sinkIntoSingleInput(c, conjuncts, op, projectionLicence(c, op));
     case Algebra.Types.GROUP: {
@@ -154,7 +187,7 @@ function sinkInto(c: TransformationContext, conjuncts: Conjunct[], op: Algebra.O
       return sinkIntoOptional(c, conjuncts, op);
     default:
       // A leaf, or a barrier: a SLICE picks its window before the filter, a SERVICE may fail SILENTly.
-      return filterOver(c, op, conjuncts);
+      return { operation: op, kept: conjuncts };
   }
 }
 
@@ -171,21 +204,21 @@ function projectionLicence(c: TransformationContext, project: Algebra.Project): 
 }
 
 /**
- * Places conjuncts on the input of an operation where licensed, and above the operation otherwise.
+ * Places conjuncts on the input of an operation where licensed, and keeps the others above it.
  * @param c - The transformation context
  * @param conjuncts - The conjuncts to place
  * @param op - The operation they stand on
  * @param licence - Whether a conjunct reads the same below the operation
- * @returns the operation with the conjuncts placed
+ * @returns the operation with the conjuncts placed, and those that stay above it
  */
 function sinkIntoSingleInput(
   c: TransformationContext,
   conjuncts: Conjunct[],
   op: Algebra.Operation & Algebra.Single,
   licence: (conjunct: Conjunct) => boolean,
-): Algebra.Operation {
-  const [ licensed, remaining ] = partition(conjuncts, licence);
-  return filterOver(c, withInput(op, filterOver(c, op.input, licensed)), remaining);
+): Placement {
+  const [ licensed, kept ] = partition(conjuncts, licence);
+  return { operation: licensed.length === 0 ? op : withInput(op, filterOver(c, op.input, licensed)), kept };
 }
 
 /**
@@ -193,27 +226,27 @@ function sinkIntoSingleInput(
  * @param c - The transformation context
  * @param conjuncts - The conjuncts to place
  * @param extend - The BIND they stand on
- * @returns the BIND with the conjuncts placed
+ * @returns the BIND with the conjuncts placed, and those that stay above it
  */
-function sinkIntoExtend(c: TransformationContext, conjuncts: Conjunct[], extend: Algebra.Extend): Algebra.Operation {
-  const bind = bindConstructionOf(c, extend);
-  const { cVars } = cpMetaOf(c, extend.input);
-  const below: Conjunct[] = [];
+function sinkIntoExtend(c: TransformationContext, conjuncts: Conjunct[], extend: Algebra.Extend): Placement {
+  const [ below, readers ] = partition(conjuncts, conjunct => !conjunct.reads.has(extend.variable.value));
   const kept: Conjunct[] = [];
-  for (const conjunct of conjuncts) {
-    if (!conjunct.reads.has(bind.variable.value)) {
-      below.push(conjunct);
-    } else if (readerAdmitsConstruction(conjunct.expression, bind)) {
-      const expression = substituteConstruction(c, conjunct.expression, bind, cVars);
-      // A conjunct the construction decides to be true asks nothing any more.
-      if (booleanConstantOf(expression) !== true) {
-        below.push(conjunctOf(c, expression));
+  if (readers.length > 0) {
+    const bind = bindConstructionOf(c, extend);
+    const { cVars } = cpMetaOf(c, extend.input);
+    for (const conjunct of readers) {
+      if (readerAdmitsConstruction(conjunct.expression, bind)) {
+        const expression = substituteConstruction(c, conjunct.expression, bind, cVars);
+        // A conjunct the construction decides to be true asks nothing any more.
+        if (booleanConstantOf(expression) !== true) {
+          below.push(conjunctOf(c, expression));
+        }
+      } else {
+        kept.push(conjunct);
       }
-    } else {
-      kept.push(conjunct);
     }
   }
-  return filterOver(c, withInput(extend, filterOver(c, extend.input, below)), kept);
+  return { operation: below.length === 0 ? extend : withInput(extend, filterOver(c, extend.input, below)), kept };
 }
 
 /**
@@ -221,16 +254,20 @@ function sinkIntoExtend(c: TransformationContext, conjuncts: Conjunct[], extend:
  * @param c - The transformation context
  * @param conjuncts - The conjuncts to place
  * @param join - The JOIN they stand on
- * @returns the JOIN with the conjuncts placed
+ * @returns the JOIN with the conjuncts placed, and those that stay above it
  */
-function sinkIntoJoin(c: TransformationContext, conjuncts: Conjunct[], join: Algebra.Join): Algebra.Operation {
+function sinkIntoJoin(c: TransformationContext, conjuncts: Conjunct[], join: Algebra.Join): Placement {
   const operands = join.input.map(operand => cpMetaOf(c, operand));
   // Per conjunct, per operand: whether the operand decides what the conjunct reads.
   const decides = conjuncts.map(conjunct =>
     operands.map((_, operandIndex) => operandDecidesVariables(conjunct.reads, operandIndex, operands)));
-  const rebuilt = c.AF.createJoin(join.input.map((operand, operandIndex) =>
-    filterOver(c, operand, conjuncts.filter((_, index) => decides[index][operandIndex]))), false);
-  return filterOver(c, rebuilt, conjuncts.filter((_, index) => !decides[index].includes(true)));
+  const kept = conjuncts.filter((_, index) => !decides[index].includes(true));
+  if (kept.length === conjuncts.length) {
+    return { operation: join, kept };
+  }
+  const operation = withInput(join, join.input.map((operand, operandIndex) =>
+    filterOver(c, operand, conjuncts.filter((_, index) => decides[index][operandIndex]))));
+  return { operation, kept };
 }
 
 /**
@@ -240,13 +277,9 @@ function sinkIntoJoin(c: TransformationContext, conjuncts: Conjunct[], join: Alg
  * @param c - The transformation context
  * @param conjuncts - The conjuncts to place
  * @param leftJoin - The OPTIONAL they stand on
- * @returns the OPTIONAL, or the JOIN it became, with the conjuncts placed
+ * @returns the OPTIONAL, or the JOIN it became, with the conjuncts placed, and those that stay above it
  */
-function sinkIntoOptional(
-  c: TransformationContext,
-  conjuncts: Conjunct[],
-  leftJoin: Algebra.LeftJoin,
-): Algebra.Operation {
+function sinkIntoOptional(c: TransformationContext, conjuncts: Conjunct[], leftJoin: Algebra.LeftJoin): Placement {
   const [ left, right ] = leftJoin.input;
   const operands = [ cpMetaOf(c, left), cpMetaOf(c, right) ];
   const requiredBound = unionSets(conjuncts.map(conjunct => variablesRequiredBoundBy(conjunct.expression)));
@@ -255,12 +288,16 @@ function sinkIntoOptional(
     return sinkInto(c, conjuncts, innerJoin);
   }
   const [ intoLeft, kept ] = partition(conjuncts, conjunct => operandDecidesVariables(conjunct.reads, 0, operands));
+  if (intoLeft.length === 0) {
+    return { operation: leftJoin, kept };
+  }
   const intoRight = intoLeft.filter(conjunct => everyOperandBindsCertainly(conjunct.reads, operands));
-  return filterOver(c, sinkOptionalCondition(c, c.AF.createLeftJoin(
+  // The OPTIONAL may end up where the traversal does not meet it again, so its own condition sinks here.
+  const operation = sinkOptionalCondition(c, withInput(leftJoin, [
     filterOver(c, left, intoLeft),
     filterOver(c, right, intoRight),
-    leftJoin.expression,
-  )), kept);
+  ]));
+  return { operation, kept };
 }
 
 /**
