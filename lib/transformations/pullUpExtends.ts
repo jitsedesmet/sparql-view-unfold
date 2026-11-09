@@ -1,24 +1,23 @@
-import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
-import type { Access } from '../utils/assertions.js';
-import { componentOf } from '../utils/assertions.js';
+import type { BindConstruction } from '../utils/bindSubstitution.js';
+import {
+  bindConstructionOf,
+  constructs,
+  readerAdmitsConstruction,
+  substituteConstruction,
+} from '../utils/bindSubstitution.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import { cpMetaOf, termVars } from '../utils/certainlyBoundVars.js';
 import { leaveExistencePatterns, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
-import {
-  asksBoundOfVariable,
-  constructedTermOf,
-  containsExistenceExpression,
-  expressionsEqual,
-  isStableExpression,
-} from '../utils/expressionHelpers.js';
+import { expressionsEqual, isStableExpression } from '../utils/expressionHelpers.js';
 import type { ChainBind, PeeledChain } from '../utils/extendChain.js';
 import { peelExtends, replantExtends } from '../utils/extendChain.js';
-import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
+import { withInput } from '../utils/operationhelpers.js';
+import { graphPatternDecides, noOtherOperandBinds } from '../utils/pushdownLicences.js';
 import type { SSet } from '../utils/setUtils.js';
-import { differenceSets } from '../utils/setUtils.js';
+import { differenceSets, isSubsetOf } from '../utils/setUtils.js';
 import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
 import { collectVariableNames } from '../utils.js';
 
@@ -120,6 +119,8 @@ type Disposition =
 interface FloatingBind {
   /** The bind itself, as {@link peelExtends} handed it over. */
   bind: ChainBind;
+  /** What it constructs, which the cost rules read: a construction is free to re-evaluate, a computation is not. */
+  construction: BindConstruction;
   /** The index of the (multi-)input whose chain it came out of. */
   inputIndex: number;
   /** Its position in that chain, in evaluation order. */
@@ -129,14 +130,6 @@ interface FloatingBind {
    * and an `?x` its input does not bind, as the outer solution of an EXISTS can.
    */
   bindIsStable: boolean;
-  /**
-   * The term `e` constructs, when it constructs one - a term expression or a `TRIPLE()` over term
-   * arguments, which are one construction spelled two ways. `undefined` for everything else, and that is
-   * what the cost rules read: a construction is free to re-evaluate where a computation is not.
-   */
-  constructedTerm: RDF.Term | undefined;
-  /** Whether `?x ∈ cVars(Extend(A, ?x, e))`, which is what decides the `bound(?x)` fold. */
-  bindsCertainly: boolean;
   /** What holds *where the bind is evaluated*, so below every bind standing above it in its chain. */
   scopeBelowBind: CPMeta;
   /** What has been decided for it, `stay` until a licence says otherwise. */
@@ -225,20 +218,16 @@ function floatBinds(
       transform: union => floatThroughUnion(c, union),
     },
     [Algebra.Types.DISTINCT]: {
-      transform: (distinct, original) =>
-        floatThroughCongruentOperation(c, distinct, sealed.has(original), input => c.AF.createDistinct(input)),
+      transform: (distinct, original) => floatThroughCongruentOperation(c, distinct, sealed.has(original)),
     },
     [Algebra.Types.REDUCED]: {
-      transform: (reduced, original) =>
-        floatThroughCongruentOperation(c, reduced, sealed.has(original), input => c.AF.createReduced(input)),
+      transform: (reduced, original) => floatThroughCongruentOperation(c, reduced, sealed.has(original)),
     },
     [Algebra.Types.SLICE]: {
-      transform: (slice, original) => floatThroughCongruentOperation(c, slice, sealed.has(original), input =>
-        c.AF.createSlice(input, slice.start, slice.length)),
+      transform: (slice, original) => floatThroughCongruentOperation(c, slice, sealed.has(original)),
     },
     [Algebra.Types.FROM]: {
-      transform: (from, original) => floatThroughCongruentOperation(c, from, sealed.has(original), input =>
-        c.AF.createFrom(input, from.default, from.named)),
+      transform: (from, original) => floatThroughCongruentOperation(c, from, sealed.has(original)),
     },
     [Algebra.Types.EXPRESSION]: leaveExistencePatterns,
     // An EXTEND needs no callback of its own: a chain is one unit, decided by whatever it stands under.
@@ -261,8 +250,7 @@ function peelInputs(c: TransformationContext, inputs: readonly Algebra.Operation
       inputIndex,
       chainPosition,
       bindIsStable: isStableExpression(c, bind.expression) && !scopeBelowBind.vRanges.has(bind.variable.value),
-      constructedTerm: constructedTermOf(bind.expression),
-      bindsCertainly: cpMetaOf(c, bind.extendNode).cVars.has(bind.variable.value),
+      construction: bindConstructionOf(c, bind.extendNode),
       scopeBelowBind,
       disposition: 'stay',
       mustLeaveWith: [],
@@ -346,16 +334,13 @@ function readerAdmitsSubstitution(
   reader: Algebra.Expression,
   floatingBind: FloatingBind,
 ): boolean {
-  // Sound almost everywhere: if `e` errors, the original leaves `?x` unbound and the reader evaluates an
-  // unbound variable - a type error - where the substituted version raises the same type error from `e`
-  // itself, and SPARQL does not distinguish the two.
   const variableName = floatingBind.bind.variable.value;
   // Nothing to write, so nothing to object to. `collectVariableNames` sees into a nested pattern, so an
   // EXISTS that does not mention `?x` answers no here and the hoist past it is allowed.
   if (!collectVariableNames(c.astTransformer, reader).has(variableName)) {
     return true;
   }
-  // Only a construction is written in at all, and that is a *cost* rule rather than a soundness one.
+  // Only a construction is written in at all, and here that is a *cost* rule rather than a soundness one.
   // With `k` occurrences of `?x` in the reader, one evaluation of `e` per row becomes `k` in the reader
   // plus one in the re-planted bind: `k+1` against `1`, which only breaks even when `e` costs nothing to
   // re-evaluate - a term. There is no `k` that saves a non-term while the bind is re-planted, so the
@@ -364,21 +349,8 @@ function readerAdmitsSubstitution(
   // can call an expression cheap enough to pay for at `k ≥ 2`. This pass has neither.
   // TODO(phase 4): substitute a non-term `e` where `k = 1` and `?x` is dead above, per phase 4's fourth
   //  item; a cheapness heuristic for `k ≥ 2` wants the cardinality estimates the report defers.
-  //
-  // And nothing is written into an EXISTS - `μ` is substituted into the nested *pattern*, where an
-  // expression cannot go and an unbound `?x` is a variable matching anything rather than one term.
-  // `substituteInExpression` leaves EXISTENCE untouched for that reason, and the pushdown carries the
-  // same TODO.
-  // TODO(phase 4): work out what a substitution into a nested pattern would mean.
-  //
-  // Read off `constructedTerm` rather than off the expression's own shape, so that `<<( s p o )>>` and the
-  // `TRIPLE(s, p, o)` the parser keeps distinct from it answer this the same way.
-  if (floatingBind.constructedTerm === undefined || containsExistenceExpression(reader)) {
-    return false;
-  }
-  // `bound(?x)` reads unboundness instead of propagating it, and takes a bare `Var`, so it folds to `true`
-  // only for a certain bind and blocks otherwise.
-  if (!floatingBind.bindsCertainly && asksBoundOfVariable(reader, variableName)) {
+  // TODO(phase 4): work out what a substitution into the nested pattern of an EXISTS would mean.
+  if (!readerAdmitsConstruction(reader, floatingBind.construction)) {
     return false;
   }
   // Cannot substitute when there is a bind *below* this one that does not stay (the expression cannot read it),
@@ -429,46 +401,15 @@ function substituteDepartedBinds(
   const readVariables = collectVariableNames(c.astTransformer, result);
   for (const departed of departedBinds) {
     const variableName = departed.bind.variable.value;
-    if (readVariables.has(variableName) && departed.constructedTerm !== undefined) {
-      const term = departed.constructedTerm;
-      result = substituteInExpression(c, result, {
-        resolve: access => access.name === variableName ? readThrough(term, access, departed) : undefined,
-        bound: departed.bindsCertainly ? new Set([ variableName ]) : new Set<string>(),
-      }, cVars);
+    if (readVariables.has(variableName) && constructs(departed.construction)) {
+      result = substituteConstruction(c, result, departed.construction, cVars);
       readVariables.delete(variableName);
-      for (const name of termVars(term)) {
+      for (const name of termVars(departed.construction.constructedTerm)) {
         readVariables.add(name);
       }
     }
   }
   return result;
-}
-
-/**
- * The term an access reads out of the one a departed bind constructs: the term itself for a bare variable,
- * and a position of it for an accessor chain such as `SUBJECT(?x)`.
- *
- * A position is only read off a construction the bind is *certain* to make. `SUBJECT(?x)` of an unbound
- * `?x` is an error, where the component it would be replaced by is an ordinary value - so where the
- * construction can fail, the whole term is written in instead and the accessor is left to raise on it,
- * exactly as it did before.
- * @param term - The term the departed bind constructs
- * @param access - The reading of it the expression asks for
- * @param departed - The bind that left, for whether its construction can fail
- * @returns the term read, or `undefined` when this access is not one to decide
- */
-function readThrough(term: RDF.Term, access: Access, departed: FloatingBind): RDF.Term | undefined {
-  if (access.positions.length === 0) {
-    return term;
-  }
-  if (!departed.bindsCertainly) {
-    return undefined;
-  }
-  let component: RDF.Term | undefined = term;
-  for (const position of access.positions) {
-    component = component === undefined ? undefined : componentOf(component, position);
-  }
-  return component;
 }
 
 /**
@@ -545,14 +486,12 @@ function noBindLeaves(peeled: PeeledInputs): boolean {
  * @param c - The transformation context
  * @param op - The operation to float through
  * @param sealed - Whether it is part of the query's solution-modifier chain, which nothing rises into
- * @param rebuildOperation - Builds it back around its new input
  * @returns the rewritten operation
  */
 function floatThroughCongruentOperation(
   c: TransformationContext,
   op: Algebra.Distinct | Algebra.Reduced | Algebra.Slice | Algebra.From,
   sealed: boolean,
-  rebuildOperation: (input: Algebra.Operation) => Algebra.Operation,
 ): Algebra.Operation {
   // Nothing here drops, and a sealed operation lets nothing rise, so every bind would end up staying:
   // there is nothing to decide, and no reason to pay `peelInputs` to find that out.
@@ -570,7 +509,7 @@ function floatThroughCongruentOperation(
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     op :
-    assembleRewrittenNode(c, peeled, rewrittenInputs => rebuildOperation(rewrittenInputs[0]));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => withInput(op, rewrittenInputs[0]));
 }
 
 /**
@@ -642,7 +581,7 @@ function constantVariablesOf(c: TransformationContext, op: Algebra.Operation): S
   // unbound comparator is a value the ordering has a place for rather than an absence.
   for (const bind of peelExtends(c, op).binds) {
     if (isStableExpression(c, bind.expression) &&
-      [ ...bind.reads ].every(readVariable => constant.has(readVariable))) {
+      isSubsetOf(bind.reads, constant)) {
       constant.add(bind.variable.value);
     }
   }
@@ -669,7 +608,7 @@ function constantVariablesOf(c: TransformationContext, op: Algebra.Operation): S
 function cleanStaticFromOrder(c: TransformationContext, orderBy: Algebra.OrderBy): Algebra.Operation {
   const constant = constantVariablesOf(c, orderBy.input);
   const deciding = orderBy.expressions.filter(expression => !(isStableExpression(c, expression) &&
-    [ ...collectVariableNames(c.astTransformer, expression) ].every(name => constant.has(name))));
+    isSubsetOf(collectVariableNames(c.astTransformer, expression), constant)));
   if (deciding.length === orderBy.expressions.length) {
     return orderBy;
   }
@@ -698,7 +637,7 @@ function floatThroughProject(c: TransformationContext, project: Algebra.Project,
       // whatever it computes - but the gate is uniform in this phase, and phase 2 revisits dropping whole.
       if (!projected.has(floatingBind.bind.variable.value)) {
         floatingBind.disposition = 'drop';
-      } else if (!sealed && [ ...floatingBind.bind.reads ].every(readVariable => projected.has(readVariable))) {
+      } else if (!sealed && isSubsetOf(floatingBind.bind.reads, projected)) {
         // Only the *rise* is what sealing forbids. A drop leaves the projection exactly where it was, so it
         // says nothing about what could be written above it - and a projection that discards a variable is
         // this phase's main drop site whether it is the query's own or a sub-SELECT's.
@@ -756,8 +695,7 @@ function floatThroughGroup(c: TransformationContext, group: Algebra.Group): Alge
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     group :
-    assembleRewrittenNode(c, peeled, rewrittenInputs =>
-      c.AF.createGroup(rewrittenInputs[0], group.variables, group.aggregates));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => withInput(group, rewrittenInputs[0]));
 }
 
 /**
@@ -768,22 +706,19 @@ function floatThroughGroup(c: TransformationContext, group: Algebra.Group): Alge
  */
 function floatThroughGraph(c: TransformationContext, graph: Algebra.Graph): Algebra.Operation {
   const peeled = peelInputs(c, [ graph.input ]);
-  const graphVariableName = graph.name.termType === 'Variable' ? graph.name.value : undefined;
   // SPARQL evaluates a GRAPH as a union over the named graphs, each joined with the binding of the graph
   // variable *outside* the pattern, so `?g` is bound above where the pattern below may leave it unbound. A
   // bind reading `?g` may therefore only rise when the pattern binds it certainly anyway, and a bind
   // *writing* `?g` may never rise - that is (C1) with the operation itself as the other binder.
   for (const floatingBind of peeled.allBinds) {
-    const mayRise = graphVariableName === undefined || (
-      floatingBind.bind.variable.value !== graphVariableName &&
-      (!floatingBind.bind.reads.has(graphVariableName) || floatingBind.scopeBelowBind.cVars.has(graphVariableName))
-    );
+    const mayRise = !floatingBind.bind.variable.equals(graph.name) &&
+      graphPatternDecides(floatingBind.bind.reads, graph.name, floatingBind.scopeBelowBind.cVars);
     floatingBind.disposition = floatingBind.bindIsStable && mayRise ? 'rise' : 'stay';
   }
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     graph :
-    assembleRewrittenNode(c, peeled, rewrittenInputs => c.AF.createGraph(rewrittenInputs[0], graph.name));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => withInput(graph, rewrittenInputs[0]));
 }
 
 /**
@@ -814,11 +749,11 @@ function floatThroughJoin(c: TransformationContext, join: Algebra.Join): Algebra
           // 1 000 000. Keeping the representative where it is deletes the *other* copies and nothing else:
           // `|A|` evaluations, better than `|A| + |B|` whatever the join does. So a construction, free to
           // re-evaluate, rises; anything else collapses in place.
-          const mayRise = floatingBind.constructedTerm !== undefined &&
+          const mayRise = constructs(floatingBind.construction) &&
             variableOutOfScopeInOtherOperands(floatingBind, operands);
           collapseGroup(carriers, mayRise ? 'rise' : 'stay');
         }
-      } else if (floatingBind.constructedTerm !== undefined &&
+      } else if (constructs(floatingBind.construction) &&
         variableOutOfScopeInOtherOperands(floatingBind, operands) &&
         readsSameValuesAbove(floatingBind, operands)) {
         // A single carrier: (C1) over the siblings, (C2) per variable of `e`, and the cost gate. The gate
@@ -838,7 +773,7 @@ function floatThroughJoin(c: TransformationContext, join: Algebra.Join): Algebra
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     join :
-    assembleRewrittenNode(c, peeled, rewrittenInputs => c.AF.createJoin(rewrittenInputs, false));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => withInput(join, rewrittenInputs));
 }
 
 /**
@@ -860,7 +795,7 @@ function floatThroughLeftJoin(c: TransformationContext, leftJoin: Algebra.LeftJo
   for (const floatingBind of peeled.allBinds) {
     if (floatingBind.bindIsStable &&
         floatingBind.inputIndex === 0 &&
-        floatingBind.constructedTerm !== undefined &&
+        constructs(floatingBind.construction) &&
         variableOutOfScopeInOtherOperands(floatingBind, operands) &&
         readsSameValuesAbove(floatingBind, operands)) {
       floatingBind.disposition = 'rise';
@@ -911,15 +846,7 @@ function floatThroughMinus(c: TransformationContext, minus: Algebra.Minus): Alge
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     minus :
-    assembleRewrittenNode(c, peeled, (rewrittenInputs) => {
-      const rebuiltMinus = c.AF.createMinus(rewrittenInputs[0], rewrittenInputs[1]);
-      // The graph-scope marker is not a licence of ours to drop: it tells an engine that the disjointness
-      // test has to ignore a `?g` bound outside the MINUS, which is as true after the rewrite as before.
-      if (minus.graphScopeVar !== undefined) {
-        rebuiltMinus.graphScopeVar = minus.graphScopeVar;
-      }
-      return rebuiltMinus;
-    });
+    assembleRewrittenNode(c, peeled, rewrittenInputs => withInput(minus, [ rewrittenInputs[0], rewrittenInputs[1] ]));
 }
 
 /**
@@ -945,7 +872,7 @@ function floatThroughUnion(c: TransformationContext, union: Algebra.Union): Alge
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     union :
-    assembleRewrittenNode(c, peeled, rewrittenInputs => c.AF.createUnion(rewrittenInputs, false));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => withInput(union, rewrittenInputs));
 }
 
 /**
@@ -1006,9 +933,8 @@ function variableOutOfScopeInOtherOperands(floatingBind: FloatingBind, operands:
  * @returns whether `e` reads the same values above the operation as below it
  */
 function readsSameValuesAbove(floatingBind: FloatingBind, operands: readonly CPMeta[]): boolean {
-  return [ ...floatingBind.bind.reads ].every(readVariable =>
-    floatingBind.scopeBelowBind.cVars.has(readVariable) ||
-    noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
+  return [ ...floatingBind.bind.reads ].every(name => floatingBind.scopeBelowBind.cVars.has(name) ||
+    noOtherOperandBinds(name, floatingBind.inputIndex, operands));
 }
 
 /**
@@ -1017,18 +943,7 @@ function readsSameValuesAbove(floatingBind: FloatingBind, operands: readonly CPM
  * @returns whether `e` reads only certainly bound variables
  */
 function readsOnlyCertainlyBoundBelow(floatingBind: FloatingBind): boolean {
-  return [ ...floatingBind.bind.reads ].every(readVariable => floatingBind.scopeBelowBind.cVars.has(readVariable));
-}
-
-/**
- * Whether no operand but the one the bind rises out of can bind a variable.
- * @param variableName - The variable to check
- * @param carrierIndex - The index of the operand the bind rises out of
- * @param operands - What each operand of the operation binds
- * @returns whether no other operand can bind it
- */
-function noOtherOperandBinds(variableName: string, carrierIndex: number, operands: readonly CPMeta[]): boolean {
-  return operands.every((operand, index) => index === carrierIndex || operand.vRanges.neverBinds(variableName));
+  return isSubsetOf(floatingBind.bind.reads, floatingBind.scopeBelowBind.cVars);
 }
 
 /**

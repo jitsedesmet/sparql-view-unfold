@@ -1,10 +1,9 @@
-import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
-import { forEveryNodeType } from '@traqula/core';
 import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import { withCpVars } from '../utils/certainlyBoundVars.js';
-import { leaveExistencePatternsPreOrder, rewriteInExistenceScopes } from '../utils/existenceScopes.js';
+import { keep, mapPreOrderInExistenceScopes } from '../utils/existenceScopes.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 
 /**
@@ -30,9 +29,6 @@ import { createFilterFalse } from '../utils/operationhelpers.js';
  * the day the unfolding starts producing empty ranges of its own.
  */
 
-/** Metadata is a cache to carry along, never a tree to iterate into: its sets do not survive that. */
-const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
-
 /**
  * Replaces every operation whose ranges prove it has no solutions by the empty solution multiset.
  * @param c - The transformation context
@@ -43,12 +39,8 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // After:  the GRAPH replaced by FILTER(false), since no graph is named by a literal.
  */
 export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
-  return rewriteInExistenceScopes(c, op, (context, operation) => {
-    const callbacks = forEveryNodeType(
-      (copy: Algebra.Operation) => nullifyIfProvenEmpty(context, copy),
-      { [Algebra.Types.EXPRESSION]: leaveExistencePatternsPreOrder },
-    );
-    return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(operation, callbacks);
+  return mapPreOrderInExistenceScopes(c, op, {
+    fallback: context => (copy: Algebra.Operation) => nullifyIfProvenEmpty(context, copy),
   });
 }
 
@@ -64,10 +56,10 @@ function nullifyIfProvenEmpty(c: TransformationContext, op: Algebra.Operation): 
   const { cVars, vRanges } = withCpVars(c, op).metadata;
   for (const name of cVars) {
     if (vRanges.neverBinds(name)) {
-      return { ...keepMetadata, newValue: createFilterFalse(c, op), continue: false };
+      return keep(createFilterFalse(c, op), { continue: false });
     }
   }
-  return { ...keepMetadata, newValue: op };
+  return keep(op);
 }
 
 /**

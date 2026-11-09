@@ -5,6 +5,7 @@ import { forEveryNodeType } from '@traqula/core';
 import type { CPMeta, RangeContext } from './certainlyBoundVars.js';
 import { cpMetaOf, joinedMeta, operationTransformer, withoutCpVars } from './certainlyBoundVars.js';
 import { containsExistenceExpression, holdsExpression } from './expressionHelpers.js';
+import { withoutMetadata } from './operationhelpers.js';
 
 /**
  * @fileoverview Rewriting EXISTS patterns in the scope of the solution they are evaluated for.
@@ -23,13 +24,54 @@ export type ExistenceScopedPass<C> = (context: C, op: Algebra.Operation) => Alge
  */
 export const leaveExistencePatterns = { preVisitor: () => ({ continue: false }) };
 
+/** Metadata is a cache to carry along, never a tree to iterate into: its sets do not survive that. */
+const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
+
 /**
- * The `algebraUtils.mapOperationPreOrder` callback with which a pass leaves EXISTS patterns alone.
- * @param expression - The expression to leave as it is
- * @returns the instruction not to descend into it
+ * Hands a value to a pre-order traversal, keeping the metadata of everything in it intact.
+ * @param newValue - What to put in place of the operation
+ * @param instruction - What else the traversal is to do, such as not to descend into the value
+ * @returns the traversal's instruction
  */
-export function leaveExistencePatternsPreOrder(expression: Algebra.Expression): PreOrderMappingReturn {
-  return { newValue: expression, continue: false };
+export function keep(
+  newValue: Algebra.Operation | Algebra.Expression,
+  instruction: Pick<PreOrderMappingReturn, 'continue' | 'reTransform'> = {},
+): PreOrderMappingReturn {
+  return { ...keepMetadata, ...instruction, newValue };
+}
+
+/** A pre-order callback for one operation type. */
+type PreOrderCallback = (copy: any) => PreOrderMappingReturn;
+
+/** What a top-down pass does per operation type, given the context it rewrites in. */
+interface PreOrderPass<C> {
+  /** The callbacks per operation type. */
+  callbacks?: (context: C) => Partial<Record<Algebra.Types, PreOrderCallback>>;
+  /** The callback for every other operation type, {@link keep} by default. */
+  fallback?: (context: C) => PreOrderCallback;
+}
+
+/**
+ * Rewrites a tree top-down, then the pattern of each EXISTS in it in the scope of its solution.
+ * @param c - The context to rewrite in
+ * @param op - The tree to rewrite, which is left untouched
+ * @param pass - The callbacks of the pass
+ * @param pass.callbacks - The callbacks per operation type
+ * @param pass.fallback - The callback for every other operation type
+ * @returns the rewritten tree, without cached metadata
+ */
+export function mapPreOrderInExistenceScopes<C extends RangeContext, T extends Algebra.Operation>(
+  c: C,
+  op: T,
+  { callbacks = () => ({}), fallback = () => copy => keep(copy) }: PreOrderPass<C>,
+): T {
+  return rewriteInExistenceScopes(c, op, (context, operation) => {
+    const everyCallback = forEveryNodeType(fallback(context), {
+      ...callbacks(context),
+      [Types.EXPRESSION]: (expression: Algebra.Expression) => keep(expression, { continue: false }),
+    });
+    return algebraUtils.mapOperationPreOrder<'unsafe', Algebra.Operation>(operation, everyCallback);
+  });
 }
 
 /**
@@ -129,16 +171,16 @@ function rewriteExistencePatternsOf<C extends RangeContext>(
  * Rewrites the pattern of every EXISTS an operation evaluates, with the solution it is evaluated for as
  * `existenceScope`. Each EXISTS gets a pattern of its own, as a pass may share one EXISTS between operations.
  * @param c - The context the operation is in
- * @param copy - A copy of the operation, whose cached metadata may be stale
+ * @param operation - A copy of the operation, whose cached metadata may be stale
  * @param rewritePattern - The rewrite of one pattern, in its scope
  * @returns the copy, without metadata and with its expressions replaced
  */
 function withExistencePatternsRewritten<C extends RangeContext>(
   c: C,
-  copy: Algebra.Operation,
+  operation: Algebra.Operation,
   rewritePattern: ExistenceScopedPass<C>,
 ): Algebra.Operation {
-  delete (<{ metadata?: unknown }> copy).metadata;
+  const copy = withoutMetadata(operation);
   if (!expressionsEvaluatedBy(copy).some(containsExistenceExpression)) {
     return copy;
   }

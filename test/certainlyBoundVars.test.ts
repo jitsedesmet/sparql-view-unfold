@@ -491,7 +491,7 @@ describe('what a filter confines', () => {
     [ 'SAMETERM(?x, STR(?s))', true, [ 'Literal' ]],
     [ 'SAMETERM(?x, <ex://a>) || ISBLANK(?x)', true, [ 'BlankNode', 'NamedNode' ]],
     [ 'ISIRI(?x) || BOUND(?s)', false, [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]],
-    [ '!ISIRI(?x)', false, [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]],
+    [ '!ISIRI(?x)', true, [ 'BlankNode', 'Literal', 'NamedNode', 'Quad' ]],
   ])('reads %s', ([ condition, certain, range ], { expect }) => {
     expect(filtered(condition)).toEqual({ certain, range });
   });

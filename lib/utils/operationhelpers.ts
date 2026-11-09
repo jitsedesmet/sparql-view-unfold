@@ -1,6 +1,8 @@
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformationContext } from '../transformContext.js';
+import { conjunctionOf } from './expressionHelpers.js';
 import { datatypeBoolean, DF } from './rdfDatatypes.js';
+import { differenceSets } from './setUtils.js';
 
 /** The literal `false` with xsd:boolean datatype, used for FILTER(FALSE) patterns */
 export const termFalse = DF.literal('false', datatypeBoolean);
@@ -52,6 +54,95 @@ export function projectSolutionExistence(
   operation: Algebra.Operation,
 ): Algebra.Project {
   return c.AF.createProject(operation, [ c.coinExistenceVariable() ]);
+}
+
+/**
+ * Copies an operation over new input, leaving out the metadata cached on the original.
+ * @param op - The operation to copy
+ * @param input - Its new input, or inputs
+ * @returns the copy, keeping every other field, such as the `graphScopeVar` of a MINUS
+ */
+export function withInput<T extends Algebra.Single | Algebra.Multi>(op: T, input: T['input']): T {
+  return { ...withoutMetadata(op), input };
+}
+
+/**
+ * Copies an object without its `metadata` key. Unlike `delete`, this keeps the copy in V8's fast mode.
+ * @param object - The object to copy
+ * @returns the shallow copy, without `metadata`
+ */
+export function withoutMetadata<T extends object>(object: T): T {
+  const { metadata: _metadata, ...rest } = <T & { metadata?: unknown }> object;
+  return <T> rest;
+}
+
+/**
+ * Filters an operation by the conjunction of conditions.
+ * @param c - The transformation context
+ * @param op - The operation to filter
+ * @param conditions - The conditions to filter by
+ * @returns the filter, or `op` itself without conditions
+ */
+export function filterByConjunction(
+  c: Pick<TransformationContext, 'AF'>,
+  op: Algebra.Operation,
+  conditions: Algebra.Expression[],
+): Algebra.Operation {
+  return conditions.length === 0 ? op : c.AF.createFilter(op, conjunctionOf(c, conditions));
+}
+
+/**
+ * Whether an operation is a GROUP, or a HAVING, select expression, ORDER BY or trailing VALUES over one. Its solutions
+ * hold only the group keys and aggregates, not the solution an EXISTS is evaluated for, which SPARQL 1.2 joins into
+ * groups only.
+ * @param op - The operation to read
+ * @returns whether it aggregates
+ */
+export function aggregatesOver(op: Algebra.Operation): boolean {
+  switch (op.type) {
+    case Algebra.Types.GROUP: {
+      return true;
+    }
+    case Algebra.Types.FILTER:
+    case Algebra.Types.EXTEND:
+    case Algebra.Types.ORDER_BY: {
+      return aggregatesOver(op.input);
+    }
+    // A trailing VALUES joins in after the grouping, also once a filter is pushed onto it.
+    case Algebra.Types.JOIN: {
+      const [ first, second ] = op.input;
+      return op.input.length === 2 &&
+        (isValuesBelowFilters(first) ? aggregatesOver(second) : isValuesBelowFilters(second) && aggregatesOver(first));
+    }
+    default: {
+      return false;
+    }
+  }
+}
+
+/**
+ * Whether an operation is a VALUES, possibly under filters.
+ * @param op - The operation to read
+ * @returns whether it is
+ */
+function isValuesBelowFilters(op: Algebra.Operation): boolean {
+  let current = op;
+  while (current.type === Algebra.Types.FILTER) {
+    current = current.input;
+  }
+  return current.type === Algebra.Types.VALUES;
+}
+
+/**
+ * The variables a GROUP groups on and passes through: its keys, except one an aggregate writes over.
+ * @param group - The grouping
+ * @returns the names of those keys
+ */
+export function groupingKeysOf(group: Algebra.Group): Set<string> {
+  return differenceSets(
+    new Set(group.variables.map(variable => variable.value)),
+    new Set(group.aggregates.map(agg => agg.variable.value)),
+  );
 }
 
 /**

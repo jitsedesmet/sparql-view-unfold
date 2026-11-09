@@ -226,11 +226,8 @@ describe('the default pipeline over a head variable the pattern writes a triple 
     expect((await rewriter.rewriteQuery('SELECT * { <ex://all> <ex://p> <<( ?a <ex://q> ?b )>> }')).trim())
       .toEqual(`SELECT ?a ?b WHERE {
   {
-    {
-      ?v_0 <ex://r> ?v_1 .
-      FILTER ( ( ISIRI( ?v_1 ) || ISBLANK( ?v_1 ) ) )
-    }
-    FILTER ( TRUE )
+    ?v_0 <ex://r> ?v_1 .
+    FILTER ( ( ISIRI( ?v_1 ) || ISBLANK( ?v_1 ) ) )
   }
   BIND( ?v_1 AS ?a )
   BIND( ?v_0 AS ?b )
@@ -248,6 +245,50 @@ describe('the default pipeline over an RDF view', () => {
     )).trim()).toEqual(`SELECT ?a ( "lit" AS ?o ) ( TRIPLE( "lit" , <ex://p> , ?a ) AS ?t ) WHERE {
   ?v_0 <ex://q> "lit" .
   BIND( ?v_0 AS ?a )
+}`);
+  });
+});
+
+describe('the default pipeline over a grouped sub-SELECT with a trailing VALUES', () => {
+  it('keeps its projection once a filter is pushed onto the VALUES', async({ expect }) => {
+    const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+      'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }',
+    ])));
+    const rewritten = await rewriter.rewriteQuery(
+      'SELECT * { { SELECT ?k (COUNT(*) AS ?n) { ?k <ex://p> ?v } GROUP BY ?k VALUES ?k { <ex://a> } } FILTER(?k != <ex://b>) }',
+    );
+    expect(rewritten.trim()).toMatch(/^SELECT \?k \?n WHERE \{\n {2}SELECT \?k /u);
+  });
+});
+
+describe('the default pipeline over a generic FILTER', () => {
+  const rewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries([
+    'CONSTRUCT { ?s <ex://p> ?o } WHERE { ?s <ex://q> ?o }',
+    'CONSTRUCT { ?s <ex://r> ?x } WHERE { ?s <ex://t> ?x . ?x <ex://u> ?z }',
+  ])));
+
+  it('sinks each conjunct onto the source pattern binding what it reads', async({ expect }) => {
+    // Each conjunct passes the join, the sub-SELECT of its pattern and the BIND renaming its variable.
+    expect((await rewriter.rewriteQuery(
+      'SELECT * { ?s <ex://p> ?o . ?s <ex://r> ?x FILTER(?x > 5 && REGEX(STR(?o), "a")) }',
+    )).trim()).toEqual(`SELECT ?o ?s ?x WHERE {
+  {
+    {
+      ?v_0 <ex://q> ?v_1 .
+      FILTER ( REGEX( STR( ?v_1 ) , "a" ) )
+    }
+    BIND( ?v_1 AS ?o )
+    BIND( ?v_0 AS ?s )
+  }
+  {
+    {
+      ?v_4 <ex://t> ?v_3 .
+      ?v_3 <ex://u> ?v_5 .
+      FILTER ( ( ?v_3 > "5"^^<http://www.w3.org/2001/XMLSchema#integer> ) )
+    }
+    BIND( ?v_4 AS ?s )
+    BIND( ?v_3 AS ?x )
+  }
 }`);
   });
 });

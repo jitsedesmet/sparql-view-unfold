@@ -9,6 +9,7 @@ import {
   outerBinding,
   rewriteInExistenceScopes,
 } from '../utils/existenceScopes.js';
+import { aggregatesOver } from '../utils/operationhelpers.js';
 import { collectVariableNames, freshVarGenerator, markVariableNamesUsed, renameVariables } from '../utils.js';
 
 /**
@@ -28,13 +29,9 @@ import { collectVariableNames, freshVarGenerator, markVariableNamesUsed, renameV
  * exactly the variables their input exposes, so anonymizing the hidden variables instead of
  * dropping them would make the deduplication consider them too, changing the result.
  *
- * A projection directly below a SLICE is kept for a different reason: dropping it is sound - a projection
- * without a DISTINCT preserves multiplicity, so the same rows fall in the window either way - but SPARQL
- * has no way to *write* a LIMIT or OFFSET that is not on a SELECT, and `toAst` rejects the `Slice` it
- * would be left holding.
- *
- * A projection over a GROUP is kept for that same reason: a GROUP BY is only written on a SELECT, and without
- * one the grouping would be printed on the enclosing query.
+ * A projection directly below a SLICE or over a GROUP is kept because dropping it gains nothing: SPARQL only writes
+ * a LIMIT, OFFSET or GROUP BY on a SELECT, so `toAst` prints a sub-SELECT there anyway, one exposing the renamed
+ * variables.
  *
  * Inside an EXISTS, SPARQL 1.2 joins the outer solution into the sub-SELECT too. A hidden variable it certainly binds
  * keeps its name, and a projection hiding a variable it may bind is kept.
@@ -75,34 +72,16 @@ function removeProjectionsAroundExistence(
     }
     return {};
   };
-  // The projection an operation sits below, through the binds of its aggregates, its HAVING and its ORDER BY.
-  const projectionAbove = new Map<Algebra.Operation, Algebra.Project>();
-  const passProjectionDown = (operation: Algebra.Extend | Algebra.Filter | Algebra.OrderBy): object => {
-    const project = projectionAbove.get(operation);
-    if (project) {
-      projectionAbove.set(operation.input, project);
-    }
-    return {};
-  };
-
   // TODO: this renames even if it has already renamed so could be optimized, but that's not a priority now.
   return algebraUtils.mapOperation<'unsafe', typeof op>(op, {
     [Algebra.Types.EXPRESSION]: leaveExistencePatterns,
     [Algebra.Types.DISTINCT]: { preVisitor: keepProjectedInput },
     [Algebra.Types.REDUCED]: { preVisitor: keepProjectedInput },
     [Algebra.Types.SLICE]: { preVisitor: keepProjectedInput },
-    [Algebra.Types.EXTEND]: { preVisitor: passProjectionDown },
-    [Algebra.Types.FILTER]: { preVisitor: passProjectionDown },
-    [Algebra.Types.ORDER_BY]: { preVisitor: passProjectionDown },
-    [Algebra.Types.GROUP]: { preVisitor: (group) => {
-      const project = projectionAbove.get(group);
-      if (project) {
+    [Algebra.Types.PROJECT]: { preVisitor: (project) => {
+      if (aggregatesOver(project.input)) {
         keptProjections.add(project);
       }
-      return {};
-    } },
-    [Algebra.Types.PROJECT]: { preVisitor: (project) => {
-      projectionAbove.set(project.input, project);
       return {};
     }, transform: (project, original) => {
       if (keptProjections.has(original)) {
