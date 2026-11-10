@@ -1,4 +1,5 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
@@ -13,6 +14,7 @@ import { removeProjectionsTransformation } from '../lib/transformations/removePr
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import type { QueryTransformation } from '../lib/types.js';
+import { createFilterFalse, isFilterFalse } from '../lib/utils/operationhelpers.js';
 import { nonReificationTripleConstruct, rdfReificationConstruct } from './queryConsts.js';
 import { createValidatingQueryRewriter, generateValidQuery } from './validQuery.js';
 
@@ -317,6 +319,143 @@ OFFSET 5`,
   FILTER ( FALSE )
 }`,
       );
+    });
+  });
+
+  describe('by ranges', () => {
+    const x = c.DF.variable('x');
+    const g = c.DF.variable('g');
+    const iri = c.AF.createValues([ x ], [{ x: c.DF.namedNode('ex://c') }]);
+    const literal = c.AF.createValues([ x ], [{ x: c.DF.literal('l') }]);
+
+    /** Whether the pass prunes an operation to the empty result. */
+    function isPrunedToEmpty(op: Algebra.Operation): boolean {
+      return isFilterFalse(c, transformFilterFalse(c, op));
+    }
+
+    it('empties a join whose operands certainly bind incompatible term types', ({ expect }) => {
+      // Neither side names the *term* the other must equal, so the term-level check cannot see this.
+      expect(isPrunedToEmpty(c.AF.createJoin([ iri, literal ], false))).toBe(true);
+    });
+
+    it('checks an operation only after its operands are pruned', ({ expect }) => {
+      // Only once the UNION drops its empty branch does the join certainly bind `?x` as a subject.
+      const subject = c.AF.createBgp([ c.AF.createPattern(x, c.DF.namedNode('ex://q'), c.DF.variable('z')) ]);
+      const union = c.AF.createUnion([ subject, createFilterFalse(c) ], false);
+      expect(isPrunedToEmpty(c.AF.createJoin([ literal, union ], false))).toBe(true);
+    });
+
+    it('drops only the branch of a union that is empty', ({ expect }) => {
+      const union = c.AF.createUnion([ c.AF.createJoin([ iri, literal ], false), literal ], false);
+      expect(transformFilterFalse(c, union)).toEqual(literal);
+    });
+
+    it('empties a GRAPH named by something no graph can be named by', ({ expect }) => {
+      expect(isPrunedToEmpty(c.AF.createGraph(c.AF.createValues([ g ], [{ g: c.DF.literal('l') }]), g))).toBe(true);
+    });
+
+    it('empties a VALUES with no rows, whose columns are vacuously certain', ({ expect }) => {
+      expect(isPrunedToEmpty(c.AF.createValues([ x ], []))).toBe(true);
+    });
+
+    it('leaves a VALUES with one empty row alone, that being the empty solution mapping', ({ expect }) => {
+      expect(isPrunedToEmpty(c.AF.createValues([], [{}]))).toBe(false);
+    });
+
+    it('leaves an UNDEF row alone, which binds nothing yet is still a solution', ({ expect }) => {
+      expect(isPrunedToEmpty(c.AF.createValues([ x ], [{}]))).toBe(false);
+    });
+
+    it('leaves a join an UNDEF row keeps satisfiable alone', ({ expect }) => {
+      expect(isPrunedToEmpty(c.AF.createJoin([ c.AF.createValues([ x ], [{}]), literal ], false))).toBe(false);
+    });
+
+    it('leaves a GRAPH whose name only an OPTIONAL disagrees with alone', ({ expect }) => {
+      const inner = c.AF.createLeftJoin(
+        c.AF.createBgp([ c.AF.createPattern(x, c.DF.variable('p'), c.DF.variable('o')) ]),
+        c.AF.createValues([ x, g ], [{ x: c.DF.namedNode('ex://a'), g: c.DF.literal('l') }]),
+      );
+      expect(isPrunedToEmpty(c.AF.createGraph(inner, g))).toBe(false);
+    });
+
+    it('empties `FILTER(bound(?x))` over something that cannot bind it, which is (FBndII)', ({ expect }) => {
+      const boundExpr = c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(x) ]);
+      expect(isPrunedToEmpty(c.AF.createFilter(c.AF.createBgp([]), boundExpr))).toBe(true);
+    });
+
+    it('never empties a GROUP without keys, whose only certain variables are COUNT targets', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT (COUNT(*) AS ?n) WHERE { ?x :p ?y VALUES ?x { "l" } }',
+        `SELECT ( COUNT( * ) AS ?n ) WHERE {
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    describe('in an EXISTS', () => {
+      it('leaves a `FILTER(bound(?y))` whose solution may bind ?y alone', ({ expect }) => {
+        const query = 'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(BOUND(?y)) } }';
+        expect(generateValidQuery(c, transformFilterFalse(c, parseQuery(c, prefixes + query)))).not.toContain('FALSE');
+      });
+
+      it('leaves a BIND of a variable its solution binds alone, which the engine leaves out', ({ expect }) => {
+        // Not prunable: SPARQL 1.2 leaves a BIND of a bound variable undefined, and Comunica keeps the outer `?y`,
+        // so the EXISTS holds wherever `?z :q ?w` matches.
+        const query = 'SELECT * WHERE { ?y :p ?o FILTER EXISTS { ?z :q ?w BIND("l" AS ?y) } }';
+        expect(generateValidQuery(c, transformFilterFalse(c, parseQuery(c, prefixes + query)))).not.toContain('FALSE');
+      });
+
+      it('empties a `FILTER(bound(?v))` where nothing can bind ?v', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(BOUND(?v)) } }',
+          `SELECT ?x ?y WHERE {
+  FILTER ( FALSE )
+}`,
+        );
+      });
+
+      it('reads the solution of operands that are already pruned', ({ expect }) => {
+        // `?y` is only certainly a literal once the UNION drops its empty branch, and a literal is no subject.
+        expectTransform(
+          expect,
+          'SELECT * WHERE { { VALUES ?y { "l" } } UNION { FILTER(false) } FILTER EXISTS { ?y :q ?w } }',
+          `SELECT ?y WHERE {
+  FILTER ( FALSE )
+}`,
+        );
+      });
+
+      it('empties a pattern inside a SERVICE', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { SERVICE :e { ?x :p ?y FILTER EXISTS { ?y :q ?w VALUES ?y { "l" } } } }',
+          `SELECT ?x ?y WHERE {
+  FILTER ( FALSE )
+}`,
+        );
+      });
+    });
+
+    describe('on a SERVICE', () => {
+      const endpoint = c.DF.namedNode('ex://endpoint');
+      const impossible = c.AF.createJoin([ iri, literal ], false);
+
+      it('empties one whose pattern is unsatisfiable, the endpoint evaluating the same algebra', ({ expect }) => {
+        expect(isPrunedToEmpty(c.AF.createService(impossible, endpoint, false))).toBe(true);
+      });
+
+      it('leaves a SILENT one, a failing endpoint still yielding an empty solution', ({ expect }) => {
+        expect(isPrunedToEmpty(c.AF.createService(impossible, endpoint, true))).toBe(false);
+      });
+
+      it('empties one whose pattern forces a non-IRI endpoint - on the assumption, not the spec', ({ expect }) => {
+        // See the TODO on `serviceNameRange`. This is the case that assumption decides.
+        const variable = c.DF.variable('e');
+        const inner = c.AF.createValues([ variable ], [{ e: c.DF.literal('l') }]);
+        expect(isPrunedToEmpty(c.AF.createService(inner, variable, false))).toBe(true);
+      });
     });
   });
 

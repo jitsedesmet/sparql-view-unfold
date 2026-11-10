@@ -280,14 +280,18 @@ export function standardExpressionRange(c: RangeContext, expression: Algebra.Exp
   }
 }
 
-/** Drops the `metadata` of the operation it is applied to, whatever that metadata holds. */
-const dropMetadata = { transform: (copy: { metadata?: unknown }): unknown => {
-  delete copy.metadata;
-  return copy;
-} };
+/**
+ * Drops the metadata cached on a node, whatever that metadata holds.
+ * @param node - The node, changed in place
+ * @returns the node
+ */
+export function dropCachedMetadata<T extends object>(node: T): T {
+  delete (<{ metadata?: unknown }> node).metadata;
+  return node;
+}
 
 /** Drops the metadata of every operation, no matter its type. */
-const dropAllMetadata = forEveryNodeType(dropMetadata);
+const dropAllMetadata = forEveryNodeType({ transform: dropCachedMetadata });
 
 /** A transformer over the algebra that only visits the keys holding operations, so no RDF term and no metadata. */
 export const operationTransformer = algebraUtils.algebraTransformer({}).clone({}, algebraUtils.knownKeysAllowlist);
@@ -520,8 +524,9 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
           .map(aggregate => aggregate.variable.value)),
       ]);
       // A grouping key keeps holding the value of the input, an aggregate target what the aggregate computes.
-      // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins.
-      const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
+      // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins. A key is in
+      // scope also where the input never binds it, as over FILTER(FALSE).
+      const ranges = new VRanges([ ...keys ].map(name => [ name, input.metadata.vRanges.rangeOf(name) ]));
       for (const aggregate of resOp.aggregates) {
         const target = aggregate.variable.value;
         ranges.set(target, rangeAfterWrite(target, c.expressionRange(c, aggregate, input.metadata), input.metadata));

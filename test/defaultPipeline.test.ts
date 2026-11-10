@@ -2,6 +2,7 @@ import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
 import type { QueryRewriter } from '../lib/queryRewriter.js';
+import { rdfReificationConstruct } from './queryConsts.js';
 import { createValidatingQueryRewriter } from './validQuery.js';
 
 /**
@@ -248,6 +249,51 @@ describe('the default pipeline over an RDF view', () => {
     )).trim()).toEqual(`SELECT ?a ( "lit" AS ?o ) ( TRIPLE( "lit" , <ex://p> , ?a ) AS ?t ) WHERE {
   ?v_0 <ex://q> "lit" .
   BIND( ?v_0 AS ?a )
+}`);
+  });
+});
+
+describe('the default pipeline over provably empty ranges', () => {
+  const identityRewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(
+    mappingFromConstructQueries([ 'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }' ]),
+  ));
+
+  it('empties a join that binds a subject to a literal', async({ expect }) => {
+    expect((await identityRewriter.rewriteQuery(
+      'SELECT * { ?x <ex://p> ?y . ?y <ex://q> ?z VALUES ?y { "a" } }',
+    )).trim()).toEqual(`SELECT ?x ?y ?z WHERE {
+  FILTER ( FALSE )
+}`);
+  });
+
+  it('empties that join once a UNION beside it drops its empty branch', async({ expect }) => {
+    expect((await identityRewriter.rewriteQuery(
+      'SELECT * { VALUES ?y { "a" } { ?y <ex://q> ?z } UNION { FILTER(false) } }',
+    )).trim()).toEqual(`SELECT ?y ?z WHERE {
+  FILTER ( FALSE )
+}`);
+  });
+
+  it('leaves the join alone when the subject can be an IRI', async({ expect }) => {
+    // Sanity: the emptying above is about the literal, not about the shape of the query.
+    expect(await identityRewriter.rewriteQuery('SELECT * { ?x <ex://p> ?y . ?y <ex://q> ?z VALUES ?y { <ex://a> } }'))
+      .not.toContain('FALSE');
+  });
+
+  it('keeps a GROUP key in scope over an emptied input, so a BIND beside it stays put', async({ expect }) => {
+    // Hoisting `BIND(1 AS ?x)` next to the sub-SELECT that projects `?x` is invalid SPARQL, which the rewriter rejects.
+    expect(await identityRewriter.rewriteQuery(
+      'SELECT * { { SELECT ?x (COUNT(*) AS ?n) WHERE { ?x <ex://p> ?y VALUES ?x { "a" } } GROUP BY ?x } { BIND(1 AS ?x) } }',
+    )).toContain('GROUP BY ?x');
+  });
+
+  it('empties a reified triple whose subject is a literal', async({ expect }) => {
+    const reificationRewriter = createValidatingQueryRewriter(createDefaultTransformationPipeline(
+      mappingFromConstructQueries([ rdfReificationConstruct ]),
+    ));
+    expect((await reificationRewriter.rewriteQuery(`PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT * { ?r rdf:reifies <<( ?s <ex://p> ?o )>> VALUES ?s { "a" } }`)).trim()).toEqual(`SELECT ?o ?r ?s WHERE {
+  FILTER ( FALSE )
 }`);
   });
 });

@@ -271,16 +271,14 @@ export function createQueryRewriter(
  * The pipeline to reach for when you have no reason to build your own.
  *
  * The order is not a preference, it is what each step needs to see. Paths are expanded *before* the
- * unfolding, which only knows triple patterns. `FILTER(FALSE)` is collapsed after every step that can
+ * unfolding, which only knows triple patterns. Empty results are pruned after every step that can
  * produce one, so the next step has less to walk. The pushdown drives terms into the leaves and the
  * pull-up floats the binds it leaves behind back out, in that order, because the pushdown is what creates
  * them. `nullifyJoinOverIncompatibleBounds` comes last, after `removeProjections` and `pullUpExtends`: it
  * reads each join operand's top-level `EXTEND` chain and halts at a `PROJECT`, so anywhere earlier it sees
  * nothing at all. Under a projection `removeProjections` keeps, such as one in an EXISTS, it sees nothing either.
  *
- * {@link transformations/nullifyUnbindableVars!nullifyUnbindableVars} is deliberately absent - nothing the
- * unfolding generates gives it anything to decide - and so are the blank node materialisations, which are
- * a choice about the data source rather than an optimisation.
+ * The blank node materialisations are absent: they are a choice about the data source rather than an optimisation.
  * @param mapping - The mapping to unfold, from {@link mapping!mappingFromConstructQueries}
  * @param options - What to configure the unfolding with
  * @returns the pipeline, to hand to {@link createQueryRewriter}

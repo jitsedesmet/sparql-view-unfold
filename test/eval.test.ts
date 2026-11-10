@@ -12,7 +12,6 @@ import { filterFalseTransformation } from '../lib/transformations/filterFalse.js
 import {
   nullifyJoinOverIncompatibleBoundsTransformation,
 } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
-import { nullifyUnbindableVarsTransformation } from '../lib/transformations/nullifyUnbindableVars.js';
 import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
@@ -107,7 +106,6 @@ describe('evaluation tests', () => {
         unfoldingTransformation(mappingFromConstructQueries([ tripleTermConstruct, nonTripleTermConstruct ])),
         filterFalseTransformation(),
         nullifyJoinOverIncompatibleBoundsTransformation(),
-        nullifyUnbindableVarsTransformation(),
         filterFalseTransformation(),
       ]);
       const resUsingMapper = await sourceToStore([ store11 ], await rewriter.rewriteQuery(userQuery));

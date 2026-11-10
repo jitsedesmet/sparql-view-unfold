@@ -3,7 +3,7 @@ import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transform
 import type { PreOrderMappingReturn } from '@traqula/core';
 import { forEveryNodeType } from '@traqula/core';
 import type { CPMeta, RangeContext } from './certainlyBoundVars.js';
-import { cpMetaOf, joinedMeta, operationTransformer, withoutCpVars } from './certainlyBoundVars.js';
+import { cpMetaOf, dropCachedMetadata, joinedMeta, operationTransformer, withoutCpVars } from './certainlyBoundVars.js';
 import { containsExistenceExpression, holdsExpression } from './expressionHelpers.js';
 
 /**
@@ -138,22 +138,34 @@ function withExistencePatternsRewritten<C extends RangeContext>(
   copy: Algebra.Operation,
   rewritePattern: ExistenceScopedPass<C>,
 ): Algebra.Operation {
-  delete (<{ metadata?: unknown }> copy).metadata;
-  if (!expressionsEvaluatedBy(copy).some(containsExistenceExpression)) {
-    return copy;
+  return rewriteExistenceExpressionsOf(c, dropCachedMetadata(copy), (context, existence) =>
+    ({ ...existence, input: rewritePattern(context, withoutCpVars(existence.input)) }));
+}
+
+/**
+ * Replaces every EXISTS an operation evaluates, with the solution it is evaluated for as `existenceScope`.
+ * @param c - The context the operation is in
+ * @param op - The operation, changed in place, whose operands give that solution
+ * @param rewriteExistence - The replacement of one EXISTS, in its scope
+ * @returns the operation
+ */
+export function rewriteExistenceExpressionsOf<C extends RangeContext, T extends Algebra.Operation>(
+  c: C,
+  op: T,
+  rewriteExistence: (context: C, existence: Algebra.ExistenceExpression) => Algebra.Expression,
+): T {
+  if (!expressionsEvaluatedBy(op).some(containsExistenceExpression)) {
+    return op;
   }
-  const inputs = [ (<A.Single | A.Multi> copy).input ].flat();
+  const inputs = [ (<A.Single | A.Multi> op).input ].flat();
   const patternContext = { ...c, existenceScope: joinedMeta(inputs.map(input => cpMetaOf(c, input))) };
-  replaceExpressionsEvaluatedBy(copy, expression =>
+  replaceExpressionsEvaluatedBy(op, expression =>
     algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expression, {}, { expression: { existence: {
       // A nested EXISTS is rewritten with the pattern holding it.
       ...leaveExistencePatterns,
-      transform: (existence: Algebra.ExistenceExpression) => ({
-        ...existence,
-        input: rewritePattern(patternContext, withoutCpVars(existence.input)),
-      }),
+      transform: (existence: Algebra.ExistenceExpression) => rewriteExistence(patternContext, existence),
     }}}));
-  return copy;
+  return op;
 }
 
 /**

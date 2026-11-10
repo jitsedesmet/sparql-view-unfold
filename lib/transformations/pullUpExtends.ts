@@ -19,7 +19,7 @@ import { peelExtends, replantExtends } from '../utils/extendChain.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import type { SSet } from '../utils/setUtils.js';
 import { differenceSets } from '../utils/setUtils.js';
-import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
+import { querySolutionModifiersOf } from '../utils/solutionModifierChain.js';
 import { collectVariableNames } from '../utils.js';
 
 /**
@@ -179,7 +179,7 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformationCont
   // in an EXISTS, stands in a group, where a `BIND` above it can be written.
   return rewriteInExistenceScopes(c, op, (context, input) => floatBinds(
     context,
-    context.existenceScope === undefined ? solutionModifierChainOf(input) : new Set(),
+    querySolutionModifiersOf(context, input),
     input,
   ));
 }
