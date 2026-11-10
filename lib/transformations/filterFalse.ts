@@ -74,8 +74,10 @@ function pruneEmptyResults(c: TransformationContext, op: Algebra.Operation): Alg
         rule(operation, original);
     } };
   }
+
   const absorbSingle = pruneBy((single: Algebra.Operation & Algebra.Single, original) =>
     absorbingSingle(c, single, sealed.has(original)));
+
   return operationTransformer.transformNodeSpecific<'unsafe', Algebra.Operation>(
     op,
     {

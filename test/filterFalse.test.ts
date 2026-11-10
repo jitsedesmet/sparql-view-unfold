@@ -379,8 +379,8 @@ OFFSET 5`,
     });
 
     it('empties `FILTER(bound(?x))` over something that cannot bind it, which is (FBndII)', ({ expect }) => {
-      const bound = c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(x) ]);
-      expect(isPrunedToEmpty(c.AF.createFilter(c.AF.createBgp([]), bound))).toBe(true);
+      const boundExpr = c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(x) ]);
+      expect(isPrunedToEmpty(c.AF.createFilter(c.AF.createBgp([]), boundExpr))).toBe(true);
     });
 
     it('never empties a GROUP without keys, whose only certain variables are COUNT targets', ({ expect }) => {
