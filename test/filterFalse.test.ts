@@ -400,6 +400,8 @@ OFFSET 5`,
       });
 
       it('leaves a BIND of a variable its solution binds alone, which the engine leaves out', ({ expect }) => {
+        // Not prunable: SPARQL 1.2 leaves a BIND of a bound variable undefined, and Comunica keeps the outer `?y`,
+        // so the EXISTS holds wherever `?z :q ?w` matches.
         const query = 'SELECT * WHERE { ?y :p ?o FILTER EXISTS { ?z :q ?w BIND("l" AS ?y) } }';
         expect(generateValidQuery(c, transformFilterFalse(c, parseQuery(c, prefixes + query)))).not.toContain('FALSE');
       });
