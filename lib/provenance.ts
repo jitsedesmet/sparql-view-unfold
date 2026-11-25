@@ -20,9 +20,15 @@ import type { TransformationContext, TransformationContextOptions } from './tran
 import { createTransformationContext, parseQuery } from './transformContext.js';
 import type { Mapping } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
-import { boundAssertionAsExpression, unboundAssertionAsExpression } from './utils/assertions.js';
 import { cpMetaOf, termVars, withoutCpVars } from './utils/certainlyBoundVars.js';
-import { conjunctionOf, disjunctionOf, sameTermExpression, splitConjunction } from './utils/expressionHelpers.js';
+import {
+  boundExpression,
+  conjunctionOf,
+  disjunctionOf,
+  sameTermExpression,
+  splitConjunction,
+  unboundExpression,
+} from './utils/expressionHelpers.js';
 import { groupProjectedBy, projectOntoVariablesOrExistence } from './utils/operationhelpers.js';
 import { datatypeInteger, DF, tripleTerm } from './utils/rdfDatatypes.js';
 import { queryFormTypes, solutionModifierChainOf } from './utils/solutionModifierChain.js';
@@ -35,9 +41,8 @@ import {
 } from './utils.js';
 
 /**
- * @fileoverview Provenance capture: a mapping linking each derivation, one solution of a mapping body, to the triples
- * it produces and matched, and SPARQLprov's rewrite of a SELECT to also select the how-provenance of its answers over
- * those derivations. See ARCHITECTURE.md.
+ * @fileoverview Provenance capture: the provenance view of a mapping, and SPARQLprov's rewrite of a SELECT to also
+ * select the how-provenance of its answers over it. See ARCHITECTURE.md.
  */
 
 const derivationOfPredicate = DF.namedNode(PREDICATE_DERIVATION_OF);
@@ -61,13 +66,22 @@ function derivationLink(
 }
 
 /**
+ * The names of the in-scope variables of an operation.
+ * @param operation - The operation to read
+ * @returns the names
+ */
+function inScopeVariableNames(operation: Algebra.Operation): Set<string> {
+  return new Set(algebraUtils.inScopeVariables(operation).map(variable => variable.value));
+}
+
+/**
  * The in-scope variables of one operation that another has in scope too.
  * @param left - The operation whose variables are kept
  * @param right - The other operation
  * @returns those variables
  */
 function sharedVariables(left: Algebra.Operation, right: Algebra.Operation): RDF.Variable[] {
-  const rightNames = new Set(algebraUtils.inScopeVariables(right).map(variable => variable.value));
+  const rightNames = inScopeVariableNames(right);
   return algebraUtils.inScopeVariables(left).filter(variable => rightNames.has(variable.value));
 }
 
@@ -158,21 +172,16 @@ interface ProvenanceCaptureContext extends TransformationContext {
   provenanceVariablePrefix: string;
   /** Coins a variable that never leaves the operation it is coined for. */
   coinInternalVariable: () => RDF.Variable;
-  /** The pattern of each operation already lifted, so a subtree rewritten twice is analysed once. */
-  patternOfOperation: Map<Algebra.Operation, ProvenancePattern>;
 }
 
-/**
- * A query being rewritten: the original operation, and its rewrite under a provenance variable prefix.
- * Combinators over these build the rewrites of operators SPARQL has no operation for, like SPARQLprov's `diff`.
- */
+/** An operation lifted for provenance capture: the original, and its rewrite under a provenance variable prefix. */
 interface ProvenancePattern {
   /** The original operation, whose in-scope and certainly bound variables the rewrite reads. */
   original: Algebra.Operation;
   /**
    * Rewrites the pattern, SPARQLprov's α(Q, z).
-   * @param prefix - The provenance variable prefix z of its root.
-   * @returns The rewritten operation.
+   * @param prefix - The provenance variable prefix z of its root
+   * @returns the rewritten operation
    */
   rewrite: (prefix: string) => Algebra.Operation;
 }
@@ -216,34 +225,35 @@ function withIdentity(
 }
 
 /**
- * Annotates every solution of an operation with the polynomial `1`, as the solutions of the empty BGP are.
- * @param c - The provenance capture context
- * @param operation - The operation, whose solutions are produced from no reified data
- * @param prefix - The provenance variable prefix
- * @returns the annotated operation
- */
-function withConstantOne(c: ProvenanceCaptureContext, operation: Algebra.Operation, prefix: string): Algebra.Extend {
-  return c.AF.createExtend(
-    operation,
-    DF.variable(provenanceNodeVariableName(prefix, 'statement')),
-    c.AF.createTermExpression(constantOne),
-  );
-}
-
-/**
- * Lifts an operation into its pattern, SPARQLprov's α (Def. 4.12), with `derivationOf` as its reification scheme.
+ * Lifts an operation whose solutions read no view triple, annotating each with the polynomial `1`.
  * @param c - The provenance capture context
  * @param operation - The operation
  * @returns the pattern
- * @throws Error if the operation is one provenance cannot be captured through
  */
-function patternOf(c: ProvenanceCaptureContext, operation: Algebra.Operation): ProvenancePattern {
-  let pattern = c.patternOfOperation.get(operation);
-  if (pattern === undefined) {
-    pattern = uncachedPatternOf(c, operation);
-    c.patternOfOperation.set(operation, pattern);
-  }
-  return pattern;
+function constantOnePattern(c: ProvenanceCaptureContext, operation: Algebra.Operation): ProvenancePattern {
+  return {
+    original: operation,
+    rewrite: prefix => c.AF.createExtend(
+      operation,
+      DF.variable(provenanceNodeVariableName(prefix, 'statement')),
+      c.AF.createTermExpression(constantOne),
+    ),
+  };
+}
+
+/**
+ * Lifts an operation over one input, rebuilding it over the rewrite of that input.
+ * @param original - The operation
+ * @param input - The pattern of its input
+ * @param rebuild - Rebuilds the operation over the rewritten input
+ * @returns the pattern
+ */
+function patternOverInput(
+  original: Algebra.Operation,
+  input: ProvenancePattern,
+  rebuild: (rewrittenInput: Algebra.Operation) => Algebra.Operation,
+): ProvenancePattern {
+  return { original, rewrite: prefix => rebuild(input.rewrite(prefix)) };
 }
 
 /**
@@ -305,11 +315,12 @@ function combinationOf(
  */
 function filteredBy(c: ProvenanceCaptureContext, pattern: ProvenancePattern, expression: Algebra.Expression):
 ProvenancePattern {
-  const lowered = withoutProvenance(c, expression);
-  return {
-    original: c.AF.createFilter(pattern.original, expression),
-    rewrite: prefix => c.AF.createFilter(pattern.rewrite(prefix), lowered),
-  };
+  const expressionWithoutProvenance = withoutProvenance(c, expression);
+  return patternOverInput(
+    c.AF.createFilter(pattern.original, expression),
+    pattern,
+    rewrittenInput => c.AF.createFilter(rewrittenInput, expressionWithoutProvenance),
+  );
 }
 
 /** Which solutions of a difference's subtrahend remove a solution of its minuend. */
@@ -322,8 +333,7 @@ interface DifferenceOptions {
 
 /**
  * The difference (⊖) of two patterns, SPARQLprov's `diff` (Def. 4.12 (5)): the minuend's solutions, each with the
- * provenance of the subtrahend's compatible solutions, its shared variables the minuend may leave unbound renamed apart
- * in the subtrahend and compared in the OPTIONAL's condition.
+ * provenance of the subtrahend's compatible ones.
  * @param c - The provenance capture context
  * @param minuend - The pattern whose solutions are kept
  * @param subtrahend - The pattern whose compatible solutions annotate them
@@ -339,45 +349,28 @@ function differenceOf(
   const { AF } = c;
   const minuendDomain = algebraUtils.inScopeVariables(minuend.original);
   const certainlyBound = cpMetaOf(c, minuend.original).cVars;
-  // A MINUS needs to tell which side bound a shared variable, so it renames them all.
+  // Shared variables the minuend may leave unbound are renamed apart in the subtrahend and compared in the OPTIONAL's
+  // condition. A MINUS needs to tell which side bound a shared variable, so it renames them all.
   const renamedApart = sharedVariables(minuend.original, subtrahend.original)
     .filter(variable => options.sharingABoundVariable === true || !certainlyBound.has(variable.value));
-  const loweredCondition = options.condition && withoutProvenance(c, options.condition);
+  const conditionWithoutProvenance = options.condition && withoutProvenance(c, options.condition);
   return {
     original: minuend.original,
     rewrite: (prefix) => {
-      const renameOf = new Map(renamedApart.map(variable => [ variable.value, c.coinInternalVariable() ]));
+      const renameOf = new Map(renamedApart.map(variable => [ variable.value, c.coinInternalVariable().value ]));
       const subtrahendSum = provenanceChildPrefix(provenanceChildPrefix(prefix, 'difference', 2), 'sum');
-      const subtrahendRewritten = renameOf.size === 0 ?
-        subtrahend.rewrite(subtrahendSum) :
-        renameVariables(
-          c,
-          subtrahend.rewrite(subtrahendSum),
-          new Map([ ...renameOf ].map(([ name, rename ]) => [ name, rename.value ])),
-        );
-      const conditions = [ ...renameOf ].map(([ name, rename ]) => disjunctionOf(c, [
-        unboundAssertionAsExpression(c, name),
-        unboundAssertionAsExpression(c, rename.value),
-        sameTermExpression(c, AF.createTermExpression(DF.variable(name)), rename),
-      ]));
-      if (options.sharingABoundVariable) {
-        conditions.push(disjunctionOf(c, [ ...renameOf ].map(([ name, rename ]) => conjunctionOf(c, [
-          boundAssertionAsExpression(c, name),
-          boundAssertionAsExpression(c, rename.value),
-        ]))));
-      }
-      if (loweredCondition) {
-        // The merged solution takes a renamed variable's value from whichever side binds it.
-        conditions.push(substitutedByCoalesce(c, loweredCondition, renameOf));
-      }
+      const subtrahendRewritten = subtrahend.rewrite(subtrahendSum);
+      const subtrahendRenamed = renameOf.size === 0 ?
+        subtrahendRewritten :
+        renameVariables(c, subtrahendRewritten, renameOf);
       const minuendRewritten = minuend.rewrite(provenanceChildPrefix(prefix, 'difference', 1));
       const optional = AF.createProject(
         AF.createLeftJoin(
           minuendRewritten,
-          subtrahendRewritten,
-          conditions.length === 0 ? undefined : conjunctionOf(c, conditions),
+          subtrahendRenamed,
+          differenceCondition(c, renameOf, options.sharingABoundVariable === true, conditionWithoutProvenance),
         ),
-        [ ...algebraUtils.inScopeVariables(minuendRewritten), ...provenanceVariablesOf(c, subtrahendRewritten) ],
+        [ ...algebraUtils.inScopeVariables(minuendRewritten), ...provenanceVariablesOf(c, subtrahendRenamed) ],
       );
       const identity = provenanceNodeVariableName(prefix, 'difference');
       // The Σ over the subtrahend has the minuend's solution as its identity too.
@@ -391,6 +384,38 @@ function differenceOf(
 }
 
 /**
+ * The condition of a difference's OPTIONAL: every renamed variable compatible with its rename, a pair bound on both
+ * sides when asked, and the difference's own condition over the merged solution.
+ * @param c - The provenance capture context
+ * @param renameOf - The rename of each variable renamed apart, by name
+ * @param sharingABoundVariable - Whether a compatible solution must share a bound variable
+ * @param condition - The difference's own condition, without provenance
+ * @returns the condition, or `undefined` when there is nothing to check
+ */
+function differenceCondition(
+  c: ProvenanceCaptureContext,
+  renameOf: ReadonlyMap<string, string>,
+  sharingABoundVariable: boolean,
+  condition: Algebra.Expression | undefined,
+): Algebra.Expression | undefined {
+  const renamedPairs = [ ...renameOf ];
+  const conditions = renamedPairs.map(([ name, rename ]) => disjunctionOf(c, [
+    unboundExpression(c, name),
+    unboundExpression(c, rename),
+    sameTermExpression(c, c.AF.createTermExpression(DF.variable(name)), DF.variable(rename)),
+  ]));
+  if (sharingABoundVariable) {
+    conditions.push(disjunctionOf(c, renamedPairs.map(([ name, rename ]) =>
+      conjunctionOf(c, [ boundExpression(c, name), boundExpression(c, rename) ]))));
+  }
+  if (condition) {
+    // The merged solution takes a renamed variable's value from whichever side binds it.
+    conditions.push(substitutedByCoalesce(c, condition, renameOf));
+  }
+  return conditions.length === 0 ? undefined : conjunctionOf(c, conditions);
+}
+
+/**
  * Substitutes, in an OPTIONAL's condition, every renamed variable `?x` by `COALESCE(?x, ?renamed)`, its value in the
  * merged solution; `BOUND(?x)`, whose grammar takes a variable, becomes `BOUND(?x) || BOUND(?renamed)`.
  * @param c - The provenance capture context
@@ -401,7 +426,7 @@ function differenceOf(
 function substitutedByCoalesce(
   c: ProvenanceCaptureContext,
   expression: Algebra.Expression,
-  renameOf: ReadonlyMap<string, RDF.Variable>,
+  renameOf: ReadonlyMap<string, string>,
 ): Algebra.Expression {
   const { AF } = c;
   const substitutedTerm = (term: RDF.Term): Algebra.Expression => {
@@ -411,7 +436,7 @@ function substitutedByCoalesce(
     if (term.termType === 'Variable') {
       return AF.createOperatorExpression('coalesce', [
         AF.createTermExpression(term),
-        AF.createTermExpression(renameOf.get(term.value)!),
+        AF.createTermExpression(DF.variable(renameOf.get(term.value)!)),
       ]);
     }
     const quad = <RDF.Quad> term;
@@ -428,7 +453,7 @@ function substitutedByCoalesce(
           undefined;
         return renamedBound === undefined ?
           AF.createOperatorExpression(operand.operator, operand.args.map(substitute)) :
-          disjunctionOf(c, [ operand, boundAssertionAsExpression(c, renamedBound.value) ]);
+          disjunctionOf(c, [ operand, boundExpression(c, renamedBound) ]);
       }
       case Algebra.ExpressionTypes.NAMED:
         return AF.createNamedExpression(operand.name, operand.args.map(substitute));
@@ -461,31 +486,39 @@ function minusPatternOf(c: ProvenanceCaptureContext, minus: Algebra.Minus): Prov
   const rightBound = cpMetaOf(c, right).cVars;
   const rightSharingABoundVariable = shared.some(variable => rightBound.has(variable.value)) ?
     right :
-    c.AF.createFilter(right, disjunctionOf(c, shared.map(variable => boundAssertionAsExpression(c, variable.value))));
+    c.AF.createFilter(right, disjunctionOf(c, shared.map(variable => boundExpression(c, variable.value))));
   return differenceOf(c, patternOf(c, left), patternOf(c, rightSharingABoundVariable));
 }
 
 /**
- * The rewrite of a filter, its top-level `NOT EXISTS` a difference and its top-level `EXISTS` the difference with
- * that difference, `P ⊖ (P ⊖ P2)`, which keeps a solution exactly when a compatible one exists. A correlated one, whose
- * pattern reads an outer variable it does not bind, stays a filter: a difference only compares the variables it binds.
+ * The rewrite of a filter: a top-level `NOT EXISTS` becomes a difference, and a top-level `EXISTS` the difference with
+ * that difference, `P ⊖ (P ⊖ P2)`.
  * @param c - The provenance capture context
  * @param filter - The filter
  * @returns the pattern
  */
 function filterPatternOf(c: ProvenanceCaptureContext, filter: Algebra.Filter): ProvenancePattern {
-  const outerNames = new Set(algebraUtils.inScopeVariables(filter.input).map(variable => variable.value));
+  const outerNames = inScopeVariableNames(filter.input);
+  // A correlated (NOT) EXISTS, whose pattern reads an outer variable it does not bind, stays a filter: a difference
+  // only compares the variables its subtrahend binds.
   const isUncorrelatedExistence = (conjunct: Algebra.Expression): conjunct is Algebra.ExistenceExpression => {
     if (conjunct.subType !== Algebra.ExpressionTypes.EXISTENCE) {
       return false;
     }
-    const boundNames = new Set(algebraUtils.inScopeVariables(conjunct.input).map(variable => variable.value));
+    const boundNames = inScopeVariableNames(conjunct.input);
     return ![ ...collectVariableNames(c.astTransformer, conjunct.input) ]
       .some(name => outerNames.has(name) && !boundNames.has(name));
   };
-  const conjuncts = splitConjunction(filter.expression);
-  const remaining = conjuncts.filter(conjunct => !isUncorrelatedExistence(conjunct));
-  const filtered = conjuncts.filter(isUncorrelatedExistence)
+  const existences: Algebra.ExistenceExpression[] = [];
+  const remaining: Algebra.Expression[] = [];
+  for (const conjunct of splitConjunction(filter.expression)) {
+    if (isUncorrelatedExistence(conjunct)) {
+      existences.push(conjunct);
+    } else {
+      remaining.push(conjunct);
+    }
+  }
+  const filtered = existences
     .reduce((pattern, existence) => {
       const solutionsWithout = differenceOf(c, pattern, patternOf(c, existence.input));
       return existence.not ? solutionsWithout : differenceOf(c, pattern, solutionsWithout);
@@ -503,15 +536,17 @@ function filterPatternOf(c: ProvenanceCaptureContext, filter: Algebra.Filter): P
 function optionalPatternOf(c: ProvenanceCaptureContext, leftJoin: Algebra.LeftJoin): ProvenancePattern {
   const [ left, right ] = leftJoin.input.map(input => patternOf(c, input));
   const joined = combinationOf(c, 'product', [ left, right ]);
-  return combinationOf(c, 'osum', [
+  const normalised = combinationOf(c, 'osum', [
     leftJoin.expression ? filteredBy(c, joined, leftJoin.expression) : joined,
     differenceOf(c, left, right, { condition: leftJoin.expression }),
   ]);
+  // The OPTIONAL has the variables of its normalisation, and is cheaper to analyse.
+  return { ...normalised, original: leftJoin };
 }
 
 /**
- * Replaces every BGP outside a SERVICE, expressions' included, by the distinct solutions of its derivation lookups on
- * the BGP's own variables: the BGP's solutions over the view as a set, selecting no provenance (this repo's choice).
+ * Replaces every BGP outside a SERVICE, in expressions too, by the distinct solutions of its derivation lookups: its
+ * solutions over the view as a set, without provenance.
  * @param c - The provenance capture context
  * @param object - The operation or expression to rewrite
  * @returns the rewritten operation or expression
@@ -529,9 +564,8 @@ function withoutProvenance<T extends object>(c: ProvenanceCaptureContext, object
 }
 
 /**
- * Attaches to every answer the provenance of the solutions agreeing with it on the join variables, where an unbound
- * variable only agrees with an unbound one: the cautious join `and=` of SPARQLprov, Def. 4.17, here also used for a
- * SLICE.
+ * Attaches to every answer the provenance of the solutions agreeing with it on the join variables, an unbound variable
+ * agreeing only with an unbound one: SPARQLprov's cautious join (Def. 4.17).
  * @param c - The provenance capture context
  * @param answers - The answers, selecting the join and answer variables
  * @param solutions - The solutions the answers are computed from, as a pattern
@@ -577,8 +611,8 @@ function attachProvenanceToAnswers(
 }
 
 /**
- * The pattern of a projection, SPARQLprov's `select` (Def. 4.12 (6)), or, over a GROUP, of its aggregate query
- * (Def. 4.17): the groups computed without provenance, the provenance of their solutions attached under the lineage δ.
+ * The pattern of a projection, SPARQLprov's `select` (Def. 4.12 (6)), or of an aggregate query over a GROUP
+ * (Def. 4.17).
  * @param c - The provenance capture context
  * @param project - The projection
  * @returns the pattern
@@ -622,8 +656,8 @@ function projectionPatternOf(c: ProvenanceCaptureContext, project: Algebra.Proje
 }
 
 /**
- * The pattern of a SLICE, rewritten as an aggregate is, this repo's choice: its answers computed without provenance,
- * and the provenance of every solution agreeing with one attached, the solutions unordered.
+ * The pattern of a SLICE, rewritten as an aggregate is: its answers computed without provenance, with the provenance
+ * of every agreeing solution attached.
  * @param c - The provenance capture context
  * @param slice - The SLICE
  * @returns the pattern
@@ -642,19 +676,18 @@ function slicePatternOf(c: ProvenanceCaptureContext, slice: Algebra.Slice): Prov
 }
 
 /**
- * Lifts an operation into its pattern, as {@link patternOf} does, without the cache.
+ * Lifts an operation into its pattern, SPARQLprov's α (Def. 4.12), with `derivationOf` as its reification scheme.
  * @param c - The provenance capture context
  * @param operation - The operation
  * @returns the pattern
  * @throws Error if the operation is one provenance cannot be captured through
  */
-function uncachedPatternOf(c: ProvenanceCaptureContext, operation: Algebra.Operation): ProvenancePattern {
+function patternOf(c: ProvenanceCaptureContext, operation: Algebra.Operation): ProvenancePattern {
   const { AF } = c;
-  const withRewrite = (rewrite: ProvenancePattern['rewrite']): ProvenancePattern => ({ original: operation, rewrite });
   switch (operation.type) {
     case Algebra.Types.BGP: {
       if (operation.patterns.length === 0) {
-        return withRewrite(prefix => withConstantOne(c, operation, prefix));
+        return constantOnePattern(c, operation);
       }
       const triplePatterns = operation.patterns.map(pattern => triplePatternOf(c, pattern));
       return triplePatterns.length === 1 ? triplePatterns[0] : combinationOf(c, 'product', triplePatterns);
@@ -670,32 +703,31 @@ function uncachedPatternOf(c: ProvenanceCaptureContext, operation: Algebra.Opera
     case Algebra.Types.FILTER:
       return filterPatternOf(c, operation);
     case Algebra.Types.EXTEND: {
-      const input = patternOf(c, operation.input);
-      const lowered = withoutProvenance(c, operation.expression);
-      return withRewrite(prefix => AF.createExtend(input.rewrite(prefix), operation.variable, lowered));
+      const expressionWithoutProvenance = withoutProvenance(c, operation.expression);
+      return patternOverInput(operation, patternOf(c, operation.input), rewrittenInput =>
+        AF.createExtend(rewrittenInput, operation.variable, expressionWithoutProvenance));
     }
     case Algebra.Types.PROJECT:
       return projectionPatternOf(c, operation);
     case Algebra.Types.SLICE:
       return slicePatternOf(c, operation);
     case Algebra.Types.ORDER_BY: {
-      const input = patternOf(c, operation.input);
-      const lowered = operation.expressions.map(expression => withoutProvenance(c, expression));
-      return withRewrite(prefix => AF.createOrderBy(input.rewrite(prefix), lowered));
+      const expressionsWithoutProvenance = operation.expressions.map(expression => withoutProvenance(c, expression));
+      return patternOverInput(operation, patternOf(c, operation.input), rewrittenInput =>
+        AF.createOrderBy(rewrittenInput, expressionsWithoutProvenance));
     }
     case Algebra.Types.DISTINCT:
     case Algebra.Types.REDUCED:
       // The decoding sums the rows of an answer, so it counts each answer once anyway, as SPARQLprov's own
       // implementation, which drops DISTINCT.
       return patternOf(c, operation.input);
-    case Algebra.Types.FROM: {
-      const input = patternOf(c, operation.input);
-      return withRewrite(prefix => AF.createFrom(input.rewrite(prefix), operation.default, operation.named));
-    }
+    case Algebra.Types.FROM:
+      return patternOverInput(operation, patternOf(c, operation.input), rewrittenInput =>
+        AF.createFrom(rewrittenInput, operation.default, operation.named));
     case Algebra.Types.VALUES:
     case Algebra.Types.SERVICE:
-      // Neither reads the view, so neither has derivations: its solutions are produced from no reified data.
-      return withRewrite(prefix => withConstantOne(c, operation, prefix));
+      // Neither reads the view, so neither has derivations.
+      return constantOnePattern(c, operation);
     default:
       throw new Error(`Provenance cannot be captured through a ${operation.type}.`);
   }
@@ -732,7 +764,6 @@ ProvenanceCapturingQuery<Algebra.Operation> {
     ...c,
     provenanceVariablePrefix,
     coinInternalVariable: freshVarGenerator(variableNames, 'internal'),
-    patternOfOperation: new Map(),
   };
   return {
     query: withoutCpVars(patternOf(context, pathless).rewrite(provenanceVariablePrefix)),
@@ -755,9 +786,8 @@ export function provenanceCapturingOperation(
 }
 
 /**
- * Rewrites a SELECT query over the view into one that also selects the how-provenance of its answers, encoded as
- * SPARQLprov encodes polynomials. Unfolded against {@link provenanceMappingFromConstructQueries}, its answers decode
- * with {@link provenancePolynomial!decodeProvenance} into the polynomials over derivations explaining them.
+ * Rewrites a SELECT query over the view into one that also selects the how-provenance of its answers. Unfolded against
+ * {@link provenanceMappingFromConstructQueries}, its answers decode with {@link provenancePolynomial!decodeProvenance}.
  * @param query - The SELECT query over the view
  * @param options - What the rewriter is configured with
  * @returns the SPARQL 1.2 query over the provenance view, and its provenance variable prefix

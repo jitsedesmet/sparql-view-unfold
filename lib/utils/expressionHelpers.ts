@@ -4,7 +4,7 @@ import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import { termFalse, termTrue } from './operationhelpers.js';
-import { tripleTerm } from './rdfDatatypes.js';
+import { DF, tripleTerm } from './rdfDatatypes.js';
 import { termIsStaticTerm } from './typeGuards.js';
 
 /**
@@ -318,6 +318,26 @@ export function constructedTermOf(expression: Algebra.Expression): RDF.Term | un
 export function isIriExpression(expression: Algebra.Expression):
     expression is Algebra.Expression & { term: { termType: 'NamedNode' }} {
   return expression.subType === Algebra.ExpressionTypes.TERM && expression.term.termType === 'NamedNode';
+}
+
+/**
+ * Creates `bound(?x)`.
+ * @param c - Object containing the algebra factory
+ * @param name - The variable's name
+ * @returns the condition
+ */
+export function boundExpression(c: Pick<TransformationContext, 'AF'>, name: string): Algebra.Expression {
+  return c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(DF.variable(name)) ]);
+}
+
+/**
+ * Creates `!bound(?x)`.
+ * @param c - Object containing the algebra factory
+ * @param name - The variable's name
+ * @returns the condition
+ */
+export function unboundExpression(c: Pick<TransformationContext, 'AF'>, name: string): Algebra.Expression {
+  return c.AF.createOperatorExpression('!', [ boundExpression(c, name) ]);
 }
 
 /**

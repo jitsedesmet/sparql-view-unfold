@@ -2,8 +2,8 @@ import type * as RDF from '@rdfjs/types';
 import { termToString } from 'rdf-string';
 
 /**
- * @fileoverview How-provenance polynomials in the spm-semiring N[X] (with the lineage operator δ), and their decoding
- * from the rows of a {@link provenance!provenanceCapturingQuery}: SPARQLprov, Def. 4.10 and Def. 4.15.
+ * @fileoverview How-provenance polynomials (SPARQLprov, Def. 4.15), and their decoding from the rows of a
+ * {@link provenance!provenanceCapturingQuery} (Def. 4.10).
  */
 
 /**
@@ -68,20 +68,17 @@ export const countingSpmSemiring: SpmSemiring<number> = {
   aggregate: () => 1,
 };
 
-/**
- * The node kinds of a polynomial tree as provenance variables name them: SPARQLprov's Σ, ⊕, ⊗, ⊖ and ⊙ (Def. 4.6),
- * and δ (Def. 4.15), spelled as SPARQLprov's implementation spells them.
- */
+/** The node kinds of a polynomial tree, Σ, ⊕, ⊗, ⊖, ⊙ and δ, as SPARQLprov's implementation names them. */
 const nodeKinds = <const> [ 'sum', 'osum', 'product', 'difference', 'statement', 'aggregate' ];
 
 /** A node kind of a polynomial tree. */
-export type ProvenanceNodeKind = typeof nodeKinds[number];
+type ProvenanceNodeKind = typeof nodeKinds[number];
 
 /**
  * Names the provenance variable of a node: its prefix, the path to it from the root, followed by its kind.
- * @param prefix - The prefix of the node.
- * @param kind - The node's kind.
- * @returns The variable name.
+ * @param prefix - The prefix of the node
+ * @param kind - The node's kind
+ * @returns the variable name
  */
 export function provenanceNodeVariableName(prefix: string, kind: ProvenanceNodeKind): string {
   return `${prefix}_${kind}`;
@@ -89,9 +86,9 @@ export function provenanceNodeVariableName(prefix: string, kind: ProvenanceNodeK
 
 /**
  * Whether a variable is a provenance variable of a capture.
- * @param prefix - The capture's provenance variable prefix.
- * @param name - The variable's name.
- * @returns Whether it starts with the prefix.
+ * @param prefix - The capture's provenance variable prefix
+ * @param name - The variable's name
+ * @returns whether it starts with the prefix
  */
 export function isProvenanceVariableName(prefix: string, name: string): boolean {
   return name.startsWith(`${prefix}_`);
@@ -99,10 +96,10 @@ export function isProvenanceVariableName(prefix: string, name: string): boolean 
 
 /**
  * The prefix of a node's child: a Σ or δ node's one child, or an n-ary node's child at an index from 1.
- * @param prefix - The prefix of the node.
- * @param kind - The node's kind.
- * @param index - The child's index, for a ⊕, ⊗ or ⊖ node.
- * @returns The child's prefix.
+ * @param prefix - The prefix of the node
+ * @param kind - The node's kind
+ * @param index - The child's index, for a ⊕, ⊗ or ⊖ node
+ * @returns the child's prefix
  */
 export function provenanceChildPrefix(prefix: string, kind: ProvenanceNodeKind, index?: number): string {
   const nodeVariableName = provenanceNodeVariableName(prefix, kind);
@@ -114,24 +111,50 @@ const zero: ProvenancePolynomial = { type: 'constant', value: 0 };
 /** A row of a provenance table: the bound variables of one solution of a rewritten query, by name. */
 type ProvenanceRow = ReadonlyMap<string, RDF.Term>;
 
+/** The structure of a provenance table, read off its variables once. */
+interface ProvenanceColumns {
+  /** The kind of the node at each prefix. */
+  kindOf: ReadonlyMap<string, ProvenanceNodeKind>;
+  /** The indices of the children of each n-ary node, in order, by the node's variable name. */
+  childIndicesOf: ReadonlyMap<string, number[]>;
+}
+
 /**
- * Finds the node kind a provenance table at a prefix is rooted in.
- * @param rows - The rows of the table.
- * @param prefix - The prefix of its variables.
- * @returns The kind, or `undefined` when no row binds a root.
+ * Reads the kind of every node and the children of every n-ary node off the variables of a provenance table.
+ * @param rows - The rows of the table
+ * @returns the structure
  */
-function rootKindOf(rows: readonly ProvenanceRow[], prefix: string): ProvenanceNodeKind | undefined {
-  return nodeKinds.find((kind) => {
-    const root = provenanceNodeVariableName(prefix, kind);
-    return rows.some(row => row.has(root));
-  });
+function provenanceColumnsOf(rows: readonly ProvenanceRow[]): ProvenanceColumns {
+  const kindOf = new Map<string, ProvenanceNodeKind>();
+  const childIndices = new Map<string, Set<number>>();
+  for (const name of new Set(rows.flatMap(row => [ ...row.keys() ]))) {
+    // Every provenance variable is a node's: its prefix, then its kind.
+    const separator = name.lastIndexOf('_');
+    const kind = <ProvenanceNodeKind> name.slice(separator + 1);
+    if (separator < 0 || !nodeKinds.includes(kind)) {
+      continue;
+    }
+    const prefix = name.slice(0, separator);
+    kindOf.set(prefix, kind);
+    // The prefix of an n-ary node's child is the node's variable name, then the child's index.
+    const child = /^(.*)_(\d+)$/u.exec(prefix);
+    if (child !== null) {
+      const indices = childIndices.get(child[1]) ?? new Set<number>();
+      childIndices.set(child[1], indices.add(Number(child[2])));
+    }
+  }
+  return {
+    kindOf,
+    childIndicesOf: new Map([ ...childIndices ]
+      .map(([ name, indices ]) => [ name, [ ...indices ].sort((left, right) => left - right) ])),
+  };
 }
 
 /**
  * Groups items by a key.
- * @param items - The items to group.
- * @param keyOf - Gives the key of an item.
- * @returns The groups, in the order their first item came.
+ * @param items - The items to group
+ * @param keyOf - Gives the key of an item
+ * @returns the groups, in the order their first item came
  */
 function groupBy<T>(items: Iterable<T>, keyOf: (item: T) => string): Map<string, T[]> {
   const groups = new Map<string, T[]>();
@@ -149,52 +172,35 @@ function groupBy<T>(items: Iterable<T>, keyOf: (item: T) => string): Map<string,
 
 /**
  * Sums the polynomials of a child's subtables, one per value of the child's root (SPARQLprov, Def. 4.7).
- * @param rows - The rows of the table.
- * @param childPrefix - The prefix of the child's variables.
- * @returns The sum; rows not binding the child's root left out.
+ * @param columns - The structure of the table
+ * @param rows - The rows of the table
+ * @param childPrefix - The prefix of the child's variables
+ * @returns the sum, leaving out rows not binding the child's root
  */
-function childSum(rows: readonly ProvenanceRow[], childPrefix: string): ProvenancePolynomial {
-  const kind = rootKindOf(rows, childPrefix);
+function childSum(columns: ProvenanceColumns, rows: readonly ProvenanceRow[], childPrefix: string):
+ProvenancePolynomial {
+  const kind = columns.kindOf.get(childPrefix);
   if (kind === undefined) {
     return { type: 'sum', operands: []};
   }
   const root = provenanceNodeVariableName(childPrefix, kind);
   const subtables = groupBy(rows.filter(row => row.has(root)), row => termToString(row.get(root)!));
-  return { type: 'sum', operands: [ ...subtables.values() ].map(subtable => decodeTable(subtable, childPrefix, kind)) };
-}
-
-/**
- * The indices of the children of an n-ary node, in order.
- * @param rows - The rows of the table.
- * @param prefix - The prefix of the node.
- * @param kind - The node's kind.
- * @returns The indices.
- */
-function childIndicesOf(rows: readonly ProvenanceRow[], prefix: string, kind: ProvenanceNodeKind): number[] {
-  const childrenPrefix = `${provenanceNodeVariableName(prefix, kind)}_`;
-  const indices = new Set<number>();
-  for (const row of rows) {
-    for (const name of row.keys()) {
-      if (name.startsWith(childrenPrefix)) {
-        indices.add(Number.parseInt(name.slice(childrenPrefix.length), 10));
-      }
-    }
-  }
-  return [ ...indices ].sort((left, right) => left - right);
+  return {
+    type: 'sum',
+    operands: [ ...subtables.values() ].map(subtable => decodeTable(columns, subtable, childPrefix)),
+  };
 }
 
 /**
  * Decodes a provenance table into its polynomial (SPARQLprov, Def. 4.10).
- * @param rows - The rows of the table.
- * @param prefix - The prefix of its variables.
- * @param kind - The kind of its root, when known.
- * @returns The polynomial; `0` for a table without a root.
+ * @param columns - The structure of the table
+ * @param rows - The rows of the table
+ * @param prefix - The prefix of its variables
+ * @returns the polynomial; `0` for a table without a root
  */
-function decodeTable(
-  rows: readonly ProvenanceRow[],
-  prefix: string,
-  kind = rootKindOf(rows, prefix),
-): ProvenancePolynomial {
+function decodeTable(columns: ProvenanceColumns, rows: readonly ProvenanceRow[], prefix: string):
+ProvenancePolynomial {
+  const kind = columns.kindOf.get(prefix);
   switch (kind) {
     case undefined:
       return zero;
@@ -208,21 +214,21 @@ function decodeTable(
           { type: 'source', term: value };
     }
     case 'sum':
-      return childSum(rows, provenanceChildPrefix(prefix, kind));
+      return childSum(columns, rows, provenanceChildPrefix(prefix, kind));
     case 'aggregate':
-      return { type: 'aggregate', operand: childSum(rows, provenanceChildPrefix(prefix, kind)) };
+      return { type: 'aggregate', operand: childSum(columns, rows, provenanceChildPrefix(prefix, kind)) };
     case 'osum':
     case 'product':
       return {
         type: kind === 'osum' ? 'sum' : 'product',
-        operands: childIndicesOf(rows, prefix, kind)
-          .map(index => childSum(rows, provenanceChildPrefix(prefix, kind, index))),
+        operands: (columns.childIndicesOf.get(provenanceNodeVariableName(prefix, kind)) ?? [])
+          .map(index => childSum(columns, rows, provenanceChildPrefix(prefix, kind, index))),
       };
     case 'difference':
       return {
         type: 'difference',
-        minuend: childSum(rows, provenanceChildPrefix(prefix, kind, 1)),
-        subtrahend: childSum(rows, provenanceChildPrefix(prefix, kind, 2)),
+        minuend: childSum(columns, rows, provenanceChildPrefix(prefix, kind, 1)),
+        subtrahend: childSum(columns, rows, provenanceChildPrefix(prefix, kind, 2)),
       };
   }
 }
@@ -230,9 +236,9 @@ function decodeTable(
 /**
  * Decodes the rows a provenance capturing query answers into the answers of the original query, each annotated with
  * the polynomial explaining it (SPARQLprov, Def. 4.10).
- * @param bindings - The rows, as an engine like Comunica returns them.
- * @param provenanceVariablePrefix - The prefix of the provenance variables, as the capture returned it.
- * @returns One annotated answer per distinct answer, its polynomial simplified.
+ * @param bindings - The rows, as an engine like Comunica returns them
+ * @param provenanceVariablePrefix - The prefix of the provenance variables, as the capture returned it
+ * @returns one annotated answer per distinct answer, its polynomial simplified
  */
 export function decodeProvenance(
   bindings: Iterable<RDF.Bindings>,
@@ -250,8 +256,9 @@ export function decodeProvenance(
   const rowsByAnswer = groupBy(splitRows, ({ answer }) => JSON.stringify([ ...answer ]
     .map(([ name, term ]) => [ name, termToString(term) ])
     .sort(([ left ], [ right ]) => left < right ? -1 : 1)));
+  const columns = provenanceColumnsOf(splitRows.map(({ row }) => row));
   return [ ...rowsByAnswer.values() ].map((group) => {
-    const polynomial = simplifyPolynomial(decodeTable(group.map(({ row }) => row), provenanceVariablePrefix));
+    const polynomial = simplifyPolynomial(decodeTable(columns, group.map(({ row }) => row), provenanceVariablePrefix));
     return {
       answer: group[0].answer,
       polynomial,
@@ -262,10 +269,10 @@ export function decodeProvenance(
 
 /**
  * Evaluates a polynomial in an spm-semiring, the homomorphism its sources' values induce.
- * @param polynomial - The polynomial to evaluate.
- * @param semiring - The spm-semiring to evaluate it in.
- * @param valueOf - Gives the value of a source.
- * @returns The polynomial's value.
+ * @param polynomial - The polynomial to evaluate
+ * @param semiring - The spm-semiring to evaluate it in
+ * @param valueOf - Gives the value of a source
+ * @returns the polynomial's value
  */
 export function evaluatePolynomial<T>(
   polynomial: ProvenancePolynomial,
@@ -292,8 +299,8 @@ export function evaluatePolynomial<T>(
 /**
  * Simplifies a polynomial by the semiring laws: nested sums and products flattened, `0` and `1` dropped as their
  * identities, and a product holding `0` made `0`. A difference is kept, `x ⊖ 0` included, as it explains an answer.
- * @param polynomial - The polynomial to simplify.
- * @returns The simplified polynomial.
+ * @param polynomial - The polynomial to simplify
+ * @returns the simplified polynomial
  */
 export function simplifyPolynomial(polynomial: ProvenancePolynomial): ProvenancePolynomial {
   switch (polynomial.type) {
@@ -328,9 +335,9 @@ export function simplifyPolynomial(polynomial: ProvenancePolynomial): Provenance
 
 /**
  * Writes a polynomial in infix notation, a source by a label, and the operands of a sum or product in sorted order.
- * @param polynomial - The polynomial to write.
- * @param labelOf - Gives the label of a source; by default its rdf-string form.
- * @returns The written polynomial.
+ * @param polynomial - The polynomial to write
+ * @param labelOf - Gives the label of a source; by default its rdf-string form
+ * @returns the written polynomial
  */
 export function polynomialToString(
   polynomial: ProvenancePolynomial,
@@ -354,32 +361,15 @@ export function polynomialToString(
 
 /**
  * The lineage of a polynomial: every source it mentions (SPARQLprov's lineage decoding).
- * @param polynomial - The polynomial to read.
- * @returns The sources, each once.
+ * @param polynomial - The polynomial to read
+ * @returns the sources, each once
  */
 export function lineageOf(polynomial: ProvenancePolynomial): RDF.Term[] {
   const sources = new Map<string, RDF.Term>();
-  const visit = (operand: ProvenancePolynomial): void => {
-    switch (operand.type) {
-      case 'constant':
-        return;
-      case 'source':
-        sources.set(termToString(operand.term), operand.term);
-        return;
-      case 'sum':
-      case 'product':
-        for (const child of operand.operands) {
-          visit(child);
-        }
-        return;
-      case 'difference':
-        visit(operand.minuend);
-        visit(operand.subtrahend);
-        return;
-      case 'aggregate':
-        visit(operand.operand);
-    }
-  };
-  visit(polynomial);
+  // Evaluation visits every source, whatever the semiring.
+  evaluatePolynomial(polynomial, countingSpmSemiring, (source) => {
+    sources.set(termToString(source), source);
+    return 0;
+  });
   return [ ...sources.values() ];
 }

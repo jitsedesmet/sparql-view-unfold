@@ -44,7 +44,6 @@ export {
   evaluatePolynomial,
   lineageOf,
   polynomialToString,
-  simplifyPolynomial,
 } from './provenancePolynomial.js';
 export type { ProvenanceAnnotatedAnswer, ProvenancePolynomial, SpmSemiring } from './provenancePolynomial.js';
 export type { MappingOptions } from './mapping.js';

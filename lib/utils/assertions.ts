@@ -11,7 +11,7 @@ import {
 } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import { termVars } from './certainlyBoundVars.js';
-import { disjunctionOf, splitDisjunction } from './expressionHelpers.js';
+import { boundExpression, disjunctionOf, splitDisjunction, unboundExpression } from './expressionHelpers.js';
 import { DF } from './rdfDatatypes.js';
 import { unionSets } from './setUtils.js';
 
@@ -655,7 +655,7 @@ function termTypeAssertionAsExpression(
  */
 function weakenedExpression(c: Pick<TransformationContext, 'AF'>, name: string, strong: Algebra.Expression):
 Algebra.Expression {
-  return disjunctionOf(c, [ unboundAssertionAsExpression(c, name), strong ]);
+  return disjunctionOf(c, [ unboundExpression(c, name), strong ]);
 }
 
 /**
@@ -674,26 +674,6 @@ function weakAssertionAsExpression(
 }
 
 /**
- * Creates the bound assertion B⟨?x⟩: `bound(?x)`.
- * @param c - Object containing the algebra factory
- * @param name - The variable
- * @returns the condition
- */
-export function boundAssertionAsExpression(c: Pick<TransformationContext, 'AF'>, name: string): Algebra.Expression {
-  return c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(DF.variable(name)) ]);
-}
-
-/**
- * Creates the unbound assertion U⟨?x⟩: `!bound(?x)`.
- * @param c - Object containing the algebra factory
- * @param name - The variable
- * @returns the condition
- */
-export function unboundAssertionAsExpression(c: Pick<TransformationContext, 'AF'>, name: string): Algebra.Expression {
-  return c.AF.createOperatorExpression('!', [ boundAssertionAsExpression(c, name) ]);
-}
-
-/**
  * The condition one conjunct stands for: the inverse of {@link asAssertionConjuncts}, next to it so that the two can
  * be read against each other.
  * @param c - Object containing the algebra factory
@@ -709,10 +689,10 @@ Algebra.Expression {
   // where the condition sits.
   switch (assertion.subType) {
     case 'unbound': {
-      return unboundAssertionAsExpression(c, access.name);
+      return unboundExpression(c, access.name);
     }
     case 'bound': {
-      return boundAssertionAsExpression(c, access.name);
+      return boundExpression(c, access.name);
     }
     case 'strong': {
       return strongAssertionAsExpression(c, access, assertion.term);
