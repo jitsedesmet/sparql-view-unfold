@@ -1,5 +1,3 @@
-import { KeysInitQuery } from '@comunica/context-entries';
-import { ActionContext } from '@comunica/core';
 import { ExpressionEngine } from '@comunica/expressions-sparql';
 import type { IExpressionEngine } from '@comunica/types';
 import { BindingsFactory } from '@comunica/utils-bindings-factory';
@@ -29,7 +27,6 @@ export function simplifyStaticExpressionsTransformation(
   return (c, operation) => {
     // The binding is empty: a static expression has no variable left to substitute.
     const emptyBindings = new BindingsFactory(c.DF).bindings();
-    const context = new ActionContext().set(KeysInitQuery.rdfVariant, c.generalizedRdf ? 'generalizedRdf' : 'rdf');
 
     // A post-order walk visits an operator after its arguments, so a static argument has already been folded
     // to a term by the time its operator is seen: {@link foldsToConstantTerm} then decides staticness from
@@ -39,7 +36,9 @@ export function simplifyStaticExpressionsTransformation(
         transform: async(expression) => {
           if (foldsToConstantTerm(expression)) {
             try {
-              const evaluator = await engine.createEvaluator(expression, context);
+              // Evaluated as plain RDF, even for a generalized RDF view: a generalized triple term has no SPARQL
+              // syntax to write it back as, so its TRIPLE() raises here and is left for the engine to build.
+              const evaluator = await engine.createEvaluator(expression);
               return c.AF.createTermExpression(await evaluator.evaluate(emptyBindings));
             } catch {
               // An error is not `false` in every context (`COALESCE(Error, false, true)`), so a raising

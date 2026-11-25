@@ -7,9 +7,9 @@ describe('simplifyStaticExpressionsTransformation', () => {
   const c = createTransformationContext();
   const simplifyStaticExpressions = simplifyStaticExpressionsTransformation();
 
-  async function simplify(query: string): Promise<string> {
+  async function simplify(query: string, generalizedRdf = false): Promise<string> {
     const operation = parseQuery(c, query);
-    const folded = await simplifyStaticExpressions(c, operation);
+    const folded = await simplifyStaticExpressions({ ...c, generalizedRdf }, operation);
     return generateValidQuery(c, folded);
   }
 
@@ -56,5 +56,15 @@ describe('simplifyStaticExpressionsTransformation', () => {
   it('does not fold NOW(), whose value is only known at execution time', async({ expect }) => {
     const out = await simplify('SELECT * WHERE { ?s ?p ?o . BIND(NOW() AS ?x) }');
     expect(out.toLowerCase()).toContain('now');
+  });
+
+  it('folds a well-formed triple term', async({ expect }) => {
+    const out = await simplify('SELECT * WHERE { ?s ?p ?o . BIND(TRIPLE(<ex:s>, <ex:p>, "o") AS ?x) }', true);
+    expect(out).toContain('<<( <ex:s> <ex:p> "o" )>>');
+  });
+
+  it('leaves a generalized triple term standing, as it has no syntax to be written back as', async({ expect }) => {
+    const out = await simplify('SELECT * WHERE { ?s ?p ?o . BIND(TRIPLE("s", <ex:p>, <ex:o>) AS ?x) }', true);
+    expect(out.toLowerCase()).toContain('triple');
   });
 });
