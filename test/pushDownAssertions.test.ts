@@ -8,6 +8,7 @@ import { describe, it } from 'vitest';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { pushDownAssertions } from '../lib/transformations/pushDownAssertions.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import { generateValidQuery } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -29,13 +30,13 @@ describe('pushDownAssertions', () => {
 
   function transform(query: string): string {
     const transformed = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query));
-    return c.generator.generate(toAst(transformed)).trim();
+    return generateValidQuery(c, transformed).trim();
   }
 
   /** Runs the FILTER(FALSE) normalisation of the design's normalisation pass on top of the pushdown. */
   function transformAndNormalise(query: string): string {
     const pushed = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query));
-    return c.generator.generate(toAst(transformFilterFalse(c, pushed))).trim();
+    return generateValidQuery(c, transformFilterFalse(c, pushed)).trim();
   }
 
   function expectTransform(expect: typeof Expect, query: string, expected: string): void {
@@ -52,7 +53,7 @@ describe('pushDownAssertions', () => {
     const once = transform(query);
     const rewrite = newRewriteContext();
     const twice = pushDownAssertions(rewrite, pushDownAssertions(rewrite, parseQuery(c, prefixes + query)));
-    expect(c.generator.generate(toAst(twice)).trim()).toEqual(once);
+    expect(generateValidQuery(c, twice).trim()).toEqual(once);
     expect(transform(once)).toEqual(once);
   }
 
@@ -75,7 +76,7 @@ describe('pushDownAssertions', () => {
    */
   function transformOverQuads(query: string): string {
     const pushed = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query, { quads: true }));
-    return c.generator.generate(toAst(pushed)).trim();
+    return generateValidQuery(c, pushed).trim();
   }
 
   function expectTransformOverQuads(expect: typeof Expect, query: string, expected: string): void {
@@ -118,9 +119,80 @@ describe('pushDownAssertions', () => {
     it('substitutes into a property path', ({ expect }) => {
       expectTransform(
         expect,
-        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(?x, :a)) }',
+        'SELECT * WHERE { ?x :step+ ?y FILTER(sameTerm(?x, :a)) }',
         `SELECT ( <ex://a> AS ?x ) ?y WHERE {
-  <ex://a> (<ex://step>*) ?y .
+  <ex://a> (<ex://step>+) ?y .
+}`,
+      );
+    });
+
+    // From a fixed term, a zero-length match yields that term even where the graph lacks it, while from a
+    // variable it ranges over the nodes of the graph only.
+    it.for([
+      ':step?',
+      ':step*',
+      '^(:step?)',
+      '(:step?)+',
+      '(:step?/:onwards*)+',
+      ':step|(:onwards?)',
+    ])('keeps a term asserted on an end of %s, which can match zero steps, a filter', (path, { expect }) => {
+      const query = `SELECT * WHERE { ?x ${path} ?y FILTER(sameTerm(?x, :a)) }`;
+      const transformed = transform(query);
+      expect(transformed).toContain('FILTER ( SAMETERM( ?x , <ex://a> ) )');
+      expect(transformed).not.toContain('<ex://a> (');
+      expectIdempotent(expect, query);
+    });
+
+    it.for([ '!:step', '^(:step+)', '(:step?/:onwards)+', ':step|:onwards' ])(
+      'substitutes a term into an end of %s, which cannot match zero steps',
+      (path, { expect }) => {
+        expect(transform(`SELECT * WHERE { ?x ${path} ?y FILTER(sameTerm(?x, :a)) }`)).not.toContain('FILTER');
+      },
+    );
+
+    it('unifies the ends of a zero-length-capable path, keeping their asserted term a filter', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(?x, ?y) && sameTerm(?x, :a)) }',
+        `SELECT ?x ( ?x AS ?y ) WHERE {
+  ?x (<ex://step>*) ?x .
+  FILTER ( SAMETERM( ?x , <ex://a> ) )
+}`,
+      );
+    });
+
+    it('substitutes a term into the end of a path that can match zero steps from a term', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        'SELECT * WHERE { :a :step* ?y FILTER(sameTerm(?y, :b)) }',
+        `SELECT ( <ex://b> AS ?y ) WHERE {
+  <ex://a> (<ex://step>*) <ex://b> .
+}`,
+      );
+    });
+
+    it('keeps a shape asserted on an end of a path that can match zero steps a filter', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(subject(?x), :a)) }',
+        `SELECT ?x ?y WHERE {
+  ?x (<ex://step>*) ?y .
+  FILTER ( SAMETERM( SUBJECT( ?x ) , <ex://a> ) )
+}`,
+      );
+    });
+
+    it('substitutes the graph of a path that can match zero steps', ({ expect }) => {
+      expectStableTransform(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?x :step* ?y } FILTER(sameTerm(?g, :g) && sameTerm(?x, :a)) }',
+        `SELECT ( <ex://g> AS ?g ) ?x ?y WHERE {
+  GRAPH <ex://g> {
+    {
+      ?x (<ex://step>*) ?y .
+      FILTER ( SAMETERM( ?x , <ex://a> ) )
+    }
+  }
 }`,
       );
     });
@@ -1488,7 +1560,7 @@ GROUP BY ?x ( ?x AS ?y )`,
         const once = pushDownAssertions(newRewriteContext(), parseQuery(c, prefixes + query));
         const rewrite = newRewriteContext();
         const twice = pushDownAssertions(rewrite, pushDownAssertions(rewrite, parseQuery(c, prefixes + query)));
-        expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
+        expect(generateValidQuery(c, twice)).toEqual(generateValidQuery(c, once));
       }
     });
   });
@@ -1633,6 +1705,79 @@ GROUP BY ?x ( ?x AS ?y )`,
   }
   FILTER ( EXISTS {
     ?x <ex://q> ?w .
+  }
+  )
+}`,
+      );
+    });
+
+    it('keeps a condition on a variable the solution of an EXISTS binds inside its pattern', ({ expect }) => {
+      // SPARQL 1.2 joins that solution into the pattern, so ?y is bound there, and a BIND of it is undefined.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) } }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> ?w .
+      FILTER ( SAMETERM( ?y , ?w ) )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('still pushes a condition on a variable only the pattern of an EXISTS binds', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, :c)) } }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> <ex://c> .
+      BIND( <ex://c> AS ?w )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('pushes into an EXISTS whose filter the pushdown rebuilt', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?x :p ?y FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, :d)) } } FILTER(sameTerm(?x, :c)) }',
+        `SELECT ?x ?y WHERE {
+  {
+    <ex://c> <ex://p> ?y .
+    BIND( <ex://c> AS ?x )
+  }
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> <ex://d> .
+      BIND( <ex://d> AS ?w )
+    }
+  }
+  )
+}`,
+      );
+    });
+
+    it('decides a condition on a variable of the solution of an EXISTS by its range', ({ expect }) => {
+      // ?y is a subject outside, so no solution the EXISTS is evaluated for makes it a literal.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?o FILTER EXISTS { ?z :q ?w FILTER(isLiteral(?y)) } }',
+        `SELECT ?o ?y WHERE {
+  ?y <ex://p> ?o .
+  FILTER ( EXISTS {
+    {
+      ?z <ex://q> ?w .
+      FILTER ( FALSE )
+    }
   }
   )
 }`,
@@ -1815,7 +1960,7 @@ GROUP BY ?x ( ?x AS ?y )`,
       const rewrite = newRewriteContext();
       const once = pushDownAssertions(rewrite, parseQuery(c, query));
       const twice = pushDownAssertions(rewrite, once);
-      expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
+      expect(generateValidQuery(c, twice)).toEqual(generateValidQuery(c, once));
     });
 
     it('empties the plan where a passed assertion contradicts the conjunction', ({ expect }) => {
@@ -2076,7 +2221,7 @@ GROUP BY ?x ( ?x AS ?y )`,
       const once = pushDownAssertions(newRewriteContext(), parseQuery(c, query));
       const rewrite = newRewriteContext();
       const twice = pushDownAssertions(rewrite, pushDownAssertions(rewrite, parseQuery(c, query)));
-      expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
+      expect(generateValidQuery(c, twice)).toEqual(generateValidQuery(c, once));
     });
   });
 
@@ -2138,9 +2283,9 @@ GROUP BY ?x ( ?x AS ?y )`,
     it('materialises a shape into a property path', ({ expect }) => {
       expectTransform(
         expect,
-        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(subject(?x), :a)) }',
+        'SELECT * WHERE { ?x :step+ ?y FILTER(sameTerm(subject(?x), :a)) }',
         `SELECT ( <<( <ex://a> ?x_p ?x_o )>> AS ?x ) ?y WHERE {
-  <<( <ex://a> ?x_p ?x_o )>> (<ex://step>*) ?y .
+  <<( <ex://a> ?x_p ?x_o )>> (<ex://step>+) ?y .
 }`,
       );
     });
@@ -2672,6 +2817,61 @@ GROUP BY ?x ( ?x AS ?y )`,
   });
 
   describe('term type tests', () => {
+    describe('below a clique they make a range of', () => {
+      // The filter confines `?o` to an IRI or a blank node, so its operation does too, which an equality met above
+      // it must not carry down as known: it would fold the very test that made it true to `true`.
+      it('keeps a test on the representative', ({ expect }) => {
+        expectStableTransform(
+          expect,
+          'SELECT * { { ?t :x ?o . ?t :y ?o2 FILTER(isIRI(?o) || isBLANK(?o)) } FILTER(sameTerm(?o, ?o2)) }',
+          `SELECT ?o ( ?o AS ?o2 ) ?t WHERE {
+  ?t <ex://x> ?o .
+  ?t <ex://y> ?o .
+  FILTER ( ( ISIRI( ?o ) || ISBLANK( ?o ) ) )
+}`,
+        );
+      });
+
+      it('keeps a test on the other member', ({ expect }) => {
+        expectStableTransform(
+          expect,
+          'SELECT * { { ?t :x ?o . ?t :y ?o2 FILTER(isIRI(?o2)) } FILTER(sameTerm(?o, ?o2)) }',
+          `SELECT ?o ( ?o AS ?o2 ) ?t WHERE {
+  ?t <ex://x> ?o .
+  ?t <ex://y> ?o .
+  FILTER ( ISIRI( ?o ) )
+}`,
+        );
+      });
+
+      it('keeps a test the operation made redundant above it', ({ expect }) => {
+        // The outer `isIRI(?o)` is forgotten at the filter that guarantees it, which has to forget it as known too.
+        expectStableTransform(
+          expect,
+          'SELECT * { { ?t :x ?o . ?t :y ?o2 FILTER(isIRI(?o)) } FILTER(isIRI(?o) && sameTerm(?o, ?o2)) }',
+          `SELECT ?o ( ?o AS ?o2 ) ?t WHERE {
+  ?t <ex://x> ?o .
+  ?t <ex://y> ?o .
+  FILTER ( ISIRI( ?o ) )
+}`,
+        );
+      });
+
+      it('keeps a test below a subquery', ({ expect }) => {
+        expectStableTransform(
+          expect,
+          'SELECT * { { SELECT * { ?t :x ?o . ?t :y ?o2 FILTER(isIRI(?o)) } } FILTER(sameTerm(?o, ?o2)) }',
+          `SELECT ?o ?o2 ?t WHERE {
+  SELECT ?o ( ?o AS ?o2 ) ?t WHERE {
+    ?t <ex://x> ?o .
+    ?t <ex://y> ?o .
+    FILTER ( ISIRI( ?o ) )
+  }
+}`,
+        );
+      });
+    });
+
     it('reads a disjunction of tests over one variable as one assertion, in a fixed order', ({ expect }) => {
       // `isBLANK(?o) || isIRI(?o)` holds of a row exactly when ?o is one of two kinds of term, which is a
       // statement about ?o alone: T⟨?o : {IRI, BlankNode}⟩. It is written back one test per term type, in the
@@ -3625,6 +3825,79 @@ HAVING SAMETERM( ?y , SAMPLE( ?x ) )`,
       }`, 1);
     });
 
+    it('matches a condition in an EXISTS against the solution it is evaluated for', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) }
+      }`, 1);
+    });
+
+    it('rejects a solution that matches no row of the pattern of an EXISTS', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :r ?y
+        FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) }
+      }`, 0);
+    });
+
+    it('writes no term for a variable of the pattern of an EXISTS the solution binds too', async({ expect }) => {
+      // The engine leaves out a BIND of ?w, so `BIND(:shared AS ?w)` would stop comparing it to the ?w of the solution.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :r ?w
+        FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, :shared)) }
+      }`, 0);
+    });
+
+    it('reads a BIND in an EXISTS over a variable of the solution with its range', async({ expect }) => {
+      // `COALESCE(?y, "x")` gives the IRI ?y holds, which a literal range would rule out as a subject.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :step ?y
+        FILTER EXISTS { ?z :onwards ?w BIND(COALESCE(?y, "x") AS ?t) FILTER(sameTerm(?t, ?z)) }
+      }`, 4);
+    });
+
+    it('keeps a condition on a variable a sub-SELECT in an EXISTS does not project above it', async({ expect }) => {
+      // The ?y of the sub-SELECT is its own, and the condition reads the one of the solution, which the OPTIONAL leaves
+      // unbound for :a.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?o OPTIONAL { ?x :q ?y }
+        FILTER EXISTS { { SELECT ?a WHERE { ?a :r ?y } } FILTER(!bound(?y)) }
+      }`, 1);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?o OPTIONAL { ?x :q ?y }
+        FILTER EXISTS { { SELECT ?a WHERE { ?a :r ?y } } FILTER(sameTerm(?y, :rd)) }
+      }`, 0);
+    });
+
+    it('keeps a condition on a BIND in an EXISTS of a variable the solution binds above it', async({ expect }) => {
+      // SPARQL 1.2 leaves that BIND undefined, and the engine leaves it out, so ?y keeps the value of the solution.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w BIND(?z AS ?y) FILTER(sameTerm(?y, :b)) }
+      }`, 0);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w BIND(?z AS ?y) FILTER(sameTerm(?y, :shared)) }
+      }`, 1);
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?y :p ?o
+        FILTER EXISTS { ?z :q ?w BIND("l" AS ?y) FILTER(isIRI(?y)) }
+      }`, 1);
+    });
+
+    it('matches a condition in a nested EXISTS against the outermost solution', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER EXISTS { ?z :q ?w FILTER EXISTS { ?a :q ?b FILTER(sameTerm(?b, ?y)) } }
+      }`, 1);
+    });
+
+    it('matches a condition in an EXISTS of an OPTIONAL against both of its sides', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        OPTIONAL { ?x :r ?v FILTER EXISTS { ?z :q ?w FILTER(sameTerm(?w, ?y)) } }
+      }`, 1);
+    });
+
     it('keeps one solution per row of a VALUES the assertion strips every column from', async({ expect }) => {
       // The empty BGP is one empty solution mapping, so it may only replace a *single* remaining row.
       await assertEquivalent(expect, `SELECT * WHERE {
@@ -3638,6 +3911,13 @@ HAVING SAMETERM( ?y , SAMPLE( ?x ) )`,
         { { ?x :p ?y } UNION { ?x :p ?y } }
         FILTER(sameTerm(?x, :a))
       }`, 2);
+    });
+
+    it('does not match a zero-length path from a term the graph lacks', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :step? ?y
+        FILTER(sameTerm(?x, :absent))
+      }`, 0);
     });
 
     it('keeps the per-pair witness count of a property path', async({ expect }) => {

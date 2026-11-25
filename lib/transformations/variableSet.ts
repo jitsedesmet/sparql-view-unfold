@@ -1,4 +1,5 @@
 import type * as RDF from '@rdfjs/types';
+import type { TransformationContext } from '../transformContext.js';
 import { unifyTerms } from '../utils/assertions.js';
 
 /**
@@ -66,11 +67,12 @@ export class VariableSet {
   /**
    * Checks if a term is compatible with this set of possible values: a variable always is, any other term
    * when it unifies with one of them, so that a triple term over variables matches the triple terms it can be.
+   * @param c - Whether triple terms may be generalized ones
    * @param term - The term to check
    * @returns True if the term could match this VariableSet
    */
-  public termIsCompatible(term: RDF.Term): boolean {
+  public termIsCompatible(c: Pick<TransformationContext, 'generalizedRdf'>, term: RDF.Term): boolean {
     return this.isNoFixed || term.termType === 'Variable' ||
-      this.values.some(value => value.termType === term.termType && unifyTerms(value, term) !== undefined);
+      this.values.some(value => value.termType === term.termType && unifyTerms(c, value, term) !== undefined);
   }
 }

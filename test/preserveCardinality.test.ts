@@ -4,9 +4,10 @@ import * as arrayifyStreamNS from 'arrayify-stream';
 import { DataFactory, Store } from 'n3';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createQueryRewriter } from '../lib/queryRewriter.js';
+import type { QueryRewriter } from '../lib/queryRewriter.js';
 import { filterFalseTransformation } from '../lib/transformations/filterFalse.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -33,8 +34,8 @@ describe('preserveCardinality', () => {
     DF.quad(DF.namedNode('ex://alice'), DF.namedNode('ex://b'), DF.namedNode('ex://bob')),
   ]);
 
-  function rewriterPreserving(preserveCardinality: boolean): ReturnType<typeof createQueryRewriter> {
-    return createQueryRewriter([
+  function rewriterPreserving(preserveCardinality: boolean): QueryRewriter {
+    return createValidatingQueryRewriter([
       unfoldingTransformation(mapping, { preserveCardinality }),
       filterFalseTransformation(),
     ]);
@@ -129,7 +130,7 @@ describe('preserveCardinality over a ground mapping head', () => {
     mappers: string[],
     preserveCardinality: boolean,
   ): Promise<string[]> {
-    const rewriter = createQueryRewriter([
+    const rewriter = createValidatingQueryRewriter([
       unfoldingTransformation(mappingFromConstructQueries(mappers), { preserveCardinality }),
       filterFalseTransformation(),
     ]);

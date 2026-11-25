@@ -1,15 +1,15 @@
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createQueryRewriter } from '../lib/queryRewriter.js';
 import { rewriteNonRecursivePathsTransformation } from '../lib/transformations/pathTransformation.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 /**
  * The restrictions of {@link userQueryRestrictions!assertUserQueryIsSupported}, over the pass-through
  * mapping: what these check is what the rewriter refuses to be handed, not what any mapping does with it.
  */
 describe('the restrictions on a user query', () => {
-  const rewriter = createQueryRewriter([
+  const rewriter = createValidatingQueryRewriter([
     rewriteNonRecursivePathsTransformation(),
     unfoldingTransformation(mappingFromConstructQueries([ 'CONSTRUCT WHERE { ?s ?p ?o }' ])),
   ]);

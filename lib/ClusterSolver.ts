@@ -1,6 +1,8 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
+import type { TriplePosition } from './datastructures/TermClusterSet.js';
 import { TermClusterSet } from './datastructures/TermClusterSet.js';
+import type { RangeSet } from './RangeSet.js';
 import { objectRange } from './RangeSet.js';
 import { RewriteNoMatchError } from './RewriteNoMatchError.js';
 import type { RangedVar } from './utils/RangedVar.js';
@@ -33,8 +35,11 @@ export class ClusterSolver extends TermClusterSet<RangedVar> {
   /** The names of the user query's variables: those {@link register} met on its user query side. */
   private userQueryVariableNames: Set<string>;
 
-  public constructor() {
-    super(variable => variable.value, variable => variable);
+  /**
+   * @param positionRange - The term types a position of a triple term admits
+   */
+  public constructor(positionRange: (position: TriplePosition) => RangeSet) {
+    super(variable => variable.value, variable => variable, positionRange);
     this.clear();
   }
 

@@ -124,7 +124,9 @@ position cannot hold — a literal subject, a blank node predicate — instantia
 CONSTRUCT the mapping is written as would not. A type test in the mapping body filters those solutions out,
 and the assertion pushdown drops it wherever the rewritten query already guarantees it.
 `mappingFromConstructQueries(constructs, { generalizedRdfView: true })` keeps those triples instead, for a
-view that means to present generalized RDF.
+view that means to present generalized RDF: any term in any position, inside triple terms included. The
+source stays RDF. The rewritten query must then run on an engine whose `TRIPLE()` builds generalized triple
+terms, such as Comunica with `rdfVariant: 'generalizedRdf'`.
 
 ### Extended engines
 
@@ -201,35 +203,17 @@ The tables below are the short version; the generated
 |---|---|
 | `unfoldingTransformation(mapping, options?)` | The rewriting proper: every triple pattern outside a `SERVICE` replaced by the mapping body producing the triples it could match. |
 | `rewriteNonRecursivePathsTransformation()` | Expands non-recursive property paths outside a `SERVICE` into BGPs and UNIONs. Belongs before the unfolding. |
-| `filterFalseTransformation()` | Lets every `FILTER(FALSE)` absorb what stands over it, sub-SELECTs included. |
+| `filterFalseTransformation()` | Replaces every operation that certainly binds a variable no term fits by `FILTER(FALSE)`, and lets every `FILTER(FALSE)` absorb what stands over it, sub-SELECTs included. |
 | `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))`, `FILTER(sameTerm(?x, ?y))` and term type tests like `FILTER(isIRI(?x) \|\| isBLANK(?x))` as deep as they go: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
 | `pullUpExtendsTransformation()` | Floats every `BIND` as high as the plan allows and drops the ones nothing reads. |
 | `removeProjectionsTransformation()` | Removes inner projections, renaming what they hid to keep the scoping. |
 | `nullifyJoinOverIncompatibleBoundsTransformation()` | Replaces a join whose branches bind one variable to incompatible terms by `FILTER(FALSE)`. |
-| `nullifyUnbindableVarsTransformation()` | The same one level up, for incompatible term *types* rather than terms. Not in the default pipeline. |
 | `extendsToValuesTransformation()` | Rewrites a `BIND` of a ground term over the empty BGP, or over a VALUES, into a VALUES. |
 | `joinValuesToFilterTransformation()` | Rewrites a JOIN with a VALUES into an equality FILTER, enabling further push-down. |
 | `serviceCallPushUpTransformation()` | Merges and hoists SERVICE calls so the endpoint evaluates as much as it can. |
 | `internalBnodeAsSpecialLiteralTransformation()` | Materialises constructed blank node identities as typed literals. |
 | `internalBnodeAsSpecialIriTransformation()` | Materialises them as prefixed IRIs, SHA-1 keeping the length manageable. |
-
-### `sparql-view-unfold/comunica` — Node only
-
-One transformation needs a Comunica runtime, and lives behind its own subpath:
-
-```typescript
-import { simplifyStaticExpressionsTransformation } from 'sparql-view-unfold/comunica';
-```
-
-| Transformation | Description |
-|---|---|
-| `simplifyStaticExpressionsTransformation()` | Folds every fully static expression to the term Comunica's evaluator says it is. |
-
-It builds its evaluator through Components.js, which resolves Comunica's actors through Node's own module
-resolution and so imports `node:module` and `node:path`. Bundlers resolve every import in a module graph
-before they tree-shake it, so re-exporting this step from the main entry point would make the whole package
-unresolvable for the browser — even in a build that never calls the step. The main entry point stays
-platform-neutral; reach for this subpath from Node.
+| `simplifyStaticExpressionsTransformation(engine?)` | Folds every fully static expression to the term Comunica's expression engine evaluates it to. |
 
 ## Cite
 

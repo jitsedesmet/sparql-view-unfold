@@ -5,6 +5,7 @@ import { isTriplePosition, TermClusterSet, triplePositions } from '../datastruct
 import {
   asAssertableTermType,
   assertableTermTypes,
+  positionRangeOf,
   RangeSet,
   rangeOfTermType,
   termTypePredicates,
@@ -763,15 +764,17 @@ export function asWeakenedConjunct(conjunct: AssertionConjunct): AssertionConjun
 type TermPosition = 'graph' | 'object' | 'predicate' | 'subject';
 
 /**
- * Whether a triple with this term in this position can exist at all: no triple has a literal or a triple
- * term as its subject, predicate or graph name, and none has anything but an IRI as its predicate.
+ * Whether a triple of the RDF source can hold this term in this position, recursing into a triple term.
  * @param term - The term to place
  * @param position - The position it lands in
  * @returns whether some triple holds it there, `true` for a variable, which may occupy any position
  */
 function canOccupy(term: RDF.Term, position: TermPosition): boolean {
-  if (position === 'object' || term.termType === 'Variable') {
+  if (term.termType === 'Variable') {
     return true;
+  }
+  if (position === 'object') {
+    return term.termType !== 'Quad' || triplePositions.every(inner => canOccupy(term[inner], inner));
   }
   if (position === 'predicate') {
     return term.termType === 'NamedNode';
@@ -848,12 +851,21 @@ export function substituteInPattern(
 
 /**
  * Unifies two terms on the term clusters, so that a triple term unifies position by position.
+ * @param c - Whether triple terms may be generalized ones
  * @param left - The one term
  * @param right - The other term
  * @returns the most general substitution making both the same term, and that term, or `undefined` when none does
  */
-export function unifyTerms(left: RDF.Term, right: RDF.Term): { unifier: Assertions; unified: RDF.Term } | undefined {
-  const clusters = new TermClusterSet<string>(name => name, variable => variable.value);
+export function unifyTerms(
+  c: Pick<TransformationContext, 'generalizedRdf'>,
+  left: RDF.Term,
+  right: RDF.Term,
+): { unifier: Assertions; unified: RDF.Term } | undefined {
+  const clusters = new TermClusterSet<string>(
+    name => name,
+    variable => variable.value,
+    positionRangeOf(c.generalizedRdf),
+  );
   const group = clusters.groupOfTerm(left);
   if (group === false || !clusters.assertTerm(group, right)) {
     return undefined;

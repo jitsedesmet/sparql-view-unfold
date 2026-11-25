@@ -1,8 +1,9 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
+import { forEveryNodeType } from '@traqula/core';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
-import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
+import { isTriplePosition } from '../datastructures/TermClusterSet.js';
 import {
   asAssertableTermType,
   blankNodeRange,
@@ -33,12 +34,8 @@ import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils
  * Key presence and range are independent on purpose, which is what makes the merge sound. A key at
  * {@link emptyRange} is a variable in scope that provably never binds, and it has to stay a key:
  * `pVars(Empty_S) := S`. A rewrite may still shrink the scope of an empty operation, as
- * {@link transformations/filterFalse!transformFilterFalse} does.
- *
- * One case deliberately drops a key rather than bottoming its range: a `FILTER(!bound(?x))` takes `?x` out
- * of scope, which is what the `pVars` this replaced did too. The bottom range would say it more precisely,
- * but (FBndII) reads *absence* as its emptiness proof, so moving it would change what the assertion
- * pushdown concludes. Worth revisiting once the bottom has consumers.
+ * {@link transformations/filterFalse!transformFilterFalse} does. A `FILTER(!bound(?x))` likewise bottoms
+ * `?x` rather than dropping it, `?x` staying in scope.
  */
 export class VRanges extends Map<string, RangeSet> {
   /**
@@ -132,6 +129,40 @@ function intersectRanges(inputs: readonly CPMeta[]): VRanges {
 }
 
 /**
+ * What the join of some operands binds.
+ * @param inputs - The metadata of the operands
+ * @returns the metadata of their join
+ */
+export function joinedMeta(inputs: readonly CPMeta[]): CPMeta {
+  return { cVars: unionSets(inputs.map(input => input.cVars)), vRanges: intersectRanges(inputs) };
+}
+
+/**
+ * What an operation binds of some variables only, as a projection on them keeps.
+ * @param meta - The metadata of the operation
+ * @param names - The variables to keep
+ * @returns the restricted metadata
+ */
+function metaRestrictedTo(meta: CPMeta, names: SSet): CPMeta {
+  return {
+    cVars: intersectSets([ meta.cVars, names ]),
+    vRanges: new VRanges([ ...meta.vRanges ].filter(([ name ]) => names.has(name))),
+  };
+}
+
+/**
+ * The range of a variable after a BIND or an aggregate writes it. A variable its input may bind already, as the outer
+ * solution of an EXISTS does, may keep its value: SPARQL 1.2 leaves such a write undefined.
+ * @param name - The variable written
+ * @param written - The range of the value written
+ * @param input - The metadata of the solutions written in
+ * @returns the range of the variable afterwards
+ */
+function rangeAfterWrite(name: string, written: RangeSet, input: CPMeta): RangeSet {
+  return input.vRanges.has(name) ? RangeSet.join([ input.vRanges.rangeOf(name), written ]) : written;
+}
+
+/**
  * The ranges of the branches an operation *chooses between*: a variable takes the type of whichever branch
  * produced the solution, so the ranges are unioned.
  * @param inputs - The metadata of the branches
@@ -192,12 +223,11 @@ const operatorRanges = new Map(([
   [ iriRange, 'datatype iri uri uuid' ],
   [ blankNodeRange, 'bnode' ],
   [ tripleTermRange, 'triple' ],
-  ...triplePositions.map((position): [RangeSet, string] => [ rangeOfPosition(position), position ]),
 ] satisfies [RangeSet, string][]).flatMap(([ range, operators ]) =>
   operators.trim().split(/\s+/u).map(operator => <const> [ operator, range ])));
 
 /** What the range analysis reads of a {@link TransformationContext}. */
-export type RangeContext = Pick<TransformationContext, 'expressionRange'>;
+export type RangeContext = Pick<TransformationContext, 'existenceScope' | 'expressionRange' | 'generalizedRdf'>;
 
 /**
  * The term types an expression can evaluate to for an engine that replaces no error with a value, reading its
@@ -223,6 +253,10 @@ export function standardExpressionRange(c: RangeContext, expression: Algebra.Exp
         const choices = expression.operator === 'if' ? expression.args.slice(1) : expression.args;
         return RangeSet.join(choices.map(choice => c.expressionRange(c, choice, input)));
       }
+      // An accessor gives what its position of a triple term holds, which any term may in generalized RDF.
+      if (isTriplePosition(expression.operator)) {
+        return rangeOfPosition(expression.operator, c.generalizedRdf);
+      }
       return operatorRanges.get(expression.operator) ?? objectRange;
     }
     case ExpressionTypes.AGGREGATE: {
@@ -247,14 +281,21 @@ export function standardExpressionRange(c: RangeContext, expression: Algebra.Exp
   }
 }
 
-/** Drops the `metadata` of the operation it is applied to, whatever that metadata holds. */
-const dropMetadata = { transform: (copy: { metadata?: unknown }): unknown => {
-  delete copy.metadata;
-  return copy;
-} };
+/**
+ * Drops the metadata cached on a node, whatever that metadata holds.
+ * @param node - The node, changed in place
+ * @returns the node
+ */
+export function dropCachedMetadata<T extends object>(node: T): T {
+  delete (<{ metadata?: unknown }> node).metadata;
+  return node;
+}
 
 /** Drops the metadata of every operation, no matter its type. */
-const dropAllMetadata = Object.fromEntries(Object.values(Types).map(type => [ type, dropMetadata ]));
+const dropAllMetadata = forEveryNodeType({ transform: dropCachedMetadata });
+
+/** A transformer over the algebra that only visits the keys holding operations, so no RDF term and no metadata. */
+export const operationTransformer = algebraUtils.algebraTransformer({}).clone({}, algebraUtils.knownKeysAllowlist);
 
 /**
  * Returns a copy of `op` without any cached metadata, the state {@link withCpVars} recomputes from. Since
@@ -263,7 +304,7 @@ const dropAllMetadata = Object.fromEntries(Object.values(Types).map(type => [ ty
  * @returns the stripped copy
  */
 export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
-  return algebraUtils.mapOperation<'unsafe', T>(op, dropAllMetadata);
+  return operationTransformer.transformNode<'unsafe', T>(op, dropAllMetadata);
 }
 
 /**
@@ -337,11 +378,57 @@ export function expressionCertainlyEvaluates(c: RangeContext, expression: Algebr
 /**
  * The operation with its certainly and possibly bound variables assigned, computed by dynamic programming:
  * callers are responsible for keeping the metadata up to date when they manipulate the operation.
- * @param c - The context whose `expressionRange` gives what a BIND or an aggregate binds
+ * @param c - The context whose `expressionRange` gives what a BIND or an aggregate binds, and whose `existenceScope`
+ * is joined in
  * @param op - The operation to annotate
  * @returns the same operation, with its metadata attached
  */
 export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T): CPOp<T> {
+  const cached = (<T & { metadata?: Partial<ScopedCPMeta> }> op).metadata;
+  // Metadata computed in another scope does not hold here.
+  if (cached?.cVars !== undefined && cached.vRanges !== undefined && cached.existenceScope === c.existenceScope) {
+    return <CPOp<T>> op;
+  }
+  const annotated = computeCpVarsOutsideExistenceScope(c, op);
+  if (c.existenceScope !== undefined && !aggregatesOver(op)) {
+    Object.assign(annotated.metadata, joinedMeta([ annotated.metadata, c.existenceScope ]));
+  }
+  (<ScopedCPMeta> annotated.metadata).existenceScope = c.existenceScope;
+  return annotated;
+}
+
+/**
+ * Whether an operation is a GROUP, or a HAVING, select expression or ORDER BY over one. Its solutions hold only the
+ * group keys and aggregates, not the solution an EXISTS is evaluated for, which SPARQL 1.2 joins into groups only.
+ * @param op - The operation to read
+ * @returns whether it aggregates
+ */
+function aggregatesOver(op: Algebra.Operation): boolean {
+  switch (op.type) {
+    case Types.GROUP: {
+      return true;
+    }
+    case Types.FILTER:
+    case Types.EXTEND:
+    case Types.ORDER_BY: {
+      return aggregatesOver(op.input);
+    }
+    default: {
+      return false;
+    }
+  }
+}
+
+/** Cached metadata, with the `existenceScope` it was computed in. */
+type ScopedCPMeta = CPMeta & Pick<RangeContext, 'existenceScope'>;
+
+/**
+ * Computes the metadata {@link withCpVars} caches, without joining in the `existenceScope`.
+ * @param c - The context whose `expressionRange` gives what a BIND or an aggregate binds
+ * @param op - The operation to annotate
+ * @returns the same operation, with its metadata attached
+ */
+function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: RangeContext, op: T): CPOp<T> {
   function asCPVars<T extends Algebra.Operation>(op: T): CPOp<T> {
     const casted = <CPOp<T>> op;
     if (!Object.hasOwn(op, 'metadata')) {
@@ -355,19 +442,12 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
     }
     return casted;
   }
-  const casted = <T & { metadata?: Partial<CPMeta> }> op;
-  if (casted.metadata !== undefined && casted.metadata.cVars !== undefined &&
-    casted.metadata.vRanges !== undefined) {
-    return <CPOp<T>> casted;
-  }
   const resOp = asCPVars<T>(op);
   switch (resOp.type) {
     case Types.BGP: {
-      const patterns = resOp.patterns.map(pattern => withCpVars(c, pattern).metadata);
-      resOp.metadata.cVars = unionSets(patterns.map(pattern => pattern.cVars));
       // Every pattern of a BGP has to match at once, so a variable occurring in several of them takes
       // the one type all of its occurrences admit.
-      resOp.metadata.vRanges = intersectRanges(patterns);
+      Object.assign(resOp.metadata, joinedMeta(resOp.patterns.map(pattern => cpMetaOf(c, pattern))));
       return resOp;
     } case Types.PATTERN: {
       resOp.metadata.cVars = unionSets([ resOp.subject, resOp.predicate, resOp.object, resOp.graph ].map(termVars));
@@ -386,12 +466,10 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
       resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.JOIN: {
-      const inputs = resOp.input.map(input => withCpVars(c, input));
-      resOp.metadata.cVars = unionSets(inputs.map(input => input.metadata.cVars));
       // Note the inversion against `cVars`: a join *merges* compatible mappings, so a variable several
       // operands can bind holds one value satisfying all of them - the ranges intersect where the
       // certainties unite. (For a union it is the other way around, see below.)
-      resOp.metadata.vRanges = intersectRanges(inputs.map(input => input.metadata));
+      Object.assign(resOp.metadata, joinedMeta(resOp.input.map(input => cpMetaOf(c, input))));
       return resOp;
     } case Types.UNION: {
       // A variable is only certain when every branch binds it, but any branch may bind it.
@@ -427,13 +505,9 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
       return resOp;
     } case Types.PROJECT: {
       const projected = new Set(resOp.variables.map(variable => variable.value));
-      const input = withCpVars(c, resOp.input);
-      resOp.metadata.cVars = intersectSets([ input.metadata.cVars, projected ]);
       // A projection only drops variables, so what it keeps still takes the values the input gave it -
       // and dropping one is now dropping its key, which is what takes it out of scope.
-      resOp.metadata.vRanges = new VRanges(
-        [ ...input.metadata.vRanges ].filter(([ name ]) => projected.has(name)),
-      );
+      Object.assign(resOp.metadata, metaRestrictedTo(cpMetaOf(c, resOp.input), projected));
       return resOp;
     } case Types.GROUP: {
       // Only the grouping keys and the aggregate targets survive the grouping. A key is certain only
@@ -451,10 +525,12 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
           .map(aggregate => aggregate.variable.value)),
       ]);
       // A grouping key keeps holding the value of the input, an aggregate target what the aggregate computes.
-      // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins.
-      const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
+      // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins. A key is in
+      // scope also where the input never binds it, as over FILTER(FALSE).
+      const ranges = new VRanges([ ...keys ].map(name => [ name, input.metadata.vRanges.rangeOf(name) ]));
       for (const aggregate of resOp.aggregates) {
-        ranges.set(aggregate.variable.value, c.expressionRange(c, aggregate, input.metadata));
+        const target = aggregate.variable.value;
+        ranges.set(target, rangeAfterWrite(target, c.expressionRange(c, aggregate, input.metadata), input.metadata));
       }
       resOp.metadata.vRanges = ranges;
       return resOp;
@@ -484,13 +560,14 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
       resOp.metadata.cVars = certain;
       // The EXTEND brings its target into scope, and what the expression yields overrides whatever the
       // input had to say about it - binding an already bound variable is an error, not a narrowing.
-      ranges.set(resOp.variable.value, c.expressionRange(c, resOp.expression, input.metadata));
+      const written = c.expressionRange(c, resOp.expression, input.metadata);
+      ranges.set(resOp.variable.value, rangeAfterWrite(resOp.variable.value, written, input.metadata));
       resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.FILTER: {
       // The variables of an EXISTS stay inside it, so a filter never adds a possible binding.
       // However: depending on the filter, we can say something on vars being present.
-      // Also filters pVars and cVars for `!bound(?x)`
+      // Also filters cVars for `!bound(?x)`
       // Keep in mind: Filter False is a special case.
       const input = withCpVars(c, resOp.input);
       const unbound = variablesImpliedUnboundBy(resOp.expression);
@@ -498,8 +575,7 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
       resOp.metadata.cVars = differenceSets(unionSets([ input.metadata.cVars, new Set(implied.keys()) ]), unbound);
       // A filter only drops solutions, so what survives holds what the input put there, narrowed by what the
       // condition confines it to. A variable out of scope stays out: the condition never holds for it.
-      // A `!bound(?x)` takes `?x` out of scope entirely, as it did out of `pVars` - see the note in the
-      // file header on why this is not the bottom range instead.
+      // A `!bound(?x)` leaves `?x` in scope but never bound.
       const ranges = new VRanges(input.metadata.vRanges);
       for (const [ name, range ] of implied) {
         if (ranges.has(name)) {
@@ -507,7 +583,9 @@ export function withCpVars<T extends Algebra.Operation>(c: RangeContext, op: T):
         }
       }
       for (const name of unbound) {
-        ranges.delete(name);
+        if (ranges.has(name)) {
+          ranges.set(name, emptyRange);
+        }
       }
       resOp.metadata.vRanges = ranges;
       return resOp;
@@ -696,11 +774,7 @@ function variablesImpliedUnboundBy(expression: A.Expression, agg = new Set<strin
  * @returns its variables
  */
 export function termVars(term: RDF.Term): Set<string> {
-  if (term.termType === 'Variable') {
-    return new Set([ term.value ]);
-  }
-  if (term.termType === 'Quad') {
-    return unionSets([ termVars(term.subject), termVars(term.predicate), termVars(term.object) ]);
-  }
-  return new Set<string>();
+  const names = new Set<string>();
+  algebraUtils.forEachTermVariable(term, variable => names.add(variable.value));
+  return names;
 }

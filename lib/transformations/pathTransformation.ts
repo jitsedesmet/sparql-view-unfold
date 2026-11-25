@@ -95,7 +95,7 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
    * @returns the match, or `undefined` when the endpoints never denote one term
    */
   function zeroLengthMatch(path: Algebra.Path): Algebra.Operation | undefined {
-    const unification = unifyTerms(path.subject, path.object);
+    const unification = unifyTerms(c, path.subject, path.object);
     if (unification === undefined) {
       return undefined;
     }

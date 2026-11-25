@@ -1,0 +1,9 @@
+PREFIX : <ex://>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+# Pairs of objects the mappings write into a subject position, equal within each node. A literal is no subject, so
+# `:t` and `:r1` make no triple: they are the rows a rewrite that lost the mapping's type test returns.
+:t :x "l" ; :y "l" .
+:u :x :c ; :y :c .
+:r1 rdf:subject "lit" ; rdf:predicate :q ; rdf:object "lit" .
+:r2 rdf:subject :c ; rdf:predicate :q ; rdf:object :c .

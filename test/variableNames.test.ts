@@ -1,10 +1,10 @@
-import { toAst } from '@traqula/algebra-sparql-1-2';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import { claimVariableName } from '../lib/utils.js';
+import { createValidatingQueryRewriter, generateValidQuery } from './validQuery.js';
 
 /**
  * Nothing is told apart by its name: the user query keeps the names it was written with, and a mapping
@@ -13,13 +13,14 @@ import { claimVariableName } from '../lib/utils.js';
 describe('variable names', () => {
   /** Rewrites a query with nothing but the unfolding of the given mappings. */
   async function unfold(query: string, constructs: string[]): Promise<string> {
-    return (await createQueryRewriter([ unfoldingTransformation(mappingFromConstructQueries(constructs)) ])
+    return (await createValidatingQueryRewriter([ unfoldingTransformation(mappingFromConstructQueries(constructs)) ])
       .rewriteQuery(query)).trim();
   }
 
   /** Rewrites a query with the default pipeline over the given mappings. */
   async function rewriteWithDefaultPipeline(query: string, constructs: string[]): Promise<string> {
-    return (await createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries(constructs)))
+    const pipeline = createDefaultTransformationPipeline(mappingFromConstructQueries(constructs));
+    return (await createValidatingQueryRewriter(pipeline)
       .rewriteQuery(query)).trim();
   }
 
@@ -157,10 +158,10 @@ WHERE {
 
     it('is not coined through rewriteOperation either', async({ expect }) => {
       const c = createTransformationContext();
-      const rewritten = await createQueryRewriter(createDefaultTransformationPipeline(
+      const rewritten = await createValidatingQueryRewriter(createDefaultTransformationPipeline(
         mappingFromConstructQueries(hidingMapping),
       )).rewriteOperation(parseQuery(c, 'SELECT ?s ?v_0 WHERE { ?s <ex://p> ?x }'));
-      expect(c.generator.generate(toAst(rewritten)).trim()).toBe(`SELECT ?s ?v_0 WHERE {\n${unfoldedPattern}\n}`);
+      expect(generateValidQuery(c, rewritten).trim()).toBe(`SELECT ?s ?v_0 WHERE {\n${unfoldedPattern}\n}`);
     });
   });
 
@@ -168,7 +169,7 @@ WHERE {
     const c = createTransformationContext();
     const query = 'SELECT * { ?s <ex://p> ?o }';
     const operation = parseQuery(c, query);
-    await createQueryRewriter([ unfoldingTransformation(mappingFromConstructQueries([
+    await createValidatingQueryRewriter([ unfoldingTransformation(mappingFromConstructQueries([
       'CONSTRUCT WHERE { ?s <ex://p> ?o }',
     ])) ]).rewriteOperation(operation);
     expect(operation).toEqual(parseQuery(c, query));

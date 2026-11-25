@@ -1,5 +1,6 @@
 import { describe, it } from 'vitest';
 import { ClusterSolver } from '../lib/ClusterSolver.js';
+import { rangeOfPosition } from '../lib/RangeSet.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
 
 /**
@@ -21,7 +22,7 @@ describe('clusterSolver', () => {
 
   /** `?y ≡ <<( ?s ?p ?o )>>`, the head triple term of a mapping bound to one pattern variable. */
   function solverWithShape(): ClusterSolver {
-    const solver = new ClusterSolver();
+    const solver = new ClusterSolver(rangeOfPosition);
     solver.register(DF.quad(varS, varP, varO), varY);
     return solver;
   }
@@ -58,7 +59,7 @@ describe('clusterSolver', () => {
     });
 
     it('decides the variables of one triple term from the terms of another', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       solver.register(DF.quad(termA, termB, varO), varY);
       solver.register(DF.quad(varS, varP, termC), varY);
       expect(solver.resolvedTermOf(solver.getGroup(varS))).toEqual(termA);
@@ -67,7 +68,7 @@ describe('clusterSolver', () => {
     });
 
     it('takes a nested triple term apart with it', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       const nested = DF.quad(DF.variable('a'), DF.variable('b'), DF.variable('c'));
       solver.register(DF.quad(varS, varP, nested), varY);
       solver.register(termB, DF.variable('b'));
@@ -76,7 +77,7 @@ describe('clusterSolver', () => {
     });
 
     it('decides a ground triple term position by position rather than pinning it whole', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       solver.register(DF.quad(termA, termB, termC), varY);
       expect(solver.getCluster(varY).term).toEqual(DF.quad(termA, termB, termC));
       expect(() => solver.register(DF.quad(termA, termB, termA), varY))
@@ -86,7 +87,7 @@ describe('clusterSolver', () => {
 
   describe('telling the mapping side of a cluster from the user query side', () => {
     it('classifies a variable by the side register meets it on, whatever its name', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       const mappingVar = DF.variable('uq_x');
       solver.register(mappingVar, DF.variable('x'));
       expect(solver.mappingVarsOf(solver.getGroup(mappingVar)).map(value => value.value))
@@ -94,7 +95,7 @@ describe('clusterSolver', () => {
     });
 
     it('forgets the user query side when cleared', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       solver.register(DF.variable('y'), DF.variable('x'));
       solver.clear();
       solver.register(DF.variable('x'), DF.variable('z'));
@@ -104,7 +105,7 @@ describe('clusterSolver', () => {
 
     /** What the rewriting reads off a cluster is its first variable, so the mapping's has to come first. */
     it('orders the mapping variables first however their names compare', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       const userQueryVar = DF.variable('a');
       const mappingVar = DF.variable('zz_x');
       solver.register(mappingVar, userQueryVar);
@@ -125,13 +126,13 @@ describe('clusterSolver', () => {
     });
 
     it('refuses a triple term containing the very group it fixes', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       // `?y ≡ <<( ?s ?p ?y )>>` has no solution: a triple term is larger than each of its positions.
       expect(() => solver.register(DF.quad(varS, varP, varY), varY)).toThrow();
     });
 
     it('refuses a triple term on a group already fixed to a basic term', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       solver.register(termA, varY);
       expect(() => solver.register(DF.quad(varS, varP, varO), varY)).toThrow('Cannot match Term');
     });
@@ -142,7 +143,7 @@ describe('clusterSolver', () => {
     });
 
     it('refuses to unify two variables fixed to different terms', ({ expect }) => {
-      const solver = new ClusterSolver();
+      const solver = new ClusterSolver(rangeOfPosition);
       solver.register(termA, varY);
       solver.register(varS, varO);
       solver.register(termB, varO);

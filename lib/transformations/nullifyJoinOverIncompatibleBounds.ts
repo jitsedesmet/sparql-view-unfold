@@ -83,7 +83,7 @@ function restrictOperations(
     if (op.type === Algebra.Types.EXTEND) {
       const varSet = varSets.get(op.variable.value);
       if (op.expression.subType === Algebra.ExpressionTypes.TERM && varSet &&
-        !varSet.termIsCompatible(op.expression.term) &&
+        !varSet.termIsCompatible(c, op.expression.term) &&
         // A bind that fails leaves its variable unbound, which joins with anything. The certainty is read off a
         // copy, so that none is left cached on operations this pass goes on to change.
         expressionCertainlyEvaluates(c, op.expression, cpMetaOf(c, withoutCpVars(op.input)))) {

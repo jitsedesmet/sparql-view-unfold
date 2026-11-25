@@ -1,4 +1,5 @@
 import { Algebra } from '@traqula/algebra-transformations-1-2';
+import type { TransformationContext } from '../transformContext.js';
 
 /**
  * @fileoverview The chain of solution modifiers at the top of a query.
@@ -44,4 +45,17 @@ export function solutionModifierChainOf(root: Algebra.Operation): Set<Algebra.Op
     current = (<Algebra.Single> current).input;
   }
   return sealed;
+}
+
+/**
+ * The solution-modifier chain of the query itself, which an EXISTS pattern is not.
+ * @param c - The context, whose `existenceScope` is set inside an EXISTS pattern
+ * @param root - The root of the tree the traversal is about to run over
+ * @returns those nodes, by identity, and none inside an EXISTS pattern
+ */
+export function querySolutionModifiersOf(
+  c: Pick<TransformationContext, 'existenceScope'>,
+  root: Algebra.Operation,
+): Set<Algebra.Operation> {
+  return c.existenceScope === undefined ? solutionModifierChainOf(root) : new Set();
 }

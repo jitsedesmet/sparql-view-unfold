@@ -1,11 +1,11 @@
 import { describe, it } from 'vitest';
 import type { PinChildren } from '../lib/datastructures/TermClusterSet.js';
 import { TermClusterSet } from '../lib/datastructures/TermClusterSet.js';
-import { predicateRange, subjectRange } from '../lib/RangeSet.js';
+import { predicateRange, rangeOfPosition, subjectRange } from '../lib/RangeSet.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
 
 function newSet(): TermClusterSet<string> {
-  return new TermClusterSet<string>(name => name, variable => variable.value);
+  return new TermClusterSet<string>(name => name, variable => variable.value, rangeOfPosition);
 }
 
 const termA = DF.namedNode('ex://a');

@@ -74,3 +74,26 @@ export function bindAssertedTerms(
   }
   return result;
 }
+
+/**
+ * Whether a property path can match zero steps, and so relate a term to itself.
+ * @param path - The property path to check
+ * @returns whether the path can match zero steps
+ */
+export function canMatchZeroLength(path: Algebra.PropertyPathSymbol): boolean {
+  switch (path.type) {
+    case Algebra.Types.LINK:
+    case Algebra.Types.NPS:
+      return false;
+    case Algebra.Types.INV:
+    case Algebra.Types.ONE_OR_MORE_PATH:
+      return canMatchZeroLength(path.path);
+    case Algebra.Types.SEQ:
+      return path.input.every(canMatchZeroLength);
+    case Algebra.Types.ALT:
+      return path.input.some(canMatchZeroLength);
+    // `?` and `*`, and, to stay safe, any path this does not know.
+    default:
+      return true;
+  }
+}

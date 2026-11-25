@@ -6,7 +6,6 @@ import { filterFalseTransformation } from '../lib/transformations/filterFalse.js
 import {
   nullifyJoinOverIncompatibleBoundsTransformation,
 } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
-import { nullifyUnbindableVarsTransformation } from '../lib/transformations/nullifyUnbindableVars.js';
 import { pullUpExtendsTransformation } from '../lib/transformations/pullUpExtends.js';
 import { pushDownAssertions, pushDownAssertionsTransformation } from '../lib/transformations/pushDownAssertions.js';
 import { removeProjectionsTransformation } from '../lib/transformations/removeProjections.js';
@@ -51,7 +50,6 @@ const standardPipeline: QueryTransformation[] = [
   unfoldingTransformation(mapping),
   filterFalseTransformation(),
   nullifyJoinOverIncompatibleBoundsTransformation(),
-  nullifyUnbindableVarsTransformation(),
   filterFalseTransformation(),
   pullUpExtendsTransformation(),
   removeProjectionsTransformation(),
@@ -63,7 +61,6 @@ const withPushdown: QueryTransformation[] = [
   pushDownAssertionsTransformation(),
   filterFalseTransformation(),
   nullifyJoinOverIncompatibleBoundsTransformation(),
-  nullifyUnbindableVarsTransformation(),
   filterFalseTransformation(),
   pullUpExtendsTransformation(),
   removeProjectionsTransformation(),
