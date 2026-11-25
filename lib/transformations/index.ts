@@ -34,14 +34,8 @@
  *   materialise internal blank nodes as typed literals or as prefixed IRIs, since RDF 1.1 sources cannot
  *   reference blank nodes consistently. With `{ encodedByExtensionFunction: true }`, the engine encodes them
  *   through `internalBnodeExtensionFunctions()`.
- *
- * One step is deliberately **not** re-exported here:
- * {@link comunica!simplifyStaticExpressionsTransformation}, which folds static expressions through
- * Comunica's expression evaluator. It bootstraps Components.js from Node's module resolution, so importing
- * it reaches `node:module` and `node:path`; a bundler resolves every import in a module graph before it
- * tree-shakes, so re-exporting it here would make this barrel - and with it the package entry point -
- * unresolvable for the browser even in a build that never calls the step. It lives behind the
- * `sparql-view-unfold/comunica` subpath instead, which only a Node consumer needs to reach for.
+ * - **simplifyStaticExpressionsTransformation**: folds every fully static expression to the term Comunica's
+ *   standalone expression engine evaluates it to.
  * @module transformations
  */
 export type { ExtensionFunctions } from './bnodeExtensionFunction.js';
@@ -60,5 +54,6 @@ export { pullUpExtendsTransformation } from './pullUpExtends.js';
 export { pushDownAssertionsTransformation } from './pushDownAssertions.js';
 export { removeProjectionsTransformation } from './removeProjections.js';
 export { serviceCallPushUpTransformation } from './serviceCallMerge.js';
+export { simplifyStaticExpressionsTransformation } from './staticExpressionEvaluation.js';
 export type { UnfoldingOptions } from './unfolding.js';
 export { unfoldingTransformation } from './unfolding.js';

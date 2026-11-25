@@ -71,8 +71,8 @@ function substitute(
 ): Algebra.Expression {
   // Only the folds the pushdown depends on are done here, synchronously. Evaluating arbitrary static
   // operators (`1 + 2`, `CONCAT(...)`, ...) is handled separately by the asynchronous
-  // {@link transformations/staticExpressionEvaluation!simplifyStaticExpressions} pass, which hands them to the
-  // Comunica Expression Evaluator.
+  // {@link transformations/staticExpressionEvaluation!simplifyStaticExpressionsTransformation} pass, which hands
+  // them to Comunica's standalone expression engine.
   const { AF } = c;
   switch (expression.subType) {
     case Algebra.ExpressionTypes.TERM: {
