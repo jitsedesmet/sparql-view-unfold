@@ -112,6 +112,7 @@ parses, which is why the BKR-star query files can be fed to the rewriter verbati
 | **QLever** | ❌ SPARQL 1.1 only | ❌ | — | C++ server over its own index here; runs the LUBM and OAEI workloads only |
 | **Blazegraph** | ❌ own RDF* (RDR) only | ❌ | — | Java server over its journal here; runs the LUBM and OAEI workloads only |
 | **Virtuoso** | ❌ SPARQL 1.1 only | ❌ | — | C server over its database here; runs the LUBM and OAEI workloads only |
+| **Tentris** | ❌ SPARQL 1.1 only | ❌ | — | Rust server over its own store here; runs the LUBM and OAEI workloads only |
 | Stardog, MillenniumDB | ❌ SPARQL 1.1 only | ❌ | — | not usable for native SPARQL 1.2 |
 
 Verified directly (2026-08-27): **Fuseki 6.2.0** parses and evaluates `<<( s p o )>>`
@@ -308,6 +309,19 @@ itself, the cell is an error saying so, and the next cell starts a new server. 3
 machine enough that the heap cap, not the kernel's OOM killer, stops such a query. Its heap dumps, the size of
 the heap, are switched off.
 
+**Tentris.** Take the `tentris-<version>-x86_64-linux.tar.gz` of a release (1.6.0 is the one driven) from
+<https://github.com/tentris/tentris/releases>, unpack it, and point `TENTRIS_BIN` at the `tentris` binary. It runs
+on glibc 2.31. Without a licence file it runs under its bundled non-commercial licence, which evaluates each query
+on one thread. That licence (EULA §2.3) lets benchmark results be published freely only if Tentris is not named or
+identifiable in them; naming it needs Tentris's prior approval, asked at least 30 days ahead. Tentris takes its
+limits from a config file only, so the harness writes one beside each store (`<store>.serve.toml`): the query
+budget, and no limit on the size of a request or an answer, which its defaults cap at 4 MB and 4 GB. Stores are
+loaded without the snapshot a load takes by default, which on a filesystem without reflinks is a full copy.
+Tentris has no memory limit of its own, so the server runs with its address space capped at 40 GB
+(`TENTRIS_MAX_MEMORY_GB`), close to GraphDB's budget; a query that reaches the cap aborts the server, the cell is
+an error, and the next cell starts a new one. The writable server `timeMaterialization.ts` inserts the views
+through runs uncapped: it reserves 8 TB of address space up front.
+
 | Env var | Meaning | Default |
 |---|---|---|
 | `OXIGRAPH_BIN` | The `oxigraph` binary. | `oxigraph` |
@@ -333,6 +347,9 @@ the heap, are switched off.
 | `GRAPHDB_PORT` | Port of the GraphDB server. | `3137` |
 | `GDB_JAVA_OPTS` | Extra JVM arguments for GraphDB's server and loader (read by GraphDB's own scripts). | (none) |
 | `GDB_MAX_MEM` | Heap cap (`-Xmx`) of GraphDB's server. | `36g` |
+| `TENTRIS_BIN` | The `tentris` binary. | `tentris` |
+| `TENTRIS_PORT` | Port of the Tentris server. | `3138` |
+| `TENTRIS_MAX_MEMORY_GB` | Address-space cap of Tentris's read-only server, in GB. | `40` |
 | `RDF2HDT` | hdt-cpp's `rdf2hdt`, for the workloads' HDT copies. | `rdf2hdt` |
 
 ## Known issues in the corpus and the engines

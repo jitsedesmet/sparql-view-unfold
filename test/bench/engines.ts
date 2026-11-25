@@ -1553,6 +1553,70 @@ export class GraphDBEngine extends ManagedServerEngine {
   }
 }
 
+/**
+ * **Tentris**'s server (`tentris serve`) over a datastore filled by its offline loader (`tentris load`). Tentris
+ * implements SPARQL 1.1 only (its loader rejects triple terms), so it runs the LUBM and OAEI workloads only.
+ *
+ * Needs the `tentris` binary of a release (<https://github.com/tentris/tentris/releases>), on `PATH` or named by
+ * `TENTRIS_BIN`. `TENTRIS_PORT` sets the port (default 3138) and `TENTRIS_MAX_MEMORY_GB` the server's address
+ * space (default 40). Its non-commercial licence is bundled; see `README.md` for what it says about publishing
+ * benchmark results.
+ */
+export class TentrisEngine extends ManagedServerEngine {
+  public readonly supportsSparql12 = false;
+  public readonly storeKind = 'tentris';
+  private readonly bin = process.env.TENTRIS_BIN ?? 'tentris';
+  /** About GraphDB's budget: its 36 GB heap plus what the JVM takes besides. */
+  private readonly maxMemoryGb = Number.parseInt(process.env.TENTRIS_MAX_MEMORY_GB ?? '40', 10);
+
+  public constructor(name = 'tentris') {
+    super(name, Number.parseInt(process.env.TENTRIS_PORT ?? '3138', 10));
+  }
+
+  /**
+   * Without the snapshot a load takes by default: on a filesystem without reflinks (ext4) it is a full copy
+   * of the store, and it only matters for recovering a store written to when the server crashed.
+   */
+  public loadStore(file: string, dir: string): void {
+    runTool(this.bin, [ '-s', dir, '--no-debug-logging', 'load', '--force-no-snapshot', file ]);
+  }
+
+  /**
+   * Tentris takes its limits from a config file only, so one is written beside the store for each budget. Its
+   * default limits on the query, the request and the answer would fail large rewrites and references alike.
+   */
+  protected serverCommand(dir: string, timeoutMs: number | undefined, writable: boolean): string[] {
+    const config = `${resolve(dir)}.serve.toml`;
+    writeFileSync(config, [
+      '[serve]',
+      `bind-address = "127.0.0.1:${this.port}"`,
+      `read-only = ${!writable}`,
+      `limit-query-duration-secs = ${timeoutMs === undefined ? '"unlimited"' : Math.ceil(timeoutMs / 1000)}`,
+      'limit-query-and-update-request-body-size = "unlimited"',
+      'limit-sparql-response-body-size = "unlimited"',
+      '',
+    ].join('\n'));
+    const command = [ this.bin, '-s', dir, '--config', config, '--no-debug-logging', 'serve' ];
+    // Tentris has no memory limit of its own, so a query could take all of the machine's memory, and the
+    // kernel's OOM killer may pick any process. The cgroup limits systemd offers are not enforced on a cgroup v1
+    // machine, so its address space is capped instead, which it exceeds by only ~4 GB at rest. At the cap it
+    // aborts without a message: a SIGABRT is it running out of memory. A writable server reserves 8 TB of
+    // address space up front, and under the cap reports its store corrupted, so it runs uncapped: it only
+    // inserts the views, the queries a capped server already constructed them with.
+    return writable ?
+      command :
+        [ '/bin/sh', '-c', 'ulimit -v "$0" && exec "$@"', String(this.maxMemoryGb * 1024 * 1024), ...command ];
+  }
+
+  protected get queryUrl(): string {
+    return `${this.baseUrl}/sparql`;
+  }
+
+  protected get updateUrl(): string {
+    return `${this.baseUrl}/update`;
+  }
+}
+
 /** The repository {@link GraphDBEngine} loads into: no reasoning, and a query that runs out of time fails. */
 const GRAPHDB_REPOSITORY = `@prefix rep: <http://www.openrdf.org/config/repository#>.
 @prefix sr: <http://www.openrdf.org/config/repository/sail#>.

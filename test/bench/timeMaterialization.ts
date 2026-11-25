@@ -8,7 +8,8 @@
  *    `tdb2.tdbloader --loader=parallel`, QLever's index builder; for Comunica, which cannot write, `rdf2hdt`
  *    and the HDT index Comunica builds when it first opens the file.
  *  - `insert`: one `INSERT { GRAPH <urn:bench:views> { ... } } WHERE { ... }` per view, into a copy of the
- *    source store (Oxigraph, Jena, QLever, Virtuoso and GraphDB; Blazegraph's store holds triples, not named graphs).
+ *    source store (Oxigraph, Jena, QLever, Virtuoso, GraphDB and Tentris; Blazegraph's store holds triples, not
+ *    named graphs).
  * The views' output overlaps, but a store is a set, so nothing is deduplicated by hand. Starting a server on
  * the source store is not timed: the rewriting needs that server too. Everything after it is, once, as a
  * one-off materialisation would pay it.
@@ -26,7 +27,7 @@
  * measurements are kept in the output file.
  *
  * Usage: npx tsx test/bench/timeMaterialization.ts
- *   [--engines oxigraph,jena,qlever,blazegraph,virtuoso,graphdb,comunica]
+ *   [--engines oxigraph,jena,qlever,blazegraph,virtuoso,graphdb,tentris,comunica]
  *   [--workloads lubm,oaei] [--scales u1,u10,...] [--methods construct-load,insert] [--include-slow]
  *   [--out file.json]
  *        npx tsx test/bench/timeMaterialization.ts --break-even results.json [--out file.json]
@@ -46,6 +47,7 @@ import {
   OxigraphEngine,
   QLeverEngine,
   runTool,
+  TentrisEngine,
   VirtuosoEngine,
 } from './engines.js';
 
@@ -205,6 +207,7 @@ function makeServer(name: string): ManagedServerEngine {
     case 'blazegraph': return new BlazegraphEngine();
     case 'virtuoso': return new VirtuosoEngine();
     case 'graphdb': return new GraphDBEngine();
+    case 'tentris': return new TentrisEngine();
     default: throw new Error(`Unknown engine '${name}'`);
   }
 }

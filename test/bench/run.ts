@@ -44,15 +44,15 @@
  * Engines:
  *   - `comunica`: a long-lived worker process per dataset (loaded and indexed once) —
  *     Comunica's join state can outgrow any heap, and inline that takes the sweep with it.
- *   - `oxigraph`, `jena`, `qlever`, `blazegraph`, `virtuoso` and `graphdb`: each engine's native server over
- *     an on-disk store it bulk-loads once per data file (see `ManagedServerEngine` in engines.ts, and
- *     README.md for setup). QLever, Blazegraph, Virtuoso and GraphDB have no RDF 1.2 support, so they run
- *     the LUBM and OAEI workloads only.
+ *   - `oxigraph`, `jena`, `qlever`, `blazegraph`, `virtuoso`, `graphdb` and `tentris`: each engine's native
+ *     server over an on-disk store it bulk-loads once per data file (see `ManagedServerEngine` in engines.ts,
+ *     and README.md for setup). QLever, Blazegraph, Virtuoso, GraphDB and Tentris have no RDF 1.2 support, so
+ *     they run the LUBM and OAEI workloads only.
  *
  * Results are written as JSON for the plotting script (`plot.mjs`).
  *
  * Usage:
- *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena,qlever,blazegraph,virtuoso,graphdb]
+ *   npx tsx test/bench/run.ts [--engines comunica,oxigraph,jena,qlever,blazegraph,virtuoso,graphdb,tentris]
  *     [--schemes reification,singleton,lubm,oaei] [--scales xs,s,m,u1,u10,u50,u100,u250,u500,d100,eswc] [--reps 1]
  *     [--reps-below 10000] [--approaches materialized,rewriting,...] [--cases lubm/Q06,...]
  *     [--preserve-cardinality | --paired-cardinality] [--rdf-views standard,generalized] [--changed-only]
@@ -74,6 +74,7 @@ import {
   JenaEngine,
   OxigraphEngine,
   QLeverEngine,
+  TentrisEngine,
   VirtuosoEngine,
 } from './engines.js';
 import type { BenchEngine, EngineSource, SelectResult } from './engines.js';
@@ -271,6 +272,7 @@ function makeEngine(name: string): BenchEngine {
     case 'blazegraph': return new BlazegraphEngine('blazegraph');
     case 'virtuoso': return new VirtuosoEngine('virtuoso');
     case 'graphdb': return new GraphDBEngine('graphdb');
+    case 'tentris': return new TentrisEngine('tentris');
     default: throw new Error(`Unknown engine '${name}'`);
   }
 }
