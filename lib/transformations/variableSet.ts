@@ -1,4 +1,6 @@
 import type * as RDF from '@rdfjs/types';
+import { unifyTerms } from '../utils/assertions.js';
+import { termIsStaticTerm } from '../utils/typeGuards.js';
 
 /**
  * Represents a set of possible values for a variable.
@@ -63,12 +65,17 @@ export class VariableSet {
   }
 
   /**
-   * Checks if a term is compatible with this set of possible values.
-   * Variables are always compatible; concrete terms must be in the value set.
+   * Whether a term can be one of the values, which are ground: a variable always can, a triple term over variables
+   * when it unifies with one, and any other term when it equals one.
    * @param term - The term to check
-   * @returns True if the term could match this VariableSet
+   * @returns whether the term could match this VariableSet
    */
   public termIsCompatible(term: RDF.Term): boolean {
-    return this.isNoFixed || term.termType === 'Variable' || this.values.some(x => x.equals(term));
+    if (this.isNoFixed || term.termType === 'Variable') {
+      return true;
+    }
+    return termIsStaticTerm(term) ?
+      this.values.some(value => value.equals(term)) :
+      this.values.some(value => value.termType === 'Quad' && unifyTerms(value, term) !== undefined);
   }
 }

@@ -31,7 +31,8 @@ describe('clusterSolver', () => {
     it('reads a triple term back off the shape it became', ({ expect }) => {
       const solver = solverWithShape();
       // Nothing *pins* the group: a triple term is a shape, and the term is what reading it back gives.
-      expect(solver.termOf(solver.getGroup(varY))).toBeUndefined();
+      expect(solver.pinOf(solver.getGroup(varY))?.kind).toBe('triple');
+      expect(solver.fixedTermOf(solver.getGroup(varY))).toBeUndefined();
       expect(solver.getCluster(varY).term).toEqual(DF.quad(varS, varP, varO));
     });
 
@@ -61,9 +62,9 @@ describe('clusterSolver', () => {
       const solver = new ClusterSolver(rangeOfPosition);
       solver.register(DF.quad(termA, termB, varO), varY);
       solver.register(DF.quad(varS, varP, termC), varY);
-      expect(solver.termOf(solver.getGroup(varS))).toEqual(termA);
-      expect(solver.termOf(solver.getGroup(varP))).toEqual(termB);
-      expect(solver.termOf(solver.getGroup(varO))).toEqual(termC);
+      expect(solver.fixedTermOf(solver.getGroup(varS))).toEqual(termA);
+      expect(solver.fixedTermOf(solver.getGroup(varP))).toEqual(termB);
+      expect(solver.fixedTermOf(solver.getGroup(varO))).toEqual(termC);
     });
 
     it('takes a nested triple term apart with it', ({ expect }) => {
@@ -139,6 +140,14 @@ describe('clusterSolver', () => {
     it('refuses a basic term on a group already holding a triple term', ({ expect }) => {
       const solver = solverWithShape();
       expect(() => solver.register(termA, varY)).toThrow('Cannot match Term');
+    });
+
+    it('refuses to unify two variables fixed to different terms', ({ expect }) => {
+      const solver = new ClusterSolver(rangeOfPosition);
+      solver.register(termA, varY);
+      solver.register(varS, varO);
+      solver.register(termB, varO);
+      expect(() => solver.register(varS, varY)).toThrow('Cannot unify');
     });
   });
 });

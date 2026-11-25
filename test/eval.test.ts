@@ -3,6 +3,7 @@ import type * as RDF from '@rdfjs/types';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import { Parser, Store } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
+import { termToString } from 'rdf-string';
 import type { ExpectStatic } from 'vitest';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
@@ -12,9 +13,11 @@ import { filterFalseTransformation } from '../lib/transformations/filterFalse.js
 import {
   nullifyJoinOverIncompatibleBoundsTransformation,
 } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
+import { rewriteNonRecursivePathsTransformation } from '../lib/transformations/pathTransformation.js';
 import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import { xsd } from '../lib/utils/rdfDatatypes.js';
 import { nonTripleTermConstruct, tripleTermConstruct } from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
 import { createValidatingQueryRewriter, generateValidQuery } from './validQuery.js';
@@ -66,7 +69,7 @@ describe('evaluation tests', () => {
    */
   async function sequence(query: string, source: string | Store): Promise<string[]> {
     const rows: RDF.Bindings[] = await arrayifyStream(await engine.queryBindings(query, { sources: [ source ]}));
-    return rows.map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${value.value}`).sort().join('|'));
+    return rows.map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${termToString(value)}`).sort().join('|'));
   }
 
   /**
@@ -138,6 +141,8 @@ describe('evaluation tests', () => {
       expect(original).toHaveLength(expectedRows);
     }
 
+    const integer = (value: number): string => `"${value}"^^${xsd}integer`;
+
     /**
      * Runs both versions of a query with an `ORDER BY` and compares the sequences, not the sets.
      * @param expect - The assertion API of the running test
@@ -162,9 +167,9 @@ describe('evaluation tests', () => {
       // because an EXTEND is element-wise and order-preserving, and the ordering does not read `?t`; this
       // is the case a string comparison cannot check, since both trees print the same.
       await assertSameSequence(expect, 'SELECT * WHERE { VALUES ?v { 3 1 2 } BIND(:tag AS ?t) } ORDER BY ASC(?v)', [
-        't=ex://tag|v=1',
-        't=ex://tag|v=2',
-        't=ex://tag|v=3',
+        `t=ex://tag|v=${integer(1)}`,
+        `t=ex://tag|v=${integer(2)}`,
+        `t=ex://tag|v=${integer(3)}`,
       ]);
     });
 
@@ -172,9 +177,9 @@ describe('evaluation tests', () => {
       // `ORDER BY ?x` becomes `ORDER BY ?v` as `?x` rises through it, so a wrong substitution would show
       // up here as a different order rather than as a different set.
       await assertSameSequence(expect, 'SELECT ?v WHERE { VALUES ?v { 3 1 2 } BIND(?v AS ?x) } ORDER BY DESC(?x)', [
-        'v=3',
-        'v=2',
-        'v=1',
+        `v=${integer(3)}`,
+        `v=${integer(2)}`,
+        `v=${integer(1)}`,
       ]);
     });
 
@@ -220,6 +225,54 @@ describe('evaluation tests', () => {
         ?x :p ?y
         BIND(:a AS ?b)
       }`, 1);
+    });
+  });
+
+  // The spec defines the zero length match for term and variable endpoints only; a triple pattern is unified.
+  describe('a zero or one path with a triple pattern endpoint', () => {
+    const tripleTermStore = new Store(new Parser().parse(`
+      <ex://s> <ex://p> <<( <ex://a> <ex://q> <ex://b> )>> .
+      <ex://n> <ex://r> <<( <ex://c> <ex://q> <ex://d> )>> .
+    `));
+    const rewriter = createValidatingQueryRewriter([ rewriteNonRecursivePathsTransformation() ]);
+
+    /**
+     * Evaluates a query with its paths expanded.
+     * @param query - The query to expand and evaluate
+     * @returns one string per row, sorted
+     */
+    async function expandedBindings(query: string): Promise<string[]> {
+      return bindings(await rewriter.rewriteQuery(query), tripleTermStore);
+    }
+
+    it('binds the variable to every triple term node the pattern matches', async({ expect }) => {
+      await expect(expandedBindings('SELECT ?x ?a ?b { ?x <ex://p>? <<( ?a <ex://q> ?b )>> }')).resolves.toEqual([
+        'a=ex://a|b=ex://b|x=<<ex://a ex://q ex://b>>',
+        'a=ex://a|b=ex://b|x=ex://s',
+        'a=ex://c|b=ex://d|x=<<ex://c ex://q ex://d>>',
+      ]);
+    });
+
+    it('binds the pattern to a ground triple term without asking for it in the data', async({ expect }) => {
+      await expect(expandedBindings('SELECT * { <<( <ex://e> <ex://q> <ex://f> )>> <ex://p>? <<( ?a <ex://q> ?b )>> }'))
+        .resolves.toEqual([ 'a=ex://e|b=ex://f' ]);
+    });
+
+    it('equates the variables of two triple pattern endpoints', async({ expect }) => {
+      await expect(expandedBindings('SELECT * { <<( ?a <ex://q> ?b )>> <ex://p>? <<( ?c <ex://q> ?d )>> }'))
+        .resolves.toEqual([
+          'a=ex://a|b=ex://b|c=ex://a|d=ex://b',
+          'a=ex://c|b=ex://d|c=ex://c|d=ex://d',
+        ]);
+    });
+
+    it('has no zero length match when unification puts a literal in subject position', async({ expect }) => {
+      await expect(expandedBindings('SELECT * { <<( ?a <ex://q> "x" )>> <ex://p>? <<( ?b <ex://q> ?a )>> }'))
+        .resolves.toEqual([]);
+    });
+
+    it('has no zero length match when the pattern holds the variable', async({ expect }) => {
+      await expect(expandedBindings('SELECT * { ?a <ex://p>? <<( ?a <ex://q> ?b )>> }')).resolves.toEqual([]);
     });
   });
 
