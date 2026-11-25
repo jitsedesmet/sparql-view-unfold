@@ -1,5 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import { termToString } from 'rdf-string';
+import { datatypeInteger } from './utils/rdfDatatypes.js';
 
 /**
  * @fileoverview How-provenance polynomials (SPARQLprov, Def. 4.15), and their decoding from the rows of a
@@ -187,29 +188,30 @@ ProvenancePolynomial {
   const subtables = groupBy(rows.filter(row => row.has(root)), row => termToString(row.get(root)!));
   return {
     type: 'sum',
-    operands: [ ...subtables.values() ].map(subtable => decodeTable(columns, subtable, childPrefix)),
+    operands: [ ...subtables.values() ].map(subtable => decodeTable(columns, subtable, childPrefix, kind)),
   };
 }
 
 /**
- * Decodes a provenance table into its polynomial (SPARQLprov, Def. 4.10).
+ * Decodes a provenance table, every row of which binds its root to the same value, into its polynomial (SPARQLprov,
+ * Def. 4.10).
  * @param columns - The structure of the table
  * @param rows - The rows of the table
  * @param prefix - The prefix of its variables
- * @returns the polynomial; `0` for a table without a root
+ * @param kind - The kind of its root
+ * @returns the polynomial
  */
-function decodeTable(columns: ProvenanceColumns, rows: readonly ProvenanceRow[], prefix: string):
-ProvenancePolynomial {
-  const kind = columns.kindOf.get(prefix);
+function decodeTable(
+  columns: ProvenanceColumns,
+  rows: readonly ProvenanceRow[],
+  prefix: string,
+  kind: ProvenanceNodeKind,
+): ProvenancePolynomial {
   switch (kind) {
-    case undefined:
-      return zero;
     case 'statement': {
-      const value = rows[0].get(provenanceNodeVariableName(prefix, kind));
-      if (value === undefined) {
-        return zero;
-      }
-      return value.termType === 'Literal' ?
+      const value = rows[0].get(provenanceNodeVariableName(prefix, kind))!;
+      // A derivation may be materialised as a literal too, of another datatype.
+      return value.termType === 'Literal' && value.datatype.equals(datatypeInteger) ?
           { type: 'constant', value: Number(value.value) } :
           { type: 'source', term: value };
     }
@@ -258,7 +260,8 @@ export function decodeProvenance(
     .sort(([ left ], [ right ]) => left < right ? -1 : 1)));
   const columns = provenanceColumnsOf(splitRows.map(({ row }) => row));
   return [ ...rowsByAnswer.values() ].map((group) => {
-    const polynomial = simplifyPolynomial(decodeTable(columns, group.map(({ row }) => row), provenanceVariablePrefix));
+    // An answer's rows may hold several values of the root, such as one per group of an aggregate.
+    const polynomial = simplifyPolynomial(childSum(columns, group.map(({ row }) => row), provenanceVariablePrefix));
     return {
       answer: group[0].answer,
       polynomial,

@@ -1,6 +1,6 @@
 /* eslint-disable jsdoc/check-param-names */
 import type * as RDF from '@rdfjs/types';
-import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { Algebra } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_MERGED_HEAD } from './consts.js';
 import type { TriplePosition } from './datastructures/TermClusterSet.js';
 import { triplePositions } from './datastructures/TermClusterSet.js';
@@ -12,7 +12,7 @@ import type { AssertionConjunct } from './utils/assertions.js';
 import { access, assertBound, assertTermType, conjunctAsExpression } from './utils/assertions.js';
 import type { VRanges } from './utils/certainlyBoundVars.js';
 import { withCpVars } from './utils/certainlyBoundVars.js';
-import { conjunctionOf, unstableOperators } from './utils/expressionHelpers.js';
+import { conjunctionOf, unstableFunctionCalledBy } from './utils/expressionHelpers.js';
 import { projectOntoVariablesOrExistence } from './utils/operationhelpers.js';
 import { isSubsetOf, unionSets } from './utils/setUtils.js';
 import { claimVariableName, collectVariableNames, deepCopy } from './utils.js';
@@ -101,14 +101,10 @@ function admissibilityTypeTests(
  * @throws Error naming the offending function
  */
 function assertBodyCallsNoUnstableFunction(body: Algebra.Operation): void {
-  algebraUtils.visitOperationSub(body, {}, {
-    expression: { operator: { visitor: (operatorExpression) => {
-      if (unstableOperators.has(operatorExpression.operator)) {
-        throw new Error(`The ${operatorExpression.operator.toUpperCase()} function cannot be used in a mapping body: it answers differently each time the body is evaluated, while the mapping has to denote one fixed graph.`);
-      }
-    } }},
-    // A mapping body may contain any path.
-  });
+  const unstableFunction = unstableFunctionCalledBy(body);
+  if (unstableFunction !== undefined) {
+    throw new Error(`The ${unstableFunction.toUpperCase()} function cannot be used in a mapping body: it answers differently each time the body is evaluated, while the mapping has to denote one fixed graph.`);
+  }
 }
 
 /**
@@ -252,7 +248,7 @@ export function parseConstructQuery(
 ): Algebra.Construct {
   const construct = parseQuery(tools, constructQuery);
   if (construct.type !== Algebra.Types.CONSTRUCT) {
-    throw new Error('A mapping is defined by a CONSTRUCT query without ORDER BY, LIMIT or OFFSET.');
+    throw new Error(`A mapping is defined by a CONSTRUCT query without LIMIT, OFFSET or FROM, not by a ${construct.type}.`);
   }
   return construct;
 }

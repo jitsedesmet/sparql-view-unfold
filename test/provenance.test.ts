@@ -23,10 +23,13 @@ import {
 } from '../lib/provenancePolynomial.js';
 import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
 import { internalBnodeExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
-import { internalBnodeAsSpecialIriTransformation } from '../lib/transformations/bnodeMapAsLiteral.js';
+import {
+  internalBnodeAsSpecialIriTransformation,
+  internalBnodeAsSpecialLiteralTransformation,
+} from '../lib/transformations/bnodeMapAsLiteral.js';
 import type { UnfoldingOptions } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
-import type { Mapping } from '../lib/types.js';
+import type { Mapping, QueryTransformation } from '../lib/types.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
 import { createValidatingQueryRewriter, generateValidQuery } from './validQuery.js';
 
@@ -50,12 +53,18 @@ const colleagues = new Store(new Parser().parse(readFileSync('./test/statics/col
  * @param mapping - The mapping to unfold
  * @param query - The query over the view
  * @param options - What to configure the unfolding with
+ * @param materialisation - The step materialising internal blank nodes
  * @returns the solutions
  */
-async function bindingsOf(mapping: Mapping, query: string, options: UnfoldingOptions = {}): Promise<RDF.Bindings[]> {
+async function bindingsOf(
+  mapping: Mapping,
+  query: string,
+  options: UnfoldingOptions = {},
+  materialisation: QueryTransformation = internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
+): Promise<RDF.Bindings[]> {
   const rewriter = createValidatingQueryRewriter([
     ...createDefaultTransformationPipeline(mapping, options),
-    internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
+    materialisation,
   ]);
   const bindings = await engine.queryBindings(await rewriter.rewriteQuery(query), {
     sources: [ colleagues ],
@@ -290,6 +299,11 @@ describe('provenanceCapturingQuery', () => {
       .toThrow('Provenance can only be captured for a SELECT query.');
   });
 
+  it('rejects an unstable function, which the rewrite would evaluate more than once', ({ expect }) => {
+    expect(() => provenanceCapturingQuery(`${prefixes} SELECT ?x ?r WHERE { ?x :worksAt :ugent BIND(RAND() AS ?r) }`))
+      .toThrow('The RAND function cannot be used in a query whose provenance is captured');
+  });
+
   it('rejects a recursive property path', ({ expect }) => {
     expect(() => provenanceCapturingQuery(`${prefixes} SELECT ?x WHERE { :alice :knows+ ?x }`))
       .toThrow('A recursive property path (+) is not supported');
@@ -303,11 +317,28 @@ describe('provenance captured over the colleagues data', () => {
   /**
    * Captures the provenance of a query, evaluates it over the provenance view and decodes its answers.
    * @param query - The query over the view, without prefixes
+   * @param materialisation - The step materialising internal blank nodes
    * @returns the decoded solutions
    */
-  async function decodedAnswersOf(query: string): Promise<ProvenanceAnnotatedAnswer[]> {
+  async function decodedAnswersOf(query: string, materialisation?: QueryTransformation):
+  Promise<ProvenanceAnnotatedAnswer[]> {
     const capture = provenanceCapturingQuery(prefixes + query);
-    return decodeProvenance(await bindingsOf(provenanceMapping, capture.query), capture.provenanceVariablePrefix);
+    return decodeProvenance(
+      await bindingsOf(provenanceMapping, capture.query, {}, materialisation),
+      capture.provenanceVariablePrefix,
+    );
+  }
+
+  /**
+   * Counts how many times each decoded answer is an answer, every derivation counting once.
+   * @param query - The query over the view, without prefixes
+   * @returns the count of each answer, by its values
+   */
+  async function countsOf(query: string): Promise<Record<string, number>> {
+    return Object.fromEntries((await decodedAnswersOf(query)).map(({ answer, polynomial }) => [
+      [ ...answer ].map(([ name, term ]) => `${name}=${termToString(term)}`).sort().join(' '),
+      evaluatePolynomial(polynomial, countingSpmSemiring, () => 1),
+    ]));
   }
 
   let derivationLabels: Promise<Map<string, string>> | undefined;
@@ -372,6 +403,11 @@ describe('provenance captured over the colleagues data', () => {
     'SELECT ?x ?o WHERE { ?x :worksAt ?o FILTER EXISTS { ?y :worksAt ?o FILTER(?y != ?x && ?y != :carol) } }',
     'SELECT ?x WHERE { ?x :worksAt ?o FILTER NOT EXISTS { { SELECT ?y WHERE { ?y :worksAt ?o } } FILTER(?y != ?x) } }',
     'SELECT ?x ?e WHERE { ?x :worksAt :imec BIND(EXISTS { :alice :knows ?x } AS ?e) }',
+    'SELECT ?x ?y WHERE { { ?x :worksAt :ugent } UNION { ?x :worksAt ?y } ' +
+    'FILTER EXISTS { ?x :worksAt ?y FILTER(?y = :imec) } }',
+    'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?o } ' +
+    'OPTIONAL { ?x :worksAt ?o FILTER EXISTS { ?o ?p ?q } } }',
+    'SELECT ?x WHERE { ?x :worksAt :ugent FILTER EXISTS { VALUES ?y { :bob } OPTIONAL { ?x :knows ?y } } }',
   ])('answers %s as the query without provenance does', async(query, { expect }) => {
     const [ decodedAnswers, rows ] = await Promise.all([
       decodedAnswersOf(query),
@@ -498,11 +534,28 @@ describe('provenance captured over the colleagues data', () => {
   });
 
   it('counts the derivations of an answer in the spm-semiring of natural numbers', async({ expect }) => {
-    const answers = await decodedAnswersOf('SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }');
-    const counts = Object.fromEntries(answers.map(({ answer, polynomial }) =>
-      [ answer.get('c')!.value, evaluatePolynomial(polynomial, countingSpmSemiring, () => 1) ]));
+    expect(await countsOf('SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }'))
+      .toEqual({ 'c=ex://carol': 2, 'c=ex://dave': 1 });
+  });
 
-    expect(counts).toEqual({ 'ex://carol': 2, 'ex://dave': 1 });
+  it('counts every group of an aggregate giving the same answer', async({ expect }) => {
+    expect(await countsOf('SELECT (COUNT(*) AS ?n) WHERE { ?x :colleague ?y } GROUP BY ?x'))
+      .toEqual({ 'n="2"^^http://www.w3.org/2001/XMLSchema#integer': 3 });
+  });
+
+  it('counts every solution produced from no view triple', async({ expect }) => {
+    expect(await countsOf('SELECT ?x WHERE { VALUES (?x ?y) { (:a 1) (:a 2) } }')).toEqual({ 'x=ex://a': 2 });
+  });
+
+  it('decodes derivations materialised as typed literals', async({ expect }) => {
+    const query = 'SELECT ?x WHERE { ?x :worksAt :ugent FILTER NOT EXISTS { ?x :worksAt :imec } }';
+    const explanationsOf = (answers: ProvenanceAnnotatedAnswer[]): string[] => answers
+      .map(({ polynomial, isAnswer }) => `${isAnswer} ${polynomialToString(polynomial, () => 'd')}`).sort();
+
+    expect(explanationsOf(await decodedAnswersOf(
+      query,
+      internalBnodeAsSpecialLiteralTransformation({ encodedByExtensionFunction: true }),
+    ))).toEqual(explanationsOf(await decodedAnswersOf(query)));
   });
 
   it('links a derivation to the source triples it matched', async({ expect }) => {

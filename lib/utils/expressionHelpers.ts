@@ -123,6 +123,23 @@ export function createBooleanExpression(c: TransformationContext, value: boolean
 export const unstableOperators = new Set([ 'bnode', 'rand', 'uuid', 'struuid' ]);
 
 /**
+ * Finds a call of an unstable function in an operation.
+ * @param operation - The operation to read
+ * @returns the name of the first unstable function it calls, or `undefined` when it calls none
+ */
+export function unstableFunctionCalledBy(operation: Algebra.Operation): string | undefined {
+  let unstableFunction: string | undefined;
+  algebraUtils.visitOperationSub(operation, {}, {
+    expression: { operator: { visitor: (operatorExpression) => {
+      if (unstableFunction === undefined && unstableOperators.has(operatorExpression.operator)) {
+        unstableFunction = operatorExpression.operator;
+      }
+    } }},
+  });
+  return unstableFunction;
+}
+
+/**
  * The extension functions declared stable, which is what lets a `BIND` over one of them move.
  * `EXTENSION_FUNCTION_BNODE`, whose "same inputs = same identity" is stability spelled out, is the only one;
  * every other `named` expression is opaque and so unstable.
