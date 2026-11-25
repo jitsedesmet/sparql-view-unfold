@@ -126,7 +126,7 @@ and the assertion pushdown drops it wherever the rewritten query already guarant
 `mappingFromConstructQueries(constructs, { generalizedRdfView: true })` keeps those triples instead, for a
 view that means to present generalized RDF: any term in any position, inside triple terms included. The
 source stays RDF. The rewritten query must then run on an engine whose `TRIPLE()` builds generalized triple
-terms, such as Comunica with `rdfVariant: 'generalizedRDF'`.
+terms, such as Comunica with `rdfVariant: 'generalizedRdf'`.
 
 ### Extended engines
 
@@ -213,24 +213,7 @@ The tables below are the short version; the generated
 | `serviceCallPushUpTransformation()` | Merges and hoists SERVICE calls so the endpoint evaluates as much as it can. |
 | `internalBnodeAsSpecialLiteralTransformation()` | Materialises constructed blank node identities as typed literals. |
 | `internalBnodeAsSpecialIriTransformation()` | Materialises them as prefixed IRIs, SHA-1 keeping the length manageable. |
-
-### `sparql-view-unfold/comunica` — Node only
-
-One transformation needs a Comunica runtime, and lives behind its own subpath:
-
-```typescript
-import { simplifyStaticExpressionsTransformation } from 'sparql-view-unfold/comunica';
-```
-
-| Transformation | Description |
-|---|---|
-| `simplifyStaticExpressionsTransformation()` | Folds every fully static expression to the term Comunica's evaluator says it is. |
-
-It builds its evaluator through Components.js, which resolves Comunica's actors through Node's own module
-resolution and so imports `node:module` and `node:path`. Bundlers resolve every import in a module graph
-before they tree-shake it, so re-exporting this step from the main entry point would make the whole package
-unresolvable for the browser — even in a build that never calls the step. The main entry point stays
-platform-neutral; reach for this subpath from Node.
+| `simplifyStaticExpressionsTransformation()` | Folds every fully static expression to the term Comunica's expression engine evaluates it to. |
 
 ## Cite
 

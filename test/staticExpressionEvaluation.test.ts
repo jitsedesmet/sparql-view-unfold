@@ -1,4 +1,4 @@
-import { beforeAll, describe, it } from 'vitest';
+import { describe, it } from 'vitest';
 import { simplifyStaticExpressions } from '../lib/transformations/staticExpressionEvaluation.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import { generateValidQuery } from './validQuery.js';
@@ -11,12 +11,6 @@ describe('simplifyStaticExpressions', () => {
     const folded = await simplifyStaticExpressions(c, operation);
     return generateValidQuery(c, folded);
   }
-
-  // The Comunica evaluator factory is built once, lazily, on the first evaluation; warming it up here keeps
-  // that one-time cost out of the individual tests' timeouts.
-  beforeAll(async() => {
-    await simplify('SELECT * WHERE { ?s ?p ?o . BIND(1 + 2 AS ?x) }');
-  }, 60_000);
 
   it('folds a static arithmetic expression in a BIND', async({ expect }) => {
     const out = await simplify('SELECT * WHERE { ?s ?p ?o . BIND(1 + 2 AS ?x) }');
