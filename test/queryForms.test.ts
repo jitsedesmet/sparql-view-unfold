@@ -4,13 +4,13 @@ import * as arrayifyStreamNS from 'arrayify-stream';
 import { Store } from 'n3';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createQueryRewriter } from '../lib/queryRewriter.js';
 import { filterFalseTransformation } from '../lib/transformations/filterFalse.js';
 import { pullUpExtendsTransformation } from '../lib/transformations/pullUpExtends.js';
 import { removeProjectionsTransformation } from '../lib/transformations/removeProjections.js';
 import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
 import { nonTripleTermConstruct, tripleTermConstruct } from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -38,7 +38,7 @@ PREFIX : <ex://>
 describe('the query forms', () => {
   const engine = new QueryEngine();
   const mappers = [ tripleTermConstruct, nonTripleTermConstruct ];
-  const rewriter = createQueryRewriter([
+  const rewriter = createValidatingQueryRewriter([
     unfoldingTransformation(mappingFromConstructQueries(mappers)),
     filterFalseTransformation(),
     pullUpExtendsTransformation(),

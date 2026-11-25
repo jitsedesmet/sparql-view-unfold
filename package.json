@@ -2,14 +2,8 @@
   "name": "sparql-view-unfold",
   "type": "module",
   "version": "0.0.0",
-  "private": true,
-  "workspaces": [
-    "comunica/engines/*",
-    "comunica/packages/*"
-  ],
   "packageManager": "yarn@1.22.22",
   "description": "View unfolding and query optimisation for SPARQL 1.2, with views defined as CONSTRUCT queries",
-  "lsd:module": true,
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -25,11 +19,6 @@
       "types": "./dist/esm/lib/index.d.ts",
       "import": "./dist/esm/lib/index.js",
       "require": "./dist/cjs/lib/index.js"
-    },
-    "./comunica": {
-      "types": "./dist/esm/lib/comunica.d.ts",
-      "import": "./dist/esm/lib/comunica.js",
-      "require": "./dist/cjs/lib/comunica.js"
     }
   },
   "main": "dist/esm/lib/index.js",
@@ -62,22 +51,19 @@
     "bench:ab": "node test/bench-ab.mjs"
   },
   "dependencies": {
-    "@comunica/bus-expression-evaluator-factory": "^5.4.0",
-    "@comunica/config-query-sparql": "^5.4.0",
-    "@comunica/context-entries": "^5.4.0",
-    "@comunica/core": "^5.4.0",
-    "@comunica/query-sparql-file": "^5.4.0",
-    "@comunica/utils-bindings-factory": "^5.4.0",
-    "@traqula/algebra-sparql-1-2": "^1.5.0-alpha.5",
-    "@traqula/algebra-transformations-1-2": "^1.5.0-alpha.5",
-    "@traqula/core": "^1.5.0-alpha.5",
-    "@traqula/generator-sparql-1-2": "^1.5.0-alpha.5",
-    "@traqula/parser-sparql-1-2": "^1.5.0-alpha.5",
-    "@traqula/rules-sparql-1-2": "^1.5.0-alpha.5",
-    "componentsjs": "^6.4.0",
+    "@comunica/expressions-sparql": "^5.5.0",
+    "@comunica/types": "^5.5.0",
+    "@comunica/utils-bindings-factory": "^5.5.0",
+    "@traqula/algebra-sparql-1-2": "^1.5.0",
+    "@traqula/algebra-transformations-1-2": "^1.5.0",
+    "@traqula/core": "^1.5.0",
+    "@traqula/generator-sparql-1-2": "^1.5.0",
+    "@traqula/parser-sparql-1-2": "^1.5.0",
+    "@traqula/rules-sparql-1-2": "^1.5.0",
     "rdf-data-factory": "^2.0.2"
   },
   "devDependencies": {
+    "@comunica/query-sparql-file": "^5.5.0",
     "@rdfjs/types": "^2.0.0",
     "@rubensworks/eslint-config": "^3.1.0",
     "@vitest/coverage-v8": "4.0.18",
@@ -92,18 +78,5 @@
     "typescript": "^5.9.3",
     "vite": "^8.0.3",
     "vitest": "^4.1.1"
-  },
-  "resolutions": {
-    "@traqula/algebra-sparql-1-1": "1.5.0-alpha.5",
-    "@traqula/algebra-sparql-1-2": "1.5.0-alpha.5",
-    "@traqula/algebra-transformations-1-1": "1.5.0-alpha.5",
-    "@traqula/algebra-transformations-1-2": "1.5.0-alpha.5",
-    "@traqula/core": "1.5.0-alpha.5",
-    "@traqula/generator-sparql-1-1": "1.5.0-alpha.5",
-    "@traqula/generator-sparql-1-2": "1.5.0-alpha.5",
-    "@traqula/parser-sparql-1-1": "1.5.0-alpha.5",
-    "@traqula/parser-sparql-1-2": "1.5.0-alpha.5",
-    "@traqula/rules-sparql-1-1": "1.5.0-alpha.5",
-    "@traqula/rules-sparql-1-2": "1.5.0-alpha.5"
   }
 }

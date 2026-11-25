@@ -3,8 +3,8 @@ import * as arrayifyStreamNS from 'arrayify-stream';
 import { Parser, Store } from 'n3';
 import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
-import { createQueryRewriter } from '../lib/queryRewriter.js';
 import { removeProjectionsTransformation } from '../lib/transformations/removeProjections.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -14,7 +14,7 @@ describe('removeProjections', () => {
   // The pass through mapping leaves every pattern as it was, so the output only shows what
   // removeProjections itself did.
   async function transform(query: string): Promise<string> {
-    return createQueryRewriter([ removeProjectionsTransformation() ]).rewriteQuery(query);
+    return createValidatingQueryRewriter([ removeProjectionsTransformation() ]).rewriteQuery(query);
   }
 
   const engine = new QueryEngine();

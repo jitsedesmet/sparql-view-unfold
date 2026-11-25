@@ -10,7 +10,8 @@
  *   cardinality.
  * - **rewriteNonRecursivePathsTransformation**: expands non-recursive property paths into equivalent BGPs
  *   and UNIONs, so the unfolding sees individual triple patterns. Belongs *before* the unfolding.
- * - **filterFalseTransformation**: removes FILTER(FALSE) patterns, what they stand over, and the structures
+ * - **filterFalseTransformation**: replaces every operation that certainly binds a variable whose range is
+ *   empty by FILTER(FALSE), and removes FILTER(FALSE) patterns, what they stand over, and the structures
  *   containing them (UNION identity, JOIN absorbing element), sub-SELECTs included; a GROUP and the query's
  *   own solution modifiers are left in place.
  * - **pushDownAssertionsTransformation**: pushes assertion filters (`FILTER(sameTerm(?x, c))`) as deep into
@@ -21,8 +22,6 @@
  *   carries the same bind included.
  * - **nullifyJoinOverIncompatibleBoundsTransformation**: detects joins whose branches bind a variable to
  *   incompatible terms and replaces them with FILTER(FALSE).
- * - **nullifyUnbindableVarsTransformation**: the same one level up, for incompatible term *types* rather
- *   than terms.
  * - **removeProjectionsTransformation**: removes all inner PROJECT operations, anonymizing every
  *   non-projected variable to a fresh one to preserve scoping.
  * - **joinValuesToFilterTransformation**: rewrites a JOIN with a VALUES clause into an equality FILTER over
@@ -35,14 +34,8 @@
  *   materialise internal blank nodes as typed literals or as prefixed IRIs, since RDF 1.1 sources cannot
  *   reference blank nodes consistently. With `{ encodedByExtensionFunction: true }`, the engine encodes them
  *   through `internalBnodeExtensionFunctions()`.
- *
- * One step is deliberately **not** re-exported here:
- * {@link comunica!simplifyStaticExpressionsTransformation}, which folds static expressions through
- * Comunica's expression evaluator. It bootstraps Components.js from Node's module resolution, so importing
- * it reaches `node:module` and `node:path`; a bundler resolves every import in a module graph before it
- * tree-shakes, so re-exporting it here would make this barrel - and with it the package entry point -
- * unresolvable for the browser even in a build that never calls the step. It lives behind the
- * `sparql-view-unfold/comunica` subpath instead, which only a Node consumer needs to reach for.
+ * - **simplifyStaticExpressionsTransformation**: folds every fully static expression to the term Comunica's
+ *   standalone expression engine evaluates it to.
  * @module transformations
  */
 export type { ExtensionFunctions } from './bnodeExtensionFunction.js';
@@ -56,11 +49,11 @@ export { extendsToValuesTransformation } from './extendsToValues.js';
 export { filterFalseTransformation } from './filterFalse.js';
 export { joinValuesToFilterTransformation } from './joinValuesToFilter.js';
 export { nullifyJoinOverIncompatibleBoundsTransformation } from './nullifyJoinOverIncompatibleBounds.js';
-export { nullifyUnbindableVarsTransformation } from './nullifyUnbindableVars.js';
 export { rewriteNonRecursivePathsTransformation } from './pathTransformation.js';
 export { pullUpExtendsTransformation } from './pullUpExtends.js';
 export { pushDownAssertionsTransformation } from './pushDownAssertions.js';
 export { removeProjectionsTransformation } from './removeProjections.js';
 export { serviceCallPushUpTransformation } from './serviceCallMerge.js';
+export { simplifyStaticExpressionsTransformation } from './staticExpressionEvaluation.js';
 export type { UnfoldingOptions } from './unfolding.js';
 export { unfoldingTransformation } from './unfolding.js';

@@ -1,22 +1,17 @@
-import { toAst } from '@traqula/algebra-sparql-1-2';
-import { beforeAll, describe, it } from 'vitest';
-import { simplifyStaticExpressions } from '../lib/transformations/staticExpressionEvaluation.js';
+import { describe, it } from 'vitest';
+import { simplifyStaticExpressionsTransformation } from '../lib/transformations/staticExpressionEvaluation.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
+import { generateValidQuery } from './validQuery.js';
 
-describe('simplifyStaticExpressions', () => {
+describe('simplifyStaticExpressionsTransformation', () => {
   const c = createTransformationContext();
+  const simplifyStaticExpressions = simplifyStaticExpressionsTransformation();
 
-  async function simplify(query: string): Promise<string> {
+  async function simplify(query: string, generalizedRdf = false): Promise<string> {
     const operation = parseQuery(c, query);
-    const folded = await simplifyStaticExpressions(c, operation);
-    return c.generator.generate(toAst(folded));
+    const folded = await simplifyStaticExpressions({ ...c, generalizedRdf }, operation);
+    return generateValidQuery(c, folded);
   }
-
-  // The Comunica evaluator factory is built once, lazily, on the first evaluation; warming it up here keeps
-  // that one-time cost out of the individual tests' timeouts.
-  beforeAll(async() => {
-    await simplify('SELECT * WHERE { ?s ?p ?o . BIND(1 + 2 AS ?x) }');
-  }, 60_000);
 
   it('folds a static arithmetic expression in a BIND', async({ expect }) => {
     const out = await simplify('SELECT * WHERE { ?s ?p ?o . BIND(1 + 2 AS ?x) }');
@@ -61,5 +56,15 @@ describe('simplifyStaticExpressions', () => {
   it('does not fold NOW(), whose value is only known at execution time', async({ expect }) => {
     const out = await simplify('SELECT * WHERE { ?s ?p ?o . BIND(NOW() AS ?x) }');
     expect(out.toLowerCase()).toContain('now');
+  });
+
+  it('folds a well-formed triple term', async({ expect }) => {
+    const out = await simplify('SELECT * WHERE { ?s ?p ?o . BIND(TRIPLE(<ex:s>, <ex:p>, "o") AS ?x) }', true);
+    expect(out).toContain('<<( <ex:s> <ex:p> "o" )>>');
+  });
+
+  it('leaves a generalized triple term standing, as it has no syntax to be written back as', async({ expect }) => {
+    const out = await simplify('SELECT * WHERE { ?s ?p ?o . BIND(TRIPLE("s", <ex:p>, <ex:o>) AS ?x) }', true);
+    expect(out.toLowerCase()).toContain('triple');
   });
 });

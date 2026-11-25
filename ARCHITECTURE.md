@@ -143,7 +143,7 @@ OPTIONAL is normalised to `(P1 ⊗ P2) ⊕ (P1 ⊖ P2)` (Def. 3.1), MINUS and NO
 `P1 ⊖ (P1 ⊖ P2)`; each repeats P1, so a chain of OPTIONALs or EXISTS grows the query exponentially. A difference keeps
 every solution of its minuend, each with the provenance of the subtrahend's compatible solutions: as SPARQLprov
 writes it, an OPTIONAL over the subtrahend with the shared variables the minuend may leave unbound renamed apart
-and compared in its condition, which needs Comunica master (comunica/comunica#1835) to evaluate. An EXISTS outside a
+and compared in its condition, which needs Comunica 5.5 or later to evaluate. An EXISTS outside a
 top-level conjunct of a FILTER, or correlated (its pattern reads an outer variable it does not bind, which a
 difference cannot compare), is evaluated over the view, contributing no provenance.
 
@@ -174,7 +174,8 @@ So a mapping that does not match becomes `FILTER(FALSE)`, never an empty group.
 sub-SELECT, from μ ([ContextSolution](https://www.w3.org/TR/sparql12-query/#defn_evalContextSolution)); above a GROUP
 only its keys and aggregates remain. A pass reading ranges runs through `rewriteInExistenceScopes`, which rewrites each
 pattern with μ as `existenceScope` once the pass has placed the EXISTS. The unfolding moves no EXISTS, so it uses
-`rewriteInExistenceScopesBeforePass`, which leaves the mapping bodies alone.
+`rewriteInExistenceScopesBeforePass`, which leaves the mapping bodies alone. `filterFalse` prunes each pattern where its
+bottom-up walk meets the operation evaluating it (`rewriteExistenceExpressionsOf`), whose operands it has pruned.
 
 A BIND of a variable μ binds is undefined ([Extend](https://www.w3.org/TR/sparql12-query/#defn_extend)), so per
 variable `?o` of μ (`outerBinding`):

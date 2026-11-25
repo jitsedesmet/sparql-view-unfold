@@ -1,4 +1,3 @@
-import { KeysInitQuery } from '@comunica/context-entries';
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
 import * as arrayifyStreamNS from 'arrayify-stream';
@@ -8,7 +7,8 @@ import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
 import type { MappingOptions } from '../lib/mapping.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import type { QueryRewriter } from '../lib/queryRewriter.js';
+import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
 import {
   nonSingletonTripleConstruct,
   nonTripleTermConstruct,
@@ -17,6 +17,7 @@ import {
   tripleTermConstruct,
 } from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
+import { createValidatingQueryRewriter } from './validQuery.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -39,8 +40,10 @@ describe('integration tests', () => {
    * @param options - What the mapping is configured with
    * @returns the rewriter
    */
-  function rewriterFor(mappers: string[], options: MappingOptions = {}): ReturnType<typeof createQueryRewriter> {
-    return createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries(mappers, options)));
+  function rewriterFor(mappers: string[], options: MappingOptions = {}): QueryRewriter {
+    return createValidatingQueryRewriter(
+      createDefaultTransformationPipeline(mappingFromConstructQueries(mappers, options)),
+    );
   }
 
   async function sourceToStore(
@@ -145,14 +148,14 @@ describe('integration tests', () => {
   ): Promise<{ resOnMappedData: string[]; resUsingRewriter: string[] }> {
     const store12 = await storeTo12Store(store11, mappers, options);
     // A generalized RDF view is evaluated on an engine whose TRIPLE() builds generalized triple terms.
-    const rdfVariant = options.generalizedRdfView === true ? { [KeysInitQuery.rdfVariant.name]: 'generalizedRdf' } : {};
+    const rdfVariant = options.generalizedRdfView === true ? 'generalizedRdf' : 'rdf';
     const mappedBindings: RDF.Bindings[] = await arrayifyStream(
-      await engine.queryBindings(userQuery, { sources: [ store12 ], ...rdfVariant }),
+      await engine.queryBindings(userQuery, { sources: [ store12 ], rdfVariant }),
     );
 
     const rewrittenQuery = await rewriterFor(mappers, options).rewriteQuery(userQuery);
     const rewrittenBindings: RDF.Bindings[] = await arrayifyStream(
-      await engine.queryBindings(rewrittenQuery, { sources: [ store11 ], ...rdfVariant }),
+      await engine.queryBindings(rewrittenQuery, { sources: [ store11 ], rdfVariant }),
     );
 
     return {

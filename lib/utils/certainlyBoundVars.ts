@@ -33,12 +33,8 @@ import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils
  * Key presence and range are independent on purpose, which is what makes the merge sound. A key at
  * {@link emptyRange} is a variable in scope that provably never binds, and it has to stay a key:
  * `pVars(Empty_S) := S`. A rewrite may still shrink the scope of an empty operation, as
- * {@link transformations/filterFalse!transformFilterFalse} does.
- *
- * One case deliberately drops a key rather than bottoming its range: a `FILTER(!bound(?x))` takes `?x` out
- * of scope, which is what the `pVars` this replaced did too. The bottom range would say it more precisely,
- * but (FBndII) reads *absence* as its emptiness proof, so moving it would change what the assertion
- * pushdown concludes. Worth revisiting once the bottom has consumers.
+ * {@link transformations/filterFalse!transformFilterFalse} does. A `FILTER(!bound(?x))` likewise bottoms
+ * `?x` rather than dropping it, `?x` staying in scope.
  */
 export class VRanges extends Map<string, RangeSet> {
   /**
@@ -284,14 +280,18 @@ export function standardExpressionRange(c: RangeContext, expression: Algebra.Exp
   }
 }
 
-/** Drops the `metadata` of the operation it is applied to, whatever that metadata holds. */
-const dropMetadata = { transform: (copy: { metadata?: unknown }): unknown => {
-  delete copy.metadata;
-  return copy;
-} };
+/**
+ * Drops the metadata cached on a node, whatever that metadata holds.
+ * @param node - The node, changed in place
+ * @returns the node
+ */
+export function dropCachedMetadata<T extends object>(node: T): T {
+  delete (<{ metadata?: unknown }> node).metadata;
+  return node;
+}
 
 /** Drops the metadata of every operation, no matter its type. */
-const dropAllMetadata = forEveryNodeType(dropMetadata);
+const dropAllMetadata = forEveryNodeType({ transform: dropCachedMetadata });
 
 /** A transformer over the algebra that only visits the keys holding operations, so no RDF term and no metadata. */
 export const operationTransformer = algebraUtils.algebraTransformer({}).clone({}, algebraUtils.knownKeysAllowlist);
@@ -524,8 +524,9 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
           .map(aggregate => aggregate.variable.value)),
       ]);
       // A grouping key keeps holding the value of the input, an aggregate target what the aggregate computes.
-      // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins.
-      const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
+      // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins. A key is in
+      // scope also where the input never binds it, as over FILTER(FALSE).
+      const ranges = new VRanges([ ...keys ].map(name => [ name, input.metadata.vRanges.rangeOf(name) ]));
       for (const aggregate of resOp.aggregates) {
         const target = aggregate.variable.value;
         ranges.set(target, rangeAfterWrite(target, c.expressionRange(c, aggregate, input.metadata), input.metadata));
@@ -565,7 +566,7 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
     } case Types.FILTER: {
       // The variables of an EXISTS stay inside it, so a filter never adds a possible binding.
       // However: depending on the filter, we can say something on vars being present.
-      // Also filters pVars and cVars for `!bound(?x)`
+      // Also filters cVars for `!bound(?x)`
       // Keep in mind: Filter False is a special case.
       const input = withCpVars(c, resOp.input);
       const unbound = variablesImpliedUnboundBy(resOp.expression);
@@ -573,8 +574,7 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
       resOp.metadata.cVars = differenceSets(unionSets([ input.metadata.cVars, new Set(implied.keys()) ]), unbound);
       // A filter only drops solutions, so what survives holds what the input put there, narrowed by what the
       // condition confines it to. A variable out of scope stays out: the condition never holds for it.
-      // A `!bound(?x)` takes `?x` out of scope entirely, as it did out of `pVars` - see the note in the
-      // file header on why this is not the bottom range instead.
+      // A `!bound(?x)` leaves `?x` in scope but never bound.
       const ranges = new VRanges(input.metadata.vRanges);
       for (const [ name, range ] of implied) {
         if (ranges.has(name)) {
@@ -582,7 +582,9 @@ function computeCpVarsOutsideExistenceScope<T extends Algebra.Operation>(c: Rang
         }
       }
       for (const name of unbound) {
-        ranges.delete(name);
+        if (ranges.has(name)) {
+          ranges.set(name, emptyRange);
+        }
       }
       resOp.metadata.vRanges = ranges;
       return resOp;
