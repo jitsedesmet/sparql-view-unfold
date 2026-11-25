@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
-import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Parser, Store } from 'n3';
 import { termToString } from 'rdf-string';
 import type { expect as Expect } from 'vitest';
@@ -22,13 +21,14 @@ import {
   lineageOf,
   polynomialToString,
 } from '../lib/provenancePolynomial.js';
-import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
+import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
 import { internalBnodeExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
 import { internalBnodeAsSpecialIriTransformation } from '../lib/transformations/bnodeMapAsLiteral.js';
 import type { UnfoldingOptions } from '../lib/transformations/unfolding.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import type { Mapping } from '../lib/types.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
+import { createValidatingQueryRewriter, generateValidQuery } from './validQuery.js';
 
 const prefixes = `PREFIX : <ex://> PREFIX provenance: <${PROVENANCE_NAMESPACE}> `;
 // The provenance IRIs as a rewritten query writes them.
@@ -53,7 +53,7 @@ const colleagues = new Store(new Parser().parse(readFileSync('./test/statics/col
  * @returns the solutions
  */
 async function bindingsOf(mapping: Mapping, query: string, options: UnfoldingOptions = {}): Promise<RDF.Bindings[]> {
-  const rewriter = createQueryRewriter([
+  const rewriter = createValidatingQueryRewriter([
     ...createDefaultTransformationPipeline(mapping, options),
     internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
   ]);
@@ -92,7 +92,7 @@ describe('provenanceConstructOf', () => {
   function expectProvenanceConstruct(expect: typeof Expect, constructQuery: string, expected: string): void {
     const construct = parseConstructQuery(c, prefixes + constructQuery);
     const provenanceConstruct = provenanceConstructOf(c, construct, DF.namedNode(`${PROVENANCE_NAMESPACE}construct0`));
-    expect(c.generator.generate(toAst(provenanceConstruct)).trim()).toEqual(expected.trim());
+    expect(generateValidQuery(c, provenanceConstruct).trim()).toEqual(expected.trim());
   }
 
   it('links a derivation to the triple it produces and the triple it matched', ({ expect }) => {
@@ -277,7 +277,7 @@ describe('provenanceCapturingQuery', () => {
     const { query: operation, provenanceVariablePrefix } = provenanceCapturingOperation(parseQuery(c, query));
 
     expect(provenanceVariablePrefix).toBe('prov');
-    expect(c.generator.generate(toAst(operation))).toBe(provenanceCapturingQuery(query).query);
+    expect(generateValidQuery(c, operation)).toBe(provenanceCapturingQuery(query).query);
   });
 
   it('keeps the dataset a FROM selects', ({ expect }) => {
