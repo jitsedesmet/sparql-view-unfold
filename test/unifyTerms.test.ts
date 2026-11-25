@@ -1,7 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import { termToString } from 'rdf-string';
 import { describe, it } from 'vitest';
-import { createTransformationContext } from '../lib/transformContext.js';
 import { unifyTerms } from '../lib/utils/assertions.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
 
@@ -20,7 +19,7 @@ const x = DF.literal('x');
  * @returns the unified term and the substitution, or `none`
  */
 function unified(left: RDF.Term, right: RDF.Term): string {
-  const unification = unifyTerms(createTransformationContext(), left, right);
+  const unification = unifyTerms(left, right);
   if (unification === undefined) {
     return 'none';
   }

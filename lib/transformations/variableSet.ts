@@ -1,6 +1,6 @@
 import type * as RDF from '@rdfjs/types';
-import type { TransformationContext } from '../transformContext.js';
 import { unifyTerms } from '../utils/assertions.js';
+import { termIsStaticTerm } from '../utils/typeGuards.js';
 
 /**
  * Represents a set of possible values for a variable.
@@ -65,14 +65,17 @@ export class VariableSet {
   }
 
   /**
-   * Checks if a term is compatible with this set of possible values: a variable always is, any other term
-   * when it unifies with one of them, so that a triple term over variables matches the triple terms it can be.
-   * @param c - Whether triple terms may be generalized ones
+   * Whether a term can be one of the values, which are ground: a variable always can, a triple term over variables
+   * when it unifies with one, and any other term when it equals one.
    * @param term - The term to check
-   * @returns True if the term could match this VariableSet
+   * @returns whether the term could match this VariableSet
    */
-  public termIsCompatible(c: Pick<TransformationContext, 'generalizedRdf'>, term: RDF.Term): boolean {
-    return this.isNoFixed || term.termType === 'Variable' ||
-      this.values.some(value => value.termType === term.termType && unifyTerms(c, value, term) !== undefined);
+  public termIsCompatible(term: RDF.Term): boolean {
+    if (this.isNoFixed || term.termType === 'Variable') {
+      return true;
+    }
+    return termIsStaticTerm(term) ?
+      this.values.some(value => value.equals(term)) :
+      this.values.some(value => value.termType === 'Quad' && unifyTerms(value, term) !== undefined);
   }
 }

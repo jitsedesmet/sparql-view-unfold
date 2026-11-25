@@ -50,7 +50,7 @@ export function termIsStaticTerm(term: RDF.Term): boolean {
  * @param term - The term to check
  * @returns whether it is such a term
  */
-export function termIsDataBlockValue(term: RDF.Term): term is RDF.NamedNode | RDF.Literal | RDF.Quad {
+export function termIsDataBlockValue(term: RDF.Term): boolean {
   if (term.termType === 'Quad') {
     return term.graph.termType === 'DefaultGraph' && triplePositions.every(position =>
       rangeOfPosition(position).has(term[position].termType) && termIsDataBlockValue(term[position]));

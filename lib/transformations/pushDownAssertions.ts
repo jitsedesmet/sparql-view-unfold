@@ -453,10 +453,10 @@ function pruneValues(
     substitution.has(name) || assertions.get(name)?.subType === 'unbound';
   const newBindings: Algebra.Values['bindings'] = [];
   const pins = termPinsOn(assertions, values.variables);
-  const strongPins = new Map(pins.filter(pin => pin.strong).map(pin => [ pin.name, pin.term ]));
+  const strongPinNames = new Set(pins.filter(pin => pin.strong).map(pin => pin.name));
   for (const binding of values.bindings) {
     // TermPinsOn is wayyy cheaper then rowSatisfies
-    if (agreesWithPins(pins, binding) && rowSatisfies(assertions, values.variables, binding, strongPins)) {
+    if (agreesWithPins(pins, binding) && rowSatisfies(assertions, values.variables, binding, strongPinNames)) {
       newBindings.push(Object.fromEntries(
         Object.entries(binding).filter(([ name ]) => !isRebuilt(name)),
       ));
@@ -541,29 +541,27 @@ function agreesWithPins(
  *
  * Asserted into a copy rather than read against it per variable, which is what makes the rule uniform over
  * the forms. Every column is asserted, the ones Θ says nothing about included, since a column Θ
- * reaches only through the shape of another one is decided by the row that holds it - except a column Θ
- * already fixes outright to the term the row holds, which asks nothing of Θ.
+ * reaches only through the shape of another one is decided by the row that holds it - except a bound column Θ
+ * fixes outright, whose value {@link agreesWithPins} already checked.
  * @param assertions - The conjunction to satisfy
  * @param variables - The columns of the VALUES
- * @param binding - The row to check
- * @param strongPins - The term each column Θ fixes outright is fixed to
+ * @param binding - The row to check, which agrees with the pins
+ * @param strongPinNames - The columns Θ fixes outright to a term
  * @returns whether the row satisfies the conjunction
  */
 function rowSatisfies(
   assertions: AssertionConjunction,
   variables: readonly RDF.Variable[],
   binding: Algebra.Values['bindings'][number],
-  strongPins: ReadonlyMap<string, RDF.Term>,
+  strongPinNames: ReadonlySet<string>,
 ): boolean {
-  const asked = variables.filter((variable) => {
-    const value = binding[variable.value];
-    return value === undefined || strongPins.get(variable.value)?.equals(value) !== true;
-  });
-  if (asked.length === 0) {
+  const columnsToAssert = variables.filter(variable =>
+    binding[variable.value] === undefined || !strongPinNames.has(variable.value));
+  if (columnsToAssert.length === 0) {
     return true;
   }
   const attempt = assertions.clone();
-  return asked.every((variable) => {
+  return columnsToAssert.every((variable) => {
     const value = binding[variable.value];
     return value === undefined ?
       attempt.assertUnbound(variable.value) :

@@ -851,28 +851,25 @@ export function substituteInPattern(
 
 /**
  * Unifies two terms on the term clusters, so that a triple term unifies position by position.
- * @param c - Whether triple terms may be generalized ones
  * @param left - The one term
  * @param right - The other term
+ * @param generalizedRdf - Whether triple terms may be generalized ones
  * @returns the most general substitution making both the same term, and that term, or `undefined` when none does
  */
 export function unifyTerms(
-  c: Pick<TransformationContext, 'generalizedRdf'>,
   left: RDF.Term,
   right: RDF.Term,
+  generalizedRdf = false,
 ): { unifier: Assertions; unified: RDF.Term } | undefined {
-  const clusters = new TermClusterSet<string>(
-    name => name,
-    variable => variable.value,
-    positionRangeOf(c.generalizedRdf),
-  );
+  const clusters =
+    new TermClusterSet<string>(name => name, variable => variable.value, positionRangeOf(generalizedRdf));
   const group = clusters.groupOfTerm(left);
   if (group === false || !clusters.assertTerm(group, right)) {
     return undefined;
   }
   // Every group the pins leave undecided holds a variable of the two terms.
   const nameOf = (undecided: number): RDF.Term => DF.variable(clusters.valuesOf(undecided)[0]);
-  const termOf = (reached: number): RDF.Term => clusters.resolvedTermOrNameOf(reached, nameOf);
+  const termOf = (reached: number): RDF.Term => clusters.fixedTermOrNameOf(reached, nameOf);
   const unifier = new Map<string, RDF.Term>();
   for (const name of unionSets([ termVars(left), termVars(right) ])) {
     const term = termOf(clusters.getGroup(name));

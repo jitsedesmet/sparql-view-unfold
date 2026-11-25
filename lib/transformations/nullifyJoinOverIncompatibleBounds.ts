@@ -3,6 +3,7 @@ import type { TransformationContext } from '../transformContext.js';
 import type { QueryTransformation } from '../types.js';
 import { cpMetaOf, expressionCertainlyEvaluates, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
+import { termIsDataBlockValue } from '../utils/typeGuards.js';
 import { directExtensions } from '../utils.js';
 import { VariableSet } from './variableSet.js';
 
@@ -83,10 +84,11 @@ function restrictOperations(
     if (op.type === Algebra.Types.EXTEND) {
       const varSet = varSets.get(op.variable.value);
       if (op.expression.subType === Algebra.ExpressionTypes.TERM && varSet &&
-        !varSet.termIsCompatible(c, op.expression.term) &&
-        // A bind that fails leaves its variable unbound, which joins with anything. The certainty is read off a
-        // copy, so that none is left cached on operations this pass goes on to change.
-        expressionCertainlyEvaluates(c, op.expression, cpMetaOf(c, withoutCpVars(op.input)))) {
+        !varSet.termIsCompatible(op.expression.term) &&
+        // A bind that fails leaves its variable unbound, which joins with anything. A data block value cannot fail;
+        // any other term is read off a copy, so no metadata stays cached on operations this pass goes on to change.
+        (termIsDataBlockValue(op.expression.term) ||
+          expressionCertainlyEvaluates(c, op.expression, cpMetaOf(c, withoutCpVars(op.input))))) {
         return createFilterFalse(c, op);
       }
       op.input = recurse(op.input);
@@ -128,7 +130,7 @@ function directExtensionOverUnionsAndMore(op: Algebra.Operation): Map<string, Va
 }
 
 /**
- * The term each variable the EXTEND chain at the top of an operation binds to a ground term is bound to.
+ * The value of each variable the EXTEND chain at the top of an operation binds to a data block value.
  * @param op - The operation to read
  * @returns one value set per such variable
  */

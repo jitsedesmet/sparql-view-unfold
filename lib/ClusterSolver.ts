@@ -17,7 +17,7 @@ import { isRdfTerm, isRdfVar } from './utils/typeGuards.js';
  *
  * Since a triple term the mapping head writes is a **shape** whose three positions are groups in their own
  * right ({@link assertTerm}) rather than a value a group is pinned to, the structure is a DAG, which
- * {@link fixedTermOf} reads a term back off and the occurs check of {@link TermClusterSet} keeps well
+ * {@link mappingTermOf} reads a term back off and the occurs check of {@link TermClusterSet} keeps well
  * founded.
  * @example
  * // Given mapping head: ?t rdf:reifies <<( ?s ?p ?o )>>
@@ -69,7 +69,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar> {
     const range = variable.range;
     const group = this.getGroup(variable);
     if (range !== undefined && group !== undefined && !this.narrowRange(group, range)) {
-      const groupTerm = this.fixedTermOf(group);
+      const groupTerm = this.mappingTermOf(group);
       throw new RewriteNoMatchError(`The range [${[ ...range.values() ].join(', ')}] of ${JSON.stringify(variable.value)} leaves nothing for its group, fixed to ${JSON.stringify(groupTerm)}`);
     }
   }
@@ -173,7 +173,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar> {
   protected registerTermToGroup(group: number, term: RDF.Term): void {
     // Read before asserting: a failed assertion leaves the set in a state no caller may read - narrowed
     // ranges and all - so what the message reports is the state the caller handed over.
-    const curTerm = this.fixedTermOf(group);
+    const curTerm = this.mappingTermOf(group);
     const curRange = this.rangeOf(group);
     if (!this.assertTerm(group, term)) {
       throw new RewriteNoMatchError(curTerm === undefined ?
@@ -183,22 +183,13 @@ export class ClusterSolver extends TermClusterSet<RangedVar> {
   }
 
   /**
-   * The term a group is fixed to, a shape read back with every position nothing fixes named by its mapping variable:
-   * the one the mapping body binds, so that `BIND(<<( ?s ?p ?o )>> AS ?y)` names values the subselect projects.
+   * The term a group is fixed to, a shape position nothing fixes named by the mapping variable the mapping body binds.
    * @param group - The group to look up
-   * @returns the term, or `undefined` when nothing fixes the group, or a position of its shape is fixed by nothing
-   * and named by nothing
+   * @returns the term, or `undefined` when a position, or the group, is neither fixed nor named
    */
-  public fixedTermOf(group: number): RDF.Term | undefined {
-    return this.resolvedTermOf(group, this.firstMappingVarOf);
+  public mappingTermOf(group: number): RDF.Term | undefined {
+    return this.fixedTermOf(group, position => this.mappingVarsOf(position)[0]);
   }
-
-  /**
-   * The mapping variable naming a group.
-   * @param group - The group to name
-   * @returns the variable, or `undefined` when no mapping variable is in it
-   */
-  private readonly firstMappingVarOf = (group: number): RDF.Variable | undefined => this.mappingVarsOf(group)[0];
 
   /**
    * The variables of the *mapping* in a group, as against the user query variables the rewriting binds from
@@ -242,7 +233,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar> {
   /**
    * Sorts the variables within each cluster, mapping variables first and by name within each of the two.
    *
-   * The mapping variables coming first is what {@link fixedTermOf} and the rewriting read a cluster by:
+   * The mapping variables coming first is what {@link mappingTermOf} and the rewriting read a cluster by:
    * the first variable of a cluster is the one the subselect really projects, so a user query variable
    * landing there would name a variable nothing binds. It is ordered on {@link isUserQueryVar} rather than
    * left to the names, which carry no sign of the side they are on.
@@ -267,7 +258,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar> {
   public getCluster(from: RDF.Variable): { term: RDF.Term | undefined ; vars: RDF.Variable[]; group: number } {
     const varGroup = this.getGroup(from);
     return {
-      term: this.fixedTermOf(varGroup),
+      term: this.mappingTermOf(varGroup),
       vars: this.valuesOf(varGroup).filter(value => !value.equals(from)),
       group: varGroup,
     };

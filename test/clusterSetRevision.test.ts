@@ -220,7 +220,7 @@ describe('cluster set revision', () => {
       set.groupEntries();
       set.hasGroup(set.groupOf('x')!);
       set.pinOf(set.groupOf('y')!);
-      set.resolvedTermOf(set.groupOf('x')!);
+      set.fixedTermOf(set.groupOf('x')!);
       set.childrenOf(set.groupOf('y')!);
       set.rangeOf(set.groupOf('y')!);
       set.assertedRangeOf(set.groupOf('x')!);
@@ -239,7 +239,7 @@ describe('cluster set revision', () => {
       const copy = set.clone();
       expect(copy.revision).not.toBe(set.revision);
       // The copy holds the same state, which is exactly why the stamp may not be the same.
-      expect(copy.resolvedTermOf(copy.getGroup('x'))).toEqual(termA);
+      expect(copy.fixedTermOf(copy.getGroup('x'))).toEqual(termA);
       expect(copy.revision).not.toBe(set.revision);
     });
 

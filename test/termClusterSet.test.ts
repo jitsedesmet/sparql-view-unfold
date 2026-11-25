@@ -18,7 +18,7 @@ describe('termClusterSet', () => {
     it('keeps a term the group is pinned to', ({ expect }) => {
       const set = newSet();
       expect(set.assertTerm(set.getGroup('x'), termA)).toBe(true);
-      expect(set.resolvedTermOf(set.getGroup('x'))).toEqual(termA);
+      expect(set.fixedTermOf(set.getGroup('x'))).toEqual(termA);
     });
 
     it('reports a conflict rather than raising it', ({ expect }) => {
@@ -32,7 +32,7 @@ describe('termClusterSet', () => {
       set.assertTerm(set.getGroup('x'), termA);
       set.getGroup('y');
       expect(set.mergeGroups('x', 'y')?.conflict).toBe(false);
-      expect(set.resolvedTermOf(set.getGroup('y'))).toEqual(termA);
+      expect(set.fixedTermOf(set.getGroup('y'))).toEqual(termA);
 
       const conflicting = newSet();
       conflicting.assertTerm(conflicting.getGroup('x'), termA);
@@ -56,7 +56,7 @@ describe('termClusterSet', () => {
       const { subject } = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       expect(set.valuesOf(subject)).toEqual([]);
       expect(set.assertTerm(subject, termA)).toBe(true);
-      expect(set.resolvedTermOf(subject)).toEqual(termA);
+      expect(set.fixedTermOf(subject)).toEqual(termA);
     });
 
     it('unifies the positions of two shapes met on one group', ({ expect }) => {
@@ -67,14 +67,14 @@ describe('termClusterSet', () => {
       set.assertTriplePin(set.getGroup('x'));
       expect(set.mergeGroups('o', 'x')?.conflict).toBe(false);
       // Everything known about the subject of `?o` is now known about the subject of `?x`.
-      expect(set.resolvedTermOf(<number> set.childrenOf(set.getGroup('x'))?.subject)).toEqual(termA);
+      expect(set.fixedTermOf(<number> set.childrenOf(set.getGroup('x'))?.subject)).toEqual(termA);
     });
 
     it('decomposes a ground triple term against a shape', ({ expect }) => {
       const set = newSet();
       const { subject } = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       expect(set.assertTerm(set.getGroup('o'), ground)).toBe(true);
-      expect(set.resolvedTermOf(subject)).toEqual(termA);
+      expect(set.fixedTermOf(subject)).toEqual(termA);
     });
 
     it('contradicts a shape against a term that is not a triple term', ({ expect }) => {
@@ -112,8 +112,8 @@ describe('termClusterSet', () => {
       expect(set.mergeGroups('o', 'x')?.conflict).toBe(false);
       const object = <number> set.childrenOf(set.getGroup('o'))?.object;
       const deep = set.childrenOf(object)!;
-      expect(set.resolvedTermOf(deep.subject)).toEqual(termA);
-      expect(set.resolvedTermOf(deep.predicate)).toEqual(termB);
+      expect(set.fixedTermOf(deep.subject)).toEqual(termA);
+      expect(set.fixedTermOf(deep.predicate)).toEqual(termB);
     });
   });
 
@@ -139,10 +139,10 @@ describe('termClusterSet', () => {
     it('shapes a group after a triple term, unifying its positions with the variables there', ({ expect }) => {
       const set = newSet();
       const group = <number> set.groupOfTerm(shaped);
-      expect(set.resolvedTermOf(group, undecided => DF.variable(set.valuesOf(undecided)[0]))).toEqual(shaped);
+      expect(set.fixedTermOf(group, undecided => DF.variable(set.valuesOf(undecided)[0]))).toEqual(shaped);
       expect(set.assertTerm(group, ground)).toBe(true);
-      expect(set.resolvedTermOf(set.getGroup('a'))).toEqual(termA);
-      expect(set.resolvedTermOf(group)).toEqual(ground);
+      expect(set.fixedTermOf(set.getGroup('a'))).toEqual(termA);
+      expect(set.fixedTermOf(group)).toEqual(ground);
     });
 
     it('holds a variable in a position of a triple term to the range of that position', ({ expect }) => {
@@ -155,7 +155,7 @@ describe('termClusterSet', () => {
       const set = newSet();
       expect(set.assertTerm(set.getGroup('x'), ground)).toBe(true);
       expect(set.pinOf(set.getGroup('x'))?.kind).toBe('triple');
-      expect(set.resolvedTermOf(set.getGroup('x'))).toEqual(ground);
+      expect(set.fixedTermOf(set.getGroup('x'))).toEqual(ground);
     });
 
     it('refuses a quad naming a graph, no triple term naming one', ({ expect }) => {
@@ -165,7 +165,7 @@ describe('termClusterSet', () => {
 
     it('leaves a group nothing fixes unresolved without a name for it', ({ expect }) => {
       const set = newSet();
-      expect(set.resolvedTermOf(<number> set.groupOfTerm(shaped))).toBeUndefined();
+      expect(set.fixedTermOf(<number> set.groupOfTerm(shaped))).toBeUndefined();
     });
   });
 

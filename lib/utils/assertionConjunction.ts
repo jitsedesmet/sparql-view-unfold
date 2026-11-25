@@ -44,6 +44,7 @@ import type { AssertionView } from './partialExpressionEvaluation.js';
 import { substituteInExpression } from './partialExpressionEvaluation.js';
 import { DF } from './rdfDatatypes.js';
 import { isSubsetOf } from './setUtils.js';
+import { isRdfQuad } from './typeGuards.js';
 
 /**
  * @fileoverview The conjunction of assertions (Θ) the pushdown moves around, and how a filter
@@ -171,8 +172,8 @@ export class AssertionConjunction {
    * `clusters` alone, and no two states of any two sets share a stamp.
    */
   private readonly members = new GroupMemo<readonly string[]>();
-  /** The groups {@link decidedTermOf} was asked about, stale the way {@link members} is. */
-  private readonly decidedTerms = new GroupMemo<RDF.Term | undefined>();
+  /** The groups {@link fixedTermOf} was asked about, stale the way {@link members} is. */
+  private readonly fixedTerms = new GroupMemo<RDF.Term | undefined>();
 
   /** Whether a triple term the query builds may be generalized, see {@link TransformationContext.generalizedRdf}. */
   public readonly generalizedRdf: boolean;
@@ -282,7 +283,7 @@ export class AssertionConjunction {
       return undefined;
     }
     const isStrong = this.strength.get(name) !== 'weak';
-    const term = this.decidedTermOf(group);
+    const term = this.fixedTermOf(group);
     if (term !== undefined) {
       return isStrong ? assertStrong(term) : assertWeak(term);
     }
@@ -382,7 +383,7 @@ export class AssertionConjunction {
   public equatedGroups(): EquatedGroup[] {
     const result: EquatedGroup[] = [];
     for (const [ group, readings ] of this.readingsPerGroup()) {
-      if (this.decidedTermOf(group) === undefined && readings.length > 1) {
+      if (this.fixedTermOf(group) === undefined && readings.length > 1) {
         result.push({ readings, range: this.assertedTermTypesOf(group) });
       }
     }
@@ -445,7 +446,7 @@ export class AssertionConjunction {
       const representative = this.representativeMemberOf(undecided);
       return representative === undefined ? undefined : DF.variable(representative);
     };
-    return this.strongMembersReplacedBy(group => this.clusters.resolvedTermOrNameOf(group, nameOf));
+    return this.strongMembersReplacedBy(group => this.clusters.fixedTermOrNameOf(group, nameOf));
   }
 
   /**
@@ -680,7 +681,7 @@ export class AssertionConjunction {
    * @returns `false` on a contradiction
    */
   private assertSourceYields(source: TransferSource, range: RangeSet): boolean {
-    if (('termType' in source && source.termType === 'Quad') || isTripleConstruction(source)) {
+    if (isRdfQuad(source) || isTripleConstruction(source)) {
       return range.has('Quad') && triplePositions.every(position =>
         this.assertSourceYields(source[position], rangeOfPosition(position, this.generalizedRdf)));
     }
@@ -1025,7 +1026,7 @@ export class AssertionConjunction {
    */
   private writeOutGroup(group: number, walk: Decomposition): AssertionConjunct[] {
     const accesses = walk.accessesPerGroup.get(group)!;
-    const term = this.decidedTermOf(group);
+    const term = this.fixedTermOf(group);
     const result: AssertionConjunct[] = [];
     if (term !== undefined) {
       // Every reading is that term, which already says they are equal to each other.
@@ -1190,8 +1191,8 @@ export class AssertionConjunction {
    * @param group - The group to read
    * @returns the term, a shape every position of which is fixed being the triple term it makes, or `undefined`
    */
-  private decidedTermOf(group: number): RDF.Term | undefined {
-    return this.decidedTerms.get(this.clusters.revision, group, () => this.clusters.resolvedTermOf(group));
+  private fixedTermOf(group: number): RDF.Term | undefined {
+    return this.fixedTerms.get(this.clusters.revision, group, () => this.clusters.fixedTermOf(group));
   }
 
   /**
@@ -1201,7 +1202,7 @@ export class AssertionConjunction {
    * @returns the group per position, or `undefined`
    */
   private readableChildrenOf(group: number): PinChildren | undefined {
-    return this.decidedTermOf(group) === undefined ? this.clusters.childrenOf(group) : undefined;
+    return this.fixedTermOf(group) === undefined ? this.clusters.childrenOf(group) : undefined;
   }
 
   /**
@@ -1269,7 +1270,7 @@ export class AssertionConjunction {
     };
 
     const nameOf = (undecided: number): RDF.Term => DF.variable(nameOfGroup(undecided));
-    const materialisedTerm = (group: number): RDF.Term => this.clusters.resolvedTermOrNameOf(group, nameOf);
+    const materialisedTerm = (group: number): RDF.Term => this.clusters.fixedTermOrNameOf(group, nameOf);
 
     const result = new Map<number, RDF.Term>();
     for (const [ group, [ representative ]] of accessesPerGroup) {
@@ -1284,7 +1285,7 @@ export class AssertionConjunction {
         // pinned to, or the representative every member of a clique substitutes to.
         result.set(group, this.shapeIsWorthWriting(group) ?
           materialisedTerm(group) :
-          this.decidedTermOf(group) ?? DF.variable(representative.name));
+          this.fixedTermOf(group) ?? DF.variable(representative.name));
       }
     }
     return result;
@@ -1302,7 +1303,7 @@ export class AssertionConjunction {
       return false;
     }
     return childGroupsOf(children).some(child =>
-      this.decidedTermOf(child) !== undefined ||
+      this.fixedTermOf(child) !== undefined ||
       this.namedMembers(child).length > 0 ||
       this.shapeIsWorthWriting(child));
   }
@@ -1368,7 +1369,7 @@ export class AssertionConjunction {
     if (group === undefined) {
       return undefined;
     }
-    const term = this.clusters.resolvedTermOf(group);
+    const term = this.fixedTermOf(group);
     if (term !== undefined) {
       return term;
     }

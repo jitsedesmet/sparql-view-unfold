@@ -5,6 +5,7 @@ import type { QueryTransformation } from '../types.js';
 import { unifyTerms } from '../utils/assertions.js';
 import { termVars } from '../utils/certainlyBoundVars.js';
 import { bindAssertedTerms, createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
+import { unionSets } from '../utils/setUtils.js';
 import { termIsStaticTerm } from '../utils/typeGuards.js';
 import { freshVarGenerator, markVariableNamesUsed } from '../utils.js';
 
@@ -71,8 +72,8 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
     const predicate = fresh();
     const other = fresh();
     const asObject = AF.createBgp([ AF.createPattern(other, predicate, term, graph) ]);
-    // A triple term is never a subject.
-    const matches = term.termType === 'Quad' ?
+    // In RDF, a triple term is never a subject.
+    const matches = term.termType === 'Quad' && !c.generalizedRdf ?
       asObject :
       AF.createUnion([ AF.createBgp([ AF.createPattern(term, predicate, other, graph) ]), asObject ]);
     return AF.createDistinct(AF.createProject(matches, variablesOf(term)));
@@ -84,7 +85,7 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
    * @returns their variables, in the order the terms hold them
    */
   function variablesOf(...terms: RDF.Term[]): RDF.Variable[] {
-    return [ ...new Set(terms.flatMap(term => [ ...termVars(term) ])) ].map(name => DF.variable(name));
+    return [ ...unionSets(terms.map(term => termVars(term))) ].map(name => DF.variable(name));
   }
 
   /**
@@ -95,7 +96,7 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
    * @returns the match, or `undefined` when the endpoints never denote one term
    */
   function zeroLengthMatch(path: Algebra.Path): Algebra.Operation | undefined {
-    const unification = unifyTerms(c, path.subject, path.object);
+    const unification = unifyTerms(path.subject, path.object, c.generalizedRdf);
     if (unification === undefined) {
       return undefined;
     }
