@@ -1,4 +1,3 @@
-import { KeysInitQuery } from '@comunica/context-entries';
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
 import * as arrayifyStreamNS from 'arrayify-stream';
@@ -149,14 +148,14 @@ describe('integration tests', () => {
   ): Promise<{ resOnMappedData: string[]; resUsingRewriter: string[] }> {
     const store12 = await storeTo12Store(store11, mappers, options);
     // A generalized RDF view is evaluated on an engine whose TRIPLE() builds generalized triple terms.
-    const rdfVariant = options.generalizedRdfView === true ? { [KeysInitQuery.rdfVariant.name]: 'generalizedRdf' } : {};
+    const rdfVariant = options.generalizedRdfView === true ? 'generalizedRdf' : 'rdf';
     const mappedBindings: RDF.Bindings[] = await arrayifyStream(
-      await engine.queryBindings(userQuery, { sources: [ store12 ], ...rdfVariant }),
+      await engine.queryBindings(userQuery, { sources: [ store12 ], rdfVariant }),
     );
 
     const rewrittenQuery = await rewriterFor(mappers, options).rewriteQuery(userQuery);
     const rewrittenBindings: RDF.Bindings[] = await arrayifyStream(
-      await engine.queryBindings(rewrittenQuery, { sources: [ store11 ], ...rdfVariant }),
+      await engine.queryBindings(rewrittenQuery, { sources: [ store11 ], rdfVariant }),
     );
 
     return {

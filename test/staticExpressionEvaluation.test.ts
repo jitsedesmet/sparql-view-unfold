@@ -1,10 +1,11 @@
 import { describe, it } from 'vitest';
-import { simplifyStaticExpressions } from '../lib/transformations/staticExpressionEvaluation.js';
+import { simplifyStaticExpressionsTransformation } from '../lib/transformations/staticExpressionEvaluation.js';
 import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 import { generateValidQuery } from './validQuery.js';
 
-describe('simplifyStaticExpressions', () => {
+describe('simplifyStaticExpressionsTransformation', () => {
   const c = createTransformationContext();
+  const simplifyStaticExpressions = simplifyStaticExpressionsTransformation();
 
   async function simplify(query: string): Promise<string> {
     const operation = parseQuery(c, query);

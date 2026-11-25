@@ -27,7 +27,7 @@ export interface Mapping {
  * One step of a query rewriting pipeline: an operation in, the rewritten operation out.
  *
  * The runner awaits every step, so a synchronous pass is a `QueryTransformation` as it stands - only the
- * passes that call an engine (`simplifyStaticExpressions`) need the promise.
+ * passes that call an engine (`simplifyStaticExpressionsTransformation`) need the promise.
  */
 export type QueryTransformation = (
   context: TransformationContext,

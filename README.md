@@ -213,7 +213,7 @@ The tables below are the short version; the generated
 | `serviceCallPushUpTransformation()` | Merges and hoists SERVICE calls so the endpoint evaluates as much as it can. |
 | `internalBnodeAsSpecialLiteralTransformation()` | Materialises constructed blank node identities as typed literals. |
 | `internalBnodeAsSpecialIriTransformation()` | Materialises them as prefixed IRIs, SHA-1 keeping the length manageable. |
-| `simplifyStaticExpressionsTransformation()` | Folds every fully static expression to the term Comunica's expression engine evaluates it to. |
+| `simplifyStaticExpressionsTransformation(engine?)` | Folds every fully static expression to the term Comunica's expression engine evaluates it to. |
 
 ## Cite
 
