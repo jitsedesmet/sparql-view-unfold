@@ -76,7 +76,8 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
     const matches = term.termType === 'Quad' && !c.generalizedRdf ?
       asObject :
       AF.createUnion([ AF.createBgp([ AF.createPattern(term, predicate, other, graph) ]), asObject ]);
-    return AF.createDistinct(AF.createProject(matches, variablesOf(term)));
+    // The graph a node is read from is part of the match: projecting it away would let a node of any graph through.
+    return AF.createDistinct(AF.createProject(matches, variablesOf(term, graph)));
   }
 
   /**

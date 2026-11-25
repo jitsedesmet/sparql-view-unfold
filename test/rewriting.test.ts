@@ -277,6 +277,12 @@ LIMIT 10`,
 }`,
       ));
 
+      it('keeps the graph a zero length match reads its node from', async({ expect }) => {
+        const rewritten = await createValidatingQueryRewriter([ rewriteNonRecursivePathsTransformation() ])
+          .rewriteQuery('DELETE { ?x <ex://a> ?y } WHERE { GRAPH ?g { ?x <ex://p>? ?y } }');
+        expect(rewritten).toContain('SELECT DISTINCT ?x ?g WHERE');
+      });
+
       it('takes every node a triple pattern endpoint matches as a zero length match', ({ expect }) => testPath(
         expect,
         'SELECT * { ?x <ex://p>? <<( ?a <ex://q> ?b )>> }',

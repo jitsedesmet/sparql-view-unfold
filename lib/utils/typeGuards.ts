@@ -39,7 +39,8 @@ export function isRdfVar(obj: object): obj is RangedVar {
  */
 export function termIsStaticTerm(term: RDF.Term): boolean {
   if (term.termType === 'Quad') {
-    return termIsStaticTerm(term.subject) && termIsStaticTerm(term.predicate) && termIsStaticTerm(term.object);
+    return termIsStaticTerm(term.subject) && termIsStaticTerm(term.predicate) && termIsStaticTerm(term.object) &&
+      termIsStaticTerm(term.graph);
   }
   return term.termType !== 'Variable';
 }
