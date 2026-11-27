@@ -433,6 +433,11 @@ describe('provenance captured over the colleagues data', () => {
     'SELECT ?x WHERE { ?x :worksAt :ugent FILTER EXISTS { { ?y :worksAt :imec FILTER(?y = ?x) } ?x :worksAt :ugent } }',
     'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?o } OPTIONAL { ?x :worksAt ?o ' +
     'FILTER EXISTS { ?x :worksAt ?w OPTIONAL { ?x :worksAt ?v FILTER(?v = ?o) } FILTER(BOUND(?v)) } } }',
+    'SELECT ?o WHERE { ?o :worksAt :imec FILTER EXISTS { ?a :knows ?b OPTIONAL { ?a :knows ?o } ?o :worksAt :imec } }',
+    'SELECT ?o WHERE { ?o :worksAt :imec FILTER NOT EXISTS { ?a :knows ?b OPTIONAL { ?a :knows ?o } ' +
+    '?o :worksAt :imec } }',
+    'SELECT ?x WHERE { VALUES ?x { :alice :bob } FILTER EXISTS { ?y :worksAt ?o BIND(?y AS ?x) } }',
+    'SELECT ?x WHERE { VALUES ?x { :alice :bob } FILTER NOT EXISTS { ?y :worksAt ?o BIND(?y AS ?x) } }',
   ])('answers %s as the query without provenance does', async(query, { expect }) => {
     const [ decodedAnswers, rows ] = await Promise.all([
       decodedAnswersOf(query),
@@ -570,6 +575,18 @@ describe('provenance captured over the colleagues data', () => {
 
   it('counts every solution produced from no view triple', async({ expect }) => {
     expect(await countsOf('SELECT ?x WHERE { VALUES (?x ?y) { (:a 1) (:a 2) } }')).toEqual({ 'x=ex://a': 2 });
+    expect(await countsOf('SELECT ?x WHERE { VALUES ?x { :a :a } }')).toEqual({ 'x=ex://a': 2 });
+  });
+
+  it('keeps the provenance of an EXISTS over a sub-SELECT, a negated path or a nested EXISTS', async({ expect }) => {
+    for (const existence of [
+      '{ SELECT ?x WHERE { ?x :worksAt :imec } }',
+      '{ ?x !:knows :imec }',
+      '{ ?x :worksAt ?o FILTER NOT EXISTS { ?y :worksAt ?o FILTER(?y != ?x && ?y != :carol) } }',
+    ]) {
+      const explanations = await explain(`SELECT ?x WHERE { ?x :worksAt :ugent FILTER EXISTS ${existence} }`);
+      expect(explanations.every(explanation => explanation.includes('⊖')), existence).toBe(true);
+    }
   });
 
   it('decodes derivations materialised as typed literals', async({ expect }) => {

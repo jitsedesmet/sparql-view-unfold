@@ -22,7 +22,7 @@ import { createTransformationContext, parseQuery } from './transformContext.js';
 import type { Mapping } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
 import { cpMetaOf, withoutCpVars } from './utils/certainlyBoundVars.js';
-import { expressionsEvaluatedBy } from './utils/existenceScopes.js';
+import { expressionsEvaluatedBy, leaveExistencePatterns } from './utils/existenceScopes.js';
 import {
   boundExpression,
   conjunctionOf,
@@ -245,7 +245,7 @@ function nodePattern(
 }
 
 /**
- * Lifts an operation whose solutions read no view triple, as the sum (Σ) of a `one` leaf per solution.
+ * Lifts an operation whose solutions read no view triple, as a `one` leaf under each solution's Σ node.
  * @param c - The provenance capture context
  * @param operation - The operation
  * @returns the pattern
@@ -256,6 +256,18 @@ function constantOnePattern(c: ProvenanceCaptureContext, operation: Algebra.Oper
     DF.variable(provenanceNodeVariableName(sum, 'one')),
     c.AF.createTermExpression(constantOne),
   ));
+}
+
+/**
+ * Numbers the rows of a VALUES, so that the identities of identical rows differ, as a bag holds them.
+ * @param c - The provenance capture context
+ * @param values - The VALUES
+ * @returns the VALUES with a column holding each row's index
+ */
+function withRowIndices(c: ProvenanceCaptureContext, values: Algebra.Values): Algebra.Values {
+  const rowIndex = c.coinInternalVariable();
+  return c.AF.createValues([ ...values.variables, rowIndex ], values.bindings.map((binding, index) =>
+    ({ ...binding, [rowIndex.value]: DF.literal(String(index), datatypeInteger) })));
 }
 
 /**
@@ -531,29 +543,37 @@ function isUncorrelatedPattern(
     return false;
   }
   let uncorrelated = true;
-  // A sub-SELECT, GROUP, MINUS's right side or SERVICE reads an outer variable apart from the solutions compared.
-  const hiding = (hidden: object): { shortcut: boolean } => {
-    uncorrelated &&= !readsOuterVariableUnbound(hidden, new Set());
+  const check = (correlated: boolean): { shortcut: boolean } => {
+    uncorrelated &&= !correlated;
     return { shortcut: !uncorrelated };
   };
   // An expression reads the outer value only where its input certainly binds the variable.
-  const evaluating = (operation: Algebra.Filter | Algebra.Extend | Algebra.LeftJoin | Algebra.OrderBy):
-  { shortcut: boolean } => {
-    const inputs = Array.isArray(operation.input) ? operation.input : [ operation.input ];
+  const expressionReadsOuterVariableUnbound = (operation: Algebra.Operation, inputs: Algebra.Operation[]): boolean => {
     const inputBound = unionSets(inputs.map(input => cpMetaOf(c, input).cVars));
-    uncorrelated &&= !expressionsEvaluatedBy(operation)
-      .some(expression => readsOuterVariableUnbound(expression, inputBound));
-    return { shortcut: !uncorrelated };
+    return expressionsEvaluatedBy(operation).some(expression => readsOuterVariableUnbound(expression, inputBound));
   };
+  const nothingBound = new Set<string>();
   algebraUtils.visitOperation(pattern, {
-    [Algebra.Types.PROJECT]: { preVisitor: hiding },
-    [Algebra.Types.GROUP]: { preVisitor: hiding },
-    [Algebra.Types.SERVICE]: { preVisitor: hiding },
-    [Algebra.Types.MINUS]: { preVisitor: minus => hiding(minus.input[1]) },
-    [Algebra.Types.FILTER]: { preVisitor: evaluating },
-    [Algebra.Types.EXTEND]: { preVisitor: evaluating },
-    [Algebra.Types.LEFT_JOIN]: { preVisitor: evaluating },
-    [Algebra.Types.ORDER_BY]: { preVisitor: evaluating },
+    // A sub-SELECT hides the outer variables it does not project; a GROUP, SERVICE or MINUS's right side all it reads.
+    [Algebra.Types.PROJECT]: { preVisitor: project =>
+      check(readsOuterVariableUnbound(project, new Set(project.variables.map(variable => variable.value)))) },
+    [Algebra.Types.GROUP]: { preVisitor: group => check(readsOuterVariableUnbound(group, nothingBound)) },
+    [Algebra.Types.SERVICE]: { preVisitor: service => check(readsOuterVariableUnbound(service, nothingBound)) },
+    [Algebra.Types.MINUS]: { preVisitor: minus => check(readsOuterVariableUnbound(minus.input[1], nothingBound)) },
+    // An OPTIONAL's right side, as an expression does, reads the outer value only where its left side binds it.
+    [Algebra.Types.LEFT_JOIN]: { preVisitor: leftJoin => check(
+      readsOuterVariableUnbound(leftJoin.input[1], cpMetaOf(c, leftJoin.input[0]).cVars) ||
+      expressionReadsOuterVariableUnbound(leftJoin, leftJoin.input),
+    ) },
+    [Algebra.Types.FILTER]: { preVisitor: filter =>
+      check(expressionReadsOuterVariableUnbound(filter, [ filter.input ])) },
+    // A BIND to an outer variable is dropped where SPARQL substitutes that variable.
+    [Algebra.Types.EXTEND]: { preVisitor: extend => check(outerNames.has(extend.variable.value) ||
+      expressionReadsOuterVariableUnbound(extend, [ extend.input ])) },
+    [Algebra.Types.ORDER_BY]: { preVisitor: orderBy =>
+      check(expressionReadsOuterVariableUnbound(orderBy, [ orderBy.input ])) },
+    // A nested EXISTS reads the outer value through the expression holding it.
+    [Algebra.Types.EXPRESSION]: leaveExistencePatterns,
   });
   return uncorrelated;
 }
@@ -788,8 +808,9 @@ function patternOf(c: ProvenanceCaptureContext, operation: Algebra.Operation): P
       return patternOverInput(operation, patternOf(c, operation.input), rewrittenInput =>
         AF.createFrom(rewrittenInput, operation.default, operation.named));
     case Algebra.Types.VALUES:
+      return constantOnePattern(c, withRowIndices(c, operation));
     case Algebra.Types.SERVICE:
-      // Neither reads the view, so neither has derivations.
+      // Its identical solutions cannot be told apart, so they count once.
       return constantOnePattern(c, operation);
     default:
       throw new Error(`Provenance cannot be captured through a ${operation.type}.`);

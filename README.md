@@ -205,7 +205,8 @@ answers: `isAnswer` tells them apart. Beyond SPARQLprov:
   joined with the provenance of every solution with the same values, including those left out. The order of an
   `ORDER BY` is lost. `DISTINCT` is dropped, as the decoding sums the rows of an answer anyway.
 - Answers of a `GROUP BY`, `LIMIT` or `OFFSET` are computed over the view as a set, as with `preserveCardinality`.
-- `VALUES` and `SERVICE` read no view triple, so their solutions are annotated with `1`.
+- `VALUES` and `SERVICE` read no view triple, so their solutions are annotated with `1`; identical `SERVICE`
+  solutions count once.
 - `derivedFrom` lists the body's triple patterns every solution matches: none under a `UNION`, the right side
   of an `OPTIONAL` or `MINUS`, a sub-SELECT, `GROUP`, `GRAPH` or `SERVICE`, nor a property path.
 - Only a `SELECT` is supported, and it may not call `RAND`, `BNODE`, `UUID` or `STRUUID`: the rewrite evaluates
