@@ -164,53 +164,125 @@ const bindings = await new QueryEngine().queryBindings(query, {
 
 ### Provenance
 
-Which source triples does an answer rest on? This follows
-[SPARQLprov](https://doi.org/10.14778/3484224.3484235) (Hernández et al.), which needs the data stored reified; the
-provenance mapping supplies that reification virtually.
+Which source triples does an answer rest on? For a `SELECT` over a view, the rewriter can tell you, per answer. Your
+data stays as it is. The approach follows [SPARQLprov](https://doi.org/10.14778/3484224.3484235) (Hernández et al.).
 
-A *derivation* is one solution of a mapping body. `provenanceMappingFromConstructQueries` builds the view of them:
-each derivation is `provenance:derivationOf` the view triples it produces and `provenance:derivedFrom` the source
-triples it matched, with `provenance:` for `https://sparql-extension.knows.idlab.ugent.be/provenance#`. The
-derivations are SPARQLprov's sources, and `derivationOf` its reification scheme. `provenanceCapturingQuery` rewrites
-a SELECT over the view as SPARQLprov does (Def. 4.12 and 4.17), so that its answers also carry their how-provenance
-polynomial, encoded in variables starting with the returned prefix. `decodeProvenance` decodes them (Def. 4.10):
+**Derivations.** A *derivation* is one solution of a view's `WHERE` clause: one way the view produces a triple. With
+the view below, `:bob :colleague :carol` has two derivations: Bob and Carol both work at UGent, and both at imec.
+`provenanceMappingFromConstructQueries` builds a second view, the *provenance view*, that describes the derivations:
+
+- `?d provenance:derivationOf <<( s p o )>>`: derivation `?d` produces the view triple `s p o`.
+- `?d provenance:derivedFrom <<( s p o )>>`: derivation `?d` matched the source triple `s p o`.
+
+`provenance:` is `https://sparql-extension.knows.idlab.ugent.be/provenance#`.
+
+**Example.** The data:
+
+```turtle
+@prefix : <ex://> .
+:alice :knows :bob .
+:bob :worksAt :ugent , :imec .
+:carol :worksAt :ugent , :imec .
+:dave :worksAt :ugent .
+```
+
+The view holds every triple as it is, plus a `:colleague` triple between two people at the same organisation. Ask it
+who Alice's acquaintances work with:
 
 ```typescript
+import { QueryEngine } from '@comunica/query-sparql-file';
+import {
+  createDefaultTransformationPipeline,
+  createQueryRewriter,
+  decodeProvenance,
+  internalBnodeAsSpecialIriTransformation,
+  internalBnodeExtensionFunctions,
+  polynomialToString,
+  provenanceCapturingQuery,
+  provenanceMappingFromConstructQueries,
+} from 'sparql-view-unfold';
+
+const view = [
+  'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }',
+  'PREFIX : <ex://> CONSTRUCT { ?x :colleague ?y } WHERE { ?x :worksAt ?org . ?y :worksAt ?org . FILTER(?x != ?y) }',
+];
+
+// 1. Rewrite the query so that it also selects how each answer was derived.
+const capture = provenanceCapturingQuery('PREFIX : <ex://> SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }');
+
+// 2. Unfold that query against the provenance view and run it. Derivations are identified by internal blank nodes
+//    (see Blank nodes above), so the pipeline ends by materialising them.
 const rewriter = createQueryRewriter([
-  ...createDefaultTransformationPipeline(provenanceMappingFromConstructQueries(constructs)),
+  ...createDefaultTransformationPipeline(provenanceMappingFromConstructQueries(view)),
   internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
 ]);
-const capture = provenanceCapturingQuery('PREFIX : <ex://> SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }');
 const bindings = await new QueryEngine().queryBindings(await rewriter.rewriteQuery(capture.query), {
-  sources,
+  sources: [ 'colleagues.ttl' ],
   extensionFunctions: internalBnodeExtensionFunctions(),
 });
-const answers = decodeProvenance(await bindings.toArray(), capture.provenanceVariablePrefix);
-for (const { answer, polynomial, isAnswer } of answers) {
-  // e.g. c=carol: ((d1 ⊕ d2) ⊗ d3), Carol a colleague through two derivations of Bob's, whom Alice knows (d3).
-  console.log(answer, polynomialToString(polynomial), isAnswer);
+
+// 3. Decode the rows: one entry per answer.
+for (const { answer, polynomial } of decodeProvenance(await bindings.toArray(), capture.provenanceVariablePrefix)) {
+  console.log(answer.get('c')!.value, polynomialToString(polynomial));
 }
 ```
 
-A polynomial is built from derivations with ⊕ (UNION, and the derivations of one view triple), ⊗ (join), ⊖
-(OPTIONAL, MINUS, NOT EXISTS) and δ (an aggregated group). `evaluatePolynomial` evaluates it in an spm-semiring,
-such as `countingSpmSemiring` for multiplicities; `lineageOf` lists its derivations, whose `derivedFrom` gives the
-source triples. A difference keeps the solutions it removes, so that their polynomial explains why they are not
-answers: `isAnswer` tells them apart. Beyond SPARQLprov:
+Each answer comes with a *polynomial*: a formula over derivations that says how the answer was derived. The
+example prints each derivation as an IRI; written as the source triples it matched (looked up as shown below), the
+answers are:
 
-- `EXISTS` is `P ⊖ (P ⊖ P2)`, its outer difference matching each solution of `P` only with itself. An `EXISTS` or
-  `NOT EXISTS` other than a top-level conjunct of a `FILTER`, or whose pattern reads an outer variable where it does
-  not certainly bind it, stays a filter, contributing no provenance.
-- `LIMIT` and `OFFSET` are rewritten as an aggregate is (Def. 4.17): the answers computed without provenance, then
-  joined with the provenance of every solution with the same values, including those left out. The order of an
-  `ORDER BY` is lost. `DISTINCT` is dropped, as the decoding sums the rows of an answer anyway.
-- Answers of a `GROUP BY`, `LIMIT` or `OFFSET` are computed over the view as a set, as with `preserveCardinality`.
-- `VALUES` and `SERVICE` read no view triple, so their solutions are annotated with `1`; identical `SERVICE`
-  solutions count once.
-- `derivedFrom` lists the body's triple patterns every solution matches: none under a `UNION`, the right side
-  of an `OPTIONAL` or `MINUS`, a sub-SELECT, `GROUP`, `GRAPH` or `SERVICE`, nor a property path.
-- Only a `SELECT` is supported, and it may not call `RAND`, `BNODE`, `UUID` or `STRUUID`: the rewrite evaluates
-  parts of the query more than once.
+```text
+ex://carol  ([bob worksAt imec, carol worksAt imec] ⊕ [bob worksAt ugent, carol worksAt ugent]) ⊗ [alice knows bob]
+ex://dave   [alice knows bob] ⊗ [bob worksAt ugent, dave worksAt ugent]
+```
+
+Read the operators as:
+
+| Operator | Meaning | Comes from |
+|---|---|---|
+| `a ⊗ b` | needs both `a` and `b` | a join |
+| `a ⊕ b` | `a` or `b` is enough | a `UNION`, or two derivations of the same view triple |
+| `a ⊖ b` | `a`, unless `b` | `MINUS`, `NOT EXISTS`, and an `OPTIONAL` that found no match |
+| `δ(a)` | an aggregate over `a` | `GROUP BY` |
+| `1` | needs no view triple | `VALUES`, `SERVICE` |
+
+**Answers and non-answers.** `decodeProvenance` also returns the solutions a `MINUS`, `NOT EXISTS` or `OPTIONAL`
+removed, so that their polynomial shows why. `isAnswer` tells them apart. For
+`SELECT ?x WHERE { ?x :worksAt :ugent MINUS { ?x :worksAt :imec } }`:
+
+```text
+ex://bob    isAnswer: false  [bob worksAt ugent] ⊖ [bob worksAt imec]
+ex://carol  isAnswer: false  [carol worksAt ugent] ⊖ [carol worksAt imec]
+ex://dave   isAnswer: true   [dave worksAt ugent] ⊖ 0
+```
+
+**From derivations to source triples.** A polynomial's leaves are derivation IRIs. `lineageOf(polynomial)` lists them.
+Ask the provenance view, through the same rewriter, which source triples each derivation matched:
+
+```sparql
+PREFIX provenance: <https://sparql-extension.knows.idlab.ugent.be/provenance#>
+SELECT ?derivation ?source WHERE { ?derivation provenance:derivedFrom ?source }
+```
+
+**Computing with a polynomial.** `evaluatePolynomial(polynomial, semiring, valueOf)` gives each derivation a value
+through `valueOf`, and combines the values the way the operators say. With `countingSpmSemiring` and `() => 1` it
+counts the ways an answer is derived (2 for Carol above). With `booleanSpmSemiring` and
+`derivation => !deleted.has(derivation)` it tells whether the answer survives when the `deleted` derivations are gone.
+
+**Limits.**
+
+- Only `SELECT` is supported, without `RAND`, `BNODE`, `UUID` or `STRUUID`: the rewritten query runs parts of the
+  query more than once, and these functions would answer differently each time.
+- `OPTIONAL` repeats its left side in the rewritten query, and `GROUP BY`, `LIMIT` and `OFFSET` their whole
+  subquery. Nesting them doubles the query each time.
+- `LIMIT` and `OFFSET` keep their answers, but an answer's provenance also covers the solutions they cut off.
+  `ORDER BY` is ignored.
+- `GROUP BY`, `LIMIT` and `OFFSET` count over the view as a set, as `preserveCardinality` does.
+- An `EXISTS` adds no provenance, but still filters, when it sits inside a larger expression, or when it uses an outer
+  variable it may not bind itself, as in `FILTER EXISTS { ?y :worksAt ?o FILTER(?y != ?x) }`.
+- `derivedFrom` misses the source triples a view matches inside a `UNION`, `OPTIONAL`, `MINUS`, sub-`SELECT`,
+  `GROUP BY`, `GRAPH`, `SERVICE` or property path.
+- Identical `SERVICE` solutions count once.
 
 ## Restrictions
 
@@ -248,11 +320,11 @@ The tables below are the short version; the generated
 | `createDefaultTransformationPipeline(mapping, options?)` | The pipeline to use when you have no reason to build your own. |
 | `rewriter.rewriteQuery(query)` | Rewrites a SPARQL query string, asynchronously. |
 | `rewriter.rewriteOperation(operation)` | The same over SPARQL algebra, for callers already holding some. |
-| `provenanceMappingFromConstructQueries(constructQueries, options?)` | Builds the mapping of the provenance view the CONSTRUCT queries define. |
-| `provenanceCapturingQuery(query)` | Rewrites a SELECT over the view to also select the how-provenance of its answers, and gives its provenance variable prefix. |
+| `provenanceMappingFromConstructQueries(constructQueries, options?)` | Builds the provenance view of a view: its derivations, and the triples each produces and matched. |
+| `provenanceCapturingQuery(query)` | Rewrites a SELECT over the view to also select how each answer was derived, and gives the prefix of the variables holding it. |
 | `provenanceCapturingOperation(operation)` | The same over SPARQL algebra. |
-| `decodeProvenance(bindings, provenanceVariablePrefix)` | Decodes the answers of a provenance capturing query into their polynomials. |
-| `evaluatePolynomial(polynomial, semiring, valueOf)` | Evaluates a polynomial in an spm-semiring, like `booleanSpmSemiring` or `countingSpmSemiring`. |
+| `decodeProvenance(bindings, provenanceVariablePrefix)` | Decodes the rows of that query into one polynomial per answer. |
+| `evaluatePolynomial(polynomial, semiring, valueOf)` | Computes a value from a polynomial, such as a count (`countingSpmSemiring`) or whether it holds (`booleanSpmSemiring`). |
 | `lineageOf(polynomial)`, `polynomialToString(polynomial, labelOf?)` | The derivations a polynomial mentions, and the polynomial written out. |
 
 | Transformation | Description |
