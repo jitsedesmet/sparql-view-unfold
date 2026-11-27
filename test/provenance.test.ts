@@ -18,7 +18,6 @@ import {
   countingSpmSemiring,
   decodeProvenance,
   evaluatePolynomial,
-  lineageOf,
   polynomialToString,
 } from '../lib/provenancePolynomial.js';
 import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
@@ -635,45 +634,238 @@ describe('provenance captured over the colleagues data', () => {
 });
 
 describe('provenance, the whole story', () => {
-  it('explains each count of a grouped query by the source triples it rests on', async({ expect }) => {
-    // The source (test/statics/colleagues.ttl): Bob and Carol work at UGent and imec, Dave at UGent only.
+  /**
+   * Sorts items by their JSON, so that rows compare whatever order the engine returns them in.
+   * @param items - The items to sort
+   * @returns the sorted items
+   */
+  function sorted<T>(items: T[]): T[] {
+    return [ ...items ].sort((left, right) => JSON.stringify(left) < JSON.stringify(right) ? -1 : 1);
+  }
+
+  it('explains each count of a grouped query by the derivations it rests on', async({ expect }) => {
+    // The source data is test/statics/colleagues.ttl: Bob and Carol work at UGent and imec, Dave at UGent only.
     // The view: two people working at the same organisation are colleagues.
     const view = [
       `${prefixes} CONSTRUCT { ?x :colleague ?y } WHERE { ?x :worksAt ?org . ?y :worksAt ?org . FILTER(?x != ?y) }`,
     ];
     const query = `${prefixes} SELECT ?x (COUNT(*) AS ?colleagues) WHERE { ?x :colleague ?y } GROUP BY ?x`;
-    const local = (term: RDF.Term | undefined): string => term!.value.replace('ex://', '');
 
-    // 1. The query answers how many colleagues each person has, over the view as a set.
-    const results = await bindingsOf(mappingFromConstructQueries(view), query, { preserveCardinality: true });
-    expect(results.map(row => `${local(row.get('x'))}: ${local(row.get('colleagues'))}`).sort())
-      .toEqual([ 'bob: 2', 'carol: 2', 'dave: 2' ]);
+    // 1. The query over the view, without provenance and with the view as a set.
+    expect(sorted(await evaluate(mappingFromConstructQueries(view), query, { preserveCardinality: true })))
+      .toEqual([
+        { x: 'ex://bob', colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer' },
+        { x: 'ex://carol', colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer' },
+        { x: 'ex://dave', colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer' },
+      ]);
 
-    // 2. Captured, the same query also answers which derivations each count rests on. A derivation is one solution
-    //    of the view's body: a colleague and the organisation shared, which its `derivedFrom` source triples give.
-    const provenanceMapping = provenanceMappingFromConstructQueries(view);
+    // 2. The query rewritten to also select its provenance.
     const capture = provenanceCapturingQuery(query);
-    const answers = decodeProvenance(
-      await bindingsOf(provenanceMapping, capture.query),
-      capture.provenanceVariablePrefix,
-    );
-    const derivations = await bindingsOf(provenanceMapping, `${prefixes} SELECT ?derivation ?y ?org WHERE {
-      ?derivation provenance:derivationOf <<( ?x :colleague ?y )>> ; provenance:derivedFrom <<( ?x :worksAt ?org )>> .
-    }`);
-    const labels = new Map(derivations.map(row =>
-      [ termToString(row.get('derivation')), `${local(row.get('y'))}@${local(row.get('org'))}` ]));
-    const labelOf = (derivation: RDF.Term): string => labels.get(termToString(derivation))!;
+    expect(capture.provenanceVariablePrefix).toBe('prov');
+    expect(capture.query).toBe(`
+SELECT ?x ?colleagues ?prov_aggregate ?prov_aggregate_sum_sum_statement ?prov_aggregate_sum_sum ?prov_aggregate_sum WHERE {
+  {
+    {
+      SELECT ?x ( COUNT( * ) AS ?colleagues ) WHERE {
+        SELECT DISTINCT ?x ?y WHERE {
+          ?internal0 <https://sparql-extension.knows.idlab.ugent.be/provenance#derivationOf> <<( ?x <ex://colleague> ?y )>> .
+        }
+      }
+      GROUP BY ?x
+    }
+    BIND( <internal://blank> ( "prov_aggregate" , ?x ) AS ?prov_aggregate )
+  }
+  OPTIONAL {
+    {
+      SELECT ?x ?prov_aggregate_sum_sum_statement ?prov_aggregate_sum_sum ?prov_aggregate_sum WHERE {
+        SELECT ?x ?prov_aggregate_sum_sum_statement ( <internal://blank> ( "prov_aggregate_sum_sum" , ?x , ?y ) AS ?prov_aggregate_sum_sum ) ( <internal://blank> ( "prov_aggregate_sum" , ?x ) AS ?prov_aggregate_sum ) WHERE {
+          ?prov_aggregate_sum_sum_statement <https://sparql-extension.knows.idlab.ugent.be/provenance#derivationOf> <<( ?x <ex://colleague> ?y )>> .
+        }
+      }
+    }
+  }
+}
+`);
 
-    // 3. Each count is the aggregate δ of the derivations of the colleague triples it counts. Bob counts two
-    //    colleagues, Carol and Dave, but Carol through two organisations: three derivations.
-    expect(answers.map(({ answer, polynomial }) =>
-      `${local(answer.get('x'))}: ${local(answer.get('colleagues'))} = ${polynomialToString(polynomial, labelOf)}`)
-      .sort()).toEqual([
-      'bob: 2 = δ(carol@imec ⊕ carol@ugent ⊕ dave@ugent)',
-      'carol: 2 = δ(bob@imec ⊕ bob@ugent ⊕ dave@ugent)',
-      'dave: 2 = δ(bob@ugent ⊕ carol@ugent)',
+    // 3. Its rows, unfolded against the provenance view and evaluated over the source data.
+    const provenanceMapping = provenanceMappingFromConstructQueries(view);
+    const rows = await bindingsOf(provenanceMapping, capture.query);
+    expect(sorted(rows.map(recordOf))).toEqual([
+      {
+        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/0be09eb44785d2772757080e1c62ec5a61b50d36',
+        x: 'ex://bob',
+        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/40bb14f804a4ea15274dfd6862956fd31d706b5a',
+        prov_aggregate_sum: 'https://myInternalBnode.example.org/b150433de9fa4d189db4787f307c905c713e6cd8',
+        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        prov_aggregate: 'https://myInternalBnode.example.org/6065d5f68d9e8d5d8ece13fa00c5578d5e2b82e5',
+      },
+      {
+        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/74810b8df84eebffced1b47c9533df0735bdcfbb',
+        x: 'ex://bob',
+        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/c4c7592be1ec9fc7d0d675e4271ba0ed7c012362',
+        prov_aggregate_sum: 'https://myInternalBnode.example.org/b150433de9fa4d189db4787f307c905c713e6cd8',
+        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        prov_aggregate: 'https://myInternalBnode.example.org/6065d5f68d9e8d5d8ece13fa00c5578d5e2b82e5',
+      },
+      {
+        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/862273efa1ef04f50b48eb5e68bc10674688a16b',
+        x: 'ex://carol',
+        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/6eb533aab0ed61b08b67e9fa777b11931cf29e8c',
+        prov_aggregate_sum: 'https://myInternalBnode.example.org/e326d5ba0a0a670e49dc040e517bf278e189e8c5',
+        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        prov_aggregate: 'https://myInternalBnode.example.org/a8388dfa950199fb198e495f5cf0ae5578b78673',
+      },
+      {
+        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/883eb62e03826d0dda04e9ff19d5d01adcaca2db',
+        x: 'ex://carol',
+        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/67006328fa6d665ccb01d71d2f7f18730d196b81',
+        prov_aggregate_sum: 'https://myInternalBnode.example.org/e326d5ba0a0a670e49dc040e517bf278e189e8c5',
+        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        prov_aggregate: 'https://myInternalBnode.example.org/a8388dfa950199fb198e495f5cf0ae5578b78673',
+      },
+      {
+        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/90f4456735d97543be8c2834c138b47e15ae3c2c',
+        x: 'ex://bob',
+        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/40bb14f804a4ea15274dfd6862956fd31d706b5a',
+        prov_aggregate_sum: 'https://myInternalBnode.example.org/b150433de9fa4d189db4787f307c905c713e6cd8',
+        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        prov_aggregate: 'https://myInternalBnode.example.org/6065d5f68d9e8d5d8ece13fa00c5578d5e2b82e5',
+      },
+      {
+        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/a4db0e8460cc73b7dea8988e5df898c53b19f26f',
+        x: 'ex://carol',
+        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/6eb533aab0ed61b08b67e9fa777b11931cf29e8c',
+        prov_aggregate_sum: 'https://myInternalBnode.example.org/e326d5ba0a0a670e49dc040e517bf278e189e8c5',
+        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        prov_aggregate: 'https://myInternalBnode.example.org/a8388dfa950199fb198e495f5cf0ae5578b78673',
+      },
+      {
+        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/a76c8265d153fb37ac044f59a9109fe05e352cde',
+        x: 'ex://dave',
+        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/5fa2488b4ccd3ca0e6828c3beaf3132493462e98',
+        prov_aggregate_sum: 'https://myInternalBnode.example.org/9d8f4772aac735af3e0229ae185dc863d94ea1cc',
+        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        prov_aggregate: 'https://myInternalBnode.example.org/5397346b50f730fb43d08aff74f9a0f7a30050af',
+      },
+      {
+        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/c5d75903ebfee0de48bfc464dccefbce7db013b8',
+        x: 'ex://dave',
+        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/17465212666d3d9546d20cf2f9afef6449b4221d',
+        prov_aggregate_sum: 'https://myInternalBnode.example.org/9d8f4772aac735af3e0229ae185dc863d94ea1cc',
+        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        prov_aggregate: 'https://myInternalBnode.example.org/5397346b50f730fb43d08aff74f9a0f7a30050af',
+      },
     ]);
-    const bob = answers.find(({ answer }) => local(answer.get('x')) === 'bob')!;
-    expect(lineageOf(bob.polynomial).map(labelOf).sort()).toEqual([ 'carol@imec', 'carol@ugent', 'dave@ugent' ]);
+
+    // 4. The rows decoded into a polynomial per answer: δ, the aggregate, over the derivations of the triples counted.
+    expect(sorted(decodeProvenance(rows, capture.provenanceVariablePrefix).map(({ answer, isAnswer, polynomial }) =>
+      ({ answer: recordOf(answer), isAnswer, polynomial: polynomialToString(polynomial) })))).toEqual([
+      {
+        answer: { x: 'ex://bob', colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer' },
+        isAnswer: true,
+        polynomial: 'δ(https://myInternalBnode.example.org/0be09eb44785d2772757080e1c62ec5a61b50d36 ⊕ https://myInternalB' +
+          'node.example.org/74810b8df84eebffced1b47c9533df0735bdcfbb ⊕ https://myInternalBnode.example.org/90f4' +
+          '456735d97543be8c2834c138b47e15ae3c2c)',
+      },
+      {
+        answer: { x: 'ex://carol', colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer' },
+        isAnswer: true,
+        polynomial: 'δ(https://myInternalBnode.example.org/862273efa1ef04f50b48eb5e68bc10674688a16b ⊕ https://myInternalB' +
+          'node.example.org/883eb62e03826d0dda04e9ff19d5d01adcaca2db ⊕ https://myInternalBnode.example.org/a4db' +
+          '0e8460cc73b7dea8988e5df898c53b19f26f)',
+      },
+      {
+        answer: { x: 'ex://dave', colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer' },
+        isAnswer: true,
+        polynomial: 'δ(https://myInternalBnode.example.org/a76c8265d153fb37ac044f59a9109fe05e352cde ⊕ https://myInternalB' +
+          'node.example.org/c5d75903ebfee0de48bfc464dccefbce7db013b8)',
+      },
+    ]);
+
+    // 5. In the provenance view, the view triple each derivation produces and the source triples it matched.
+    expect(sorted(await evaluate(provenanceMapping, `${prefixes} SELECT ?derivation ?viewTriple ?source WHERE {
+      ?derivation provenance:derivationOf ?viewTriple ; provenance:derivedFrom ?source .
+    }`))).toEqual([
+      {
+        derivation: 'https://myInternalBnode.example.org/0be09eb44785d2772757080e1c62ec5a61b50d36',
+        source: '<<ex://bob ex://worksAt ex://ugent>>',
+        viewTriple: '<<ex://bob ex://colleague ex://carol>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/0be09eb44785d2772757080e1c62ec5a61b50d36',
+        source: '<<ex://carol ex://worksAt ex://ugent>>',
+        viewTriple: '<<ex://bob ex://colleague ex://carol>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/74810b8df84eebffced1b47c9533df0735bdcfbb',
+        source: '<<ex://bob ex://worksAt ex://ugent>>',
+        viewTriple: '<<ex://bob ex://colleague ex://dave>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/74810b8df84eebffced1b47c9533df0735bdcfbb',
+        source: '<<ex://dave ex://worksAt ex://ugent>>',
+        viewTriple: '<<ex://bob ex://colleague ex://dave>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/862273efa1ef04f50b48eb5e68bc10674688a16b',
+        source: '<<ex://bob ex://worksAt ex://imec>>',
+        viewTriple: '<<ex://carol ex://colleague ex://bob>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/862273efa1ef04f50b48eb5e68bc10674688a16b',
+        source: '<<ex://carol ex://worksAt ex://imec>>',
+        viewTriple: '<<ex://carol ex://colleague ex://bob>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/883eb62e03826d0dda04e9ff19d5d01adcaca2db',
+        source: '<<ex://carol ex://worksAt ex://ugent>>',
+        viewTriple: '<<ex://carol ex://colleague ex://dave>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/883eb62e03826d0dda04e9ff19d5d01adcaca2db',
+        source: '<<ex://dave ex://worksAt ex://ugent>>',
+        viewTriple: '<<ex://carol ex://colleague ex://dave>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/90f4456735d97543be8c2834c138b47e15ae3c2c',
+        source: '<<ex://bob ex://worksAt ex://imec>>',
+        viewTriple: '<<ex://bob ex://colleague ex://carol>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/90f4456735d97543be8c2834c138b47e15ae3c2c',
+        source: '<<ex://carol ex://worksAt ex://imec>>',
+        viewTriple: '<<ex://bob ex://colleague ex://carol>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/a4db0e8460cc73b7dea8988e5df898c53b19f26f',
+        source: '<<ex://bob ex://worksAt ex://ugent>>',
+        viewTriple: '<<ex://carol ex://colleague ex://bob>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/a4db0e8460cc73b7dea8988e5df898c53b19f26f',
+        source: '<<ex://carol ex://worksAt ex://ugent>>',
+        viewTriple: '<<ex://carol ex://colleague ex://bob>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/a76c8265d153fb37ac044f59a9109fe05e352cde',
+        source: '<<ex://bob ex://worksAt ex://ugent>>',
+        viewTriple: '<<ex://dave ex://colleague ex://bob>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/a76c8265d153fb37ac044f59a9109fe05e352cde',
+        source: '<<ex://dave ex://worksAt ex://ugent>>',
+        viewTriple: '<<ex://dave ex://colleague ex://bob>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/c5d75903ebfee0de48bfc464dccefbce7db013b8',
+        source: '<<ex://carol ex://worksAt ex://ugent>>',
+        viewTriple: '<<ex://dave ex://colleague ex://carol>>',
+      },
+      {
+        derivation: 'https://myInternalBnode.example.org/c5d75903ebfee0de48bfc464dccefbce7db013b8',
+        source: '<<ex://dave ex://worksAt ex://ugent>>',
+        viewTriple: '<<ex://dave ex://colleague ex://carol>>',
+      },
+    ]);
   });
 });

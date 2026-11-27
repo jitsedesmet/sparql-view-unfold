@@ -164,11 +164,14 @@ const bindings = await new QueryEngine().queryBindings(query, {
 
 ### Provenance
 
-Which source triples does an answer rest on? For a `SELECT` over a view, the rewriter can tell you, per answer. Your
-data stays as it is. The approach follows [SPARQLprov](https://doi.org/10.14778/3484224.3484235) (Hernández et al.).
+Which source triples does an answer rest on?
+For a `SELECT` over a view, the rewriter can tell you, per answer.
+Your data stays as it is.
+The approach follows [SPARQLprov](https://doi.org/10.14778/3484224.3484235) (Hernández et al.).
 
-**Derivations.** A *derivation* is one solution of a view's `WHERE` clause: one way the view produces a triple. With
-the view below, `:bob :colleague :carol` has two derivations: Bob and Carol both work at UGent, and both at imec.
+**Derivations.**
+A *derivation* is one solution of a view's `WHERE` clause: one way the view produces a triple.
+With the view below, `:bob :colleague :carol` has two derivations: Bob and Carol both work at UGent, and both at imec.
 `provenanceMappingFromConstructQueries` builds a second view, the *provenance view*, that describes the derivations:
 
 - `?d provenance:derivationOf <<( s p o )>>`: derivation `?d` produces the view triple `s p o`.
@@ -176,7 +179,8 @@ the view below, `:bob :colleague :carol` has two derivations: Bob and Carol both
 
 `provenance:` is `https://sparql-extension.knows.idlab.ugent.be/provenance#`.
 
-**Example.** The data:
+**Example.**
+The data, in `colleagues.ttl`:
 
 ```turtle
 @prefix : <ex://> .
@@ -186,11 +190,13 @@ the view below, `:bob :colleague :carol` has two derivations: Bob and Carol both
 :dave :worksAt :ugent .
 ```
 
-The view holds every triple as it is, plus a `:colleague` triple between two people at the same organisation. Ask it
-who Alice's acquaintances work with:
+The view holds every triple as it is, plus a `:colleague` triple between two people at the same organisation.
+The query asks who Alice's acquaintances work with:
 
 ```typescript
 import { QueryEngine } from '@comunica/query-sparql-file';
+import type * as RDF from '@rdfjs/types';
+import { termToString } from 'rdf-string';
 import {
   createDefaultTransformationPipeline,
   createQueryRewriter,
@@ -210,79 +216,91 @@ const view = [
 // 1. Rewrite the query so that it also selects how each answer was derived.
 const capture = provenanceCapturingQuery('PREFIX : <ex://> SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }');
 
-// 2. Unfold that query against the provenance view and run it. Derivations are identified by internal blank nodes
-//    (see Blank nodes above), so the pipeline ends by materialising them.
+// 2. Queries over the provenance view are rewritten as any query over a view.
+//    Derivations are identified by internal blank nodes (see Blank nodes above), which the last step turns into IRIs.
 const rewriter = createQueryRewriter([
   ...createDefaultTransformationPipeline(provenanceMappingFromConstructQueries(view)),
   internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
 ]);
-const bindings = await new QueryEngine().queryBindings(await rewriter.rewriteQuery(capture.query), {
-  sources: [ 'colleagues.ttl' ],
-  extensionFunctions: internalBnodeExtensionFunctions(),
-});
+const engine = new QueryEngine();
+const context = { sources: [ 'colleagues.ttl' ], extensionFunctions: internalBnodeExtensionFunctions() };
+const run = async(query: string): Promise<RDF.Bindings[]> =>
+  (await engine.queryBindings(await rewriter.rewriteQuery(query), context)).toArray();
 
-// 3. Decode the rows: one entry per answer.
-for (const { answer, polynomial } of decodeProvenance(await bindings.toArray(), capture.provenanceVariablePrefix)) {
-  console.log(answer.get('c')!.value, polynomialToString(polynomial));
+// 3. Decode the rows: one entry per solution, with isAnswer telling answers from non-answers.
+const answers = decodeProvenance(await run(capture.query), capture.provenanceVariablePrefix);
+
+// 4. Look up the source triples each derivation matched.
+const links = await run(`PREFIX provenance: <https://sparql-extension.knows.idlab.ugent.be/provenance#>
+  SELECT ?derivation ?source WHERE { ?derivation provenance:derivedFrom ?source }`);
+const sourcesOf = (derivation: RDF.Term): string => `[${links
+  .filter(link => link.get('derivation')!.equals(derivation))
+  .map(link => termToString(link.get('source'))).sort().join(', ')}]`;
+
+for (const { answer, polynomial, isAnswer } of answers) {
+  console.log(termToString(answer.get('c')), isAnswer, polynomialToString(polynomial, sourcesOf));
 }
 ```
 
-Each answer comes with a *polynomial*: a formula over derivations that says how the answer was derived. The
-example prints each derivation as an IRI; written as the source triples it matched (looked up as shown below), the
-answers are:
+This prints:
 
 ```text
-ex://carol  ([bob worksAt imec, carol worksAt imec] ⊕ [bob worksAt ugent, carol worksAt ugent]) ⊗ [alice knows bob]
-ex://dave   [alice knows bob] ⊗ [bob worksAt ugent, dave worksAt ugent]
+ex://carol true (([<<ex://bob ex://worksAt ex://imec>>, <<ex://carol ex://worksAt ex://imec>>] ⊕ [<<ex://bob ex://worksAt ex://ugent>>, <<ex://carol ex://worksAt ex://ugent>>]) ⊗ [<<ex://alice ex://knows ex://bob>>])
+ex://dave true ([<<ex://alice ex://knows ex://bob>>] ⊗ [<<ex://bob ex://worksAt ex://ugent>>, <<ex://dave ex://worksAt ex://ugent>>])
 ```
 
+Each answer comes with a *polynomial*: a formula over its derivations that says how the answer was derived.
+Here, each derivation is printed as the list of source triples it matched.
+Carol is an answer because Alice knows Bob, and Bob works with Carol at imec or at UGent.
+The operands of `⊕` and `⊗` are printed in alphabetical order.
 Read the operators as:
 
 | Operator | Meaning | Comes from |
 |---|---|---|
 | `a ⊗ b` | needs both `a` and `b` | a join |
 | `a ⊕ b` | `a` or `b` is enough | a `UNION`, or two derivations of the same view triple |
-| `a ⊖ b` | `a`, unless `b` | `MINUS`, `NOT EXISTS`, and an `OPTIONAL` that found no match |
-| `δ(a)` | an aggregate over `a` | `GROUP BY` |
+| `a ⊖ b` | `a`, unless `b` | `MINUS`, `NOT EXISTS`, an `OPTIONAL` that found no match, and `EXISTS` as `a ⊖ (a ⊖ b)` |
+| `δ(a)` | a `GROUP BY` answer, computed from `a` | `GROUP BY` |
 | `1` | needs no view triple | `VALUES`, `SERVICE` |
+| `0` | nothing | the right side of a `⊖` that matched nothing |
 
-**Answers and non-answers.** `decodeProvenance` also returns the solutions a `MINUS`, `NOT EXISTS` or `OPTIONAL`
-removed, so that their polynomial shows why. `isAnswer` tells them apart. For
-`SELECT ?x WHERE { ?x :worksAt :ugent MINUS { ?x :worksAt :imec } }`:
+**Answers and non-answers.**
+`decodeProvenance` also returns the solutions a `MINUS` or `NOT EXISTS` removed, so that their polynomial shows why.
+For an `OPTIONAL` that found a match, it also returns the left row without that match.
+Check `isAnswer` before you use a row.
+For `SELECT ?x WHERE { ?x :worksAt :ugent MINUS { ?x :worksAt :imec } }`, the same code prints:
 
 ```text
-ex://bob    isAnswer: false  [bob worksAt ugent] ⊖ [bob worksAt imec]
-ex://carol  isAnswer: false  [carol worksAt ugent] ⊖ [carol worksAt imec]
-ex://dave   isAnswer: true   [dave worksAt ugent] ⊖ 0
+ex://bob false ([<<ex://bob ex://worksAt ex://ugent>>] ⊖ [<<ex://bob ex://worksAt ex://imec>>])
+ex://carol false ([<<ex://carol ex://worksAt ex://ugent>>] ⊖ [<<ex://carol ex://worksAt ex://imec>>])
+ex://dave true ([<<ex://dave ex://worksAt ex://ugent>>] ⊖ 0)
 ```
 
-**From derivations to source triples.** A polynomial's leaves are derivation IRIs. `lineageOf(polynomial)` lists them.
-Ask the provenance view, through the same rewriter, which source triples each derivation matched:
-
-```sparql
-PREFIX provenance: <https://sparql-extension.knows.idlab.ugent.be/provenance#>
-SELECT ?derivation ?source WHERE { ?derivation provenance:derivedFrom ?source }
-```
-
-**Computing with a polynomial.** `evaluatePolynomial(polynomial, semiring, valueOf)` gives each derivation a value
-through `valueOf`, and combines the values the way the operators say. With `countingSpmSemiring` and `() => 1` it
-counts the ways an answer is derived (2 for Carol above). With `booleanSpmSemiring` and
-`derivation => !deleted.has(derivation)` it tells whether the answer survives when the `deleted` derivations are gone.
+**Computing with a polynomial.**
+`evaluatePolynomial(polynomial, semiring, valueOf)` gives each derivation a value through `valueOf`,
+and combines those values as the semiring says for each operator.
+With `countingSpmSemiring` and `() => 1`, it counts the ways an answer is derived: 2 for Carol above.
+With `booleanSpmSemiring` and `derivation => !deleted.has(derivation)`,
+it tells whether the answer survives when the `deleted` derivations are gone.
+`lineageOf(polynomial)` lists the derivations in a polynomial.
 
 **Limits.**
 
-- Only `SELECT` is supported, without `RAND`, `BNODE`, `UUID` or `STRUUID`: the rewritten query runs parts of the
-  query more than once, and these functions would answer differently each time.
-- `OPTIONAL` repeats its left side in the rewritten query, and `GROUP BY`, `LIMIT` and `OFFSET` their whole
-  subquery. Nesting them doubles the query each time.
-- `LIMIT` and `OFFSET` keep their answers, but an answer's provenance also covers the solutions they cut off.
-  `ORDER BY` is ignored.
-- `GROUP BY`, `LIMIT` and `OFFSET` count over the view as a set, as `preserveCardinality` does.
-- An `EXISTS` adds no provenance, but still filters, when it sits inside a larger expression, or when it uses an outer
-  variable it may not bind itself, as in `FILTER EXISTS { ?y :worksAt ?o FILTER(?y != ?x) }`.
-- `derivedFrom` misses the source triples a view matches inside a `UNION`, `OPTIONAL`, `MINUS`, sub-`SELECT`,
-  `GROUP BY`, `GRAPH`, `SERVICE` or property path.
-- Identical `SERVICE` solutions count once.
+- Only `SELECT` is supported, without `RAND`, `BNODE`, `UUID` or `STRUUID`:
+  the rewritten query runs parts of the query more than once, and these functions would answer differently each time.
+- `OPTIONAL` copies its left side, and `GROUP BY`, `LIMIT` and `OFFSET` copy their whole subquery.
+  Each nested one doubles the rewritten query.
+- `LIMIT` and `OFFSET` return the same answers as without provenance, but not in `ORDER BY` order.
+  An answer's provenance also mentions the solutions with the same values that the `LIMIT` cut off.
+- Inside `GROUP BY`, `LIMIT` and `OFFSET`, a view triple counts once, however many derivations it has.
+  So a `COUNT` can differ from a run without provenance, unless that run uses `preserveCardinality`.
+- An `EXISTS` still filters, but adds nothing to the polynomial, in two cases:
+  when it is part of a larger expression,
+  and when it uses an outer variable that its own pattern may leave unbound, such as `?x` in
+  `FILTER EXISTS { ?y :worksAt ?o FILTER(?y != ?x) }`.
+- If a view's `WHERE` clause uses `UNION`, `OPTIONAL`, `MINUS`, a sub-`SELECT`, `GROUP BY`, `GRAPH`, `SERVICE` or a
+  property path, `derivedFrom` does not list the source triples matched there.
+- Identical `SERVICE` solutions count once: they cannot be told apart.
 
 ## Restrictions
 
@@ -323,7 +341,7 @@ The tables below are the short version; the generated
 | `provenanceMappingFromConstructQueries(constructQueries, options?)` | Builds the provenance view of a view: its derivations, and the triples each produces and matched. |
 | `provenanceCapturingQuery(query)` | Rewrites a SELECT over the view to also select how each answer was derived, and gives the prefix of the variables holding it. |
 | `provenanceCapturingOperation(operation)` | The same over SPARQL algebra. |
-| `decodeProvenance(bindings, provenanceVariablePrefix)` | Decodes the rows of that query into one polynomial per answer. |
+| `decodeProvenance(bindings, provenanceVariablePrefix)` | Decodes the rows of that query into one polynomial per solution, answers and non-answers (`isAnswer`). |
 | `evaluatePolynomial(polynomial, semiring, valueOf)` | Computes a value from a polynomial, such as a count (`countingSpmSemiring`) or whether it holds (`booleanSpmSemiring`). |
 | `lineageOf(polynomial)`, `polynomialToString(polynomial, labelOf?)` | The derivations a polynomial mentions, and the polynomial written out. |
 
