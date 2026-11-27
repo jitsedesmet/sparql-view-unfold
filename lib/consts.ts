@@ -29,6 +29,18 @@ export const EXTENSION_FUNCTION_BNODE_ENCODING = 'internal://blank/encoding';
 export const PROVENANCE_NAMESPACE = 'https://sparql-extension.knows.idlab.ugent.be/provenance#';
 
 /**
+ * Extension function IRI a provenance view identifies a derivation by, from the index of its CONSTRUCT and the values
+ * of that CONSTRUCT's body variables.
+ */
+export const EXTENSION_FUNCTION_DERIVATION = 'internal://derivation';
+
+/**
+ * IRI prefix of a materialised derivation, followed by the index of its CONSTRUCT, `/`, and the encoding of its values
+ * as `ENCODE_FOR_URI` writes it.
+ */
+export const IRI_PREFIX_DERIVATION = 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/';
+
+/**
  * Predicate of the provenance view linking a derivation, one solution of a mapping body, to the view triple
  * it produces.
  */

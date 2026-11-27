@@ -126,12 +126,17 @@ Getting the provenance of a query takes three steps:
 3. `decodeProvenance(rows, prefix)` turns the rows into a *polynomial* per row: a formula over derivations.
    Some rows are not answers, so check `isAnswer` (more below).
 
+A derivation is an IRI that holds its solution,
+so `createDerivationDecoder(view)` can read it back into the data triples it matched and the view triples it produces,
+without another query.
+
 ```typescript
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
 import { termToString } from 'rdf-string';
 import {
   createDefaultTransformationPipeline,
+  createDerivationDecoder,
   createQueryRewriter,
   decodeProvenance,
   internalBnodeAsSpecialIriTransformation,
@@ -146,25 +151,22 @@ const view = [
   'PREFIX : <ex://> CONSTRUCT { ?x :colleague ?y } WHERE { ?x :worksAt ?org . ?y :worksAt ?org . FILTER(?x != ?y) }',
 ];
 
-// Derivations are internal blank nodes, so the pipeline ends by turning them into IRIs.
+// The pipeline ends by turning derivations and other internal nodes into IRIs.
 const rewriter = createQueryRewriter([
   ...createDefaultTransformationPipeline(provenanceMappingFromConstructQueries(view)),
   internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
 ]);
-const engine = new QueryEngine();
-const context = { sources: [ 'colleagues.ttl' ], extensionFunctions: internalBnodeExtensionFunctions() };
-const run = async(query: string): Promise<RDF.Bindings[]> =>
-  (await engine.queryBindings(await rewriter.rewriteQuery(query), context)).toArray();
-
 const capture = provenanceCapturingQuery('PREFIX : <ex://> SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }');
-const answers = decodeProvenance(await run(capture.query), capture.provenanceVariablePrefix);
+const rows = await new QueryEngine().queryBindings(await rewriter.rewriteQuery(capture.query), {
+  sources: [ 'colleagues.ttl' ],
+  extensionFunctions: internalBnodeExtensionFunctions(),
+});
+const answers = decodeProvenance(await rows.toArray(), capture.provenanceVariablePrefix);
 
-// To print a derivation, look up the data triples it matched.
-const links = await run(`PREFIX provenance: <https://sparql-extension.knows.idlab.ugent.be/provenance#>
-  SELECT ?derivation ?source WHERE { ?derivation provenance:derivedFrom ?source }`);
-const sourcesOf = (derivation: RDF.Term): string => `[${links
-  .filter(link => link.get('derivation')!.equals(derivation))
-  .map(link => termToString(link.get('source'))).sort().join(', ')}]`;
+// Write a derivation as the data triples it matched.
+const decodeDerivation = createDerivationDecoder(view);
+const sourcesOf = (derivation: RDF.Term): string =>
+  `[${decodeDerivation(derivation).sourceTriples.map(triple => termToString(triple)).join(', ')}]`;
 
 for (const { answer, polynomial, isAnswer } of answers) {
   console.log(termToString(answer.get('c')), isAnswer, polynomialToString(polynomial, sourcesOf));
@@ -229,6 +231,7 @@ These are the ones to start from:
 | `provenanceCapturingQuery(query)` | Rewrites a `SELECT` to also select how each answer was derived. |
 | `decodeProvenance(rows, provenanceVariablePrefix)` | Turns the rows of that query into a polynomial per answer or non-answer. |
 | `evaluatePolynomial(polynomial, semiring, valueOf)` | Computes a value from a polynomial, such as a count. |
+| `createDerivationDecoder(views, options?)` | Reads a derivation back into its solution, and the triples it matched and produces. |
 
 ## Cite
 

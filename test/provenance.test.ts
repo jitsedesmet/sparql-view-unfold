@@ -5,21 +5,27 @@ import { Parser, Store } from 'n3';
 import { termToString } from 'rdf-string';
 import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
-import { PREDICATE_DERIVATION_OF, PREDICATE_DERIVED_FROM, PROVENANCE_NAMESPACE } from '../lib/consts.js';
-import { mappingFromConstructQueries, parseConstructQuery } from '../lib/mapping.js';
 import {
-  provenanceCapturingOperation,
-  provenanceCapturingQuery,
-  provenanceConstructOf,
-  provenanceMappingFromConstructQueries,
-} from '../lib/provenance.js';
+  IRI_PREFIX_DERIVATION,
+  PREDICATE_DERIVATION_OF,
+  PREDICATE_DERIVED_FROM,
+  PROVENANCE_NAMESPACE,
+} from '../lib/consts.js';
+import { mappingFromConstructQueries, parseConstructQuery } from '../lib/mapping.js';
+import { provenanceCapturingOperation, provenanceCapturingQuery } from '../lib/provenance.js';
 import type { ProvenanceAnnotatedAnswer } from '../lib/provenancePolynomial.js';
 import {
   countingSpmSemiring,
   decodeProvenance,
   evaluatePolynomial,
+  lineageOf,
   polynomialToString,
 } from '../lib/provenancePolynomial.js';
+import {
+  createDerivationDecoder,
+  provenanceConstructOf,
+  provenanceMappingFromConstructQueries,
+} from '../lib/provenanceView.js';
 import { createDefaultTransformationPipeline } from '../lib/queryRewriter.js';
 import { internalBnodeExtensionFunctions } from '../lib/transformations/bnodeExtensionFunction.js';
 import {
@@ -36,7 +42,6 @@ const prefixes = `PREFIX : <ex://> PREFIX provenance: <${PROVENANCE_NAMESPACE}> 
 // The provenance IRIs as a rewritten query writes them.
 const derivationOf = `<${PREDICATE_DERIVATION_OF}>`;
 const derivedFrom = `<${PREDICATE_DERIVED_FROM}>`;
-const construct0 = `<${PROVENANCE_NAMESPACE}construct0>`;
 const colleagueConstructs = [
   `${prefixes} CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }`,
   `${prefixes} CONSTRUCT { ?x :colleague ?y } WHERE { ?x :worksAt ?org . ?y :worksAt ?org . FILTER(?x != ?y) }`,
@@ -117,7 +122,7 @@ describe('provenanceConstructOf', () => {
 
   function expectProvenanceConstruct(expect: typeof Expect, constructQuery: string, expected: string): void {
     const construct = parseConstructQuery(c, prefixes + constructQuery);
-    const provenanceConstruct = provenanceConstructOf(c, construct, DF.namedNode(`${PROVENANCE_NAMESPACE}construct0`));
+    const provenanceConstruct = provenanceConstructOf(c, construct, 0);
     expect(generateValidQuery(c, provenanceConstruct).trim()).toEqual(expected.trim());
   }
 
@@ -131,7 +136,7 @@ describe('provenanceConstructOf', () => {
 }
 WHERE {
   ?s ?p ?o .
-  BIND( <internal://blank> ( ${construct0} , ?s , ?p , ?o ) AS ?derivation )
+  BIND( <internal://derivation> ( "0" , ?s , ?p , ?o ) AS ?derivation )
 }`,
     );
   });
@@ -151,7 +156,7 @@ WHERE {
     ?y <ex://worksAt> ?org .
     FILTER ( ( ?x != ?y ) )
   }
-  BIND( <internal://blank> ( ${construct0} , ?x , ?org , ?y ) AS ?derivation )
+  BIND( <internal://derivation> ( "0" , ?x , ?org , ?y ) AS ?derivation )
 }`,
     );
   });
@@ -167,7 +172,7 @@ WHERE {
 }
 WHERE {
   ?x <ex://firstName> ?f .
-  BIND( <internal://blank> ( ${construct0} , ?x , ?f ) AS ?derivation )
+  BIND( <internal://derivation> ( "0" , ?x , ?f ) AS ?derivation )
 }`,
     );
   });
@@ -185,7 +190,7 @@ WHERE {
 WHERE {
   ?x <ex://firstName> ?f .
   BIND( CONCAT( ?f , "!" ) AS ?n )
-  BIND( <internal://blank> ( ${construct0} , ?x , ?f , ?n ) AS ?derivation )
+  BIND( <internal://derivation> ( "0" , ?x , ?f , ?n ) AS ?derivation )
 }`,
     );
   });
@@ -203,7 +208,7 @@ WHERE {
   OPTIONAL {
     ?x <ex://knows> ?y .
   }
-  BIND( <internal://blank> ( ${construct0} , ?x , ?y ) AS ?derivation )
+  BIND( <internal://derivation> ( "0" , ?x , ?y ) AS ?derivation )
 }`,
     );
   });
@@ -221,7 +226,7 @@ WHERE {
   MINUS {
     ?x <ex://worksAt> ?o .
   }
-  BIND( <internal://blank> ( ${construct0} , ?x , ?y ) AS ?derivation )
+  BIND( <internal://derivation> ( "0" , ?x , ?y ) AS ?derivation )
 }`,
     );
   });
@@ -240,7 +245,7 @@ WHERE {
   UNION {
     ?x <ex://colleague> ?y .
   }
-  BIND( <internal://blank> ( ${construct0} , ?x , ?y ) AS ?derivation )
+  BIND( <internal://derivation> ( "0" , ?x , ?y ) AS ?derivation )
 }`,
     );
   });
@@ -259,7 +264,7 @@ WHERE {
     }
     GROUP BY ?x
   }
-  BIND( <internal://blank> ( ${construct0} , ?x , ?n ) AS ?derivation )
+  BIND( <internal://derivation> ( "0" , ?x , ?n ) AS ?derivation )
 }`,
     );
   });
@@ -274,7 +279,7 @@ WHERE {
 }
 WHERE {
   ?derivation <ex://q> ?o .
-  BIND( <internal://blank> ( ${construct0} , ?derivation , ?o ) AS ?derivation0 )
+  BIND( <internal://derivation> ( "0" , ?derivation , ?o ) AS ?derivation0 )
 }`,
     );
   });
@@ -363,27 +368,18 @@ describe('provenance captured over the colleagues data', () => {
       [ answerKey(answer), evaluatePolynomial(polynomial, countingSpmSemiring, () => 1) ]));
   }
 
-  let derivationLabels: Promise<Map<string, string>> | undefined;
+  const decodeDerivation = createDerivationDecoder(colleagueConstructs);
 
   /**
-   * Labels every derivation by the view triple it produces and, where they differ, the source triples it matched.
-   * @returns the labels by derivation
+   * Labels a derivation by the view triple it produces and, where they differ, the source triples it matched.
+   * @param derivation - The derivation
+   * @returns the label
    */
-  async function labelDerivations(): Promise<Map<string, string>> {
-    const links = await evaluate(provenanceMapping, `${prefixes} SELECT ?derivation ?viewTriple ?source WHERE {
-      ?derivation provenance:derivationOf ?viewTriple . OPTIONAL { ?derivation provenance:derivedFrom ?source }
-    }`);
-    const compact = (triple: string): string => triple.replaceAll(/<<|>>|ex:\/\//gu, '');
-    const labels = new Map<string, string>();
-    for (const derivation of new Set(links.map(link => link.derivation))) {
-      const linksOfDerivation = links.filter(link => link.derivation === derivation);
-      const viewTriple = linksOfDerivation[0].viewTriple;
-      const sources = linksOfDerivation.map(link => link.source).filter(source => source !== viewTriple).sort();
-      labels.set(derivation, sources.length === 0 ?
-        compact(viewTriple) :
-        `${compact(viewTriple)} from ${sources.map(compact).join(' and ')}`);
-    }
-    return labels;
+  function labelOf(derivation: RDF.Term): string {
+    const { viewTriples: [ viewTriple ], sourceTriples } = decodeDerivation(derivation);
+    const compact = (triple: RDF.Quad): string => termToString(triple).replaceAll(/<<|>>|ex:\/\//gu, '');
+    const sources = sourceTriples.filter(source => !source.equals(viewTriple)).map(compact).sort();
+    return sources.length === 0 ? compact(viewTriple) : `${compact(viewTriple)} from ${sources.join(' and ')}`;
   }
 
   /**
@@ -392,13 +388,9 @@ describe('provenance captured over the colleagues data', () => {
    * @returns per solution `+` for an answer or `-` for a solution a difference removes, its values and polynomial
    */
   async function explain(query: string): Promise<string[]> {
-    derivationLabels ??= labelDerivations();
-    const [ answers, labels ] = await Promise.all([ decodedAnswersOf(query), derivationLabels ]);
-    return answers.map(({ answer, polynomial, isAnswer }) => {
-      const values = answerKey(answer).replaceAll('ex://', '');
-      const explanation = polynomialToString(polynomial, term => labels.get(termToString(term))!);
-      return `${isAnswer ? '+' : '-'} ${values}: ${explanation}`;
-    }).sort();
+    return (await decodedAnswersOf(query)).map(({ answer, polynomial, isAnswer }) =>
+      `${isAnswer ? '+' : '-'} ${answerKey(answer).replaceAll('ex://', '')}: ${polynomialToString(polynomial, labelOf)}`)
+      .sort();
   }
 
   it.for(<const> [
@@ -633,6 +625,151 @@ describe('provenance captured over the colleagues data', () => {
   });
 });
 
+describe('createDerivationDecoder', () => {
+  /**
+   * Evaluates a query over a provenance view, and decodes every derivation it answers.
+   * @param view - The CONSTRUCT queries of the view
+   * @param materialisation - The step materialising internal blank nodes and derivations
+   * @returns per derivation, its IRI and what it decodes into, each term written as a string
+   */
+  async function decodedDerivationsOf(view: string[], materialisation?: QueryTransformation): Promise<unknown[]> {
+    const decode = createDerivationDecoder(view);
+    const rows = await bindingsOf(
+      provenanceMappingFromConstructQueries(view),
+      `${prefixes} SELECT DISTINCT ?derivation WHERE { ?derivation provenance:derivationOf ?viewTriple }`,
+      {},
+      materialisation,
+    );
+    return rows.map((row) => {
+      const { constructIndex, bindings, sourceTriples, viewTriples } = decode(row.get('derivation')!);
+      return {
+        constructIndex,
+        bindings: recordOf(bindings),
+        sourceTriples: sourceTriples.map(triple => termToString(triple)).sort(),
+        viewTriples: viewTriples.map(triple => termToString(triple)).sort(),
+      };
+    }).sort((left, right) => JSON.stringify(left) < JSON.stringify(right) ? -1 : 1);
+  }
+
+  it.for(<const> [
+    [ 'the SPARQL encoding', internalBnodeAsSpecialIriTransformation() ],
+    [ 'the extension function', internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }) ],
+  ])('reads back every kind of value a derivation is built from, through %s', async(
+    [ , materialisation ],
+    { expect },
+  ) => {
+    const view = [ `${prefixes} PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+      CONSTRUCT { ?s :holds ?value } WHERE {
+        VALUES (?s ?value ?extra) {
+          (:iri <ex://other> UNDEF)
+          (:plain "plain" "a ,3: inside, and 😀 after")
+          (:typed "1"^^xsd:integer "chat"@fr)
+          (:directional "x"@en--ltr <<( :a :p "1" )>>)
+          (:nested <<( :a :p <<( :b :q "deep"@en )>> )>> UNDEF)
+        }
+      }` ];
+
+    expect(await decodedDerivationsOf(view, materialisation)).toEqual([
+      {
+        constructIndex: 0,
+        bindings: { s: 'ex://directional', value: '"x"@en--ltr', extra: '<<ex://a ex://p "1">>' },
+        sourceTriples: [],
+        viewTriples: [ '<<ex://directional ex://holds "x"@en--ltr>>' ],
+      },
+      {
+        constructIndex: 0,
+        bindings: { s: 'ex://iri', value: 'ex://other' },
+        sourceTriples: [],
+        viewTriples: [ '<<ex://iri ex://holds ex://other>>' ],
+      },
+      {
+        constructIndex: 0,
+        bindings: { s: 'ex://nested', value: '<<ex://a ex://p <<ex://b ex://q "deep"@en>>>>' },
+        sourceTriples: [],
+        viewTriples: [ '<<ex://nested ex://holds <<ex://a ex://p <<ex://b ex://q "deep"@en>>>>>>' ],
+      },
+      {
+        constructIndex: 0,
+        bindings: { s: 'ex://plain', value: '"plain"', extra: '"a ,3: inside, and 😀 after"' },
+        sourceTriples: [],
+        viewTriples: [ '<<ex://plain ex://holds "plain">>' ],
+      },
+      {
+        constructIndex: 0,
+        bindings: { s: 'ex://typed', value: '"1"^^http://www.w3.org/2001/XMLSchema#integer', extra: '"chat"@fr' },
+        sourceTriples: [],
+        viewTriples: [ '<<ex://typed ex://holds "1"^^http://www.w3.org/2001/XMLSchema#integer>>' ],
+      },
+    ]);
+  });
+
+  it.for(<const> [
+    [ 'the SPARQL encoding', internalBnodeAsSpecialIriTransformation() ],
+    [ 'the extension function', internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }) ],
+  ])('rebuilds the triples the provenance view links each derivation to, through %s', async(
+    [ , materialisation ],
+    { expect },
+  ) => {
+    const view = [
+      ...colleagueConstructs,
+      // Nobody at UGent knows anyone, so ?y stays unbound.
+      `${prefixes} CONSTRUCT { ?x :employed true } WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?y } }`,
+      // A literal subject is no triple, so the second template triple is left out.
+      `${prefixes} CONSTRUCT { ?x :name ?name . ?name :nameOf ?x } WHERE {
+        ?x :worksAt :imec VALUES (?x ?name) { (:bob "Bob") (:carol "Carol"@en) } }`,
+      `${prefixes} CONSTRUCT { ?x :said ?t } WHERE { ?x :knows ?y BIND(<<( ?x :knows ?y )>> AS ?t) }`,
+      `${prefixes} CONSTRUCT { ?b :for ?x } WHERE { ?x :worksAt ?o BIND(<internal://blank>(?x, ?o) AS ?b) }`,
+    ];
+    const provenanceMapping = provenanceMappingFromConstructQueries(view);
+    const decode = createDerivationDecoder(view);
+    const linked = await bindingsOf(provenanceMapping, `${prefixes} SELECT ?derivation ?predicate ?triple WHERE {
+      ?derivation ?predicate ?triple FILTER(?predicate IN (provenance:derivationOf, provenance:derivedFrom))
+    }`, {}, materialisation);
+    const triplesBy = (derivation: string, predicate: string): string[] => [ ...new Set(linked
+      .filter(row => termToString(row.get('derivation')) === derivation &&
+        row.get('predicate')!.value === predicate)
+      .map(row => termToString(row.get('triple')!))) ].sort();
+    const derivations = new Map(linked.map(row => [ termToString(row.get('derivation')), row.get('derivation')! ]));
+
+    // 6 data triples, 8 colleague pairs, 3 employees, 2 names, 1 statement and 5 blank nodes.
+    expect(derivations.size).toBe(25);
+    for (const [ key, derivation ] of derivations) {
+      const { sourceTriples, viewTriples } = decode(derivation);
+      expect({
+        sourceTriples: sourceTriples.map(triple => termToString(triple)).sort(),
+        viewTriples: viewTriples.map(triple => termToString(triple)).sort(),
+      }, key).toEqual({
+        sourceTriples: triplesBy(key, PREDICATE_DERIVED_FROM),
+        viewTriples: triplesBy(key, PREDICATE_DERIVATION_OF),
+      });
+    }
+  });
+
+  it('writes a blank node materialised as a literal where the view writes the blank node', async({ expect }) => {
+    // No engine builds a triple term with a literal subject, so the provenance view cannot link this view triple.
+    const view = [ `${prefixes} CONSTRUCT { ?b :for ?x } WHERE { VALUES ?x { :bob } BIND(<internal://blank>(?x) AS ?b) }` ];
+
+    expect(await decodedDerivationsOf(
+      view,
+      internalBnodeAsSpecialLiteralTransformation({ encodedByExtensionFunction: true }),
+    )).toEqual([{
+      constructIndex: 0,
+      bindings: { x: 'ex://bob', b: '",iri,8:ex://bob"^^https://sparql-extension.knows.idlab.ugent.be/bnode' },
+      sourceTriples: [],
+      viewTriples: [ '<<",iri,8:ex://bob"^^https://sparql-extension.knows.idlab.ugent.be/bnode ex://for ex://bob>>' ],
+    }]);
+  });
+
+  it('rejects a term that is no derivation of the view', ({ expect }) => {
+    const decode = createDerivationDecoder(colleagueConstructs);
+
+    expect(() => decode(DF.namedNode('ex://bob'))).toThrow('ex://bob is no derivation of this view.');
+    expect(() => decode(DF.namedNode(`${IRI_PREFIX_DERIVATION}2/`))).toThrow('is no derivation of this view.');
+    expect(() => decode(DF.namedNode(`${IRI_PREFIX_DERIVATION}0/`))).toThrow('is no derivation of this view.');
+  });
+});
+
+/* eslint-disable max-len -- The raw values are kept on one line each, as the run gives them. */
 describe('provenance, the whole story', () => {
   /**
    * Sorts items by their JSON, so that rows compare whatever order the engine returns them in.
@@ -651,15 +788,24 @@ describe('provenance, the whole story', () => {
     ];
     const query = `${prefixes} SELECT ?x (COUNT(*) AS ?colleagues) WHERE { ?x :colleague ?y } GROUP BY ?x`;
 
-    // 1. The query over the view, without provenance and with the view as a set.
+    // 1. Plain result: the query over the view, without provenance and with the view as a set.
     expect(sorted(await evaluate(mappingFromConstructQueries(view), query, { preserveCardinality: true })))
       .toEqual([
-        { x: 'ex://bob', colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer' },
-        { x: 'ex://carol', colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer' },
-        { x: 'ex://dave', colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer' },
+        {
+          x: 'ex://bob',
+          colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        },
+        {
+          x: 'ex://carol',
+          colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        },
+        {
+          x: 'ex://dave',
+          colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        },
       ]);
 
-    // 2. The query rewritten to also select its provenance.
+    // 2. Captured query: the query rewritten to also select its provenance.
     const capture = provenanceCapturingQuery(query);
     expect(capture.provenanceVariablePrefix).toBe('prov');
     expect(capture.query).toBe(`
@@ -687,28 +833,11 @@ SELECT ?x ?colleagues ?prov_aggregate ?prov_aggregate_sum_sum_statement ?prov_ag
 }
 `);
 
-    // 3. Its rows, unfolded against the provenance view and evaluated over the source data.
-    const provenanceMapping = provenanceMappingFromConstructQueries(view);
-    const rows = await bindingsOf(provenanceMapping, capture.query);
+    // 3. Its raw rows: the captured query unfolded against the provenance view and evaluated over the source data.
+    const rows = await bindingsOf(provenanceMappingFromConstructQueries(view), capture.query);
     expect(sorted(rows.map(recordOf))).toEqual([
       {
-        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/0be09eb44785d2772757080e1c62ec5a61b50d36',
-        x: 'ex://bob',
-        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/40bb14f804a4ea15274dfd6862956fd31d706b5a',
-        prov_aggregate_sum: 'https://myInternalBnode.example.org/b150433de9fa4d189db4787f307c905c713e6cd8',
-        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
-        prov_aggregate: 'https://myInternalBnode.example.org/6065d5f68d9e8d5d8ece13fa00c5578d5e2b82e5',
-      },
-      {
-        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/74810b8df84eebffced1b47c9533df0735bdcfbb',
-        x: 'ex://bob',
-        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/c4c7592be1ec9fc7d0d675e4271ba0ed7c012362',
-        prov_aggregate_sum: 'https://myInternalBnode.example.org/b150433de9fa4d189db4787f307c905c713e6cd8',
-        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
-        prov_aggregate: 'https://myInternalBnode.example.org/6065d5f68d9e8d5d8ece13fa00c5578d5e2b82e5',
-      },
-      {
-        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/862273efa1ef04f50b48eb5e68bc10674688a16b',
+        prov_aggregate_sum_sum_statement: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C10%3Aex%3A%2F%2Fcarol%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C8%3Aex%3A%2F%2Fbob',
         x: 'ex://carol',
         prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/6eb533aab0ed61b08b67e9fa777b11931cf29e8c',
         prov_aggregate_sum: 'https://myInternalBnode.example.org/e326d5ba0a0a670e49dc040e517bf278e189e8c5',
@@ -716,7 +845,7 @@ SELECT ?x ?colleagues ?prov_aggregate ?prov_aggregate_sum_sum_statement ?prov_ag
         prov_aggregate: 'https://myInternalBnode.example.org/a8388dfa950199fb198e495f5cf0ae5578b78673',
       },
       {
-        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/883eb62e03826d0dda04e9ff19d5d01adcaca2db',
+        prov_aggregate_sum_sum_statement: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C10%3Aex%3A%2F%2Fcarol%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C9%3Aex%3A%2F%2Fdave',
         x: 'ex://carol',
         prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/67006328fa6d665ccb01d71d2f7f18730d196b81',
         prov_aggregate_sum: 'https://myInternalBnode.example.org/e326d5ba0a0a670e49dc040e517bf278e189e8c5',
@@ -724,15 +853,7 @@ SELECT ?x ?colleagues ?prov_aggregate ?prov_aggregate_sum_sum_statement ?prov_ag
         prov_aggregate: 'https://myInternalBnode.example.org/a8388dfa950199fb198e495f5cf0ae5578b78673',
       },
       {
-        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/90f4456735d97543be8c2834c138b47e15ae3c2c',
-        x: 'ex://bob',
-        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/40bb14f804a4ea15274dfd6862956fd31d706b5a',
-        prov_aggregate_sum: 'https://myInternalBnode.example.org/b150433de9fa4d189db4787f307c905c713e6cd8',
-        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
-        prov_aggregate: 'https://myInternalBnode.example.org/6065d5f68d9e8d5d8ece13fa00c5578d5e2b82e5',
-      },
-      {
-        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/a4db0e8460cc73b7dea8988e5df898c53b19f26f',
+        prov_aggregate_sum_sum_statement: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C10%3Aex%3A%2F%2Fcarol%2Ciri%2C9%3Aex%3A%2F%2Fimec%2Ciri%2C8%3Aex%3A%2F%2Fbob',
         x: 'ex://carol',
         prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/6eb533aab0ed61b08b67e9fa777b11931cf29e8c',
         prov_aggregate_sum: 'https://myInternalBnode.example.org/e326d5ba0a0a670e49dc040e517bf278e189e8c5',
@@ -740,132 +861,247 @@ SELECT ?x ?colleagues ?prov_aggregate ?prov_aggregate_sum_sum_statement ?prov_ag
         prov_aggregate: 'https://myInternalBnode.example.org/a8388dfa950199fb198e495f5cf0ae5578b78673',
       },
       {
-        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/a76c8265d153fb37ac044f59a9109fe05e352cde',
-        x: 'ex://dave',
-        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/5fa2488b4ccd3ca0e6828c3beaf3132493462e98',
-        prov_aggregate_sum: 'https://myInternalBnode.example.org/9d8f4772aac735af3e0229ae185dc863d94ea1cc',
+        prov_aggregate_sum_sum_statement: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C8%3Aex%3A%2F%2Fbob%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C10%3Aex%3A%2F%2Fcarol',
+        x: 'ex://bob',
+        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/40bb14f804a4ea15274dfd6862956fd31d706b5a',
+        prov_aggregate_sum: 'https://myInternalBnode.example.org/b150433de9fa4d189db4787f307c905c713e6cd8',
         colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
-        prov_aggregate: 'https://myInternalBnode.example.org/5397346b50f730fb43d08aff74f9a0f7a30050af',
+        prov_aggregate: 'https://myInternalBnode.example.org/6065d5f68d9e8d5d8ece13fa00c5578d5e2b82e5',
       },
       {
-        prov_aggregate_sum_sum_statement: 'https://myInternalBnode.example.org/c5d75903ebfee0de48bfc464dccefbce7db013b8',
+        prov_aggregate_sum_sum_statement: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C8%3Aex%3A%2F%2Fbob%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C9%3Aex%3A%2F%2Fdave',
+        x: 'ex://bob',
+        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/c4c7592be1ec9fc7d0d675e4271ba0ed7c012362',
+        prov_aggregate_sum: 'https://myInternalBnode.example.org/b150433de9fa4d189db4787f307c905c713e6cd8',
+        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        prov_aggregate: 'https://myInternalBnode.example.org/6065d5f68d9e8d5d8ece13fa00c5578d5e2b82e5',
+      },
+      {
+        prov_aggregate_sum_sum_statement: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C8%3Aex%3A%2F%2Fbob%2Ciri%2C9%3Aex%3A%2F%2Fimec%2Ciri%2C10%3Aex%3A%2F%2Fcarol',
+        x: 'ex://bob',
+        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/40bb14f804a4ea15274dfd6862956fd31d706b5a',
+        prov_aggregate_sum: 'https://myInternalBnode.example.org/b150433de9fa4d189db4787f307c905c713e6cd8',
+        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        prov_aggregate: 'https://myInternalBnode.example.org/6065d5f68d9e8d5d8ece13fa00c5578d5e2b82e5',
+      },
+      {
+        prov_aggregate_sum_sum_statement: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C9%3Aex%3A%2F%2Fdave%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C10%3Aex%3A%2F%2Fcarol',
         x: 'ex://dave',
         prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/17465212666d3d9546d20cf2f9afef6449b4221d',
         prov_aggregate_sum: 'https://myInternalBnode.example.org/9d8f4772aac735af3e0229ae185dc863d94ea1cc',
         colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
         prov_aggregate: 'https://myInternalBnode.example.org/5397346b50f730fb43d08aff74f9a0f7a30050af',
       },
+      {
+        prov_aggregate_sum_sum_statement: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C9%3Aex%3A%2F%2Fdave%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C8%3Aex%3A%2F%2Fbob',
+        x: 'ex://dave',
+        prov_aggregate_sum_sum: 'https://myInternalBnode.example.org/5fa2488b4ccd3ca0e6828c3beaf3132493462e98',
+        prov_aggregate_sum: 'https://myInternalBnode.example.org/9d8f4772aac735af3e0229ae185dc863d94ea1cc',
+        colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        prov_aggregate: 'https://myInternalBnode.example.org/5397346b50f730fb43d08aff74f9a0f7a30050af',
+      },
     ]);
 
-    // 4. The rows decoded into a polynomial per answer: δ, the aggregate, over the derivations of the triples counted.
-    expect(sorted(decodeProvenance(rows, capture.provenanceVariablePrefix).map(({ answer, isAnswer, polynomial }) =>
+    // 4. Decoded polynomials: the rows decoded into a polynomial per answer, δ over the derivations of the triples counted.
+    const answers = decodeProvenance(rows, capture.provenanceVariablePrefix);
+    expect(sorted(answers.map(({ answer, isAnswer, polynomial }) =>
       ({ answer: recordOf(answer), isAnswer, polynomial: polynomialToString(polynomial) })))).toEqual([
       {
-        answer: { x: 'ex://bob', colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer' },
+        answer: {
+          x: 'ex://bob',
+          colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        },
         isAnswer: true,
-        polynomial: 'δ(https://myInternalBnode.example.org/0be09eb44785d2772757080e1c62ec5a61b50d36 ⊕ https://myInternalB' +
-          'node.example.org/74810b8df84eebffced1b47c9533df0735bdcfbb ⊕ https://myInternalBnode.example.org/90f4' +
-          '456735d97543be8c2834c138b47e15ae3c2c)',
+        polynomial: 'δ(https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C8%3Aex%3A%2F%2Fbob%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C10%3Aex%3A%2F%2Fcarol ⊕ https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C8%3Aex%3A%2F%2Fbob%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C9%3Aex%3A%2F%2Fdave ⊕ https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C8%3Aex%3A%2F%2Fbob%2Ciri%2C9%3Aex%3A%2F%2Fimec%2Ciri%2C10%3Aex%3A%2F%2Fcarol)',
       },
       {
-        answer: { x: 'ex://carol', colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer' },
+        answer: {
+          x: 'ex://carol',
+          colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        },
         isAnswer: true,
-        polynomial: 'δ(https://myInternalBnode.example.org/862273efa1ef04f50b48eb5e68bc10674688a16b ⊕ https://myInternalB' +
-          'node.example.org/883eb62e03826d0dda04e9ff19d5d01adcaca2db ⊕ https://myInternalBnode.example.org/a4db' +
-          '0e8460cc73b7dea8988e5df898c53b19f26f)',
+        polynomial: 'δ(https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C10%3Aex%3A%2F%2Fcarol%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C8%3Aex%3A%2F%2Fbob ⊕ https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C10%3Aex%3A%2F%2Fcarol%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C9%3Aex%3A%2F%2Fdave ⊕ https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C10%3Aex%3A%2F%2Fcarol%2Ciri%2C9%3Aex%3A%2F%2Fimec%2Ciri%2C8%3Aex%3A%2F%2Fbob)',
       },
       {
-        answer: { x: 'ex://dave', colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer' },
+        answer: {
+          x: 'ex://dave',
+          colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        },
         isAnswer: true,
-        polynomial: 'δ(https://myInternalBnode.example.org/a76c8265d153fb37ac044f59a9109fe05e352cde ⊕ https://myInternalB' +
-          'node.example.org/c5d75903ebfee0de48bfc464dccefbce7db013b8)',
+        polynomial: 'δ(https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C9%3Aex%3A%2F%2Fdave%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C10%3Aex%3A%2F%2Fcarol ⊕ https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C9%3Aex%3A%2F%2Fdave%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C8%3Aex%3A%2F%2Fbob)',
       },
     ]);
 
-    // 5. In the provenance view, the view triple each derivation produces and the source triples it matched.
-    expect(sorted(await evaluate(provenanceMapping, `${prefixes} SELECT ?derivation ?viewTriple ?source WHERE {
-      ?derivation provenance:derivationOf ?viewTriple ; provenance:derivedFrom ?source .
-    }`))).toEqual([
+    // 5. Decoded derivations: each derivation of those polynomials, decoded into the source triples it matched and
+    // the view triples it produces.
+    const decodeDerivation = createDerivationDecoder(view);
+    expect(sorted(answers.flatMap(({ polynomial }) => lineageOf(polynomial)).map((derivation) => {
+      const { constructIndex, bindings, sourceTriples, viewTriples } = decodeDerivation(derivation);
+      return {
+        derivation: termToString(derivation),
+        constructIndex,
+        bindings: recordOf(bindings),
+        sourceTriples: sourceTriples.map(triple => termToString(triple)),
+        viewTriples: viewTriples.map(triple => termToString(triple)),
+      };
+    }))).toEqual([
       {
-        derivation: 'https://myInternalBnode.example.org/0be09eb44785d2772757080e1c62ec5a61b50d36',
-        source: '<<ex://bob ex://worksAt ex://ugent>>',
-        viewTriple: '<<ex://bob ex://colleague ex://carol>>',
+        derivation: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C10%3Aex%3A%2F%2Fcarol%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C8%3Aex%3A%2F%2Fbob',
+        constructIndex: 0,
+        bindings: {
+          x: 'ex://carol',
+          org: 'ex://ugent',
+          y: 'ex://bob',
+        },
+        sourceTriples: [
+          '<<ex://carol ex://worksAt ex://ugent>>',
+          '<<ex://bob ex://worksAt ex://ugent>>',
+        ],
+        viewTriples: [
+          '<<ex://carol ex://colleague ex://bob>>',
+        ],
       },
       {
-        derivation: 'https://myInternalBnode.example.org/0be09eb44785d2772757080e1c62ec5a61b50d36',
-        source: '<<ex://carol ex://worksAt ex://ugent>>',
-        viewTriple: '<<ex://bob ex://colleague ex://carol>>',
+        derivation: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C10%3Aex%3A%2F%2Fcarol%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C9%3Aex%3A%2F%2Fdave',
+        constructIndex: 0,
+        bindings: {
+          x: 'ex://carol',
+          org: 'ex://ugent',
+          y: 'ex://dave',
+        },
+        sourceTriples: [
+          '<<ex://carol ex://worksAt ex://ugent>>',
+          '<<ex://dave ex://worksAt ex://ugent>>',
+        ],
+        viewTriples: [
+          '<<ex://carol ex://colleague ex://dave>>',
+        ],
       },
       {
-        derivation: 'https://myInternalBnode.example.org/74810b8df84eebffced1b47c9533df0735bdcfbb',
-        source: '<<ex://bob ex://worksAt ex://ugent>>',
-        viewTriple: '<<ex://bob ex://colleague ex://dave>>',
+        derivation: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C10%3Aex%3A%2F%2Fcarol%2Ciri%2C9%3Aex%3A%2F%2Fimec%2Ciri%2C8%3Aex%3A%2F%2Fbob',
+        constructIndex: 0,
+        bindings: {
+          x: 'ex://carol',
+          org: 'ex://imec',
+          y: 'ex://bob',
+        },
+        sourceTriples: [
+          '<<ex://carol ex://worksAt ex://imec>>',
+          '<<ex://bob ex://worksAt ex://imec>>',
+        ],
+        viewTriples: [
+          '<<ex://carol ex://colleague ex://bob>>',
+        ],
       },
       {
-        derivation: 'https://myInternalBnode.example.org/74810b8df84eebffced1b47c9533df0735bdcfbb',
-        source: '<<ex://dave ex://worksAt ex://ugent>>',
-        viewTriple: '<<ex://bob ex://colleague ex://dave>>',
+        derivation: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C8%3Aex%3A%2F%2Fbob%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C10%3Aex%3A%2F%2Fcarol',
+        constructIndex: 0,
+        bindings: {
+          x: 'ex://bob',
+          org: 'ex://ugent',
+          y: 'ex://carol',
+        },
+        sourceTriples: [
+          '<<ex://bob ex://worksAt ex://ugent>>',
+          '<<ex://carol ex://worksAt ex://ugent>>',
+        ],
+        viewTriples: [
+          '<<ex://bob ex://colleague ex://carol>>',
+        ],
       },
       {
-        derivation: 'https://myInternalBnode.example.org/862273efa1ef04f50b48eb5e68bc10674688a16b',
-        source: '<<ex://bob ex://worksAt ex://imec>>',
-        viewTriple: '<<ex://carol ex://colleague ex://bob>>',
+        derivation: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C8%3Aex%3A%2F%2Fbob%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C9%3Aex%3A%2F%2Fdave',
+        constructIndex: 0,
+        bindings: {
+          x: 'ex://bob',
+          org: 'ex://ugent',
+          y: 'ex://dave',
+        },
+        sourceTriples: [
+          '<<ex://bob ex://worksAt ex://ugent>>',
+          '<<ex://dave ex://worksAt ex://ugent>>',
+        ],
+        viewTriples: [
+          '<<ex://bob ex://colleague ex://dave>>',
+        ],
       },
       {
-        derivation: 'https://myInternalBnode.example.org/862273efa1ef04f50b48eb5e68bc10674688a16b',
-        source: '<<ex://carol ex://worksAt ex://imec>>',
-        viewTriple: '<<ex://carol ex://colleague ex://bob>>',
+        derivation: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C8%3Aex%3A%2F%2Fbob%2Ciri%2C9%3Aex%3A%2F%2Fimec%2Ciri%2C10%3Aex%3A%2F%2Fcarol',
+        constructIndex: 0,
+        bindings: {
+          x: 'ex://bob',
+          org: 'ex://imec',
+          y: 'ex://carol',
+        },
+        sourceTriples: [
+          '<<ex://bob ex://worksAt ex://imec>>',
+          '<<ex://carol ex://worksAt ex://imec>>',
+        ],
+        viewTriples: [
+          '<<ex://bob ex://colleague ex://carol>>',
+        ],
       },
       {
-        derivation: 'https://myInternalBnode.example.org/883eb62e03826d0dda04e9ff19d5d01adcaca2db',
-        source: '<<ex://carol ex://worksAt ex://ugent>>',
-        viewTriple: '<<ex://carol ex://colleague ex://dave>>',
+        derivation: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C9%3Aex%3A%2F%2Fdave%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C10%3Aex%3A%2F%2Fcarol',
+        constructIndex: 0,
+        bindings: {
+          x: 'ex://dave',
+          org: 'ex://ugent',
+          y: 'ex://carol',
+        },
+        sourceTriples: [
+          '<<ex://dave ex://worksAt ex://ugent>>',
+          '<<ex://carol ex://worksAt ex://ugent>>',
+        ],
+        viewTriples: [
+          '<<ex://dave ex://colleague ex://carol>>',
+        ],
       },
       {
-        derivation: 'https://myInternalBnode.example.org/883eb62e03826d0dda04e9ff19d5d01adcaca2db',
-        source: '<<ex://dave ex://worksAt ex://ugent>>',
-        viewTriple: '<<ex://carol ex://colleague ex://dave>>',
+        derivation: 'https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/0/%2Ciri%2C9%3Aex%3A%2F%2Fdave%2Ciri%2C10%3Aex%3A%2F%2Fugent%2Ciri%2C8%3Aex%3A%2F%2Fbob',
+        constructIndex: 0,
+        bindings: {
+          x: 'ex://dave',
+          org: 'ex://ugent',
+          y: 'ex://bob',
+        },
+        sourceTriples: [
+          '<<ex://dave ex://worksAt ex://ugent>>',
+          '<<ex://bob ex://worksAt ex://ugent>>',
+        ],
+        viewTriples: [
+          '<<ex://dave ex://colleague ex://bob>>',
+        ],
+      },
+    ]);
+
+    // 6. Rendered polynomials: the polynomials of step 4, each derivation written as the source triples it matched.
+    const sourcesOf = (derivation: RDF.Term): string =>
+      `[${decodeDerivation(derivation).sourceTriples.map(triple => termToString(triple)).join(', ')}]`;
+    expect(sorted(answers.map(({ answer, polynomial }) =>
+      ({ answer: recordOf(answer), polynomial: polynomialToString(polynomial, sourcesOf) })))).toEqual([
+      {
+        answer: {
+          x: 'ex://bob',
+          colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        },
+        polynomial: 'δ([<<ex://bob ex://worksAt ex://imec>>, <<ex://carol ex://worksAt ex://imec>>] ⊕ [<<ex://bob ex://worksAt ex://ugent>>, <<ex://carol ex://worksAt ex://ugent>>] ⊕ [<<ex://bob ex://worksAt ex://ugent>>, <<ex://dave ex://worksAt ex://ugent>>])',
       },
       {
-        derivation: 'https://myInternalBnode.example.org/90f4456735d97543be8c2834c138b47e15ae3c2c',
-        source: '<<ex://bob ex://worksAt ex://imec>>',
-        viewTriple: '<<ex://bob ex://colleague ex://carol>>',
+        answer: {
+          x: 'ex://carol',
+          colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        },
+        polynomial: 'δ([<<ex://carol ex://worksAt ex://imec>>, <<ex://bob ex://worksAt ex://imec>>] ⊕ [<<ex://carol ex://worksAt ex://ugent>>, <<ex://bob ex://worksAt ex://ugent>>] ⊕ [<<ex://carol ex://worksAt ex://ugent>>, <<ex://dave ex://worksAt ex://ugent>>])',
       },
       {
-        derivation: 'https://myInternalBnode.example.org/90f4456735d97543be8c2834c138b47e15ae3c2c',
-        source: '<<ex://carol ex://worksAt ex://imec>>',
-        viewTriple: '<<ex://bob ex://colleague ex://carol>>',
-      },
-      {
-        derivation: 'https://myInternalBnode.example.org/a4db0e8460cc73b7dea8988e5df898c53b19f26f',
-        source: '<<ex://bob ex://worksAt ex://ugent>>',
-        viewTriple: '<<ex://carol ex://colleague ex://bob>>',
-      },
-      {
-        derivation: 'https://myInternalBnode.example.org/a4db0e8460cc73b7dea8988e5df898c53b19f26f',
-        source: '<<ex://carol ex://worksAt ex://ugent>>',
-        viewTriple: '<<ex://carol ex://colleague ex://bob>>',
-      },
-      {
-        derivation: 'https://myInternalBnode.example.org/a76c8265d153fb37ac044f59a9109fe05e352cde',
-        source: '<<ex://bob ex://worksAt ex://ugent>>',
-        viewTriple: '<<ex://dave ex://colleague ex://bob>>',
-      },
-      {
-        derivation: 'https://myInternalBnode.example.org/a76c8265d153fb37ac044f59a9109fe05e352cde',
-        source: '<<ex://dave ex://worksAt ex://ugent>>',
-        viewTriple: '<<ex://dave ex://colleague ex://bob>>',
-      },
-      {
-        derivation: 'https://myInternalBnode.example.org/c5d75903ebfee0de48bfc464dccefbce7db013b8',
-        source: '<<ex://carol ex://worksAt ex://ugent>>',
-        viewTriple: '<<ex://dave ex://colleague ex://carol>>',
-      },
-      {
-        derivation: 'https://myInternalBnode.example.org/c5d75903ebfee0de48bfc464dccefbce7db013b8',
-        source: '<<ex://dave ex://worksAt ex://ugent>>',
-        viewTriple: '<<ex://dave ex://colleague ex://carol>>',
+        answer: {
+          x: 'ex://dave',
+          colleagues: '"2"^^http://www.w3.org/2001/XMLSchema#integer',
+        },
+        polynomial: 'δ([<<ex://dave ex://worksAt ex://ugent>>, <<ex://bob ex://worksAt ex://ugent>>] ⊕ [<<ex://dave ex://worksAt ex://ugent>>, <<ex://carol ex://worksAt ex://ugent>>])',
       },
     ]);
   });
 });
+/* eslint-enable max-len */

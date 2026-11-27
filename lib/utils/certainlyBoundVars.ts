@@ -2,7 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
 import { forEveryNodeType } from '@traqula/core';
-import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
+import { EXTENSION_FUNCTION_BNODE, EXTENSION_FUNCTION_DERIVATION } from '../consts.js';
 import { isTriplePosition } from '../datastructures/TermClusterSet.js';
 import {
   asAssertableTermType,
@@ -270,6 +270,9 @@ export function standardExpressionRange(c: RangeContext, expression: Algebra.Exp
     case ExpressionTypes.NAMED: {
       if (expression.name.value === EXTENSION_FUNCTION_BNODE) {
         return blankNodeRange;
+      }
+      if (expression.name.value === EXTENSION_FUNCTION_DERIVATION) {
+        return iriRange;
       }
       // A function of the XSD namespace is a cast to one of its datatypes.
       return expression.name.value.startsWith(xsd) ? literalRange : objectRange;

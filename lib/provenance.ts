@@ -1,25 +1,18 @@
 import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import {
-  PREDICATE_DERIVATION_OF,
-  PREDICATE_DERIVED_FROM,
-  PROVENANCE_NAMESPACE,
-} from './consts.js';
-import type { MappingConstructionTools, MappingOptions } from './mapping.js';
-import { mappingFromConstructs, parseConstructQuery } from './mapping.js';
 import type { ProvenanceNodeKind } from './provenancePolynomial.js';
 import {
   isProvenanceVariableName,
   provenanceChildPrefix,
   provenanceNodeVariableName,
 } from './provenancePolynomial.js';
+import { derivationLink, derivationOfPredicate } from './provenanceView.js';
 import { boundOrUnboundArgumentExpression } from './transformations/bnodeExtensionFunction.js';
 import { internalBnodeExpression } from './transformations/internalBnodeMaterialisation.js';
 import { rewriteNonRecursivePaths } from './transformations/pathTransformation.js';
 import type { TransformationContext, TransformationContextOptions } from './transformContext.js';
 import { createTransformationContext, parseQuery } from './transformContext.js';
-import type { Mapping } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
 import { cpMetaOf, withoutCpVars } from './utils/certainlyBoundVars.js';
 import { expressionsEvaluatedBy, leaveExistencePatterns } from './utils/existenceScopes.js';
@@ -31,35 +24,15 @@ import {
   unstableFunctionCalledBy,
 } from './utils/expressionHelpers.js';
 import { groupProjectedBy, projectOntoVariablesOrExistence } from './utils/operationhelpers.js';
-import { datatypeInteger, DF, tripleTerm } from './utils/rdfDatatypes.js';
+import { datatypeInteger, DF } from './utils/rdfDatatypes.js';
 import { unionSets } from './utils/setUtils.js';
 import { queryFormTypes, solutionModifierChainOf } from './utils/solutionModifierChain.js';
 import { claimVariableName, collectVariableNames, freshVarGenerator, markVariableNamesUsed } from './utils.js';
 
 /**
- * @fileoverview Provenance capture: the provenance view of a mapping, and SPARQLprov's rewrite of a SELECT to also
- * select the how-provenance of its answers over it. See ARCHITECTURE.md.
+ * @fileoverview Provenance capture: SPARQLprov's rewrite of a SELECT to also select the how-provenance of its answers,
+ * over the provenance view of {@link provenanceView!provenanceMappingFromConstructQueries}. See ARCHITECTURE.md.
  */
-
-const derivationOfPredicate = DF.namedNode(PREDICATE_DERIVATION_OF);
-const derivedFromPredicate = DF.namedNode(PREDICATE_DERIVED_FROM);
-
-/**
- * Creates the pattern linking a derivation to the triple term a triple (pattern) writes.
- * @param AF - The algebra factory to create it with
- * @param derivation - The variable the derivation is bound to
- * @param predicate - `derivationOf` or `derivedFrom`
- * @param triple - The triple (pattern)
- * @returns the pattern
- */
-function derivationLink(
-  AF: TransformationContext['AF'],
-  derivation: RDF.Variable,
-  predicate: RDF.NamedNode,
-  triple: RDF.BaseQuad,
-): Algebra.Pattern {
-  return AF.createPattern(derivation, predicate, tripleTerm(triple.subject, triple.predicate, triple.object));
-}
 
 /**
  * The names of the in-scope variables of an operation.
@@ -79,87 +52,6 @@ function inScopeVariableNames(operation: Algebra.Operation): Set<string> {
 function sharedVariables(left: Algebra.Operation, right: Algebra.Operation): RDF.Variable[] {
   const rightNames = inScopeVariableNames(right);
   return algebraUtils.inScopeVariables(left).filter(variable => rightNames.has(variable.value));
-}
-
-/**
- * Collects the triple patterns every solution of an operation matches, skipping those under a UNION, the
- * right side of an OPTIONAL or MINUS, a sub-SELECT, GROUP, GRAPH or SERVICE, and a property path.
- * @param operation - The operation to read
- * @returns the triple patterns
- */
-function triplePatternsEverySolutionMatches(operation: Algebra.Operation): Algebra.Pattern[] {
-  switch (operation.type) {
-    case Algebra.Types.BGP:
-      return operation.patterns;
-    case Algebra.Types.JOIN:
-      return operation.input.flatMap(triplePatternsEverySolutionMatches);
-    case Algebra.Types.LEFT_JOIN:
-    case Algebra.Types.MINUS:
-      return triplePatternsEverySolutionMatches(operation.input[0]);
-    case Algebra.Types.FILTER:
-    case Algebra.Types.EXTEND:
-    case Algebra.Types.DISTINCT:
-    case Algebra.Types.REDUCED:
-    case Algebra.Types.ORDER_BY:
-    case Algebra.Types.SLICE:
-      return triplePatternsEverySolutionMatches(operation.input);
-    default:
-      return [];
-  }
-}
-
-/**
- * Rewrites a CONSTRUCT into the one building its provenance view. Each body solution becomes a derivation,
- * identified by the CONSTRUCT and the values of the body's variables.
- * @param tools - The factories to build with
- * @param construct - The CONSTRUCT a mapping is defined by
- * @param constructIdentifier - The IRI telling this CONSTRUCT's derivations apart from those of another
- * @returns the CONSTRUCT linking each derivation to the triples it produces and matched
- */
-export function provenanceConstructOf(
-  tools: MappingConstructionTools,
-  construct: Algebra.Construct,
-  constructIdentifier: RDF.NamedNode,
-): Algebra.Construct {
-  const { AF } = tools;
-  const body = construct.input;
-  const usedNames = collectVariableNames(tools.astTransformer, construct);
-  const derivation = DF.variable(claimVariableName('derivation', usedNames));
-  // A variable the body leaves unbound is an argument of its own, so it still tells the derivations apart.
-  const derivationIdentity = internalBnodeExpression(AF, [
-    AF.createTermExpression(constructIdentifier),
-    ...algebraUtils.inScopeVariables(body).map(variable => AF.createTermExpression(variable)),
-  ]);
-  return AF.createConstruct(AF.createExtend(body, derivation, derivationIdentity), [
-    ...construct.template.map(triple => derivationLink(AF, derivation, derivationOfPredicate, triple)),
-    ...triplePatternsEverySolutionMatches(body)
-      .map(pattern => derivationLink(AF, derivation, derivedFromPredicate, pattern)),
-  ]);
-}
-
-/**
- * Builds the mapping of the provenance view of a set of CONSTRUCT queries: the derivations of their bodies,
- * each `derivationOf` the view triples it produces and `derivedFrom` the source triples it matched.
- * @param constructQueries - The SPARQL CONSTRUCT query strings defining the view
- * @param options - What the mapping is configured with
- * @returns the mapping to unfold a {@link provenanceCapturingQuery} against
- * @throws Error under the same conditions as {@link mapping!mappingFromConstructQueries}
- */
-export function provenanceMappingFromConstructQueries(
-  constructQueries: readonly string[],
-  options: MappingOptions = {},
-): Mapping {
-  const tools = createTransformationContext({ expressionRange: options.expressionRange });
-  return mappingFromConstructs(
-    tools,
-    constructQueries.map((constructQuery, index) =>
-      provenanceConstructOf(
-        tools,
-        parseConstructQuery(tools, constructQuery),
-        DF.namedNode(`${PROVENANCE_NAMESPACE}construct${index}`),
-      )),
-    options,
-  );
 }
 
 /** The transformation context, with what provenance capture needs. */
@@ -874,8 +766,9 @@ export function provenanceCapturingOperation(
 }
 
 /**
- * Rewrites a SELECT query over the view into one that also selects the how-provenance of its answers. Unfolded against
- * {@link provenanceMappingFromConstructQueries}, its answers decode with {@link provenancePolynomial!decodeProvenance}.
+ * Rewrites a SELECT query over the view into one that also selects the how-provenance of its answers.
+ * Unfolded against {@link provenanceView!provenanceMappingFromConstructQueries},
+ * its answers decode with {@link provenancePolynomial!decodeProvenance}.
  * @param query - The SELECT query over the view
  * @param options - What the rewriter is configured with
  * @returns the SPARQL 1.2 query over the provenance view, and its provenance variable prefix

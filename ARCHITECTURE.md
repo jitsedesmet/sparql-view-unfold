@@ -123,17 +123,26 @@ encoding from the evaluated arguments instead, at any depth, and the same materi
 
 ## Provenance
 
-`lib/provenance.ts` builds two things.
+Provenance takes two parts: the provenance view (`lib/provenanceView.ts`) and the rewritten query (`lib/provenance.ts`).
 The README explains what they are for and how to read the result; the limits are at the end of this section.
 
 **The provenance view** (`provenanceMappingFromConstructQueries`).
 A *derivation* is one solution of a view's `WHERE` clause.
 Each view CONSTRUCT is rewritten into one over the same `WHERE` clause that gives every solution an identifier:
-`BIND(<internal://blank>(provenance:construct0, ?var1, ?var2, …) AS ?derivation)`,
-a blank node built from the CONSTRUCT's index and all variables of its `WHERE` clause.
+`BIND(<internal://derivation>("0", ?var1, ?var2, …) AS ?derivation)`,
+built from the CONSTRUCT's index and all variables of its `WHERE` clause.
 Its template links `?derivation` by `derivationOf` to every triple the original template produces,
 and by `derivedFrom` to every triple pattern of the `WHERE` clause that each solution matches
 (so not those inside a `UNION`, `OPTIONAL` and the like).
+
+The materialisation step turns `<internal://derivation>` into an IRI:
+the prefix `https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/`, the index, `/`,
+and the values encoded as for an internal blank node (see [Blank nodes](#blank-nodes)), through `ENCODE_FOR_URI`.
+An internal blank node hashes that encoding; a derivation keeps it, so it can be read back.
+`createDerivationDecoder` does that: it parses the CONSTRUCT queries again,
+pairs the values with the `WHERE` clause's variables in the same order,
+and fills them into the patterns `derivedFrom` links and into the template.
+Like a CONSTRUCT, it leaves out a template triple with an unbound variable or a term its position does not admit.
 
 **The rewritten query** (`provenanceCapturingQuery`).
 The provenance of an answer is a *polynomial*: a formula of ⊗ (join), ⊕ (union), ⊖ (difference) and δ (aggregate),

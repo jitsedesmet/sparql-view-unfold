@@ -1,6 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
+import { EXTENSION_FUNCTION_BNODE, EXTENSION_FUNCTION_DERIVATION } from '../consts.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import { termFalse, termTrue } from './operationhelpers.js';
@@ -140,10 +140,10 @@ export function unstableFunctionCalledBy(operation: Algebra.Operation): string |
 
 /**
  * The extension functions declared stable, which is what lets a `BIND` over one of them move.
- * `EXTENSION_FUNCTION_BNODE`, whose "same inputs = same identity" is stability spelled out, is the only one;
- * every other `named` expression is opaque and so unstable.
+ * `EXTENSION_FUNCTION_BNODE` and `EXTENSION_FUNCTION_DERIVATION`, whose "same inputs = same identity" is stability
+ * spelled out, are the only ones; every other `named` expression is opaque and so unstable.
  */
-const stableNamedFunctions = new Set<string>([ EXTENSION_FUNCTION_BNODE ]);
+const stableNamedFunctions = new Set<string>([ EXTENSION_FUNCTION_BNODE, EXTENSION_FUNCTION_DERIVATION ]);
 
 /**
  * Whether an expression is a pure function of the variables it reads: asked twice about the same values, it

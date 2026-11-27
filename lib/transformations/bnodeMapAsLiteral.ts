@@ -25,7 +25,7 @@ import type {
   InternalBnodeMaterialisation,
 } from './internalBnodeMaterialisation.js';
 import {
-  holdsInternalBnodeOrIsBlank,
+  holdsInternalIdentityOrIsBlank,
   internalBnodeEncodingTags,
   internalBnodeExpressionCallbacks,
   specialIriMaterialisation,
@@ -380,7 +380,7 @@ function internalBnodeMaterialisationTransformation(
   const materialise = options.encodedByExtensionFunction ?
     materialiseInternalBnodesByExtensionFunction :
     materialiseInternalBnodes;
-  return (c, op) => holdsInternalBnodeOrIsBlank(op) ? materialise(c, op, materialisation) : op;
+  return (c, op) => holdsInternalIdentityOrIsBlank(op) ? materialise(c, op, materialisation) : op;
 }
 
 /**

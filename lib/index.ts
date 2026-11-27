@@ -31,12 +31,10 @@
  */
 export * from './consts.js';
 export { mappingFromConstructQueries } from './mapping.js';
-export {
-  provenanceCapturingOperation,
-  provenanceCapturingQuery,
-  provenanceMappingFromConstructQueries,
-} from './provenance.js';
+export { provenanceCapturingOperation, provenanceCapturingQuery } from './provenance.js';
 export type { ProvenanceCapturingQuery } from './provenance.js';
+export { createDerivationDecoder, provenanceMappingFromConstructQueries } from './provenanceView.js';
+export type { DecodedDerivation } from './provenanceView.js';
 export {
   booleanSpmSemiring,
   countingSpmSemiring,
