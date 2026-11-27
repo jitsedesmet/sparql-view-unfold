@@ -123,27 +123,19 @@ encoding from the evaluated arguments instead, at any depth, and the same materi
 
 ## Provenance
 
-`lib/provenance.ts`, in two halves that meet in an ordinary unfolding; the README lists the semantics.
+`lib/provenance.ts` has two parts; the README describes what they compute.
 
-- **The mapping** (`provenanceMappingFromConstructQueries`) rewrites every CONSTRUCT into one over the same body,
-  extended with `BIND(<internal://blank>(<construct IRI>, <the body's variables>) AS ?derivation)`. Its template
-  links that derivation by `derivationOf` to every template triple and by `derivedFrom` to every body triple pattern
-  each solution matches.
-- **The query** (`provenanceCapturingQuery`) is SPARQLprov's rewrite α(Q, z) (Def. 4.12), run *before* the rewriter,
-  with `?z_sum_statement derivationOf <<( s p o )>>` as the reification of a triple pattern. Every operator binds
-  its node of the polynomial, in a variable named by the node's path (`?prov_sum_product_1_sum_statement`), to an
-  identity of its solution, `<internal://blank>("<variable>", <the solution's variables>)`, by which
-  `decodeProvenance` (`lib/provenancePolynomial.ts`, Def. 4.10) groups the rows into sums.
+- **The mapping** (`provenanceMappingFromConstructQueries`) gives every solution of a CONSTRUCT body, a derivation,
+  an identity: `BIND(<internal://blank>(<construct IRI>, <body variables>) AS ?derivation)`. Its template links the
+  derivation by `derivationOf` to the triples it produces and by `derivedFrom` to the patterns it matched.
+- **The query** (`provenanceCapturingQuery`) is SPARQLprov's rewrite (Def. 4.12), applied before the rewriter. Each
+  operator binds its node of the polynomial to an identity of its solution, in a variable named after the node's
+  path (`?prov_sum_product_1_sum_statement`). `decodeProvenance` rebuilds the polynomial from those variables.
 
-A difference is a natural OPTIONAL over the subtrahend, under the OPTIONAL's or MINUS's own condition, which needs
-Comunica 5.5 or later. A shared variable the minuend may leave unbound is copied before it and restored after it, so
-each row keeps the minuend's solution. An EXISTS, `P ⊖ (P ⊖ P2)`, rewrites P once: each solution of P meets only its
-own rows of `P ⊖ P2`, whose copy of P's provenance stands in for the outer minuend.
-
-OPTIONAL repeats its left side, and GROUP and SLICE duplicate their subtree (answers without provenance, solutions
-with it, joined on the group or answer variables), so nesting them grows the query exponentially. A variable that may
-be unbound is joined on the extension function's wrapped key, `COALESCE(TRIPLE(<…argument>, <…argument>, ?x),
-<…unbound>)`, rather than on SPARQLprov's cautious compatibility filter.
+A difference (⊖) is an OPTIONAL over the subtrahend. A shared variable the minuend may leave unbound is copied before
+the OPTIONAL and restored after it, so each row keeps the minuend's solution. An EXISTS, `P ⊖ (P ⊖ P2)`, evaluates P
+once. OPTIONAL repeats its left side, and GROUP and SLICE evaluate their subtree twice, so nesting them grows the
+query exponentially.
 
 ## SPARQL quirks worth knowing
 
@@ -189,13 +181,8 @@ moves no BIND of one.
   run after `removeProjections`.
 - **Merging SERVICE calls.** A service can absorb a variable amount of computation, so there is a
   composition to choose; `transformServiceCallPushUp` makes one choice.
-- **Pruning a derivation lookup.** Every provenance mapping head has the predicate `derivationOf` or
-  `derivedFrom`, so a provenance mapping is nearly always several merged behind the generic head, whose triple
-  term is a `BIND` nothing re-reads. A lookup then unfolds against every mapping, the mismatch of a constant
-  inside the triple term only caught at run time by `sameTerm(c, PREDICATE(?m_o))`. Folding
-  `SUBJECT`/`PREDICATE`/`OBJECT` of a bound triple term into the term it reads would prune those branches and
-  leave plain SPARQL 1.1.
-- **Provenance across SERVICE.** A SERVICE pattern is annotated with `1`, and `derivedFrom` stops at one.
-  Asma et al., "Native Provenance Computation for Federated and Non-Federated SPARQL Queries"
-  (https://doi.org/10.4230/TGDK.4.1.4), Def. 62, annotates provenance per endpoint (`y ⊛ x`) by shipping the
-  rewrite into the SERVICE: the reference for extending it.
+- **Pruning derivation lookups.** All provenance mappings share the predicates `derivationOf` and `derivedFrom`,
+  so a lookup unfolds against every one of them and only fails at run time. Folding `SUBJECT`, `PREDICATE` and
+  `OBJECT` of a known triple term while rewriting would prune those branches.
+- **Provenance across SERVICE.** A SERVICE is annotated with `1`. Fed-NPCS (https://doi.org/10.4230/TGDK.4.1.4,
+  Def. 62) shows how to carry provenance into it.

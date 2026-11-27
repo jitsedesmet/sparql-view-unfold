@@ -635,59 +635,45 @@ describe('provenance captured over the colleagues data', () => {
 });
 
 describe('provenance, the whole story', () => {
-  it('traces a grouped answer over the view back to the source triples it rests on', async({ expect }) => {
-    // The source data (test/statics/colleagues.ttl): Bob and Carol work at UGent and imec, Dave at UGent only.
+  it('explains each count of a grouped query by the source triples it rests on', async({ expect }) => {
+    // The source (test/statics/colleagues.ttl): Bob and Carol work at UGent and imec, Dave at UGent only.
     // The view: two people working at the same organisation are colleagues.
     const view = [
       `${prefixes} CONSTRUCT { ?x :colleague ?y } WHERE { ?x :worksAt ?org . ?y :worksAt ?org . FILTER(?x != ?y) }`,
     ];
-    // A user asks the view how many colleagues each person has.
     const query = `${prefixes} SELECT ?x (COUNT(*) AS ?colleagues) WHERE { ?x :colleague ?y } GROUP BY ?x`;
+    const local = (term: RDF.Term | undefined): string => term!.value.replace('ex://', '');
 
-    // 1. The provenance view: every solution of the view's body is a derivation, `derivationOf` the view triple it
-    //    produces and `derivedFrom` the source triples it matched. SPARQLprov (Hernández et al., "Computing
-    //    How-Provenance for SPARQL Queries via Query Rewriting", https://doi.org/10.14778/3484224.3484235) and NPCS
-    //    (Asma et al., "NPCS: Native Provenance Computation for SPARQL", https://doi.org/10.1145/3589334.3645557)
-    //    need the data stored reified; NPCS (p. 2092) leaves non-reified data as future work. This view supplies the
-    //    reification virtually: the derivations are SPARQLprov's sources, `derivationOf` its reification scheme.
+    // 1. The query answers how many colleagues each person has, over the view as a set.
+    const results = await bindingsOf(mappingFromConstructQueries(view), query, { preserveCardinality: true });
+    expect(results.map(row => `${local(row.get('x'))}: ${local(row.get('colleagues'))}`).sort())
+      .toEqual([ 'bob: 2', 'carol: 2', 'dave: 2' ]);
+
+    // 2. Captured, the same query also answers which derivations each count rests on. A derivation is one solution
+    //    of the view's body: a colleague and the organisation shared, which its `derivedFrom` source triples give.
     const provenanceMapping = provenanceMappingFromConstructQueries(view);
-
-    // 2. The query is rewritten as SPARQLprov rewrites it (Def. 4.12 and 4.17): every triple pattern reified by a
-    //    lookup of the derivations of the view triple it matches, and every operator encoding its node of the
-    //    answer's polynomial in provenance variables `?prov_…`. The GROUP duplicates its subtree: the counts are
-    //    computed without provenance, and the provenance of each group's solutions joined onto its answer.
     const capture = provenanceCapturingQuery(query);
-
-    // 3. Unfolded onto the source and evaluated, with Comunica encoding the identities, the answers decode into their
-    //    polynomials (Def. 4.10). Bob has two colleagues, as the view without provenance says, resting on three
-    //    derivations: Carol through UGent, Carol through imec, and Dave through UGent. δ marks them as aggregated
-    //    (Def. 4.15).
     const answers = decodeProvenance(
       await bindingsOf(provenanceMapping, capture.query),
       capture.provenanceVariablePrefix,
     );
-    const bobsAnswer = answers.find(({ answer }) => answer.get('x')!.value === 'ex://bob')!;
-    expect(bobsAnswer.answer.get('colleagues')!.value).toBe('2');
-    expect(bobsAnswer.polynomial.type).toBe('aggregate');
-    const bobsDerivations = lineageOf(bobsAnswer.polynomial).map(termToString);
-    expect(bobsDerivations).toHaveLength(3);
-
-    // 4. Every derivation leads back, through the provenance view, to the view triple it produced and the source
-    //    triples it matched.
-    const links = await evaluate(provenanceMapping, `${prefixes} SELECT ?derivation ?viewTriple ?source WHERE {
-      ?derivation provenance:derivationOf ?viewTriple ; provenance:derivedFrom ?source .
+    const derivations = await bindingsOf(provenanceMapping, `${prefixes} SELECT ?derivation ?y ?org WHERE {
+      ?derivation provenance:derivationOf <<( ?x :colleague ?y )>> ; provenance:derivedFrom <<( ?x :worksAt ?org )>> .
     }`);
-    const traceOf = (derivation: string): string => {
-      const linksOfDerivation = links.filter(link => link.derivation === derivation);
-      const sources = linksOfDerivation.map(link => link.source).sort().join(' and ');
-      return `${linksOfDerivation[0].viewTriple} from ${sources}`;
-    };
-    expect(polynomialToString(bobsAnswer.polynomial, term => traceOf(termToString(term)))).toBe(
-      'δ(<<ex://bob ex://colleague ex://carol>> from <<ex://bob ex://worksAt ex://imec>> and ' +
-      '<<ex://carol ex://worksAt ex://imec>> ⊕ <<ex://bob ex://colleague ex://carol>> from ' +
-      '<<ex://bob ex://worksAt ex://ugent>> and <<ex://carol ex://worksAt ex://ugent>> ⊕ ' +
-      '<<ex://bob ex://colleague ex://dave>> from <<ex://bob ex://worksAt ex://ugent>> and ' +
-      '<<ex://dave ex://worksAt ex://ugent>>)',
-    );
+    const labels = new Map(derivations.map(row =>
+      [ termToString(row.get('derivation')), `${local(row.get('y'))}@${local(row.get('org'))}` ]));
+    const labelOf = (derivation: RDF.Term): string => labels.get(termToString(derivation))!;
+
+    // 3. Each count is the aggregate δ of the derivations of the colleague triples it counts. Bob counts two
+    //    colleagues, Carol and Dave, but Carol through two organisations: three derivations.
+    expect(answers.map(({ answer, polynomial }) =>
+      `${local(answer.get('x'))}: ${local(answer.get('colleagues'))} = ${polynomialToString(polynomial, labelOf)}`)
+      .sort()).toEqual([
+      'bob: 2 = δ(carol@imec ⊕ carol@ugent ⊕ dave@ugent)',
+      'carol: 2 = δ(bob@imec ⊕ bob@ugent ⊕ dave@ugent)',
+      'dave: 2 = δ(bob@ugent ⊕ carol@ugent)',
+    ]);
+    const bob = answers.find(({ answer }) => local(answer.get('x')) === 'bob')!;
+    expect(lineageOf(bob.polynomial).map(labelOf).sort()).toEqual([ 'carol@imec', 'carol@ugent', 'dave@ugent' ]);
   });
 });
