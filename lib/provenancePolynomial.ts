@@ -15,7 +15,7 @@ export type ProvenancePolynomial =
   | { type: 'source'; term: RDF.Term }
   | { type: 'sum'; operands: ProvenancePolynomial[] }
   | { type: 'product'; operands: ProvenancePolynomial[] }
-  | { type: 'difference'; minuend: ProvenancePolynomial; subtrahend: ProvenancePolynomial }
+  | { type: 'difference'; left: ProvenancePolynomial; right: ProvenancePolynomial }
   | { type: 'aggregate'; operand: ProvenancePolynomial };
 
 /**
@@ -230,8 +230,8 @@ function decodeTable(
     case 'difference':
       return {
         type: 'difference',
-        minuend: sumOfSubtables(columns, rows, provenanceChildPrefix(root, 1)),
-        subtrahend: sumOfSubtables(columns, rows, provenanceChildPrefix(root, 2)),
+        left: sumOfSubtables(columns, rows, provenanceChildPrefix(root, 1)),
+        right: sumOfSubtables(columns, rows, provenanceChildPrefix(root, 2)),
       };
   }
 }
@@ -311,8 +311,8 @@ export function evaluatePolynomial<T>(
         semiring.times(value, evaluatePolynomial(operand, semiring, valueOf)), semiring.one);
     case 'difference':
       return semiring.monus(
-        evaluatePolynomial(polynomial.minuend, semiring, valueOf),
-        evaluatePolynomial(polynomial.subtrahend, semiring, valueOf),
+        evaluatePolynomial(polynomial.left, semiring, valueOf),
+        evaluatePolynomial(polynomial.right, semiring, valueOf),
       );
     case 'aggregate':
       return semiring.aggregate(evaluatePolynomial(polynomial.operand, semiring, valueOf));
@@ -333,8 +333,8 @@ export function simplifyPolynomial(polynomial: ProvenancePolynomial): Provenance
     case 'difference':
       return {
         type: 'difference',
-        minuend: simplifyPolynomial(polynomial.minuend),
-        subtrahend: simplifyPolynomial(polynomial.subtrahend),
+        left: simplifyPolynomial(polynomial.left),
+        right: simplifyPolynomial(polynomial.right),
       };
     case 'aggregate':
       return { type: 'aggregate', operand: simplifyPolynomial(polynomial.operand) };
@@ -376,7 +376,7 @@ export function polynomialToString(
     case 'product':
       return `(${polynomial.operands.map(write).sort().join(polynomial.type === 'sum' ? ' ⊕ ' : ' ⊗ ')})`;
     case 'difference':
-      return `(${write(polynomial.minuend)} ⊖ ${write(polynomial.subtrahend)})`;
+      return `(${write(polynomial.left)} ⊖ ${write(polynomial.right)})`;
     case 'aggregate':
       return `δ${write(polynomial.operand)}`;
   }

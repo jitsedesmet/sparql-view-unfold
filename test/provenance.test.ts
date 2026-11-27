@@ -529,7 +529,7 @@ describe('provenance captured over the colleagues data', () => {
     ]);
   });
 
-  it('subtracts from every row of a difference over a variable the minuend may not bind', async(
+  it('subtracts from every row of a difference over a variable the left side may not bind', async(
     { expect },
   ) => {
     const explanations = await explain(

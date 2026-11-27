@@ -132,8 +132,8 @@ encoding from the evaluated arguments instead, at any depth, and the same materi
   operator binds its node of the polynomial to an identity of its solution, in a variable named after the node's
   path (`?prov_sum_product_1_sum_statement`). `decodeProvenance` rebuilds the polynomial from those variables.
 
-A difference (⊖) is an OPTIONAL over the subtrahend. A shared variable the minuend may leave unbound is copied before
-the OPTIONAL and restored after it, so each row keeps the minuend's solution. An EXISTS, `P ⊖ (P ⊖ P2)`, evaluates P
+A difference (⊖) is an OPTIONAL over the right side. A shared variable the left side may leave unbound is copied before
+the OPTIONAL and restored after it, so each row keeps the left side's solution. An EXISTS, `P ⊖ (P ⊖ P2)`, evaluates P
 once. OPTIONAL repeats its left side, and GROUP and SLICE evaluate their subtree twice, so nesting them grows the
 query exponentially.
 

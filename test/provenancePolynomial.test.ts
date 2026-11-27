@@ -91,7 +91,7 @@ describe('simplifyPolynomial', () => {
       { type: 'sum', operands: [ source('a'), { type: 'constant', value: 0 }]},
       { type: 'product', operands: [ source('b'), { type: 'constant', value: 1 }]},
       { type: 'product', operands: [ source('c'), { type: 'constant', value: 0 }]},
-      { type: 'difference', minuend: source('d'), subtrahend: { type: 'sum', operands: []}},
+      { type: 'difference', left: source('d'), right: { type: 'sum', operands: []}},
     ]};
 
     expect(polynomialToString(simplifyPolynomial(polynomial))).toBe('((d ⊖ 0) ⊕ a ⊕ b)');
@@ -99,7 +99,7 @@ describe('simplifyPolynomial', () => {
 });
 
 describe('evaluatePolynomial', () => {
-  const difference: ProvenancePolynomial = { type: 'difference', minuend: source('c'), subtrahend: source('d') };
+  const difference: ProvenancePolynomial = { type: 'difference', left: source('c'), right: source('d') };
   const polynomial: ProvenancePolynomial = { type: 'sum', operands: [
     { type: 'product', operands: [ source('a'), source('b') ]},
     difference,
@@ -121,7 +121,7 @@ describe('lineageOf', () => {
   it('lists every source once', ({ expect }) => {
     expect(lineageOf({ type: 'product', operands: [
       source('a'),
-      { type: 'difference', minuend: source('a'), subtrahend: source('b') },
+      { type: 'difference', left: source('a'), right: source('b') },
     ]}).map(term => term.value)).toEqual([ 'a', 'b' ]);
   });
 });

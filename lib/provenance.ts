@@ -359,36 +359,36 @@ function copiesOf(c: ProvenanceCaptureContext, variables: RDF.Variable[]): (read
 }
 
 /**
- * Names the Σ node over a difference's subtrahend.
+ * Names the Σ node over a difference's right side.
  * @param differenceNodeVariableName - The difference node's variable name
  * @returns the Σ node's variable name
  */
-function subtrahendSumOf(differenceNodeVariableName: string): string {
+function rightSumOf(differenceNodeVariableName: string): string {
   return provenanceNodeVariableName(provenanceChildPrefix(differenceNodeVariableName, 2), 'sum');
 }
 
 /**
- * Binds a difference node to the identity of its minuend's solution, as is the Σ node over its subtrahend.
+ * Binds a difference node to the identity of its left side's solution, as is the Σ node over its right side.
  * @param c - The provenance capture context
  * @param operation - The rewritten difference
- * @param minuendDomain - The variables of the minuend
+ * @param leftDomain - The variables of the left side
  * @param differenceNodeVariableName - The difference node's variable name
  * @returns the bound operation
  */
 function boundAsDifferenceNode(
   c: ProvenanceCaptureContext,
   operation: Algebra.Operation,
-  minuendDomain: RDF.Variable[],
+  leftDomain: RDF.Variable[],
   differenceNodeVariableName: string,
 ): Algebra.Operation {
   return c.AF.createExtend(
-    withIdentity(c, operation, minuendDomain, differenceNodeVariableName),
-    DF.variable(subtrahendSumOf(differenceNodeVariableName)),
+    withIdentity(c, operation, leftDomain, differenceNodeVariableName),
+    DF.variable(rightSumOf(differenceNodeVariableName)),
     c.AF.createTermExpression(DF.variable(differenceNodeVariableName)),
   );
 }
 
-/** Which solutions of a difference's subtrahend annotate a solution of its minuend. */
+/** Which solutions of a difference's right side annotate a solution of its left side. */
 interface DifferenceOptions {
   /** What the merged solution must satisfy, as an OPTIONAL's condition. */
   condition?: Algebra.Expression;
@@ -397,76 +397,76 @@ interface DifferenceOptions {
 }
 
 /**
- * The difference (⊖) of two patterns, SPARQLprov's `diff` (Def. 4.12 (5)): the minuend's solutions, each with the
- * provenance of the subtrahend's compatible ones.
+ * The difference (⊖) of two patterns, SPARQLprov's `diff` (Def. 4.12 (5)): the left side's solutions, each with the
+ * provenance of the right side's compatible ones.
  * @param c - The provenance capture context
- * @param minuend - The pattern whose solutions are kept
- * @param subtrahend - The pattern whose compatible solutions annotate them
- * @param options - Which solutions of the subtrahend count
+ * @param left - The pattern whose solutions are kept
+ * @param right - The pattern whose compatible solutions annotate them
+ * @param options - Which solutions of the right side count
  * @returns the difference
  */
 function differenceOf(
   c: ProvenanceCaptureContext,
-  minuend: ProvenancePattern,
-  subtrahend: ProvenancePattern,
+  left: ProvenancePattern,
+  right: ProvenancePattern,
   options: DifferenceOptions = {},
 ): ProvenancePattern {
   const { AF } = c;
-  const minuendDomain = algebraUtils.inScopeVariables(minuend.original);
-  const minuendCertainlyBound = cpMetaOf(c, minuend.original).cVars;
-  const shared = sharedVariables(minuend.original, subtrahend.original);
-  // The OPTIONAL merges a minuend solution with the subtrahend's value of a shared variable it leaves unbound, so the
-  // minuend's own value is copied before the OPTIONAL and restored after it.
-  const restored = shared.filter(variable => !minuendCertainlyBound.has(variable.value));
+  const leftDomain = algebraUtils.inScopeVariables(left.original);
+  const leftCertainlyBound = cpMetaOf(c, left.original).cVars;
+  const shared = sharedVariables(left.original, right.original);
+  // The OPTIONAL merges a left solution with the right side's value of a shared variable it leaves unbound, so the
+  // left side's own value is copied before the OPTIONAL and restored after it.
+  const restored = shared.filter(variable => !leftCertainlyBound.has(variable.value));
   const conditionWithoutProvenance = options.condition && withoutProvenance(c, options.condition);
   return {
-    original: minuend.original,
+    original: left.original,
     rewrite: (prefix) => {
       const node = provenanceNodeVariableName(prefix, 'difference');
-      const minuendRewritten = minuend.rewrite(provenanceChildPrefix(node, 1));
-      const subtrahendRewritten = subtrahend.rewrite(subtrahendSumOf(node));
-      const minuendCopies = copiesOf(c, restored);
+      const leftRewritten = left.rewrite(provenanceChildPrefix(node, 1));
+      const rightRewritten = right.rewrite(rightSumOf(node));
+      const leftCopies = copiesOf(c, restored);
       const conditions = conditionWithoutProvenance ? [ conditionWithoutProvenance ] : [];
-      let subtrahendJoined = subtrahendRewritten;
+      let rightJoined = rightRewritten;
       if (options.sharingABoundVariable) {
         // Which side bound a shared variable is read off the copies taken before the merge.
-        const subtrahendCopies = copiesOf(c, shared);
-        subtrahendJoined = withCopies(c, subtrahendRewritten, subtrahendCopies);
-        const minuendCopyOf = new Map(minuendCopies.map(([ variable, copy ]) => [ variable.value, copy ]));
-        conditions.push(disjunctionOf(c, subtrahendCopies.map(([ variable, copy ]) => conjunctionOf(c, [
-          boundExpression(c, (minuendCopyOf.get(variable.value) ?? variable).value),
+        const rightCopies = copiesOf(c, shared);
+        rightJoined = withCopies(c, rightRewritten, rightCopies);
+        const leftCopyOf = new Map(leftCopies.map(([ variable, copy ]) => [ variable.value, copy ]));
+        conditions.push(disjunctionOf(c, rightCopies.map(([ variable, copy ]) => conjunctionOf(c, [
+          boundExpression(c, (leftCopyOf.get(variable.value) ?? variable).value),
           boundExpression(c, copy.value),
         ]))));
       }
-      const minuendVariables = algebraUtils.inScopeVariables(minuendRewritten);
-      const subtrahendProvenance = provenanceVariablesOf(c, subtrahendRewritten);
+      const leftVariables = algebraUtils.inScopeVariables(leftRewritten);
+      const rightProvenance = provenanceVariablesOf(c, rightRewritten);
       const restoredNames = new Set(restored.map(variable => variable.value));
       const merged = AF.createProject(
         AF.createLeftJoin(
-          withCopies(c, minuendRewritten, minuendCopies),
-          subtrahendJoined,
+          withCopies(c, leftRewritten, leftCopies),
+          rightJoined,
           conditions.length === 0 ? undefined : conjunctionOf(c, conditions),
         ),
         [
-          ...minuendVariables.filter(variable => !restoredNames.has(variable.value)),
-          ...minuendCopies.map(([ , copy ]) => copy),
-          ...subtrahendProvenance,
+          ...leftVariables.filter(variable => !restoredNames.has(variable.value)),
+          ...leftCopies.map(([ , copy ]) => copy),
+          ...rightProvenance,
         ],
       );
-      const minuendSolutions = minuendCopies.length === 0 ?
+      const leftSolutions = leftCopies.length === 0 ?
         merged :
         AF.createProject(
-          withCopies(c, merged, minuendCopies.map(([ variable, copy ]) => <const> [ copy, variable ])),
-          [ ...minuendVariables, ...subtrahendProvenance ],
+          withCopies(c, merged, leftCopies.map(([ variable, copy ]) => <const> [ copy, variable ])),
+          [ ...leftVariables, ...rightProvenance ],
         );
-      return boundAsDifferenceNode(c, minuendSolutions, minuendDomain, node);
+      return boundAsDifferenceNode(c, leftSolutions, leftDomain, node);
     },
   };
 }
 
 /**
  * The pattern of an EXISTS, `P ⊖ (P ⊖ P2)`. Each solution of P meets only its own rows of `P ⊖ P2`, so P is rewritten
- * once, and its provenance copied from the inner minuend to the outer one.
+ * once, and its provenance copied from the inner left side to the outer one.
  * @param c - The provenance capture context
  * @param pattern - The pattern P the EXISTS filters
  * @param existence - The pattern P2 of the EXISTS
@@ -483,15 +483,15 @@ function existencePatternOf(
     original: pattern.original,
     rewrite: (prefix) => {
       const node = provenanceNodeVariableName(prefix, 'difference');
-      const subtrahendSum = subtrahendSumOf(node);
-      const solutionsWithoutRewritten = solutionsWithout.rewrite(subtrahendSum);
-      const innerMinuendPrefix = provenanceChildPrefix(provenanceNodeVariableName(subtrahendSum, 'difference'), 1);
-      const outerMinuendPrefix = provenanceChildPrefix(node, 1);
+      const rightSum = rightSumOf(node);
+      const solutionsWithoutRewritten = solutionsWithout.rewrite(rightSum);
+      const innerLeftPrefix = provenanceChildPrefix(provenanceNodeVariableName(rightSum, 'difference'), 1);
+      const outerLeftPrefix = provenanceChildPrefix(node, 1);
       const copied = withCopies(c, solutionsWithoutRewritten, provenanceVariablesOf(c, solutionsWithoutRewritten)
-        .filter(variable => isProvenanceVariableName(innerMinuendPrefix, variable.value))
+        .filter(variable => isProvenanceVariableName(innerLeftPrefix, variable.value))
         .map(variable => <const> [
           variable,
-          DF.variable(outerMinuendPrefix + variable.value.slice(innerMinuendPrefix.length)),
+          DF.variable(outerLeftPrefix + variable.value.slice(innerLeftPrefix.length)),
         ]));
       return boundAsDifferenceNode(c, copied, domain, node);
     },
