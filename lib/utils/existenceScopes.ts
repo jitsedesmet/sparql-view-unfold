@@ -173,7 +173,7 @@ export function rewriteExistenceExpressionsOf<C extends RangeContext, T extends 
  * @param op - The operation to read
  * @returns its expressions
  */
-function expressionsEvaluatedBy(op: Algebra.Operation): Algebra.Expression[] {
+export function expressionsEvaluatedBy(op: Algebra.Operation): Algebra.Expression[] {
   switch (op.type) {
     case Types.FILTER:
     case Types.EXTEND: {

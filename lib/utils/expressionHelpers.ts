@@ -1,10 +1,10 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
+import { EXTENSION_FUNCTION_BNODE, EXTENSION_FUNCTION_DERIVATION } from '../consts.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformationContext } from '../transformContext.js';
 import { termFalse, termTrue } from './operationhelpers.js';
-import { DF } from './rdfDatatypes.js';
+import { DF, tripleTerm } from './rdfDatatypes.js';
 import { termIsStaticTerm } from './typeGuards.js';
 
 /**
@@ -123,11 +123,27 @@ export function createBooleanExpression(c: TransformationContext, value: boolean
 export const unstableOperators = new Set([ 'bnode', 'rand', 'uuid', 'struuid' ]);
 
 /**
- * The extension functions declared stable, which is what lets a `BIND` over one of them move.
- * `EXTENSION_FUNCTION_BNODE`, whose "same inputs = same identity" is stability spelled out, is the only one;
- * every other `named` expression is opaque and so unstable.
+ * Finds a call of an unstable function in an operation.
+ * @param operation - The operation to read
+ * @returns the name of the first unstable function it calls, or `undefined` when it calls none
  */
-const stableNamedFunctions = new Set<string>([ EXTENSION_FUNCTION_BNODE ]);
+export function unstableFunctionCalledBy(operation: Algebra.Operation): string | undefined {
+  let unstableFunction: string | undefined;
+  holdsExpression(operation, (expression) => {
+    if (expression.subType === Algebra.ExpressionTypes.OPERATOR && unstableOperators.has(expression.operator)) {
+      unstableFunction = expression.operator;
+    }
+    return unstableFunction !== undefined;
+  });
+  return unstableFunction;
+}
+
+/**
+ * The extension functions declared stable, which is what lets a `BIND` over one of them move.
+ * `EXTENSION_FUNCTION_BNODE` and `EXTENSION_FUNCTION_DERIVATION`, whose "same inputs = same identity" is stability
+ * spelled out, are the only ones; every other `named` expression is opaque and so unstable.
+ */
+const stableNamedFunctions = new Set<string>([ EXTENSION_FUNCTION_BNODE, EXTENSION_FUNCTION_DERIVATION ]);
 
 /**
  * Whether an expression is a pure function of the variables it reads: asked twice about the same values, it
@@ -305,11 +321,7 @@ export function constructedTermOf(expression: Algebra.Expression): RDF.Term | un
       // Needed for valid grammar
       return undefined;
     }
-    return DF.quad(
-        <RDF.Quad_Subject> components[0],
-        <RDF.Quad_Predicate> components[1],
-        <RDF.Quad_Object> components[2],
-    );
+    return tripleTerm(components[0]!, components[1]!, components[2]!);
   }
   return undefined;
 }
@@ -322,6 +334,26 @@ export function constructedTermOf(expression: Algebra.Expression): RDF.Term | un
 export function isIriExpression(expression: Algebra.Expression):
     expression is Algebra.Expression & { term: { termType: 'NamedNode' }} {
   return expression.subType === Algebra.ExpressionTypes.TERM && expression.term.termType === 'NamedNode';
+}
+
+/**
+ * Creates `bound(?x)`.
+ * @param c - Object containing the algebra factory
+ * @param name - The variable's name
+ * @returns the condition
+ */
+export function boundExpression(c: Pick<TransformationContext, 'AF'>, name: string): Algebra.Expression {
+  return c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(DF.variable(name)) ]);
+}
+
+/**
+ * Creates `!bound(?x)`.
+ * @param c - Object containing the algebra factory
+ * @param name - The variable's name
+ * @returns the condition
+ */
+export function unboundExpression(c: Pick<TransformationContext, 'AF'>, name: string): Algebra.Expression {
+  return c.AF.createOperatorExpression('!', [ boundExpression(c, name) ]);
 }
 
 /**

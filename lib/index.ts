@@ -31,6 +31,19 @@
  */
 export * from './consts.js';
 export { mappingFromConstructQueries } from './mapping.js';
+export { provenanceCapturingOperation, provenanceCapturingQuery } from './provenance.js';
+export type { ProvenanceCapturingQuery } from './provenance.js';
+export { createDerivationDecoder, provenanceMappingFromConstructQueries } from './provenanceView.js';
+export type { DecodedDerivation } from './provenanceView.js';
+export {
+  booleanSpmSemiring,
+  countingSpmSemiring,
+  decodeProvenance,
+  evaluatePolynomial,
+  lineageOf,
+  polynomialToString,
+} from './provenancePolynomial.js';
+export type { ProvenanceAnnotatedAnswer, ProvenancePolynomial, SpmSemiring } from './provenancePolynomial.js';
 export type { MappingOptions } from './mapping.js';
 export { createDefaultTransformationPipeline, createQueryRewriter } from './queryRewriter.js';
 export type { QueryRewriter } from './queryRewriter.js';

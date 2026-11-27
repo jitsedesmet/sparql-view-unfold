@@ -121,6 +121,95 @@ encoding from the evaluated arguments instead, at any depth, and the same materi
 (`lib/transformations/bnodeExtensionFunction.ts`). An engine errors the call when an argument errors, so each argument
 `e` is wrapped as `COALESCE(TRIPLE(<internal://blank/argument>, <internal://blank/argument>, e), <internal://blank/unbound>)`.
 
+## Provenance
+
+Provenance takes two parts: the provenance view (`lib/provenanceView.ts`) and the rewritten query (`lib/provenance.ts`).
+The README explains what they are for and how to read the result; the limits are at the end of this section.
+
+**The provenance view** (`provenanceMappingFromConstructQueries`).
+A *derivation* is one solution of a view's `WHERE` clause.
+Each view CONSTRUCT is rewritten into one over the same `WHERE` clause that gives every solution an identifier:
+`BIND(<internal://derivation>("0", ?var1, ?var2, …) AS ?derivation)`,
+built from the CONSTRUCT's index and all variables of its `WHERE` clause.
+Its template links `?derivation` by `derivationOf` to every triple the original template produces,
+and by `derivedFrom` to every triple pattern of the `WHERE` clause that each solution matches
+(so not those inside a `UNION`, `OPTIONAL` and the like).
+
+The materialisation step turns `<internal://derivation>` into an IRI:
+the prefix `https://sparql-extension.knows.idlab.ugent.be/provenance/derivation/`, the index, `/`,
+and the values encoded as for an internal blank node (see [Blank nodes](#blank-nodes)), through `ENCODE_FOR_URI`.
+An internal blank node hashes that encoding; a derivation keeps it, so it can be read back.
+`createDerivationDecoder` does that: it parses the CONSTRUCT queries again,
+pairs the values with the `WHERE` clause's variables in the same order,
+and fills them into the patterns `derivedFrom` links and into the template.
+Like a CONSTRUCT, it leaves out a template triple with an unbound variable or a term its position does not admit.
+
+**The rewritten query** (`provenanceCapturingQuery`).
+The provenance of an answer is a *polynomial*: a formula of ⊗ (join), ⊕ (union), ⊖ (difference) and δ (aggregate),
+with derivations at the leaves.
+The rewrite adds a column for every operator of the query, named after its place in the polynomial.
+For `SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }`:
+
+| Column | What it holds |
+|---|---|
+| `?prov_sum` | the answer; several rows can give the same answer, and its provenance is their ⊕ (`sum`) |
+| `?prov_sum_product` | the join (⊗, `product`) of the two triple patterns |
+| `?prov_sum_product_1_sum` | the first triple pattern, which can match several derivations (`sum`) |
+| `?prov_sum_product_1_sum_statement` | one derivation of `:alice :knows ?f` |
+| `?prov_sum_product_2_sum`, `…_2_sum_statement` | the same for `?f :colleague ?c` |
+
+A `statement` column holds a derivation.
+A `one` column holds `1`, for a row of a `VALUES` or `SERVICE`, which needs no derivation.
+Every other column holds an ID of the solution its operator produced:
+a blank node built from the column name and the solution's values.
+`decodeProvenance` (`lib/provenancePolynomial.ts`) groups the rows by those IDs to rebuild the polynomial.
+
+A triple pattern turns into the lookup `?d provenance:derivationOf <<( s p o )>>`, a pattern over the provenance view.
+That is why the rewrite runs before the unfolding: the unfolding then handles those lookups like any other pattern.
+
+**Differences.**
+`a ⊖ b` keeps every row of `a`, together with the derivations of the rows of `b` that remove it.
+The removed rows are kept, so that the README's `isAnswer: false` rows can show why they were removed.
+It is written as `a OPTIONAL { b }`.
+One catch: when `a` leaves a variable unbound that `b` binds, the OPTIONAL fills it in from `b`.
+If `a` returns `?x` unbound and `b` returns `?x = :carol`, the row would then claim `?x = :carol`.
+So such a variable is saved under another name before the OPTIONAL and restored after it: unbound stays unbound.
+
+- `MINUS` is a difference whose OPTIONAL also asks that the two rows share a bound variable.
+  A `MINUS` that shares no variable removes nothing, and stays just its left side.
+- `NOT EXISTS { b }` over `a` is `a ⊖ b`.
+  Only a `NOT EXISTS` (or `EXISTS`) that does not depend on the outer row is rewritten; the limits below list the others.
+- `OPTIONAL` is the matched rows plus the unmatched ones: `(a ⊗ b) ⊕ (a ⊖ b)`.
+- `EXISTS { b }` over `a` is `a ⊖ (a ⊖ b)`.
+  `a ⊖ b` is the rows of `a` without a match in `b`, and taking those away from `a` leaves the ones with a match.
+  Each row of `a` is only compared with the rows built from that same row,
+  so `a` is computed once and its columns are reused.
+
+**Aggregates.**
+The rewritten query has a row per derivation, so aggregating it directly would count derivations, not solutions.
+So a `GROUP BY` subquery runs twice: once without provenance to compute the answers,
+and once with provenance, joined to the answers on the group variables.
+`LIMIT` and `OFFSET` work the same way.
+A group variable that may be unbound is joined on a stand-in value, so that unbound only matches unbound.
+
+**Limits.**
+
+- Only `SELECT` is supported, without `RAND`, `BNODE`, `UUID` or `STRUUID`:
+  the rewritten query runs parts of the query more than once, and these functions would answer differently each time.
+- `OPTIONAL` repeats its left side, and `GROUP BY`, `LIMIT` and `OFFSET` their subquery.
+  Each nesting so doubles the rewritten query.
+- `LIMIT` and `OFFSET` return the same answers as without provenance, but not in `ORDER BY` order.
+  An answer's provenance also mentions the solutions with the same values that the `LIMIT` cut off.
+- Inside `GROUP BY`, `LIMIT` and `OFFSET`, a view triple counts once, however many derivations it has.
+  So a `COUNT` can differ from a run without provenance, unless that run uses `preserveCardinality`.
+- An `EXISTS` still filters, but adds nothing to the polynomial, in two cases:
+  when it is part of a larger expression,
+  and when it uses an outer variable that its own pattern may leave unbound, such as `?x` in
+  `FILTER EXISTS { ?y :worksAt ?o FILTER(?y != ?x) }`.
+- `derivedFrom` does not list the source triples matched inside a `UNION`, `OPTIONAL`, `MINUS`, sub-`SELECT`,
+  `GROUP BY`, `GRAPH`, `SERVICE` or property path of a view's `WHERE` clause.
+- Identical `SERVICE` solutions count once: they cannot be told apart.
+
 ## SPARQL quirks worth knowing
 
 There is a [working draft for RDF 1.2 interoperability](https://w3c.github.io/rdf-interop/spec/) describing
@@ -165,3 +254,13 @@ moves no BIND of one.
   run after `removeProjections`.
 - **Merging SERVICE calls.** A service can absorb a variable amount of computation, so there is a
   composition to choose; `transformServiceCallPushUp` makes one choice.
+- **Pruning derivation lookups.**
+  Every CONSTRUCT of the provenance view produces `derivationOf` triples,
+  so the lookup `?d provenance:derivationOf <<( :alice :knows ?f )>>` is unfolded against all of them,
+  also those whose triples can never be `:alice :knows …`.
+  Those branches only come up empty when the query runs.
+  Checking the triple term while rewriting would drop them.
+- **Provenance across SERVICE.**
+  A `SERVICE` row counts as needing no view triple (`1`).
+  Asma et al., "Native Provenance Computation for Federated and Non-Federated SPARQL Queries"
+  (https://doi.org/10.4230/TGDK.4.1.4), show how the remote endpoint could return provenance too.

@@ -38,17 +38,29 @@ export function materialiseInternalBnodesByExtensionFunction<T extends Algebra.O
   op: T,
   materialisation: InternalBnodeMaterialisation,
 ): T {
-  const { AF } = c;
-  const boundMarkerExpression = AF.createTermExpression(boundArgumentMarker);
-  const unboundMarkerExpression = AF.createTermExpression(unboundArgumentMarker);
   return algebraUtils.mapOperationSub<'unsafe', typeof op>(op, {}, {
     expression: internalBnodeExpressionCallbacks(c, materialisation, named =>
-      AF.createNamedExpression(encodingFunctionName, named.args.map(argument =>
-        AF.createOperatorExpression('coalesce', [
-          AF.createOperatorExpression('triple', [ boundMarkerExpression, boundMarkerExpression, argument ]),
-          unboundMarkerExpression,
-        ])))),
+      c.AF.createNamedExpression(encodingFunctionName, named.args.map(argument =>
+        boundOrUnboundArgumentExpression(c.AF, argument)))),
   });
+}
+
+/**
+ * Wraps an expression as `COALESCE(TRIPLE(<…argument>, <…argument>, e), <…unbound>)`, a term for every outcome that
+ * no outcome shares with another.
+ * @param AF - The algebra factory to create it with.
+ * @param argument - The expression to wrap.
+ * @returns The wrapping expression.
+ */
+export function boundOrUnboundArgumentExpression(
+  AF: TransformationContext['AF'],
+  argument: Algebra.Expression,
+): Algebra.Expression {
+  const boundMarkerExpression = AF.createTermExpression(boundArgumentMarker);
+  return AF.createOperatorExpression('coalesce', [
+    AF.createOperatorExpression('triple', [ boundMarkerExpression, boundMarkerExpression, argument ]),
+    AF.createTermExpression(unboundArgumentMarker),
+  ]);
 }
 
 /**
