@@ -164,16 +164,19 @@ const bindings = await new QueryEngine().queryBindings(query, {
 
 ### Provenance
 
-Which source triples does an answer rest on? This follows
-[SPARQLprov](https://doi.org/10.14778/3484224.3484235) (Hernández et al.), which needs the data stored reified; the
-provenance mapping supplies that reification virtually.
+Which source triples does an answer rest on?
+This follows [SPARQLprov](https://doi.org/10.14778/3484224.3484235) (Hernández et al.), which needs the data stored reified;
+the provenance mapping supplies that reification virtually.
 
-A *derivation* is one solution of a mapping body. `provenanceMappingFromConstructQueries` builds the view of them:
+A *derivation* is one solution of a mapping body.
+`provenanceMappingFromConstructQueries` builds the view of them:
 each derivation is `provenance:derivationOf` the view triples it produces and `provenance:derivedFrom` the source
-triples it matched, with `provenance:` for `https://sparql-extension.knows.idlab.ugent.be/provenance#`. The
-derivations are SPARQLprov's sources, and `derivationOf` its reification scheme. `provenanceCapturingQuery` rewrites
-a SELECT over the view as SPARQLprov does (Def. 4.12 and 4.17), so that its answers also carry their how-provenance
-polynomial, encoded in variables starting with the returned prefix. `decodeProvenance` decodes them (Def. 4.10):
+triples it matched, with `provenance:` for `https://sparql-extension.knows.idlab.ugent.be/provenance#`.
+The derivations are SPARQLprov's sources, and `derivationOf` its reification scheme.
+`provenanceCapturingQuery` rewrites a SELECT over the view as SPARQLprov does (Def. 4.12 and 4.17),
+so that its answers also carry their how-provenance polynomial,
+encoded in variables starting with the returned prefix.
+`decodeProvenance` decodes them (Def. 4.10):
 
 ```typescript
 const rewriter = createQueryRewriter([
@@ -192,25 +195,26 @@ for (const { answer, polynomial, isAnswer } of answers) {
 }
 ```
 
-A polynomial is built from derivations with ⊕ (UNION, and the derivations of one view triple), ⊗ (join), ⊖
-(OPTIONAL, MINUS, NOT EXISTS) and δ (an aggregated group). `evaluatePolynomial` evaluates it in an spm-semiring,
-such as `countingSpmSemiring` for multiplicities; `lineageOf` lists its derivations, whose `derivedFrom` gives the
-source triples. A difference keeps the solutions it removes, so that their polynomial explains why they are not
-answers: `isAnswer` tells them apart. Beyond SPARQLprov:
+A polynomial is built from derivations with ⊕ (UNION, and the derivations of one view triple), ⊗ (join),
+⊖ (OPTIONAL, MINUS, NOT EXISTS) and δ (an aggregated group).
+`evaluatePolynomial` evaluates it in an spm-semiring, such as `countingSpmSemiring` for multiplicities;
+`lineageOf` lists its derivations, whose `derivedFrom` gives the source triples.
+A difference keeps the solutions it removes, so that their polynomial explains why they are not answers:
+`isAnswer` tells them apart. Beyond SPARQLprov:
 
-- `EXISTS` is `P ⊖ (P ⊖ P2)`, its outer difference matching each solution of `P` only with itself. An `EXISTS` or
-  `NOT EXISTS` other than a top-level conjunct of a `FILTER`, or whose pattern reads an outer variable where it does
-  not certainly bind it, stays a filter, contributing no provenance.
-- `LIMIT` and `OFFSET` are rewritten as an aggregate is (Def. 4.17): the answers computed without provenance, then
-  joined with the provenance of every solution with the same values, including those left out. The order of an
-  `ORDER BY` is lost. `DISTINCT` is dropped, as the decoding sums the rows of an answer anyway.
+- `EXISTS` is `P ⊖ (P ⊖ P2)`, its outer difference matching each solution of `P` only with itself.
+  An `EXISTS` or `NOT EXISTS` other than a top-level conjunct of a `FILTER`,
+  or whose pattern reads an outer variable where it does not certainly bind it, stays a filter, contributing no provenance.
+- `LIMIT` and `OFFSET` are rewritten as an aggregate is (Def. 4.17): the answers computed without provenance,
+  then joined with the provenance of every solution with the same values, including those left out.
+  The order of an `ORDER BY` is lost. `DISTINCT` is dropped, as the decoding sums the rows of an answer anyway.
 - Answers of a `GROUP BY`, `LIMIT` or `OFFSET` are computed over the view as a set, as with `preserveCardinality`.
-- `VALUES` and `SERVICE` read no view triple, so their solutions are annotated with `1`; identical `SERVICE`
-  solutions count once.
+- `VALUES` and `SERVICE` read no view triple, so their solutions are annotated with `1`;
+  identical `SERVICE` solutions count once.
 - `derivedFrom` lists the body's triple patterns every solution matches: none under a `UNION`, the right side
   of an `OPTIONAL` or `MINUS`, a sub-SELECT, `GROUP`, `GRAPH` or `SERVICE`, nor a property path.
-- Only a `SELECT` is supported, and it may not call `RAND`, `BNODE`, `UUID` or `STRUUID`: the rewrite evaluates
-  parts of the query more than once.
+- Only a `SELECT` is supported, and it may not call `RAND`, `BNODE`, `UUID` or `STRUUID`
+  the rewrite evaluates parts of the query more than once.
 
 ## Restrictions
 

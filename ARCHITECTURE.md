@@ -126,16 +126,16 @@ encoding from the evaluated arguments instead, at any depth, and the same materi
 `lib/provenance.ts` has two parts; the README describes what they compute.
 
 - **The mapping** (`provenanceMappingFromConstructQueries`) gives every solution of a CONSTRUCT body, a derivation,
-  an identity: `BIND(<internal://blank>(<construct IRI>, <body variables>) AS ?derivation)`. Its template links the
-  derivation by `derivationOf` to the triples it produces and by `derivedFrom` to the patterns it matched.
-- **The query** (`provenanceCapturingQuery`) is SPARQLprov's rewrite (Def. 4.12), applied before the rewriter. Each
-  operator binds its node of the polynomial to an identity of its solution, in a variable named after the node's
+  an identity: `BIND(<internal://blank>(<construct IRI>, <body variables>) AS ?derivation)`.
+  Its template links the derivation by `derivationOf` to the triples it produces and by `derivedFrom` to the patterns it matched.
+- **The query** (`provenanceCapturingQuery`) is SPARQLprov's rewrite (Def. 4.12), applied before the rewriter.
+  Each operator binds its node of the polynomial to an identity of its solution, in a variable named after the node's
   path (`?prov_sum_product_1_sum_statement`). `decodeProvenance` rebuilds the polynomial from those variables.
 
-A difference (⊖) is an OPTIONAL over the right side. A shared variable the left side may leave unbound is copied before
-the OPTIONAL and restored after it, so each row keeps the left side's solution. An EXISTS, `P ⊖ (P ⊖ P2)`, evaluates P
-once. OPTIONAL repeats its left side, and GROUP and SLICE evaluate their subtree twice, so nesting them grows the
-query exponentially.
+A difference (⊖) is an OPTIONAL over the right side.
+A shared variable the left side may leave unbound is copied before the OPTIONAL and restored after it,
+so each row keeps the left side's solution. An EXISTS, `P ⊖ (P ⊖ P2)`, evaluates P once.
+OPTIONAL repeats its left side, and GROUP and SLICE evaluate their subtree twice, so nesting them grows the query exponentially.
 
 ## SPARQL quirks worth knowing
 
@@ -182,7 +182,7 @@ moves no BIND of one.
 - **Merging SERVICE calls.** A service can absorb a variable amount of computation, so there is a
   composition to choose; `transformServiceCallPushUp` makes one choice.
 - **Pruning derivation lookups.** All provenance mappings share the predicates `derivationOf` and `derivedFrom`,
-  so a lookup unfolds against every one of them and only fails at run time. Folding `SUBJECT`, `PREDICATE` and
-  `OBJECT` of a known triple term while rewriting would prune those branches.
-- **Provenance across SERVICE.** A SERVICE is annotated with `1`. Fed-NPCS (https://doi.org/10.4230/TGDK.4.1.4,
-  Def. 62) shows how to carry provenance into it.
+  so a lookup unfolds against every one of them and only fails at run time.
+  Folding `SUBJECT`, `PREDICATE` and `OBJECT` of a known triple term while rewriting would prune those branches.
+- **Provenance across SERVICE.** A SERVICE is annotated with `1`.
+  Fed-NPCS (https://doi.org/10.4230/TGDK.4.1.4, Def. 62) shows how to carry provenance into it.
