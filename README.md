@@ -164,14 +164,9 @@ const bindings = await new QueryEngine().queryBindings(query, {
 
 ### Provenance
 
-Which source triples does an answer rest on? Hernández et al.,
-["Computing How-Provenance for SPARQL Queries via Query Rewriting"](https://doi.org/10.14778/3484224.3484235)
-(SPARQLprov) answer that by rewriting the query, and Asma et al.,
-["NPCS: Native Provenance Computation for SPARQL"](https://doi.org/10.1145/3589334.3645557) (NPCS) natively, both
-over data stored reified; NPCS (p. 2092) leaves non-reified data and CONSTRUCT as future work. Here the
-provenance mapping supplies the reification virtually, and a derivation points back through the mapping to the
-source triples it matched. That is no general answer to non-reified data: over one plain graph, a triple can be
-its own identifier.
+Which source triples does an answer rest on? This follows
+[SPARQLprov](https://doi.org/10.14778/3484224.3484235) (Hernández et al.), which needs the data stored reified; the
+provenance mapping supplies that reification virtually.
 
 A *derivation* is one solution of a mapping body. `provenanceMappingFromConstructQueries` builds the view of them:
 each derivation is `provenance:derivationOf` the view triples it produces and `provenance:derivedFrom` the source
@@ -204,8 +199,8 @@ source triples. A difference keeps the solutions it removes, so that their polyn
 answers: `isAnswer` tells them apart. Beyond SPARQLprov:
 
 - `EXISTS` is `P ⊖ (P ⊖ P2)`, its outer difference matching each solution of `P` only with itself. An `EXISTS` or
-  `NOT EXISTS` other than a top-level conjunct of a `FILTER`, or whose pattern reads an outer variable it may leave
-  unbound, stays a filter, contributing no provenance.
+  `NOT EXISTS` other than a top-level conjunct of a `FILTER`, or whose pattern reads an outer variable where it does
+  not certainly bind it, stays a filter, contributing no provenance.
 - `LIMIT` and `OFFSET` are rewritten as an aggregate is (Def. 4.17): the answers computed without provenance, then
   joined with the provenance of every solution with the same values, including those left out. The order of an
   `ORDER BY` is lost. `DISTINCT` is dropped, as the decoding sums the rows of an answer anyway.

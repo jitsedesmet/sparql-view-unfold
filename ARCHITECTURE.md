@@ -123,40 +123,27 @@ encoding from the evaluated arguments instead, at any depth, and the same materi
 
 ## Provenance
 
-`lib/provenance.ts`, in two halves that meet in an ordinary unfolding.
+`lib/provenance.ts`, in two halves that meet in an ordinary unfolding; the README lists the semantics.
 
 - **The mapping** (`provenanceMappingFromConstructQueries`) rewrites every CONSTRUCT into one over the same body,
-  extended with `BIND(<internal://blank>(<construct IRI>, <the body's variables>) AS ?derivation)`, an unbound
-  variable still telling derivations apart as an argument of its own. Its template links that derivation by
-  `derivationOf` to every template triple and by `derivedFrom` to every body triple pattern each solution
-  matches. The result goes through `mappingFromConstructs` like any other.
-- **The query** (`provenanceCapturingQuery`) is a query-to-query rewrite over the view, run *before* the
-  rewriter: it changes the projection, which the runner rebuilds as the user wrote it. It is SPARQLprov's rewrite
-  α(Q, z) (Hernández et al., "Computing How-Provenance for SPARQL Queries via Query Rewriting",
-  https://doi.org/10.14778/3484224.3484235, Def. 4.12), with `?z_sum_statement derivationOf <<( s p o )>>` as the
-  reification of a triple pattern. Every operator encodes its node of the polynomial in variables named by the
-  node's path, `?prov_sum_product_1_sum_statement`, as SPARQLprov's implementation names them, and binds the node to
-  an identity of its solution, `<internal://blank>("<variable>", <the solution's variables>)`, by which
+  extended with `BIND(<internal://blank>(<construct IRI>, <the body's variables>) AS ?derivation)`. Its template
+  links that derivation by `derivationOf` to every template triple and by `derivedFrom` to every body triple pattern
+  each solution matches.
+- **The query** (`provenanceCapturingQuery`) is SPARQLprov's rewrite α(Q, z) (Def. 4.12), run *before* the rewriter,
+  with `?z_sum_statement derivationOf <<( s p o )>>` as the reification of a triple pattern. Every operator binds
+  its node of the polynomial, in a variable named by the node's path (`?prov_sum_product_1_sum_statement`), to an
+  identity of its solution, `<internal://blank>("<variable>", <the solution's variables>)`, by which
   `decodeProvenance` (`lib/provenancePolynomial.ts`, Def. 4.10) groups the rows into sums.
 
-OPTIONAL is normalised to `(P1 ⊗ P2) ⊕ (P1 ⊖ P2)` (Def. 3.1), MINUS and NOT EXISTS are ⊖, and EXISTS is
-`P1 ⊖ (P1 ⊖ P2)`; each repeats P1, so a chain of OPTIONALs or EXISTS grows the query exponentially. A difference keeps
-every solution of its minuend, each with the provenance of the subtrahend's compatible solutions: as SPARQLprov
-writes it, an OPTIONAL over the subtrahend with the shared variables the minuend may leave unbound renamed apart
-and compared in its condition, which needs Comunica 5.5 or later to evaluate; an EXISTS in that condition reads the
-merged value from a BIND of its own. The outer difference of an EXISTS compares by identity, unbound variables
-included, rather than by compatibility. An EXISTS outside a top-level conjunct of a FILTER, or correlated (its pattern
-reads an outer variable it may leave unbound, where SPARQL substitutes what a difference would compare), is evaluated
-over the view, contributing no provenance.
+A difference is a natural OPTIONAL over the subtrahend, under the OPTIONAL's or MINUS's own condition, which needs
+Comunica 5.5 or later. A shared variable the minuend may leave unbound is copied before it and restored after it, so
+each row keeps the minuend's solution. An EXISTS, `P ⊖ (P ⊖ P2)`, rewrites P once: each solution of P meets only its
+own rows of `P ⊖ P2`, whose copy of P's provenance stands in for the outer minuend.
 
-Every other operator is rewritten in place. A GROUP or SLICE counts solutions rather than derivations, so it
-duplicates its subtree: once without provenance to compute the answers, once with it for the solutions whose
-provenance is left-joined onto those answers; the subtree is thus evaluated twice, and nested GROUPs and SLICEs grow
-the query exponentially. That duplication is the paper's aggregate rewrite for a GROUP (Def. 4.17), under the
-lineage δ (Def. 4.15); applying it to LIMIT and OFFSET, computing the answers over each BGP's distinct lookups (the
-view's set semantics), and joining a variable that may be unbound on the extension function's wrapped key,
-`COALESCE(TRIPLE(<…argument>, <…argument>, ?x), <…unbound>)`, rather than on SPARQLprov's cautious compatibility
-filter, are this repo's own choices.
+OPTIONAL repeats its left side, and GROUP and SLICE duplicate their subtree (answers without provenance, solutions
+with it, joined on the group or answer variables), so nesting them grows the query exponentially. A variable that may
+be unbound is joined on the extension function's wrapped key, `COALESCE(TRIPLE(<…argument>, <…argument>, ?x),
+<…unbound>)`, rather than on SPARQLprov's cautious compatibility filter.
 
 ## SPARQL quirks worth knowing
 

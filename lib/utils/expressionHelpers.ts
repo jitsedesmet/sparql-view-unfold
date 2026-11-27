@@ -129,12 +129,11 @@ export const unstableOperators = new Set([ 'bnode', 'rand', 'uuid', 'struuid' ])
  */
 export function unstableFunctionCalledBy(operation: Algebra.Operation): string | undefined {
   let unstableFunction: string | undefined;
-  algebraUtils.visitOperationSub(operation, {}, {
-    expression: { operator: { visitor: (operatorExpression) => {
-      if (unstableFunction === undefined && unstableOperators.has(operatorExpression.operator)) {
-        unstableFunction = operatorExpression.operator;
-      }
-    } }},
+  holdsExpression(operation, (expression) => {
+    if (expression.subType === Algebra.ExpressionTypes.OPERATOR && unstableOperators.has(expression.operator)) {
+      unstableFunction = expression.operator;
+    }
+    return unstableFunction !== undefined;
   });
   return unstableFunction;
 }

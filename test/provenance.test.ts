@@ -74,6 +74,25 @@ async function bindingsOf(
 }
 
 /**
+ * Writes each term of a solution as a string.
+ * @param solution - The solution, by variable or by variable name
+ * @returns the record
+ */
+function recordOf(solution: Iterable<readonly [RDF.Variable | string, RDF.Term]>): Row {
+  return Object.fromEntries([ ...solution ].map(([ variable, term ]) =>
+    [ typeof variable === 'string' ? variable : variable.value, termToString(term) ]));
+}
+
+/**
+ * Writes a solution as its sorted `name=term` pairs.
+ * @param solution - The solution, by variable name
+ * @returns the key
+ */
+function answerKey(solution: ReadonlyMap<string, RDF.Term>): string {
+  return Object.entries(recordOf(solution)).map(([ name, term ]) => `${name}=${term}`).sort().join(' ');
+}
+
+/**
  * As {@link bindingsOf}, each term written as a string.
  * @param mapping - The mapping to unfold
  * @param query - The query over the view
@@ -81,8 +100,7 @@ async function bindingsOf(
  * @returns one record per solution
  */
 async function evaluate(mapping: Mapping, query: string, options: UnfoldingOptions = {}): Promise<Row[]> {
-  return (await bindingsOf(mapping, query, options)).map(binding =>
-    Object.fromEntries([ ...binding ].map(([ variable, term ]) => [ variable.value, termToString(term) ])));
+  return (await bindingsOf(mapping, query, options)).map(recordOf);
 }
 
 /**
@@ -109,12 +127,12 @@ describe('provenanceConstructOf', () => {
       expect,
       'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }',
       `CONSTRUCT {
-  ?derivation0 ${derivationOf} <<( ?s ?p ?o )>> .
-  ?derivation0 ${derivedFrom} <<( ?s ?p ?o )>> .
+  ?derivation ${derivationOf} <<( ?s ?p ?o )>> .
+  ?derivation ${derivedFrom} <<( ?s ?p ?o )>> .
 }
 WHERE {
   ?s ?p ?o .
-  BIND( <internal://blank> ( ${construct0} , ?s , ?p , ?o ) AS ?derivation0 )
+  BIND( <internal://blank> ( ${construct0} , ?s , ?p , ?o ) AS ?derivation )
 }`,
     );
   });
@@ -124,9 +142,9 @@ WHERE {
       expect,
       'CONSTRUCT { ?x :colleague ?y } WHERE { ?x :worksAt ?org . ?y :worksAt ?org . FILTER(?x != ?y) }',
       `CONSTRUCT {
-  ?derivation0 ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
-  ?derivation0 ${derivedFrom} <<( ?x <ex://worksAt> ?org )>> .
-  ?derivation0 ${derivedFrom} <<( ?y <ex://worksAt> ?org )>> .
+  ?derivation ${derivationOf} <<( ?x <ex://colleague> ?y )>> .
+  ?derivation ${derivedFrom} <<( ?x <ex://worksAt> ?org )>> .
+  ?derivation ${derivedFrom} <<( ?y <ex://worksAt> ?org )>> .
 }
 WHERE {
   {
@@ -134,7 +152,7 @@ WHERE {
     ?y <ex://worksAt> ?org .
     FILTER ( ( ?x != ?y ) )
   }
-  BIND( <internal://blank> ( ${construct0} , ?x , ?org , ?y ) AS ?derivation0 )
+  BIND( <internal://blank> ( ${construct0} , ?x , ?org , ?y ) AS ?derivation )
 }`,
     );
   });
@@ -144,13 +162,13 @@ WHERE {
       expect,
       'CONSTRUCT { ?x :name ?f . ?x a :Person } WHERE { ?x :firstName ?f }',
       `CONSTRUCT {
-  ?derivation0 ${derivationOf} <<( ?x <ex://name> ?f )>> .
-  ?derivation0 ${derivationOf} <<( ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <ex://Person> )>> .
-  ?derivation0 ${derivedFrom} <<( ?x <ex://firstName> ?f )>> .
+  ?derivation ${derivationOf} <<( ?x <ex://name> ?f )>> .
+  ?derivation ${derivationOf} <<( ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <ex://Person> )>> .
+  ?derivation ${derivedFrom} <<( ?x <ex://firstName> ?f )>> .
 }
 WHERE {
   ?x <ex://firstName> ?f .
-  BIND( <internal://blank> ( ${construct0} , ?x , ?f ) AS ?derivation0 )
+  BIND( <internal://blank> ( ${construct0} , ?x , ?f ) AS ?derivation )
 }`,
     );
   });
@@ -162,13 +180,13 @@ WHERE {
       expect,
       'CONSTRUCT { ?x :name ?n } WHERE { ?x :firstName ?f BIND(CONCAT(?f, "!") AS ?n) }',
       `CONSTRUCT {
-  ?derivation0 ${derivationOf} <<( ?x <ex://name> ?n )>> .
-  ?derivation0 ${derivedFrom} <<( ?x <ex://firstName> ?f )>> .
+  ?derivation ${derivationOf} <<( ?x <ex://name> ?n )>> .
+  ?derivation ${derivedFrom} <<( ?x <ex://firstName> ?f )>> .
 }
 WHERE {
   ?x <ex://firstName> ?f .
   BIND( CONCAT( ?f , "!" ) AS ?n )
-  BIND( <internal://blank> ( ${construct0} , ?x , ?f , ?n ) AS ?derivation0 )
+  BIND( <internal://blank> ( ${construct0} , ?x , ?f , ?n ) AS ?derivation )
 }`,
     );
   });
@@ -178,15 +196,15 @@ WHERE {
       expect,
       'CONSTRUCT { ?x :employed true } WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?y } }',
       `CONSTRUCT {
-  ?derivation0 ${derivationOf} <<( ?x <ex://employed> TRUE )>> .
-  ?derivation0 ${derivedFrom} <<( ?x <ex://worksAt> <ex://ugent> )>> .
+  ?derivation ${derivationOf} <<( ?x <ex://employed> TRUE )>> .
+  ?derivation ${derivedFrom} <<( ?x <ex://worksAt> <ex://ugent> )>> .
 }
 WHERE {
   ?x <ex://worksAt> <ex://ugent> .
   OPTIONAL {
     ?x <ex://knows> ?y .
   }
-  BIND( <internal://blank> ( ${construct0} , ?x , ?y ) AS ?derivation0 )
+  BIND( <internal://blank> ( ${construct0} , ?x , ?y ) AS ?derivation )
 }`,
     );
   });
@@ -196,15 +214,15 @@ WHERE {
       expect,
       'CONSTRUCT { ?x :unemployed true } WHERE { ?x :knows ?y MINUS { ?x :worksAt ?o } }',
       `CONSTRUCT {
-  ?derivation0 ${derivationOf} <<( ?x <ex://unemployed> TRUE )>> .
-  ?derivation0 ${derivedFrom} <<( ?x <ex://knows> ?y )>> .
+  ?derivation ${derivationOf} <<( ?x <ex://unemployed> TRUE )>> .
+  ?derivation ${derivedFrom} <<( ?x <ex://knows> ?y )>> .
 }
 WHERE {
   ?x <ex://knows> ?y .
   MINUS {
     ?x <ex://worksAt> ?o .
   }
-  BIND( <internal://blank> ( ${construct0} , ?x , ?y ) AS ?derivation0 )
+  BIND( <internal://blank> ( ${construct0} , ?x , ?y ) AS ?derivation )
 }`,
     );
   });
@@ -214,7 +232,7 @@ WHERE {
       expect,
       'CONSTRUCT { ?x :reaches ?y } WHERE { { ?x :knows ?y } UNION { ?x :colleague ?y } }',
       `CONSTRUCT {
-  ?derivation0 ${derivationOf} <<( ?x <ex://reaches> ?y )>> .
+  ?derivation ${derivationOf} <<( ?x <ex://reaches> ?y )>> .
 }
 WHERE {
   {
@@ -223,7 +241,7 @@ WHERE {
   UNION {
     ?x <ex://colleague> ?y .
   }
-  BIND( <internal://blank> ( ${construct0} , ?x , ?y ) AS ?derivation0 )
+  BIND( <internal://blank> ( ${construct0} , ?x , ?y ) AS ?derivation )
 }`,
     );
   });
@@ -233,7 +251,7 @@ WHERE {
       expect,
       'CONSTRUCT { ?x :friends ?n } WHERE { { SELECT ?x (COUNT(*) AS ?n) WHERE { ?x :knows ?y } GROUP BY ?x } }',
       `CONSTRUCT {
-  ?derivation0 ${derivationOf} <<( ?x <ex://friends> ?n )>> .
+  ?derivation ${derivationOf} <<( ?x <ex://friends> ?n )>> .
 }
 WHERE {
   {
@@ -242,7 +260,7 @@ WHERE {
     }
     GROUP BY ?x
   }
-  BIND( <internal://blank> ( ${construct0} , ?x , ?n ) AS ?derivation0 )
+  BIND( <internal://blank> ( ${construct0} , ?x , ?n ) AS ?derivation )
 }`,
     );
   });
@@ -250,14 +268,14 @@ WHERE {
   it('coins a derivation variable the CONSTRUCT does not use yet', ({ expect }) => {
     expectProvenanceConstruct(
       expect,
-      'CONSTRUCT { ?derivation0 :p ?o } WHERE { ?derivation0 :q ?o }',
+      'CONSTRUCT { ?derivation :p ?o } WHERE { ?derivation :q ?o }',
       `CONSTRUCT {
-  ?derivation1 ${derivationOf} <<( ?derivation0 <ex://p> ?o )>> .
-  ?derivation1 ${derivedFrom} <<( ?derivation0 <ex://q> ?o )>> .
+  ?derivation0 ${derivationOf} <<( ?derivation <ex://p> ?o )>> .
+  ?derivation0 ${derivedFrom} <<( ?derivation <ex://q> ?o )>> .
 }
 WHERE {
-  ?derivation0 <ex://q> ?o .
-  BIND( <internal://blank> ( ${construct0} , ?derivation0 , ?o ) AS ?derivation1 )
+  ?derivation <ex://q> ?o .
+  BIND( <internal://blank> ( ${construct0} , ?derivation , ?o ) AS ?derivation0 )
 }`,
     );
   });
@@ -299,6 +317,13 @@ describe('provenanceCapturingQuery', () => {
       .toThrow('Provenance can only be captured for a SELECT query.');
   });
 
+  it('rewrites the pattern an EXISTS filters once', ({ expect }) => {
+    const { query } = provenanceCapturingQuery(`${prefixes} SELECT ?x WHERE { ?x :worksAt :ugent ` +
+      'FILTER(EXISTS { ?x :worksAt :imec } && EXISTS { :alice :knows ?x }) }');
+
+    expect(query.split('<<( ?x <ex://worksAt> <ex://ugent> )>>')).toHaveLength(2);
+  });
+
   it('rejects an unstable function, which the rewrite would evaluate more than once', ({ expect }) => {
     expect(() => provenanceCapturingQuery(`${prefixes} SELECT ?x ?r WHERE { ?x :worksAt :ugent BIND(RAND() AS ?r) }`))
       .toThrow('The RAND function cannot be used in a query whose provenance is captured');
@@ -335,10 +360,8 @@ describe('provenance captured over the colleagues data', () => {
    * @returns the count of each answer, by its values
    */
   async function countsOf(query: string): Promise<Record<string, number>> {
-    return Object.fromEntries((await decodedAnswersOf(query)).map(({ answer, polynomial }) => [
-      [ ...answer ].map(([ name, term ]) => `${name}=${termToString(term)}`).sort().join(' '),
-      evaluatePolynomial(polynomial, countingSpmSemiring, () => 1),
-    ]));
+    return Object.fromEntries((await decodedAnswersOf(query)).map(({ answer, polynomial }) =>
+      [ answerKey(answer), evaluatePolynomial(polynomial, countingSpmSemiring, () => 1) ]));
   }
 
   let derivationLabels: Promise<Map<string, string>> | undefined;
@@ -373,8 +396,7 @@ describe('provenance captured over the colleagues data', () => {
     derivationLabels ??= labelDerivations();
     const [ answers, labels ] = await Promise.all([ decodedAnswersOf(query), derivationLabels ]);
     return answers.map(({ answer, polynomial, isAnswer }) => {
-      const values = [ ...answer ].map(([ name, term ]) => `${name}=${termToString(term).replace('ex://', '')}`)
-        .sort().join(' ');
+      const values = answerKey(answer).replaceAll('ex://', '');
       const explanation = polynomialToString(polynomial, term => labels.get(termToString(term))!);
       return `${isAnswer ? '+' : '-'} ${values}: ${explanation}`;
     }).sort();
@@ -408,6 +430,9 @@ describe('provenance captured over the colleagues data', () => {
     'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?o } ' +
     'OPTIONAL { ?x :worksAt ?o FILTER EXISTS { ?o ?p ?q } } }',
     'SELECT ?x WHERE { ?x :worksAt :ugent FILTER EXISTS { VALUES ?y { :bob } OPTIONAL { ?x :knows ?y } } }',
+    'SELECT ?x WHERE { ?x :worksAt :ugent FILTER EXISTS { { ?y :worksAt :imec FILTER(?y = ?x) } ?x :worksAt :ugent } }',
+    'SELECT ?x ?o WHERE { ?x :worksAt :ugent OPTIONAL { ?x :knows ?o } OPTIONAL { ?x :worksAt ?o ' +
+    'FILTER EXISTS { ?x :worksAt ?w OPTIONAL { ?x :worksAt ?v FILTER(?v = ?o) } FILTER(BOUND(?v)) } } }',
   ])('answers %s as the query without provenance does', async(query, { expect }) => {
     const [ decodedAnswers, rows ] = await Promise.all([
       decodedAnswersOf(query),
@@ -416,7 +441,7 @@ describe('provenance captured over the colleagues data', () => {
     ]);
     const answers = decodedAnswers
       .filter(({ isAnswer }) => isAnswer)
-      .map(({ answer }) => Object.fromEntries([ ...answer ].map(([ name, term ]) => [ name, termToString(term) ])));
+      .map(({ answer }) => recordOf(answer));
     const variables = [ ...new Set(rows.flatMap(row => Object.keys(row))) ];
     expect(distinctAnswers(answers, variables)).toEqual(distinctAnswers(rows, variables));
   });
