@@ -124,7 +124,7 @@ encoding from the evaluated arguments instead, at any depth, and the same materi
 ## Provenance
 
 `lib/provenance.ts` builds two things.
-The README explains what they are for and how to read the result.
+The README explains what they are for and how to read the result; the limits are at the end of this section.
 
 **The provenance view** (`provenanceMappingFromConstructQueries`).
 A *derivation* is one solution of a view's `WHERE` clause.
@@ -169,7 +169,7 @@ So such a variable is saved under another name before the OPTIONAL and restored 
 - `MINUS` is a difference whose OPTIONAL also asks that the two rows share a bound variable.
   A `MINUS` that shares no variable removes nothing, and stays just its left side.
 - `NOT EXISTS { b }` over `a` is `a ⊖ b`.
-  Only a `NOT EXISTS` (or `EXISTS`) that does not depend on the outer row is rewritten; the README lists the others.
+  Only a `NOT EXISTS` (or `EXISTS`) that does not depend on the outer row is rewritten; the limits below list the others.
 - `OPTIONAL` is the matched rows plus the unmatched ones: `(a ⊗ b) ⊕ (a ⊖ b)`.
 - `EXISTS { b }` over `a` is `a ⊖ (a ⊖ b)`.
   `a ⊖ b` is the rows of `a` without a match in `b`, and taking those away from `a` leaves the ones with a match.
@@ -183,10 +183,23 @@ and once with provenance, joined to the answers on the group variables.
 `LIMIT` and `OFFSET` work the same way.
 A group variable that may be unbound is joined on a stand-in value, so that unbound only matches unbound.
 
-**Query size.**
-`OPTIONAL` repeats its left side, and `GROUP BY`, `LIMIT` and `OFFSET` their subquery.
-Each nesting so doubles the rewritten query.
-That is accepted for now.
+**Limits.**
+
+- Only `SELECT` is supported, without `RAND`, `BNODE`, `UUID` or `STRUUID`:
+  the rewritten query runs parts of the query more than once, and these functions would answer differently each time.
+- `OPTIONAL` repeats its left side, and `GROUP BY`, `LIMIT` and `OFFSET` their subquery.
+  Each nesting so doubles the rewritten query.
+- `LIMIT` and `OFFSET` return the same answers as without provenance, but not in `ORDER BY` order.
+  An answer's provenance also mentions the solutions with the same values that the `LIMIT` cut off.
+- Inside `GROUP BY`, `LIMIT` and `OFFSET`, a view triple counts once, however many derivations it has.
+  So a `COUNT` can differ from a run without provenance, unless that run uses `preserveCardinality`.
+- An `EXISTS` still filters, but adds nothing to the polynomial, in two cases:
+  when it is part of a larger expression,
+  and when it uses an outer variable that its own pattern may leave unbound, such as `?x` in
+  `FILTER EXISTS { ?y :worksAt ?o FILTER(?y != ?x) }`.
+- `derivedFrom` does not list the source triples matched inside a `UNION`, `OPTIONAL`, `MINUS`, sub-`SELECT`,
+  `GROUP BY`, `GRAPH`, `SERVICE` or property path of a view's `WHERE` clause.
+- Identical `SERVICE` solutions count once: they cannot be told apart.
 
 ## SPARQL quirks worth knowing
 

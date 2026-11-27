@@ -2,51 +2,25 @@
 
 [![CI](https://github.com/jitsedesmet/sparql-view-unfold/actions/workflows/ci.yml/badge.svg)](https://github.com/jitsedesmet/sparql-view-unfold/actions/workflows/ci.yml)
 
-Answers SPARQL 1.2 queries posed over views, by rewriting them into queries over the data those views are
-defined on.
+A *view* is a SPARQL CONSTRUCT query over your data.
+This library answers SPARQL queries over a view,
+by rewriting them into queries over your data that any SPARQL engine can run.
+Your data stays as it is.
 
-A view is a SPARQL CONSTRUCT query — a GAV mapping: its template says which triples the view holds, its
-WHERE clause how they are found in your data. The rewriter *unfolds* that view into every triple pattern of
-a user query, handing you back a query any SPARQL engine can answer, and a pipeline of optimisations then
-cuts the result down to something worth executing.
+It was built to run SPARQL 1.2 queries, triple terms and all, over RDF 1.1 data:
+the view says how the RDF 1.1 data represents RDF 1.2, and the rewritten query is plain SPARQL 1.1.
+Our [SEMANTiCS 2026 demo paper](https://2026-semantics-rewriting.jitsedesmet.be/) explains the idea,
+and you can [try the demo](https://2026-query-rewriting.demo.jitsedesmet.be/).
+[ARCHITECTURE.md](ARCHITECTURE.md) explains the code.
 
-Running SPARQL 1.2 queries — triple terms and all — against RDF 1.1 data is one case it was built for, and
-the one the examples below use: a view says how your RDF 1.1 data represents RDF 1.2, and the rewrite hands
-you plain SPARQL 1.1.
-
-The idea is explained in our [demo paper published at SEMANTiCS 2026](https://2026-semantics-rewriting.jitsedesmet.be/).
-[View that demo live](https://2026-query-rewriting.demo.jitsedesmet.be/). [ARCHITECTURE.md](ARCHITECTURE.md) maps the code.
-
-## Installation
+## Usage
 
 ```bash
 npm install sparql-view-unfold
 ```
 
-or
-
-```bash
-yarn add sparql-view-unfold
-```
-
-## Import
-
-Either through ESM import:
-
-```typescript
-import { createQueryRewriter } from 'sparql-view-unfold';
-```
-
-_or_ CJS require:
-
-```typescript
-const createQueryRewriter = require('sparql-view-unfold').createQueryRewriter;
-```
-
-## Usage
-
-A mapping is one or more CONSTRUCT queries. Hand them to `mappingFromConstructQueries`, hand the mapping to
-`createDefaultTransformationPipeline`, and rewrite:
+A view is one or more CONSTRUCT queries.
+Turn them into a mapping, build a rewriter, and rewrite your query:
 
 ```typescript
 import {
@@ -72,91 +46,46 @@ const sparql11Query = await rewriter.rewriteQuery(`
   SELECT ?s ?p ?o WHERE { ?t rdf:reifies <<( ?s ?p ?o )>> }`);
 ```
 
-A rewriter is reusable and holds no per-query state, so build it once and rewrite many queries with it.
+Run `sparql11Query` on your RDF 1.1 data with any SPARQL 1.1 engine.
+A rewriter keeps no state between queries, so build it once.
 
-### Building your own pipeline
+### Options
 
-The default pipeline is a list of transformations, and nothing stops you writing your own. Each step is a
-`<stem>Transformation()` factory, so the pipeline reads as a uniform list; only the unfolding takes
-arguments, because only it needs the mapping:
+- **Count each view triple once.**
+  When a view's `WHERE` clause finds the same triple twice, the rewritten query counts it twice,
+  so a `COUNT(*)` can be higher than over the view.
+  `createDefaultTransformationPipeline(mapping, { preserveCardinality: true })` counts it once.
+  That sorts what each pattern matches, which can be slow,
+  but it can also be much faster when the view finds many duplicates (LUBM Q09 on Oxigraph: 13.1 s to 0.17 s).
+- **Generalized RDF.**
+  A view triple with a term where RDF does not allow one, such as a literal subject, is left out, as a CONSTRUCT would.
+  `mappingFromConstructQueries(views, { generalizedRdfView: true })` keeps it.
+  The rewritten query then needs an engine that builds generalized triple terms,
+  such as Comunica with `rdfVariant: 'generalizedRdf'`.
+- **Engines that extend SPARQL.**
+  The rewriter assumes the SPARQL operator tables, for example that `STR(?x)` gives a literal.
+  If your engine extends an operator, pass an `expressionRange` to `createQueryRewriter` and `mappingFromConstructQueries`.
+- **Your own pipeline.**
+  `createDefaultTransformationPipeline` returns the list of transformations the rewriter runs, in order.
+  Add to it, as the next sections do,
+  or build your own from the `…Transformation()` functions in the [API documentation](https://jitsedesmet.github.io/sparql-view-unfold/).
+  The order matters: ARCHITECTURE.md says why.
+
+### Blank nodes in a view
+
+A view cannot use `BNODE()`: the rewritten query runs parts of a view more than once,
+and `BNODE()` gives a new node each time.
+Use `<internal://blank>(?a, ?b, …)` instead: the same arguments always give the same node.
+To turn those nodes into IRIs, end the pipeline with `internalBnodeAsSpecialIriTransformation()`,
+or with `internalBnodeAsSpecialLiteralTransformation()` for literals.
+With Comunica, let the engine build them, which also works for deeply nested triple terms:
 
 ```typescript
-import {
-  createQueryRewriter,
-  filterFalseTransformation,
-  mappingFromConstructQueries,
-  pullUpExtendsTransformation,
-  pushDownAssertionsTransformation,
-  rewriteNonRecursivePathsTransformation,
-  unfoldingTransformation,
-} from 'sparql-view-unfold';
-
 const rewriter = createQueryRewriter([
-  rewriteNonRecursivePathsTransformation(),
-  unfoldingTransformation(mappingFromConstructQueries([ myConstructQuery ]), { preserveCardinality: false }),
-  filterFalseTransformation(),
-  pushDownAssertionsTransformation(),
-  filterFalseTransformation(),
-  pullUpExtendsTransformation(),
-  filterFalseTransformation(),
-]);
-```
-
-Order matters and is not a preference: paths are expanded before the unfolding, which only knows triple
-patterns, and `nullifyJoinOverIncompatibleBoundsTransformation` sees nothing until `removeProjections` and
-`pullUpExtends` have run. [ARCHITECTURE.md](ARCHITECTURE.md) says why for each step.
-
-### Cardinality
-
-By default the unfolded query treats the virtual RDF 1.2 graph as a **bag**: where two solutions of the
-mapping body produce the same triple, it is counted twice, and a `COUNT(*)` disagrees with the mapped graph.
-`unfoldingTransformation(mapping, { preserveCardinality: true })` deduplicates the mapping body so each
-triple is produced once. It is **potentially expensive** — every unfolded pattern materialises and sorts
-its whole body, where it otherwise streams. It can also make a query *faster*: where the mapping body
-produces many duplicate triples, deduplicating each pattern before the joins shrinks what the joins have to
-combine. On LUBM (scale 1, Oxigraph) it cut Q09 from 13.1 s to 0.17 s, while queries without duplicates
-paid a little for the extra `DISTINCT` (Q14: 134 ms to 189 ms). Measure on your own views and engine.
-
-### Generalized RDF
-
-By default the mapping denotes a standard RDF graph: a solution binding a head variable to a term its
-position cannot hold — a literal subject, a blank node predicate — instantiates no triple, exactly as the
-CONSTRUCT the mapping is written as would not. A type test in the mapping body filters those solutions out,
-and the assertion pushdown drops it wherever the rewritten query already guarantees it.
-`mappingFromConstructQueries(constructs, { generalizedRdfView: true })` keeps those triples instead, for a
-view that means to present generalized RDF: any term in any position, inside triple terms included. The
-source stays RDF. The rewritten query must then run on an engine whose `TRIPLE()` builds generalized triple
-terms, such as Comunica with `rdfVariant: 'generalizedRdf'`.
-
-### Extended engines
-
-The rewriting reads the term type an expression gives off the SPARQL operator tables: `STR(?x)` gives a literal,
-`IRI(?x)` an IRI. An engine may extend an operator to give a value where SPARQL raises a type error (SPARQL 1.1
-§17.3.1). For such an engine, pass an `expressionRange` to `createQueryRewriter` and `mappingFromConstructQueries`
-that answers for what it extends and calls `standardExpressionRange` for the rest.
-
-### Blank nodes
-
-An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to construct a
-blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: the same inputs always give the
-same identity. An argument can be any expression, and one that is unbound or errors counts as a value of its own,
-so a node is still built, one that differs from every node built from a value. A triple term argument is encoded
-through its subject, predicate and object, up to two triple terms deep or the `tripleTermArgumentDepth` given to
-`createQueryRewriter`. Add `internalBnodeAsSpecialLiteralTransformation()` or
-`internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed literal or
-as a prefixed IRI respectively.
-
-Evaluating the rewritten query with Comunica, the engine can encode those identities itself, for a triple term of any
-depth too: pass `{ encodedByExtensionFunction: true }` to the transformation and `internalBnodeExtensionFunctions()` as
-`extensionFunctions`. Both give the same nodes, except where the SPARQL encoding falls short: a triple term deeper
-than it unrolls, a blank node, or an unstable argument in an `OPTIONAL` condition, which it evaluates repeatedly.
-
-```typescript
-const query = await createQueryRewriter([
   ...createDefaultTransformationPipeline(mapping),
   internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
-]).rewriteQuery('SELECT * WHERE { ?s ?p ?o }');
-const bindings = await new QueryEngine().queryBindings(query, {
+]);
+const bindings = await new QueryEngine().queryBindings(await rewriter.rewriteQuery(query), {
   sources,
   extensionFunctions: internalBnodeExtensionFunctions(),
 });
@@ -164,23 +93,11 @@ const bindings = await new QueryEngine().queryBindings(query, {
 
 ### Provenance
 
-Which source triples does an answer rest on?
-For a `SELECT` over a view, the rewriter can tell you, per answer.
-Your data stays as it is.
-The approach follows [SPARQLprov](https://doi.org/10.14778/3484224.3484235) (Hernández et al.).
+Why is an answer an answer?
+For a `SELECT` over a view, the rewriter can tell you which triples of your data each answer rests on.
+It follows [SPARQLprov](https://doi.org/10.14778/3484224.3484235).
 
-**Derivations.**
-A *derivation* is one solution of a view's `WHERE` clause: one way the view produces a triple.
-With the view below, `:bob :colleague :carol` has two derivations: Bob and Carol both work at UGent, and both at imec.
-`provenanceMappingFromConstructQueries` builds a second view, the *provenance view*, that describes the derivations:
-
-- `?d provenance:derivationOf <<( s p o )>>`: derivation `?d` produces the view triple `s p o`.
-- `?d provenance:derivedFrom <<( s p o )>>`: derivation `?d` matched the source triple `s p o`.
-
-`provenance:` is `https://sparql-extension.knows.idlab.ugent.be/provenance#`.
-
-**Example.**
-The data, in `colleagues.ttl`:
+Take this data, in `colleagues.ttl`:
 
 ```turtle
 @prefix : <ex://> .
@@ -190,8 +107,16 @@ The data, in `colleagues.ttl`:
 :dave :worksAt :ugent .
 ```
 
-The view holds every triple as it is, plus a `:colleague` triple between two people at the same organisation.
-The query asks who Alice's acquaintances work with:
+The view below keeps every triple, and adds a `:colleague` triple between two people who work at the same place.
+It produces `:bob :colleague :carol` in two ways: through UGent and through imec.
+Each way, one solution of the view's `WHERE` clause, is a *derivation*.
+Getting the provenance of a query takes three steps:
+
+1. `provenanceCapturingQuery(query)` rewrites the query to also select how each answer was derived.
+2. Run that query over the *provenance view*, which `provenanceMappingFromConstructQueries(view)` builds.
+   It is the view plus, for each derivation, the view triple it produces (`provenance:derivationOf`)
+   and the data triples it matched (`provenance:derivedFrom`).
+3. `decodeProvenance(rows, prefix)` turns the rows into a *polynomial* per answer: a formula over derivations.
 
 ```typescript
 import { QueryEngine } from '@comunica/query-sparql-file';
@@ -213,11 +138,7 @@ const view = [
   'PREFIX : <ex://> CONSTRUCT { ?x :colleague ?y } WHERE { ?x :worksAt ?org . ?y :worksAt ?org . FILTER(?x != ?y) }',
 ];
 
-// 1. Rewrite the query so that it also selects how each answer was derived.
-const capture = provenanceCapturingQuery('PREFIX : <ex://> SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }');
-
-// 2. Queries over the provenance view are rewritten as any query over a view.
-//    Derivations are identified by internal blank nodes (see Blank nodes above), which the last step turns into IRIs.
+// Derivations are internal blank nodes, so the pipeline ends by turning them into IRIs.
 const rewriter = createQueryRewriter([
   ...createDefaultTransformationPipeline(provenanceMappingFromConstructQueries(view)),
   internalBnodeAsSpecialIriTransformation({ encodedByExtensionFunction: true }),
@@ -227,10 +148,10 @@ const context = { sources: [ 'colleagues.ttl' ], extensionFunctions: internalBno
 const run = async(query: string): Promise<RDF.Bindings[]> =>
   (await engine.queryBindings(await rewriter.rewriteQuery(query), context)).toArray();
 
-// 3. Decode the rows: one entry per solution, with isAnswer telling answers from non-answers.
+const capture = provenanceCapturingQuery('PREFIX : <ex://> SELECT ?c WHERE { :alice :knows ?f . ?f :colleague ?c }');
 const answers = decodeProvenance(await run(capture.query), capture.provenanceVariablePrefix);
 
-// 4. Look up the source triples each derivation matched.
+// To print a derivation, look up the data triples it matched.
 const links = await run(`PREFIX provenance: <https://sparql-extension.knows.idlab.ugent.be/provenance#>
   SELECT ?derivation ?source WHERE { ?derivation provenance:derivedFrom ?source }`);
 const sourcesOf = (derivation: RDF.Term): string => `[${links
@@ -249,117 +170,56 @@ ex://carol true (([<<ex://bob ex://worksAt ex://imec>>, <<ex://carol ex://worksA
 ex://dave true ([<<ex://alice ex://knows ex://bob>>] ⊗ [<<ex://bob ex://worksAt ex://ugent>>, <<ex://dave ex://worksAt ex://ugent>>])
 ```
 
-Each answer comes with a *polynomial*: a formula over its derivations that says how the answer was derived.
-Here, each derivation is printed as the list of source triples it matched.
-Carol is an answer because Alice knows Bob, and Bob works with Carol at imec or at UGent.
-The operands of `⊕` and `⊗` are printed in alphabetical order.
-Read the operators as:
+Carol is an answer because Alice knows Bob, *and* Bob works with Carol at imec *or* at UGent.
+The other operators come from other parts of a query:
 
 | Operator | Meaning | Comes from |
 |---|---|---|
-| `a ⊗ b` | needs both `a` and `b` | a join |
-| `a ⊕ b` | `a` or `b` is enough | a `UNION`, or two derivations of the same view triple |
-| `a ⊖ b` | `a`, unless `b` | `MINUS`, `NOT EXISTS`, an `OPTIONAL` that found no match, and `EXISTS` as `a ⊖ (a ⊖ b)` |
-| `δ(a)` | a `GROUP BY` answer, computed from `a` | `GROUP BY` |
+| `a ⊗ b` | needs both | a join |
+| `a ⊕ b` | either is enough | `UNION`, or two derivations of one view triple |
+| `a ⊖ b` | `a`, unless `b` (`0` if nothing matched `b`) | `MINUS`, `NOT EXISTS`, `OPTIONAL`, `EXISTS` |
+| `δ(a)` | a group computed from `a` | `GROUP BY` |
 | `1` | needs no view triple | `VALUES`, `SERVICE` |
-| `0` | nothing | the right side of a `⊖` that matched nothing |
 
-**Answers and non-answers.**
-`decodeProvenance` also returns the solutions a `MINUS` or `NOT EXISTS` removed, so that their polynomial shows why.
-For an `OPTIONAL` that found a match, it also returns the left row without that match.
-Check `isAnswer` before you use a row.
-For `SELECT ?x WHERE { ?x :worksAt :ugent MINUS { ?x :worksAt :imec } }`, the same code prints:
+The result also holds *non-answers*: the rows a `MINUS` or `NOT EXISTS` removed,
+and for an `OPTIONAL` that matched, the row without the match.
+Their polynomial says why they are not answers, so check `isAnswer` before you use a row.
 
-```text
-ex://bob false ([<<ex://bob ex://worksAt ex://ugent>>] ⊖ [<<ex://bob ex://worksAt ex://imec>>])
-ex://carol false ([<<ex://carol ex://worksAt ex://ugent>>] ⊖ [<<ex://carol ex://worksAt ex://imec>>])
-ex://dave true ([<<ex://dave ex://worksAt ex://ugent>>] ⊖ 0)
-```
-
-**Computing with a polynomial.**
-`evaluatePolynomial(polynomial, semiring, valueOf)` gives each derivation a value through `valueOf`,
-and combines those values as the semiring says for each operator.
-With `countingSpmSemiring` and `() => 1`, it counts the ways an answer is derived: 2 for Carol above.
-With `booleanSpmSemiring` and `derivation => !deleted.has(derivation)`,
-it tells whether the answer survives when the `deleted` derivations are gone.
-`lineageOf(polynomial)` lists the derivations in a polynomial.
-
-**Limits.**
-
-- Only `SELECT` is supported, without `RAND`, `BNODE`, `UUID` or `STRUUID`:
-  the rewritten query runs parts of the query more than once, and these functions would answer differently each time.
-- `OPTIONAL` copies its left side, and `GROUP BY`, `LIMIT` and `OFFSET` copy their whole subquery.
-  Each nested one doubles the rewritten query.
-- `LIMIT` and `OFFSET` return the same answers as without provenance, but not in `ORDER BY` order.
-  An answer's provenance also mentions the solutions with the same values that the `LIMIT` cut off.
-- Inside `GROUP BY`, `LIMIT` and `OFFSET`, a view triple counts once, however many derivations it has.
-  So a `COUNT` can differ from a run without provenance, unless that run uses `preserveCardinality`.
-- An `EXISTS` still filters, but adds nothing to the polynomial, in two cases:
-  when it is part of a larger expression,
-  and when it uses an outer variable that its own pattern may leave unbound, such as `?x` in
-  `FILTER EXISTS { ?y :worksAt ?o FILTER(?y != ?x) }`.
-- If a view's `WHERE` clause uses `UNION`, `OPTIONAL`, `MINUS`, a sub-`SELECT`, `GROUP BY`, `GRAPH`, `SERVICE` or a
-  property path, `derivedFrom` does not list the source triples matched there.
-- Identical `SERVICE` solutions count once: they cannot be told apart.
+To compute with a polynomial, use `evaluatePolynomial(polynomial, semiring, valueOf)`.
+For example, `countingSpmSemiring` with `() => 1` counts the ways an answer is derived: 2 for Carol.
+Only `SELECT` is supported, and [ARCHITECTURE.md](ARCHITECTURE.md#provenance) lists the other limits.
 
 ## Restrictions
 
-| Restriction | What happens when you break it |
+| Restriction | If you break it |
 |---|---|
-| No `+` or `*` property path in the user query | The rewrite throws. A recursive path cannot be expanded into triple patterns, so the mapping could not be unfolded into it. `?`, `|`, `/`, `^` and `!(…)` are all fine. |
-| No `GRAPH` in the user query | The rewrite throws. What unfolding a mapping inside a named graph means is not settled. |
-| No unstable function (`BNODE`, `RAND`, `UUID`, `STRUUID`) in a mapping body | Building the mapping throws, naming the function. A mapping has to denote one fixed graph, and those answer differently on every evaluation. `NOW` is allowed: SPARQL 1.1 §17.4.5.1 fixes it per query execution. |
-| A mapping head holds exactly one triple | Nothing — `mappingFromConstructQueries` splits a larger CONSTRUCT template into one mapping per triple for you, which denotes the same graph. |
-| No blank nodes in the RDF 1.1 dataset, unless skolemised | **Wrong answers, silently.** A blank node cannot be referenced across the sub-queries the unfolding produces, so triples reached through one are lost. Skolemise them into IRIs before querying. |
+| No `+` or `*` property path in the query (`?`, `\|`, `/`, `^` and `!` are fine) | The rewrite throws. |
+| No `GRAPH` in the query | The rewrite throws. |
+| No `BNODE`, `RAND`, `UUID` or `STRUUID` in a view (`NOW` is fine) | Building the mapping throws. |
+| No blank nodes in your data: skolemise them into IRIs first | **Silently wrong answers**: the rewritten query loses the triples reached through a blank node. |
 
-`DESCRIBE` is supported, with the caveat inherent to it: a `DESCRIBE` answers with a description of the
-data it is run against, so a rewritten one describes its resources in RDF 1.1. It selects the same
-resources the query over the mapped data would.
+Some queries work, but mean something you might not expect:
 
-Updates are supported, with the caveat inherent to *them*: only the `WHERE` reads the RDF 1.2 graph, and
-only the `WHERE` is rewritten. That graph is virtual, so nothing can be written to it — an `INSERT` or
-`DELETE` template goes to the RDF 1.1 source exactly as you wrote it, with its variables bound by the
-rewritten `WHERE`. Writing RDF 1.2 through the mapping is a different problem (the view update problem) and
-is not what this does.
-
-`SERVICE` is supported and means what it always does: its endpoint evaluates the pattern over its own data.
-The mapping describes your data, not the endpoint's, so nothing inside a `SERVICE` is unfolded, and the
-restrictions on the user query do not apply inside one.
+- `DESCRIBE` describes the resources in your data, not in the view.
+- In an update, only the `WHERE` reads the view.
+  `INSERT` and `DELETE` write to your data exactly as written: the view itself cannot be written to.
+- Nothing inside a `SERVICE` is rewritten: the endpoint answers over its own data.
 
 ## API
 
-The tables below are the short version; the generated
-[API documentation](https://jitsedesmet.github.io/sparql-view-unfold/) has the full signatures.
+The [API documentation](https://jitsedesmet.github.io/sparql-view-unfold/) has every function and transformation.
+These are the ones to start from:
 
-| Function | Description |
+| Function | What it does |
 |---|---|
-| `mappingFromConstructQueries(constructQueries, options?)` | Builds the `Mapping` a set of CONSTRUCT query strings denotes. The only way to build one. |
-| `createQueryRewriter(transformations, options?)` | Builds a `QueryRewriter` running those transformations, in order. |
-| `createDefaultTransformationPipeline(mapping, options?)` | The pipeline to use when you have no reason to build your own. |
-| `rewriter.rewriteQuery(query)` | Rewrites a SPARQL query string, asynchronously. |
-| `rewriter.rewriteOperation(operation)` | The same over SPARQL algebra, for callers already holding some. |
-| `provenanceMappingFromConstructQueries(constructQueries, options?)` | Builds the provenance view of a view: its derivations, and the triples each produces and matched. |
-| `provenanceCapturingQuery(query)` | Rewrites a SELECT over the view to also select how each answer was derived, and gives the prefix of the variables holding it. |
-| `provenanceCapturingOperation(operation)` | The same over SPARQL algebra. |
-| `decodeProvenance(bindings, provenanceVariablePrefix)` | Decodes the rows of that query into one polynomial per solution, answers and non-answers (`isAnswer`). |
-| `evaluatePolynomial(polynomial, semiring, valueOf)` | Computes a value from a polynomial, such as a count (`countingSpmSemiring`) or whether it holds (`booleanSpmSemiring`). |
-| `lineageOf(polynomial)`, `polynomialToString(polynomial, labelOf?)` | The derivations a polynomial mentions, and the polynomial written out. |
-
-| Transformation | Description |
-|---|---|
-| `unfoldingTransformation(mapping, options?)` | The rewriting proper: every triple pattern outside a `SERVICE` replaced by the mapping body producing the triples it could match. |
-| `rewriteNonRecursivePathsTransformation()` | Expands non-recursive property paths outside a `SERVICE` into BGPs and UNIONs. Belongs before the unfolding. |
-| `filterFalseTransformation()` | Replaces every operation that certainly binds a variable no term fits by `FILTER(FALSE)`, and lets every `FILTER(FALSE)` absorb what stands over it, sub-SELECTs included. |
-| `pushDownAssertionsTransformation()` | Pushes `FILTER(sameTerm(?x, c))`, `FILTER(sameTerm(?x, ?y))` and term type tests like `FILTER(isIRI(?x) \|\| isBLANK(?x))` as deep as they go: substituting into BGPs and paths, pruning VALUES rows, emptying UNION branches, turning an OPTIONAL over an asserted variable into a plain join. |
-| `pullUpExtendsTransformation()` | Floats every `BIND` as high as the plan allows and drops the ones nothing reads. |
-| `removeProjectionsTransformation()` | Removes inner projections, renaming what they hid to keep the scoping. |
-| `nullifyJoinOverIncompatibleBoundsTransformation()` | Replaces a join whose branches bind one variable to incompatible terms by `FILTER(FALSE)`. |
-| `extendsToValuesTransformation()` | Rewrites a `BIND` of a ground term over the empty BGP, or over a VALUES, into a VALUES. |
-| `joinValuesToFilterTransformation()` | Rewrites a JOIN with a VALUES into an equality FILTER, enabling further push-down. |
-| `serviceCallPushUpTransformation()` | Merges and hoists SERVICE calls so the endpoint evaluates as much as it can. |
-| `internalBnodeAsSpecialLiteralTransformation()` | Materialises constructed blank node identities as typed literals. |
-| `internalBnodeAsSpecialIriTransformation()` | Materialises them as prefixed IRIs, SHA-1 keeping the length manageable. |
-| `simplifyStaticExpressionsTransformation(engine?)` | Folds every fully static expression to the term Comunica's expression engine evaluates it to. |
+| `mappingFromConstructQueries(views, options?)` | Builds the mapping of a view. |
+| `createDefaultTransformationPipeline(mapping, options?)` | The transformations to use when you have no reason to pick your own. |
+| `createQueryRewriter(transformations, options?)` | Builds a rewriter that runs those transformations in order. |
+| `rewriter.rewriteQuery(query)` | Rewrites a query string. `rewriteOperation` does the same for SPARQL algebra. |
+| `provenanceMappingFromConstructQueries(views, options?)` | Builds the provenance view of a view. |
+| `provenanceCapturingQuery(query)` | Rewrites a `SELECT` to also select how each answer was derived. |
+| `decodeProvenance(rows, provenanceVariablePrefix)` | Turns the rows of that query into a polynomial per answer or non-answer. |
+| `evaluatePolynomial(polynomial, semiring, valueOf)` | Computes a value from a polynomial, such as a count. |
 
 ## Cite
 
