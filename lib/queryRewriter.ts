@@ -17,6 +17,7 @@ import { createTransformationContext, parseQuery, resolveTransformationContextOp
 import type { TransformationContext, TransformationContextOptions } from './transformContext.js';
 import type { Mapping, QueryTransformation } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
+import { DF } from './utils/rdfDatatypes.js';
 import { queryFormTypes, solutionModifierTypes } from './utils/solutionModifierChain.js';
 import { collectVariableNames, deepCopy, freshVarGenerator, markVariableNamesUsed, renameVariables } from './utils.js';
 
@@ -47,9 +48,9 @@ export interface QueryRewriter {
    */
   rewriteQuery: (query: string) => Promise<string>;
   /**
-   * Rewrites a query or update that is already in algebra form, shaped like the one `rewriteQuery` prints.
+   * Rewrites a query or update that is already in algebra form.
    * @param operation - The operation to rewrite
-   * @returns the rewritten operation
+   * @returns the rewritten operation, shaped like the one `rewriteQuery` prints for `toAst` to print faithfully
    */
   rewriteOperation: (operation: Algebra.Operation) => Promise<Algebra.Operation>;
 }
@@ -103,14 +104,23 @@ function readKeyBindingsInAggregates(
     const input = rebindKeyChain(operation.input);
     const { variable, expression } = operation;
     if (aggregatedVariableNames.has(variable.value)) {
-      if (expression.subType !== Algebra.ExpressionTypes.TERM || expression.term.termType !== 'Variable') {
+      const boundVariableName = expression.subType === Algebra.ExpressionTypes.TERM &&
+        expression.term.termType === 'Variable' ?
+        expression.term.value :
+        undefined;
+      // Renamed onto a key, an aggregate could read a condition again; onto a name the aggregates already hold, it
+      // could join two variables of a nested scope.
+      if (boundVariableName === undefined || keys.has(boundVariableName) ||
+        aggregatedVariableNames.has(boundVariableName)) {
         // The fresh variable is no key, so `toAst` ends the GROUP BY conditions above it, writing its extend as BIND.
         const freshVariable = nextVar();
         renames.set(variable.value, freshVariable.value);
         const freshVariableExtend = c.AF.createExtend(input, freshVariable, expression);
-        return c.AF.createExtend(freshVariableExtend, variable, c.AF.createTermExpression(freshVariable));
+        // One variable object per occurrence, as the unfolding writes ranges onto them.
+        const freshVariableRead = c.AF.createTermExpression(DF.variable(freshVariable.value));
+        return c.AF.createExtend(freshVariableExtend, variable, freshVariableRead);
       }
-      renames.set(variable.value, expression.term.value);
+      renames.set(variable.value, boundVariableName);
     }
     return input === operation.input ? operation : c.AF.createExtend(input, variable, expression);
   };

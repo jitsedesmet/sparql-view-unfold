@@ -30,9 +30,32 @@ GROUP BY ( ?v_0 AS ?c )`);
   });
 
   it('is read through that fresh variable in BOUND too, where no expression can stand', async({ expect }) => {
-    expect(await identityRewriter.rewriteQuery(
+    expect((await identityRewriter.rewriteQuery(
       'SELECT ?c (SUM(IF(BOUND(?c), 1, 0)) AS ?n) WHERE { ?s ?p ?o BIND(STR(?o) AS ?c) } GROUP BY ?c',
-    )).toContain('BOUND( ?v_0 )');
+    )).trim()).toEqual(`SELECT ?c ( SUM( IF( BOUND( ?v_0 ) , "1"^^<http://www.w3.org/2001/XMLSchema#integer> , \
+"0"^^<http://www.w3.org/2001/XMLSchema#integer> ) ) AS ?n ) WHERE {
+  ?s ?p ?o .
+  BIND( STR( ?o ) AS ?v_0 )
+}
+GROUP BY ( ?v_0 AS ?c )`);
+  });
+
+  it('is read through a fresh variable when bound to another key, possibly a condition itself', async({ expect }) => {
+    expect((await identityRewriter.rewriteQuery(
+      'SELECT ?a (COUNT(?a) AS ?n) WHERE { ?s ?p ?o } GROUP BY (STR(?o) AS ?b) (?b AS ?a)',
+    )).trim()).toEqual(`SELECT ?a ( COUNT( ?v_0 ) AS ?n ) WHERE {
+  ?s ?p ?o .
+  BIND( STR( ?o ) AS ?b )
+  BIND( ?b AS ?v_0 )
+}
+GROUP BY ?b ( ?v_0 AS ?a )`);
+  });
+
+  it('is read through a fresh variable when the variable it is bound to occurs in an aggregate', async({ expect }) => {
+    // Renamed onto ?o, the ?c of the sub-SELECT would join the ?o it hides.
+    expect(await identityRewriter.rewriteQuery(`SELECT ?c (SUM(IF(EXISTS { SELECT ?z WHERE { ?c <ex://q> ?z . ?z <ex://r> ?o } },
+      1, 0)) AS ?n) WHERE { ?s ?p ?o } GROUP BY (?o AS ?c)`)).toContain(`?v_0 <ex://q> ?z .
+      ?z <ex://r> ?o .`);
   });
 
   it('leaves a key no aggregate reads a GROUP BY condition', async({ expect }) => {
