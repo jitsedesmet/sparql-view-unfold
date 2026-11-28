@@ -47,7 +47,7 @@ export interface QueryRewriter {
    */
   rewriteQuery: (query: string) => Promise<string>;
   /**
-   * Rewrites a query or update that is already in algebra form.
+   * Rewrites a query or update that is already in algebra form, shaped like the one `rewriteQuery` prints.
    * @param operation - The operation to rewrite
    * @returns the rewritten operation
    */
@@ -80,72 +80,60 @@ function tripleTermExpression(c: TransformationContext, term: RDF.Term): Algebra
 }
 
 /**
- * Rewrites every non-RDF triple term an expression holds into a `TRIPLE()`, so the query can be printed. In RDF
- * that `TRIPLE()` raises, as the construction the term was substituted into did.
- * @param c - The transformation context
- * @param operation - The operation to rewrite
- * @returns the rewritten operation
- */
-function spellNonRdfTripleTerms(c: TransformationContext, operation: Algebra.Operation): Algebra.Operation {
-  return algebraUtils.mapOperationSub<'unsafe', typeof operation>(operation, {}, { expression: { term: {
-    transform: expression => tripleTermExpression(c, expression.term),
-  }}});
-}
-
-/**
  * Makes the aggregates of a group read what its keys are bound to rather than the keys themselves. `toAst` writes an
  * extend binding a key directly below the group as `GROUP BY (expr AS ?key)`, a variable Jena and Oxigraph do not bind
  * where aggregates read.
  * @param c - The transformation context
  * @param group - The group to rewrite
- * @param nextVar - Coins a fresh variable, binding a key's expression when that is not a variable already
+ * @param nextVar - Coins the fresh variable a key's expression is bound to when that expression is no variable
  * @returns the group, its aggregates reading no key bound directly below it
  */
-function aggregateOverKeyBindings(
+function readKeyBindingsInAggregates(
   c: TransformationContext,
   group: Algebra.Group,
   nextVar: () => RDF.Variable,
 ): Algebra.Group {
   const keys = new Set(group.variables.map(variable => variable.value));
-  const aggregatedVariables = collectVariableNames(c.astTransformer, group.aggregates);
+  const aggregatedVariableNames = collectVariableNames(c.astTransformer, group.aggregates);
   const renames = new Map<string, string>();
-  // The chain of key binds `toAst` reads as `GROUP BY (expr AS ?key)` conditions.
-  const rebindChain = (operation: Algebra.Operation): Algebra.Operation => {
+  const rebindKeyChain = (operation: Algebra.Operation): Algebra.Operation => {
     if (operation.type !== Algebra.Types.EXTEND || !keys.has(operation.variable.value)) {
       return operation;
     }
-    const input = rebindChain(operation.input);
+    const input = rebindKeyChain(operation.input);
     const { variable, expression } = operation;
-    if (!aggregatedVariables.has(variable.value)) {
-      return c.AF.createExtend(input, variable, expression);
-    }
-    if (expression.subType === Algebra.ExpressionTypes.TERM && expression.term.termType === 'Variable') {
+    if (aggregatedVariableNames.has(variable.value)) {
+      if (expression.subType !== Algebra.ExpressionTypes.TERM || expression.term.termType !== 'Variable') {
+        // The fresh variable is no key, so `toAst` ends the GROUP BY conditions above it, writing its extend as BIND.
+        const freshVariable = nextVar();
+        renames.set(variable.value, freshVariable.value);
+        const freshVariableExtend = c.AF.createExtend(input, freshVariable, expression);
+        return c.AF.createExtend(freshVariableExtend, variable, c.AF.createTermExpression(freshVariable));
+      }
       renames.set(variable.value, expression.term.value);
-      return c.AF.createExtend(input, variable, expression);
     }
-    // Written as a BIND, as the chain of conditions stops at a variable that is not a key.
-    const binding = nextVar();
-    renames.set(variable.value, binding.value);
-    const bound = c.AF.createExtend(input, binding, expression);
-    return c.AF.createExtend(bound, variable, c.AF.createTermExpression(binding));
+    return input === operation.input ? operation : c.AF.createExtend(input, variable, expression);
   };
-  const input = rebindChain(group.input);
+  const input = rebindKeyChain(group.input);
   return renames.size === 0 ?
     group :
     c.AF.createGroup(input, group.variables, renameVariables(c, group.aggregates, renames));
 }
 
 /**
- * Rewrites an operation into the form `toAst` prints with the same meaning on every engine.
+ * Rewrites an operation into the form `toAst` prints with the same meaning on every engine: a non-RDF triple term
+ * becomes the `TRIPLE()` raising for it, and aggregates read what group keys are bound to.
  * @param c - The transformation context
  * @param operation - The operation to rewrite
  * @returns the rewritten operation
  */
-function printable(c: TransformationContext, operation: Algebra.Operation): Algebra.Operation {
+function rewriteForPrinting(c: TransformationContext, operation: Algebra.Operation): Algebra.Operation {
   const nextVar = freshVarGenerator(markVariableNamesUsed(c, operation));
-  return algebraUtils.mapOperation<'unsafe', typeof operation>(spellNonRdfTripleTerms(c, operation), {
-    [Algebra.Types.GROUP]: { transform: group => aggregateOverKeyBindings(c, group, nextVar) },
-  });
+  return algebraUtils.mapOperationSub<'unsafe', typeof operation>(operation, {
+    [Algebra.Types.GROUP]: { transform: group => readKeyBindingsInAggregates(c, group, nextVar) },
+  }, { expression: { term: {
+    transform: expression => tripleTermExpression(c, expression.term),
+  }}});
 }
 
 /** The updates that write without reading, so that the pipeline has nothing to run over. */
@@ -312,13 +300,13 @@ export function createQueryRewriter(
       const operation = parseQuery(c, query);
       markVariableNamesUsed(c, operation);
       const rewritten = await rewriteParsedQuery(c, transformations, operation);
-      return c.generator.generate(toAst(printable(c, rewritten)));
+      return c.generator.generate(toAst(rewriteForPrinting(c, rewritten)));
     },
     async rewriteOperation(operation: Algebra.Operation): Promise<Algebra.Operation> {
       const c = createTransformationContext(resolvedOptions);
       markVariableNamesUsed(c, operation);
       // A copy, since passes may rewrite in place and the operation is the caller's.
-      return printable(c, await rewriteParsedQuery(c, transformations, deepCopy(c, operation)));
+      return rewriteForPrinting(c, await rewriteParsedQuery(c, transformations, deepCopy(c, operation)));
     },
   };
 }
