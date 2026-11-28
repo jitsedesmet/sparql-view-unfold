@@ -17,8 +17,9 @@ import { createTransformationContext, parseQuery, resolveTransformationContextOp
 import type { TransformationContext, TransformationContextOptions } from './transformContext.js';
 import type { Mapping, QueryTransformation } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
+import { DF } from './utils/rdfDatatypes.js';
 import { queryFormTypes, solutionModifierTypes } from './utils/solutionModifierChain.js';
-import { deepCopy, markVariableNamesUsed } from './utils.js';
+import { collectVariableNames, deepCopy, freshVarGenerator, markVariableNamesUsed, renameVariables } from './utils.js';
 
 /**
  * @fileoverview The pipeline runner: a list of {@link QueryTransformation}s applied to a query in order.
@@ -49,7 +50,7 @@ export interface QueryRewriter {
   /**
    * Rewrites a query or update that is already in algebra form.
    * @param operation - The operation to rewrite
-   * @returns the rewritten operation
+   * @returns the rewritten operation, shaped like the one `rewriteQuery` prints for `toAst` to print faithfully
    */
   rewriteOperation: (operation: Algebra.Operation) => Promise<Algebra.Operation>;
 }
@@ -80,14 +81,67 @@ function tripleTermExpression(c: TransformationContext, term: RDF.Term): Algebra
 }
 
 /**
- * Rewrites every non-RDF triple term an expression holds into a `TRIPLE()`, so the query can be printed. In RDF
- * that `TRIPLE()` raises, as the construction the term was substituted into did.
+ * Makes the aggregates of a group read what its keys are bound to rather than the keys themselves. `toAst` writes an
+ * extend binding a key directly below the group as `GROUP BY (expr AS ?key)`, a variable Jena and Oxigraph do not bind
+ * where aggregates read.
+ * @param c - The transformation context
+ * @param group - The group to rewrite
+ * @param nextVar - Coins the fresh variable a key's expression is bound to when that expression is no variable
+ * @returns the group, its aggregates reading no key bound directly below it
+ */
+function readKeyBindingsInAggregates(
+  c: TransformationContext,
+  group: Algebra.Group,
+  nextVar: () => RDF.Variable,
+): Algebra.Group {
+  const keys = new Set(group.variables.map(variable => variable.value));
+  const aggregatedVariableNames = collectVariableNames(c.astTransformer, group.aggregates);
+  const renames = new Map<string, string>();
+  const rebindKeyChain = (operation: Algebra.Operation): Algebra.Operation => {
+    if (operation.type !== Algebra.Types.EXTEND || !keys.has(operation.variable.value)) {
+      return operation;
+    }
+    const input = rebindKeyChain(operation.input);
+    const { variable, expression } = operation;
+    if (aggregatedVariableNames.has(variable.value)) {
+      const boundVariableName = expression.subType === Algebra.ExpressionTypes.TERM &&
+        expression.term.termType === 'Variable' ?
+        expression.term.value :
+        undefined;
+      // Renamed onto a key, an aggregate could read a condition again; onto a name the aggregates already hold, it
+      // could join two variables of a nested scope.
+      if (boundVariableName === undefined || keys.has(boundVariableName) ||
+        aggregatedVariableNames.has(boundVariableName)) {
+        // The fresh variable is no key, so `toAst` ends the GROUP BY conditions above it, writing its extend as BIND.
+        const freshVariable = nextVar();
+        renames.set(variable.value, freshVariable.value);
+        const freshVariableExtend = c.AF.createExtend(input, freshVariable, expression);
+        // One variable object per occurrence, as the unfolding writes ranges onto them.
+        const freshVariableRead = c.AF.createTermExpression(DF.variable(freshVariable.value));
+        return c.AF.createExtend(freshVariableExtend, variable, freshVariableRead);
+      }
+      renames.set(variable.value, boundVariableName);
+    }
+    return input === operation.input ? operation : c.AF.createExtend(input, variable, expression);
+  };
+  const input = rebindKeyChain(group.input);
+  return renames.size === 0 ?
+    group :
+    c.AF.createGroup(input, group.variables, renameVariables(c, group.aggregates, renames));
+}
+
+/**
+ * Rewrites an operation into the form `toAst` prints with the same meaning on every engine: a non-RDF triple term
+ * becomes the `TRIPLE()` raising for it, and aggregates read what group keys are bound to.
  * @param c - The transformation context
  * @param operation - The operation to rewrite
  * @returns the rewritten operation
  */
-function spellNonRdfTripleTerms(c: TransformationContext, operation: Algebra.Operation): Algebra.Operation {
-  return algebraUtils.mapOperationSub<'unsafe', typeof operation>(operation, {}, { expression: { term: {
+function rewriteForPrinting(c: TransformationContext, operation: Algebra.Operation): Algebra.Operation {
+  const nextVar = freshVarGenerator(markVariableNamesUsed(c, operation));
+  return algebraUtils.mapOperationSub<'unsafe', typeof operation>(operation, {
+    [Algebra.Types.GROUP]: { transform: group => readKeyBindingsInAggregates(c, group, nextVar) },
+  }, { expression: { term: {
     transform: expression => tripleTermExpression(c, expression.term),
   }}});
 }
@@ -256,13 +310,13 @@ export function createQueryRewriter(
       const operation = parseQuery(c, query);
       markVariableNamesUsed(c, operation);
       const rewritten = await rewriteParsedQuery(c, transformations, operation);
-      return c.generator.generate(toAst(spellNonRdfTripleTerms(c, rewritten)));
+      return c.generator.generate(toAst(rewriteForPrinting(c, rewritten)));
     },
     async rewriteOperation(operation: Algebra.Operation): Promise<Algebra.Operation> {
       const c = createTransformationContext(resolvedOptions);
       markVariableNamesUsed(c, operation);
       // A copy, since passes may rewrite in place and the operation is the caller's.
-      return spellNonRdfTripleTerms(c, await rewriteParsedQuery(c, transformations, deepCopy(c, operation)));
+      return rewriteForPrinting(c, await rewriteParsedQuery(c, transformations, deepCopy(c, operation)));
     },
   };
 }
